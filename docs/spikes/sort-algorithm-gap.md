@@ -1,13 +1,25 @@
 # `Vec.sort_by` vs Rust's `sort_by` — where the gap actually is
 
-**Status:** measured, and the adaptivity half **landed** (B-2026-08-10-9).
-The gap reproduces. The cause is **not** codegen quality — karac's lowering
-is at parity with rustc for the same algorithm — it is the **algorithm**: a
-fixed-32-run bottom-up merge sort with no adaptivity, versus Rust's
-driftsort. No contained merge-kernel tweak is a reliable win; the measured
-options are all listed below with the data that rejects them. The fix that
-shipped is a natural-run merge sort — see "What landed". The remaining
-shuffled-uniform gap needs a stable quicksort and is tracked separately.
+**Status:** two fixes landed, and the remaining gap is ~1.30x on
+shuffled-uniform input only (B-2026-08-10-20, open).
+
+**Read the sections in order — later ones correct earlier ones.** This
+document was written as the investigation ran, and its conclusions changed
+twice as better measurements arrived:
+
+1. *Results 1–6, "What the fix is", "What landed"* — the gap is the
+   **algorithm**, not codegen quality (karac's lowering is 5–8% ahead of
+   rustc on the identical algorithm). Fixed by a natural-run merge sort:
+   35x on sorted and reverse-sorted input.
+2. *"The real answer: branch mispredictions"* — the remaining shuffled-input
+   gap was **entirely branch mispredicts**, not the algorithm. Fixed by a
+   per-pass adaptive branchless merge kernel: 1.29x on random.
+3. *"After the fix"* and *"The bounds-check hoist"* — the gap has now flipped
+   to **instructions and latency**, and the last section **withdraws** that
+   one's conclusion that the partition direction is ruled out. Instruction
+   budgeting was the wrong metric; the direction is unresolved.
+
+Everything rejected along the way is listed with the data that rejected it.
 
 ## The claim under test
 
@@ -562,6 +574,108 @@ Flat within ~3% on random across a **16x** range of RUN, which means the
 insertion cost per element and the extra-pass cost stay balanced over the
 whole range. Only RUN=64 is clearly worse, and only on few-unique. Not a
 lever, under either kernel.
+
+
+## The bounds-check hoist: measured, NOT merged — and it corrects the section above
+
+The section above recommends hoisting the branchless kernel's two per-element
+bounds checks and budgets it at ~13%. It was built and measured. **It does not
+pay, and measuring it invalidates the reasoning that produced the ~12% figure
+used to rule out the partition direction.** Read this section before acting on
+that one.
+
+### The change
+
+`p2.bl.chk.a` / `p2.bl.chk.b` test `a < mid` and `b < hi` on every element.
+Only one cursor moves per step, so `min(mid - a, hi - b)` steps are safe with
+no test at all: after j steps `a <= a0 + j` and `b <= b0 + j`, and
+`j < min(...)` bounds both. The kernel becomes
+
+    blk:   ra = mid - a;  rb = hi - b;  rem = min(ra, rb)
+           if rem < 1 -> drain
+           kend = k + rem
+    ubody: <branchless take>;  if k+1 < kend -> ubody else -> blk
+
+with the loop test riding on `k`, which already increments every step, so no
+separate counter is needed. The bounds-checked loop is then dead and was
+deleted outright — keeping it as a small-`rem` fallback measured **worse**
+(see below).
+
+On shuffled input the safe count shrinks geometrically (L, ~L/2, ~L/4), so a
+2L-element merge needs only ~log2(L) blocks. The collapsed-`min` case that
+would make blocks expensive belongs to wildly unequal runs, which is
+partially-ordered input — routed to the branchy kernel and never reaching
+this code.
+
+### The result
+
+Interleaved A/B against main, three sweeps, plus deterministic counters:
+
+| pattern | wall clock | instructions | cond branches | mispredicts |
+|---|---|---|---|---|
+| random | **+3–4%** | 74.05 → 67.33 M (**−9.1%**) | 7.33 → 5.61 M (−23%) | 0.192 → 0.226 M |
+| few-unique | **−2–3%** | 48.85 → 47.69 M (−2.4%) | 8.05 → 7.27 M | unchanged |
+| sawtooth | neutral | 22.53 → 21.90 M (−2.8%) | 3.94 → 3.43 M | unchanged |
+| sorted / reverse | unchanged | unchanged | — | — |
+
+Net across the five patterns is roughly zero, so it was not merged. The
+few-unique regression is reproducible across all three sweeps and has **no
+signature in any counter available here** — fewer instructions, fewer
+branches, unchanged D1/LLd/I1 misses, unchanged mispredicts — which points at
+µop-cache or alignment effects that cachegrind does not model, and which any
+unrelated change could flip either way.
+
+An earlier version that kept the checked loop as a `rem < 8` fallback was
+strictly worse: the duplicated take cost **+2.4% instructions on few-unique
+and +1.8% on sawtooth — patterns that never execute this kernel** — purely
+through register pressure in the shared function, for a 3–5% wall-clock
+regression. Worth remembering generally: in a function this large, a second
+copy of a hot loop is not free for the paths that never run it.
+
+### Why this invalidates the "~12%, therefore ruled out" argument
+
+The headline number is that **−9.1% of instructions and −23% of branches
+bought +3.5% of wall clock.** The branchless merge is therefore *not*
+throughput-bound on instruction count — it is **latency-bound on its
+loop-carried dependency chain** (`load -> compare -> cursor -> next load
+address`, ~7 cycles). Removing instructions from around that chain does not
+shorten it.
+
+That is exactly the metric the previous section used to dismiss the partition
+direction, and it is the wrong one:
+
+- Instruction budgeting **over-predicts** changes that only delete
+  instructions. This change is the proof: budgeted at ~13%, delivered ~3.5%.
+- It **under-predicts** changes that shorten the critical path — and the
+  partition direction is precisely such a change. Its claim was never "fewer
+  instructions" (a 2-way partition element is ~24 against a merge element's
+  ~33, a modest edge); its claim is that a partition loop has **no
+  loop-carried dependency on the load address**, because the read pointer
+  advances unconditionally. Iterations overlap; merge iterations cannot.
+
+So the "~12% best case, therefore not worth it" conclusion is **withdrawn**.
+It costed the partition direction on the one axis where partitioning does not
+compete, and ignored the axis it was proposed for. The direction is
+**unresolved**, not ruled out.
+
+What still stands from that analysis, unaffected:
+
+- The gap flipped from mispredicts to instructions/latency: karac now runs
+  1.53x driftsort's instructions and 0.82x its mispredicts.
+- The 3-way prototype's failure is fully explained by its instruction count
+  (+34.2 M against −0.58 M mispredicts), and its ~47 instructions per element
+  per level came from writing the element to all three buckets. That
+  explanation does **not** generalise to a tight 2-way loop.
+
+### The measurement that would actually decide it
+
+Achieved **cycles per element per partition level** for a 2-way branchless
+partition in this codegen — not instructions, and not extrapolated from the
+3-way prototype, whose 6-stores-per-element scatter contaminates the figure.
+If a partition level runs near 2–3 cycles/element against the merge's ~7,
+ten levels replacing nine passes is a large win in time while being roughly
+neutral in instructions. If it runs at 6+, the direction is dead for real.
+Nothing measured so far distinguishes those two worlds.
 
 
 ## Caveats
