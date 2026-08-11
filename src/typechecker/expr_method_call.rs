@@ -5990,12 +5990,38 @@ impl<'a> super::TypeChecker<'a> {
                 // c.shout()` passed; now its return type is checked.
                 const PRIMITIVE_VALUE_METHODS: &[&str] =
                     &["cmp", "eq", "ne", "lt", "le", "gt", "ge"];
+                // The exemption is keyed on the BAKED IMPL, not on the name
+                // alone (B-2026-08-11-9). `env_build.rs`'s `eq_ord_targets`
+                // registers `Eq`/`Ord` for the integers, `bool`, `char`, `String`
+                // and the F32/F64 wrapper types, and DELIBERATELY skips `f32`/
+                // `f64` — "IEEE NaN breaks Eq/Ord", which is correct and matches
+                // Rust (`f64: PartialOrd` but not `Ord`). Keying on the name
+                // alone shielded the float receivers just as strongly as the
+                // integer ones that actually have the impl, so `f.cmp(g)` was
+                // check-green on all three paths and then failed: `--interp`
+                // reported "no interpreter dispatch arm", and `build` failed with
+                // the "this is a codegen bug — add a dispatcher arm" text, which
+                // blames the compiler for user error (the B-2026-08-11-2 defect
+                // class). Floats have no baked candidate, so dropping the
+                // exemption for them needs no new code — `find_methods_with_args`
+                // comes back empty and the existing error branch says `no method
+                // 'cmp' on type 'f64'`. There is no mis-count risk either: the
+                // `(self, other)` arity confusion the exemption exists to avoid
+                // only arises when a baked impl IS found.
+                //
+                // The OPERATORS `==` / `<` / `>` on floats are a separate
+                // lowering and are untouched; so is a `partial_cmp`/`total_cmp`
+                // surface, if one is ever added. Rejecting the spelling that does
+                // not work is right either way.
+                let receiver_has_baked_cmp_impl = !matches!(&receiver_for_lookup, Type::Float(_));
+                let is_exempt_builtin =
+                    receiver_has_baked_cmp_impl && PRIMITIVE_VALUE_METHODS.contains(&method);
                 if matches!(
                     &receiver_for_lookup,
                     Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
                 ) {
                     if let Some(prim) = method_callee_type_name(&receiver_for_lookup) {
-                        if !PRIMITIVE_VALUE_METHODS.contains(&method)
+                        if !is_exempt_builtin
                             && !self
                                 .env
                                 .find_methods_with_args(&prim, &[], method)
@@ -6020,7 +6046,7 @@ impl<'a> super::TypeChecker<'a> {
                             for arg in args {
                                 self.infer_expr(&arg.value);
                             }
-                            if !PRIMITIVE_VALUE_METHODS.contains(&method) {
+                            if !is_exempt_builtin {
                                 let mut msg = format!("no method '{}' on type '{}'", method, prim);
                                 // `char` has no numeric-value method — the route
                                 // is the cast. This is the exact spelling the

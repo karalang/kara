@@ -14467,7 +14467,7 @@ fn test_comparison_op_exemption_survives_the_cast_removal() {
     // must still pass on every receiver that carries the impl — env_build.rs
     // registers them for the integers, `bool`, `char` and `String`. (Floats are
     // deliberately excluded there — IEEE NaN breaks Eq/Ord — which is why they
-    // are not in this list; see B-2026-08-11-9.)
+    // are not in this list, and why B-2026-08-11-9 stopped exempting them.)
     for (lit, other) in [
         ("5i64", "6i64"),
         ("5u8", "6u8"),
@@ -14482,6 +14482,120 @@ fn test_comparison_op_exemption_survives_the_cast_removal() {
              let _ = a.ge({other}); }}"
         ));
     }
+}
+
+#[test]
+fn test_float_comparison_methods_rejected() {
+    // B-2026-08-11-9. `PRIMITIVE_VALUE_METHODS` held these seven names off BOTH
+    // impl-table dispatch and the `NoMethodFound` error, keyed on the NAME
+    // alone. But `env_build.rs`'s `eq_ord_targets` deliberately skips `f32`/
+    // `f64` — IEEE NaN breaks Eq/Ord — so on a float receiver the exemption
+    // shielded a method that does not exist. All three paths agreed it was
+    // broken and none of them said so at check time: `--interp` reported "no
+    // interpreter dispatch arm", and `build` failed with "this is a codegen bug
+    // — add a dispatcher arm", blaming the compiler for user error. Keying the
+    // exemption on the baked impl instead rejects them at typecheck, naming the
+    // float width.
+    for ty in ["f32", "f64"] {
+        for m in ["cmp", "eq", "ne", "lt", "le", "gt", "ge"] {
+            let (v, o) = if ty == "f32" {
+                ("1.0f32", "2.0f32")
+            } else {
+                ("1.0", "2.0")
+            };
+            let src = format!("fn main() {{ let a: {ty} = {v}; let _ = a.{m}({o}); }}");
+            let errors = typecheck_errors(&src);
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.message.contains(&format!("no method '{m}'"))
+                        && e.message.contains(ty)),
+                "expected '{ty}.{m}' rejected naming the width, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn test_float_operators_and_real_methods_survive_the_comparison_gating() {
+    // The guard on the rejection above. Only the METHOD spellings go away: the
+    // comparison OPERATORS on floats are a separate lowering and keep working
+    // (that is the whole point — `a < b` is how you compare floats), as do the
+    // float methods that genuinely dispatch through the early scalar intercept.
+    typecheck_ok(
+        "fn main() {
+             let a: f64 = 1.0;
+             let b: f64 = 2.0;
+             let c: f32 = 1.0f32;
+             let d: f32 = 2.0f32;
+             let _ = a == b; let _ = a != b; let _ = a < b;
+             let _ = a <= b; let _ = a > b; let _ = a >= b;
+             let _ = c == d; let _ = c < d; let _ = c > d;
+             let _ = (0.0 - 2.5).abs();
+             let _ = a.to_string();
+             let _ = b.clone();
+         }",
+    );
+}
+
+#[test]
+fn test_user_impl_named_cmp_on_a_float_is_reachable() {
+    // Same second-order win the `cast` removal had (B-2026-08-11-4): the
+    // exemption short-circuits ahead of the impl lookup, so while it applied to
+    // floats these seven names were undefinable on a float receiver. Dropping it
+    // for floats makes a user impl dispatch like any other, with its return type
+    // enforced.
+    let src = "impl f64 {
+                   fn cmp(self, other: f64) -> i64 {
+                       if self < other { return -1 }
+                       if self > other { return 1 }
+                       return 0
+                   }
+               }
+               fn main() {
+                   let a: f64 = 1.0;
+                   PLACEHOLDER
+               }";
+    typecheck_ok(&src.replace("PLACEHOLDER", "let n: i64 = a.cmp(2.0); let _ = n;"));
+    let errors =
+        typecheck_errors(&src.replace("PLACEHOLDER", "let s: String = a.cmp(2.0); let _ = s;"));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'String'") && e.message.contains("i64")),
+        "expected the user f64 cmp impl's return type to be checked, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_generic_ord_bound_still_gates_floats_the_same_way() {
+    // Cross-check that the direct-method surface now agrees with the bound
+    // surface, which was already correct: a `T: Ord` instantiation at `f64` was
+    // rejected all along, with a diagnostic naming the `F64` wrapper. Before
+    // B-2026-08-11-9 the two disagreed — `pick(1.0, 2.0)` under `T: Ord` was a
+    // hard error while a bare `a.cmp(b)` on the same `f64` typechecked clean.
+    let errors = typecheck_errors(
+        "fn pick[T: Ord](a: T, b: T) -> T {
+             if a < b { return b }
+             return a
+         }
+         fn main() { let _ = pick(1.0, 2.0); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Ord") && e.message.contains("f64")),
+        "expected the T: Ord bound to reject f64, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // And a generic body calling `.cmp` on a `TypeParam` receiver is a different
+    // dispatch arm entirely — untouched.
+    typecheck_ok(
+        "fn cmp2[T: Ord](a: T, b: T) -> i64 { let _ = a.cmp(b); return 0 }
+         fn main() { let _ = cmp2(1, 2); }",
+    );
 }
 
 #[test]
