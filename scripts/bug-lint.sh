@@ -50,7 +50,14 @@ for i, line in enumerate(pathlib.Path(ledger).read_text().splitlines(), 1):
     if bid in seen:
         errs.append(f"line {i}: duplicate B-ID '{bid}' (also line {seen[bid]})")
     seen[bid] = i
-    if r.get("status") not in {"open","fixed","invalid","not-reproduced"}:
+    # `open` is the WORK QUEUE — bug-curve.py renders open rows in full
+    # precisely because you are expected to act on them. A row that is real and
+    # reproduced but has no action left is `wontfix`, NOT `open` (it would sit
+    # in the queue forever) and NOT `invalid` (that means the premise was
+    # refuted; saying so about a reproducible finding puts a false claim in the
+    # ledger). `wontfix` rows render as their own collapsed section, so the
+    # measurements that closed the question stay visible without being work.
+    if r.get("status") not in {"open","fixed","invalid","not-reproduced","wontfix"}:
         errs.append(f"{bid}: bad status '{r.get('status')}'")
     if r.get("severity") not in {"high","medium","low"}:
         errs.append(f"{bid}: bad severity '{r.get('severity')}'")

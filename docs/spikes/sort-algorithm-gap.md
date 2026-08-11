@@ -1005,6 +1005,22 @@ first, which is code-growth rather than algorithm — sawtooth never executes
 the quicksort at all, yet its instruction count rises 4.1% with identical
 branch and mispredict counts.
 
+Those two halves have different futures, so they were split into two ledger
+rows rather than left as one:
+
+- **B-2026-08-10-20** — the shuffled-uniform residual, `wontfix`. Real,
+  reproducible, five directions measured, no action left. It stays readable
+  (the `wontfix` section of `bug-ledger.md` renders titles in full) so nobody
+  re-derives the dead ends, but it is out of the open queue.
+- **B-2026-08-11-10** — the few-unique gap, `open`. karac 5.39 ms vs
+  driftsort's 3.6–4.1, with a measured route to 4.15 (parity) that is blocked
+  only by the sawtooth regression. That one is work, and it is filed as work.
+
+The distinction is worth stating because it is easy to get wrong in the other
+direction: a row kept open out of reluctance to admit a dead end costs the
+queue its meaning, and a finding closed along with its dead-end parent gets
+lost.
+
 ## Caveats
 
 - **Single host, x86_64 shared container.** Absolute numbers drift a few
