@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 230 | 1 |
+| miscompile | 231 | 2 |
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
 | codegen-gap | 100 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 788 | 1 |
+| codegen | 789 | 2 |
 | typecheck | 151 | 1 |
 | interp | 135 | 0 |
 | ownership | 44 | 0 |
-| autopar | 38 | 0 |
+| autopar | 39 | 1 |
 | other | 36 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1091 surfaced · 1 open · 1079 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1092 surfaced · 2 open · 1079 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-15 | 2026-08-11 | typecheck+codegen | medium | `Vec[f64].max()` / `.min()` return an ORDER-DEPENDENT element instead of erroring, and there is currently no working remedy to point users at -- which is why B-2026-08-11-7 gated `sort`/`sorted`/`binary_search` but deliberately left these alone. Measured: `[3.0, NaN, 1.0].max()` silently skips the NaN and answers 3, while `[NaN, 3.0, 1.0]` makes BOTH `max()` and `min()` answer NaN -- the result depends on where the NaN sits. The two obvious remedies are both broken: (a) `Vec[F64].max()`, the wrapper -7's own sort gate prescribes, is rejected at typecheck by the iterator arm's numeric-or-String element test, and when that test is widened to admit the wrapper it then FAILS IN CODEGEN with 'no handler for method max on non-identifier receiver' -- i.e. it would trade a wrong answer for a run-vs-build gap; (b) `Stats.max(v)`, the f64-shaped alternative, is itself wrong AND BACKEND-DIVERGENT -- on `[NaN, 3.0, 1.0]` the interpreter answers 3 and the JIT answers NaN. Fixing (a) is the real task: add the codegen max/min-over-wrapper arm, then widen the element test, then gate. That makes `F64` a COMPLETE answer instead of a partial one. | `max`/`min` on a float sequence: the numeric-or-String element test and the (withdrawn) Ord gate in typechecker/stdlib_iter.rs `"max" | "min"`; the missing codegen dispatcher arm for max/min over a wrapper struct; and Stats.max/min in the interpreter vs try_compile_stats_call |
+| B-2026-08-11-16 | 2026-08-11 | autopar+codegen | high | Auto-par (ON BY DEFAULT) silently DROPS every LITERAL-step accumulator in a `while` loop that also contains a NON-literal-step one: `while i < n { b = b + f(x); a = a + 1; }` leaves `a` at its PRE-LOOP value, with no diagnostic and no crash -- just wrong arithmetic. MIXING IS THE TRIGGER: two literal-step accumulators are fine, two non-literal ones are fine, and a bare call that feeds no accumulator is fine. Interpreter is CORRECT; `karac build` and `karac run` (JIT) are wrong at BOTH -O0 and -O2, so it is karac's own transform and not an LLVM pass. `KARAC_AUTO_PAR=0` fixes it. `for` loops are unaffected. | auto-par reduction lowering |
 
 ### Wontfix (1)
 
