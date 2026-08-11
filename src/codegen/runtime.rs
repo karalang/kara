@@ -4303,6 +4303,51 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return val;
         }
+        // MAP / SET (B-2026-08-10-21 type axis). The value is a handle to a
+        // `KaracMap`; a bit-copy leaves both owners pointing at one table, so
+        // the reuse read a freed table — a SEGFAULT rather than garbage, the
+        // most severe symptom this bug had. `emit_map_clone_fn` deep-clones
+        // entries and writes the new handle back over the slot (src == dst),
+        // exactly as the enum payload duplicator's `MapOrSet` arm calls it.
+        if let Some(clone_fn) = self.uam_map_or_set_clone_fn(name) {
+            let fn_val = self.current_fn.unwrap();
+            let slot = self.create_entry_alloca(fn_val, "uam.mapset.src", val.get_type());
+            self.builder.build_store(slot, val).unwrap();
+            self.builder
+                .build_call(clone_fn, &[slot.into(), slot.into()], "")
+                .unwrap();
+            let cloned = self
+                .builder
+                .build_load(val.get_type(), slot, "uam.mapset.clone")
+                .unwrap();
+            self.uam_copied_sites
+                .insert((expr.span.offset, expr.span.length));
+            return cloned;
+        }
+        // USER STRUCT (non-shared). The struct's own words are bit-copied
+        // already; what aliases is the heap its FIELDS point at, so recurse
+        // into them in place — the same duplication a by-value struct param's
+        // callee-entry copy performs. A `shared struct` is excluded: it is
+        // RC-managed, so a move is an aliasing acquire rather than a transfer
+        // and there is no second free to prevent.
+        if let Some(struct_name) = self.var_type_names.get(name).cloned() {
+            if self.struct_types.contains_key(struct_name.as_str())
+                && !self.shared_types.contains_key(struct_name.as_str())
+                && val.is_struct_value()
+            {
+                let fn_val = self.current_fn.unwrap();
+                let slot = self.create_entry_alloca(fn_val, "uam.struct.src", val.get_type());
+                self.builder.build_store(slot, val).unwrap();
+                self.deep_copy_struct_heap_fields_in_place(slot, &struct_name);
+                let cloned = self
+                    .builder
+                    .build_load(val.get_type(), slot, "uam.struct.clone")
+                    .unwrap();
+                self.uam_copied_sites
+                    .insert((expr.span.offset, expr.span.length));
+                return cloned;
+            }
+        }
         let vec_ty = self.vec_struct_type();
         if val.get_type() != vec_ty.into() {
             return val;
@@ -4319,6 +4364,32 @@ impl<'ctx> super::Codegen<'ctx> {
         self.uam_copied_sites
             .insert((expr.span.offset, expr.span.length));
         copied
+    }
+
+    /// B-2026-08-10-21 — the deep-clone fn for a `Map`/`Set` variable, or
+    /// `None` when `name` is neither.
+    ///
+    /// A `Map[K, V]` variable registers K in `map_key_type_exprs` and V in
+    /// `var_elem_type_exprs` (that table doubles as the map's value slot — see
+    /// its registration in `types_lowering.rs`). A `Set[T]` lowers to
+    /// `Map[T, ()]`, so its element type is the key and the value half is the
+    /// unit tuple — the same substitution `emit_clone_fn_for_type_expr`'s Set
+    /// arm makes.
+    fn uam_map_or_set_clone_fn(&mut self, name: &str) -> Option<FunctionValue<'ctx>> {
+        if let (Some(k_te), Some(v_te)) = (
+            self.map_key_type_exprs.get(name).cloned(),
+            self.var_elem_type_exprs.get(name).cloned(),
+        ) {
+            return Some(self.emit_map_clone_fn(&k_te, &v_te));
+        }
+        if let Some(elem_te) = self.set_elem_type_exprs.get(name).cloned() {
+            let unit_te = TypeExpr {
+                kind: TypeKind::Tuple(Vec::new()),
+                span: elem_te.span.clone(),
+            };
+            return Some(self.emit_map_clone_fn(&elem_te, &unit_te));
+        }
+        None
     }
 
     pub(super) fn maybe_defensive_copy_param_arg(

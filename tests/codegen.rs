@@ -10728,29 +10728,24 @@ fn main() {
         );
     }
 
-    /// B-2026-08-10-21 — what the defensive copy does NOT yet cover, pinned as
-    /// a visibly deferred gap rather than left silently absent.
+    /// B-2026-08-10-21, the TYPE axis — `Map`, `Set` and user-struct moves.
     ///
-    /// The copy is scoped to the `{ptr,len,cap}` family. `Map`, `Set` and user
-    /// structs still alias on a reused move: the first two SEGFAULT, the struct
-    /// prints an empty field.
+    /// The last uncovered families, and the two collection cases were the most
+    /// severe symptom this bug had: a `Map`/`Set` handle bit-copied to a second
+    /// owner meant both freed one `KaracMap`, so the reuse SEGFAULTED rather
+    /// than printing garbage.
     ///
-    /// The scoping is deliberate and the safety argument is why they can be
-    /// deferred at all. The disarm skip keys on whether a copy was actually
-    /// emitted (`uam_copied_sites`), not on the flagged span, so an uncovered
-    /// type keeps BOTH its old copy behaviour and its old disarm — it is
-    /// exactly as it was, not half-converted. Keying the skip on the flagged
-    /// span instead was measured to turn case 3 here into
-    /// `free(): double free detected in tcache 2`, which is worse than the
-    /// wrong output it replaced.
+    /// Each family needed its own duplicator at the same hook — the synthesized
+    /// map clone for `Map`/`Set` (a `Set[T]` clones as `Map[T, ()]`), and field
+    /// recursion for a user struct, whose own words are already bit-copied so
+    /// what aliases is the heap its FIELDS point at.
     ///
-    /// Closing these means giving each family its type-directed copy at the
-    /// same hook: `emit_map_clone_fn` for `Map`/`Set`, and the struct
-    /// deep-copy for a user struct.
+    /// `shared struct` is deliberately absent: it is RC-managed, so a move is
+    /// an aliasing acquire rather than a transfer and there is no second free
+    /// to prevent.
     #[test]
-    #[ignore = "B-2026-08-10-21: the defensive copy does not yet cover Map/Set/struct moves"]
-    fn test_e2e_use_after_move_defensive_copy_map_set_struct_still_open() {
-        // 1. Map — SEGFAULT.
+    fn test_e2e_use_after_move_defensive_copy_map_set_struct() {
+        // 1. Map — SEGFAULTED before.
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -10763,7 +10758,7 @@ fn main() {
             .as_deref(),
             Some("7\n")
         );
-        // 2. Set — SEGFAULT.
+        // 2. Set — SEGFAULTED before.
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -10776,7 +10771,7 @@ fn main() {
             .as_deref(),
             Some("true\n")
         );
-        // 3. A struct carrying a heap field — prints an empty String.
+        // 3. A struct carrying a heap field — printed an empty String before.
         assert_eq!(
             run_program(
                 "struct H { name: String }\n\
@@ -10784,6 +10779,26 @@ fn main() {
                      let h = H { name: f\"alpha\" };\n\
                      { let keep: H = h; }\n\
                      println(h.name);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\n")
+        );
+        // 4. A Map whose VALUES are heap — the clone must walk the entries,
+        // not merely duplicate the handle.
+        //
+        // Read with `match` rather than `.unwrap_or(...)` on purpose: the
+        // heap-valued `m.get(k).unwrap_or(d)` spelling double-frees on its own,
+        // with NO move anywhere in the program (filed separately as
+        // B-2026-08-11-11). Using it here would have made this case fail for a
+        // reason that has nothing to do with the defensive copy.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut m: Map[String, String] = Map.new();\n\
+                     m.insert(f\"k\", f\"alpha\");\n\
+                     { let keep: Map[String, String] = m; }\n\
+                     match m.get(f\"k\") { Some(v) => println(v), None => println(f\"-\") }\n\
                  }"
             )
             .as_deref(),
