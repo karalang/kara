@@ -3146,6 +3146,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // `obj.f.m()`) also work. Plain-struct sibling of
             // `shared_type_for_call_like`.
             ExprKind::MethodCall { object, method, .. } => {
+                // `x.clone()` has x's type. Recursing is right for every
+                // receiver, since clone preserves type, and it is what lets a
+                // cloned receiver in a CHAIN resolve the same as the original:
+                // without it `n.clone().to_string()` cannot see that `n` is a
+                // scalar, because the span-keyed dispatch key it would
+                // otherwise consult is shadowed by the outer link
+                // (B-2026-08-11-22).
+                if method == "clone" {
+                    return self.type_name_of_expr(object);
+                }
                 // `arena.get(r)` on a struct-element arena returns the element
                 // struct by value (compile_arena_get loads it), so a chained
                 // `arena.get(r).field` needs the element struct's name here to
@@ -3364,6 +3374,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 ) =>
             {
                 true
+            }
+            // `clone` preserves its receiver's type, so a cloned String is
+            // string-like and a cloned Vec is not — recurse rather than adding
+            // `clone` to the name list above, which would misroute
+            // `v.clone().to_string()` on a Vec into the String-copy path for
+            // exactly the reason `sorted`/`replace`/`repeat` are excluded.
+            ExprKind::MethodCall { method, object, .. } if method == "clone" => {
+                self.expr_is_string_like(object)
             }
             _ => matches!(
                 self.type_name_of_expr(expr).as_deref(),

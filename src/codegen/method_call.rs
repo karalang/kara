@@ -2595,27 +2595,42 @@ impl<'ctx> super::Codegen<'ctx> {
         // `to_string` below WITHOUT pre-compiling the receiver, which keeps a
         // single evaluation for any receiver form (literal, `(expr)`, field,
         // call) and never double-evaluates a side-effecting receiver.
+        //
+        // B-2026-08-11-22: `dispatch_key` alone is not enough, for the same
+        // reason it was not enough above — it is span-keyed, and a chain shares
+        // one key. In `n.to_string().to_string()` the inner link reads the
+        // outer's `String.to_string`, so the receiver looks like a String here
+        // and the scalar arms below decline; the call then died in the catch-all
+        // as "no handler for method 'to_string'" even though `n` is an i64.
+        // `type_name_of_expr` is a static lookup keyed by the receiver
+        // EXPRESSION, so it cannot be shadowed, and consulting it costs nothing
+        // — in particular it does NOT pre-compile the receiver, which is the
+        // property this gate was written to preserve.
+        fn is_scalar_primitive_name(t: &str) -> bool {
+            matches!(
+                t,
+                "i8" | "i16"
+                    | "i32"
+                    | "i64"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "usize"
+                    | "f32"
+                    | "f64"
+                    | "bool"
+                    | "char"
+            )
+        }
         let recv_is_scalar_primitive = dispatch_key
             .as_deref()
             .and_then(|k| k.rsplit_once('.'))
-            .map(|(t, _)| {
-                matches!(
-                    t,
-                    "i8" | "i16"
-                        | "i32"
-                        | "i64"
-                        | "u8"
-                        | "u16"
-                        | "u32"
-                        | "u64"
-                        | "usize"
-                        | "f32"
-                        | "f64"
-                        | "bool"
-                        | "char"
-                )
-            })
-            .unwrap_or(false);
+            .map(|(t, _)| is_scalar_primitive_name(t))
+            .unwrap_or(false)
+            || self
+                .type_name_of_expr(object)
+                .is_some_and(|t| is_scalar_primitive_name(&t));
 
         if method == "clone" && args.is_empty() {
             if let Some(value) = self.try_compile_clone(object)? {
@@ -2671,6 +2686,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // shadowed by an outer chained call (`s.to_string().to_uppercase()`,
         // B-2026-07-16-20) by recognising a statically String/StringSlice
         // receiver directly.
+        // B-2026-08-11-22: a statically-known non-String receiver VETOES the
+        // `dispatch_key` half of this test — and only that half.
+        //
+        // `dispatch_key` is span-keyed, and the parser sets a MethodCall's span
+        // equal to its RECEIVER's, so in `n.to_string().to_string()` both links
+        // share one key. The chained-call collision guard where `dispatch_key`
+        // is computed cannot separate them here, because it works by requiring
+        // the key's method segment to match this call's method — and both links
+        // ARE named `to_string`. The inner link therefore read the outer's
+        // `String.to_string`, entered this String-copy path with an `i64`
+        // receiver, and panicked unwrapping an IntValue as a struct.
+        //
+        // The receiver's own type is the reliable signal, and it separates the
+        // two links exactly: the inner one reports `Some("i64")`, the outer one
+        // `None` (a `to_string` call's type is not resolvable here), so nothing
+        // that previously worked is vetoed. The `expr_is_string_like` half is
+        // left alone — it reads the receiver expression rather than a span
+        // table, so it cannot be shadowed.
+        let recv_known_non_string = self
+            .type_name_of_expr(object)
+            .is_some_and(|t| t != "String" && t != "StringSlice");
         if method == "to_string"
             && args.is_empty()
             && (dispatch_key
@@ -2678,6 +2714,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .and_then(|k| k.rsplit_once('.'))
                 .map(|(t, _)| t == "String" || t == "StringSlice")
                 .unwrap_or(false)
+                && !recv_known_non_string
                 || self.expr_is_string_like(object))
         {
             let v = self.compile_expr(object)?.into_struct_value();

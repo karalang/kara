@@ -22407,6 +22407,105 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_scalar_to_string_survives_being_chained() {
+        // B-2026-08-11-22 — chaining onto a SCALAR's `.to_string()`. Both gates
+        // that route this call read `dispatch_key`, which is span-keyed, and
+        // the parser sets a MethodCall's span equal to its receiver's — so in
+        // `n.to_string().to_string()` both links share one key. The existing
+        // collision guard separates links by requiring the key's method segment
+        // to match the call's method, which cannot help when BOTH links are
+        // named `to_string`.
+        //
+        // The inner link therefore read the outer's `String.to_string` and
+        // (a) entered the String-copy path with an i64 receiver, panicking the
+        // compiler while unwrapping an IntValue as a struct, and (b) once that
+        // was vetoed, failed the scalar gate too and died as "no handler for
+        // method 'to_string'". Both halves now consult the receiver's own
+        // static type, which is not span-keyed and so cannot be shadowed.
+        //
+        // Every element type the scalar gate lists that has a distinguishable
+        // rendering, plus receivers that are not plain identifiers (a field and
+        // a call result) since those resolve differently.
+        assert_eq!(
+            run_program(
+                "struct P { v: i64 }\n\
+                 fn f() -> i64 { return 999i64; }\n\
+                 fn main() {\n\
+                     let n: i64 = 12345;\n\
+                     let x: f64 = 1.5;\n\
+                     let b: bool = true;\n\
+                     let c: char = 'q';\n\
+                     println(n.to_string().to_string());\n\
+                     println(n.to_string().len());\n\
+                     println(x.to_string().len());\n\
+                     println(b.to_string().len());\n\
+                     println(c.to_string().len());\n\
+                     let p = P { v: 4242 };\n\
+                     println(p.v.to_string().len());\n\
+                     println(f().to_string().len());\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("12345\n5\n3\n4\n1\n4\n3\n"),
+        );
+    }
+
+    #[test]
+    fn test_e2e_clone_in_a_chain_resolves_to_its_receiver_type() {
+        // B-2026-08-11-22, second leg. `x.clone()` as a receiver inside a chain
+        // had no resolvable type, so the same span-shadowed dispatch key that
+        // broke `n.to_string().to_string()` also broke anything routed through
+        // a clone — `s.clone().to_string().len()` and
+        // `n.clone().to_string().len()` both died as "no handler for method
+        // 'to_string' on non-identifier receiver", on both a String and a
+        // scalar receiver.
+        //
+        // `clone` preserves its receiver's type, so resolving it by recursion
+        // is right for every receiver — and the Vec case is the control that it
+        // did not become "string-like" wholesale, which is the mistake the
+        // neighbouring name list exists to avoid.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let s: String = \"hello\".to_string();\n\
+                     println(s.clone().to_string().len());\n\
+                     let n: i64 = 12345;\n\
+                     println(n.clone().to_string().len());\n\
+                     let v: Vec[i64] = [1, 2, 3];\n\
+                     println(v.clone().len());\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("5\n5\n3\n"),
+        );
+    }
+
+    #[test]
+    fn test_e2e_string_receiver_to_string_chains_still_route_to_the_copy_path() {
+        // The control for B-2026-08-11-22's veto. The String-copy path must
+        // still take every case it took before — the veto is keyed on the
+        // receiver being a KNOWN non-String, so a String/StringSlice receiver
+        // (identifier, literal, or a chained String→String builtin) is
+        // untouched. If the veto were too broad these would fall through to the
+        // catch-all instead.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let s: String = \"hello\".to_string();\n\
+                     println(s.to_string().to_string());\n\
+                     println(\"abc\".to_string().len());\n\
+                     let t: String = \"  hi  \".to_string();\n\
+                     println(t.trim().to_string().len());\n\
+                     println(s.to_uppercase().to_string());\n\
+                     println(s.clone().to_string());\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("hello\n3\n2\nHELLO\nhello\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_direct_vec_iterator_terminals_survive_being_chained() {
         // B-2026-08-11-19 — `v.max()` / `.min()` / `.sum()` / `.product()`
         // without an `.iter()` hop are desugared to the `.iter().<terminal>()`

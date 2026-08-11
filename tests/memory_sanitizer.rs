@@ -40255,6 +40255,47 @@ fn main() {
     }
 
     #[test]
+    fn asan_chained_scalar_to_string_no_leak_no_double_free() {
+        // B-2026-08-11-22 — the fix reroutes which calls reach the String-copy
+        // path, and that path both mallocs a fresh buffer AND frees the
+        // intermediate receiver when it is a fresh owned String. Getting the
+        // routing right but the ownership wrong would be a leak (per iteration,
+        // so unbounded) or a double free, neither of which the value pins can
+        // see.
+        //
+        // Loops so a per-iteration imbalance accumulates rather than hiding in
+        // the noise, and covers both sides of the veto: a SCALAR receiver
+        // (which must now take the scalar path and allocate its own String) and
+        // a STRING receiver chained through a builtin (which must still take
+        // the copy path and free the intermediate).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let n: i64 = 12345;
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 40 {
+        total = total + n.to_string().len();
+        total = total + n.to_string().to_string().len();
+        i = i + 1;
+    }
+    let s: String = "  hello  ".to_string();
+    let mut j: i64 = 0;
+    while j < 40 {
+        total = total + s.trim().to_string().len();
+        total = total + s.clone().to_string().len();
+        j = j + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            // 40*(5+5) + 40*(5+9) = 400 + 560 = 960
+            &["960"],
+            "chained_scalar_to_string_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_vec_sort_by_partition_path_in_bounds() {
         // B-2026-08-11-10 § Direction 7 — `Vec.sort_by` on a low-cardinality
         // input above the entry probe's length floor takes the full-array
