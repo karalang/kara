@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 118 | 0 |
 | codegen-gap | 100 | 0 |
 | run-vs-build | 98 | 0 |
-| missing-feature | 90 | 2 |
+| missing-feature | 90 | 1 |
 | perf | 63 | 1 |
 | false-positive | 58 | 0 |
 | diagnostics | 47 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 785 | 2 |
-| typecheck | 150 | 4 |
+| typecheck | 150 | 3 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1087 surfaced · 7 open · 1069 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1087 surfaced · 6 open · 1070 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1087 surfaced
 | B-2026-08-11-7 | 2026-08-11 | typecheck | high | `Vec[f64].sort()` bypasses the `Ord` gate that design.md § Float semantics REQUIRES -- the spec's own verbatim counter-example compiles. With a NaN present, `sort()` silently leaves the Vec UNSORTED (all three backends agree), so a percentile/statistics program yields wrong answers with no diagnostic. `.sorted()`, `.max()`, `.min()` and `.contains()` on `Vec[f64]` are ungated the same way, while `Map[f64,_]`, `Set[f64]`, `SortedSet[f64]` and free `max(f64,f64)` all gate correctly. | src/typechecker/stdlib_seq.rs:1436 -- the Vec `"sort" | "reverse"` arm calls `expect_no_args` and returns `Type::Unit` with NO element-type Ord check; the Slice twin at :1164 checks mutability only. Working gate to copy: stdlib_map.rs:516/633 (SortedSet/SortedMap element+key Ord). |
 | B-2026-08-11-8 | 2026-08-11 | typecheck | medium | `F64.from(x)` / `F32.from(x)` -- the total-order wrapper constructor that design.md AND the compiler's own `T: Ord` diagnostic both name as THE fix for `f64` in an Ord/Eq/Hash context -- is unimplemented: `no associated function 'from' on type 'F64'`. Every spelling a user would try next fails, and one of them (`F64(1.5)`) panics the interpreter. | the `F64`/`F32` stdlib surface; the diagnostic that prescribes it is the `T: Ord` bound message (it renders "use the total-order wrapper `F64` (`F64.from(x)`)"), and design.md § Float semantics line ~2264 writes `scores.map(F64.from).sort()  # OK`. |
 | B-2026-08-11-10 | 2026-08-11 | codegen | low | `Vec[(i64,i64)].sort_by` on FEW-UNIQUE input (150k pairs over 8 distinct keys) is 5.93 ms / 48.8M instructions vs driftsort's 1.81 ms / 14.2M on this host -- a 3.3x gap, NOT the 1.3-1.5x originally filed. The stable 2-way quicksort run-builder built for B-2026-08-10-20 is a real 1.43x (to 34.25M / 4.15 ms) but is NOT a route to parity as this row first claimed: it still leaves 2.4x on instructions and 2.3x on wall clock. Both previously proposed options (pay down the sawtooth regression; gate on a cardinality signal) only bank that 1.43x, and the sawtooth one defends the pattern karac ALREADY WINS (22.5M vs 31.6M). Any future attempt should be budgeted against driftsort's 14.2M -- ~95 instructions per element against karac's ~325 -- before a line is written. | Vec.sort_by / Vec.sort lowering |
-| B-2026-08-11-11 | 2026-08-11 | typecheck | medium | a `ref` to a TUPLE is unusable by every accessor -- `v.get(i).unwrap()` on a `Vec[(i64,i64)]` yields `ref (i64, i64)` and then `.0` is rejected, a tuple pattern is rejected, and annotating it `(i64,i64)` is rejected, while the IDENTICAL shape on a STRUCT element (`.field` on a `ref P`) works fine; the one spelling that typechecks, `.clone()`, is check-green/run-red | tuple-index / tuple-pattern projection through a `ref` receiver |
 
 ### Wontfix (1)
 
@@ -148,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1087 surfaced
 
 </details>
 
-### Fixed (1069)
+### Fixed (1070)
 
-<details><summary>1069 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1070 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1281,6 +1280,7 @@ rejected, the operators and the real float methods left working, a user
 cross-check that the direct-method surface now agrees with the `T: Ord` bound
 surface. |
 | B-2026-08-11-1 | codegen+typecheck | high | a `Vec[char]` INDEX used directly as a method receiver (`cs[0].to_string()`) loses its `char` type and dispatches to the INTEGER method, so codegen s… | 7372313 (three root causes: the `char` name in register_var_from_type_expr, the Array element-TypeExpr fallback at the indexed-receiver site, and VecDeque in the typechecker's scalar index arm) |
+| B-2026-08-11-11 | typecheck | medium | a borrow-returning accessor's payload handed through `unwrap_or` (`m.get(k).unwrap_or(d)`, `v.get(i).unwrap_or(d)`) is an ALIAS of the container's st… | FIXED by bf43b275. `unwrap_or`'s PRESENT path now deep-clones the payload when the receiver is a borrow-returning accessor, so the result the caller owns is not the container's stored buffer. Reuses the match path's own shape gate -- split out of `borrow_get_payload_clone_te` as `borrow_payload_clone_te_gate` -- so the two paths agree on which payloads are safe to clone and how deep. Pins: e2e `test_e2e_borrow_accessor_unwrap_or_clones_heap_payload` (6 cases incl. the scalar and absent-key controls) and asan `asan_borrow_accessor_unwrap_or_clones_heap_payload`, both stash-proven red -- the ASAN one with an explicit double-free. |
 
 </details>
 
