@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 231 | 1 |
+| miscompile | 232 | 1 |
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
-| codegen-gap | 100 | 0 |
-| run-vs-build | 99 | 0 |
+| codegen-gap | 102 | 2 |
+| run-vs-build | 100 | 1 |
 | missing-feature | 90 | 0 |
 | perf | 63 | 0 |
 | false-positive | 58 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 789 | 1 |
-| typecheck | 151 | 1 |
-| interp | 135 | 0 |
+| codegen | 792 | 3 |
+| typecheck | 152 | 1 |
+| interp | 137 | 2 |
 | ownership | 44 | 0 |
 | autopar | 39 | 0 |
 | other | 36 | 0 |
@@ -124,13 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1092 surfaced · 1 open · 1080 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1096 surfaced · 4 open · 1081 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-15 | 2026-08-11 | typecheck+codegen | medium | `Vec[f64].max()` / `.min()` return an ORDER-DEPENDENT element instead of erroring, and there is currently no working remedy to point users at -- which is why B-2026-08-11-7 gated `sort`/`sorted`/`binary_search` but deliberately left these alone. Measured: `[3.0, NaN, 1.0].max()` silently skips the NaN and answers 3, while `[NaN, 3.0, 1.0]` makes BOTH `max()` and `min()` answer NaN -- the result depends on where the NaN sits. The two obvious remedies are both broken: (a) `Vec[F64].max()`, the wrapper -7's own sort gate prescribes, is rejected at typecheck by the iterator arm's numeric-or-String element test, and when that test is widened to admit the wrapper it then FAILS IN CODEGEN with 'no handler for method max on non-identifier receiver' -- i.e. it would trade a wrong answer for a run-vs-build gap; (b) `Stats.max(v)`, the f64-shaped alternative, is itself wrong AND BACKEND-DIVERGENT -- on `[NaN, 3.0, 1.0]` the interpreter answers 3 and the JIT answers NaN. Fixing (a) is the real task: add the codegen max/min-over-wrapper arm, then widen the element test, then gate. That makes `F64` a COMPLETE answer instead of a partial one. | `max`/`min` on a float sequence: the numeric-or-String element test and the (withdrawn) Ord gate in typechecker/stdlib_iter.rs `"max" | "min"`; the missing codegen dispatcher arm for max/min over a wrapper struct; and Stats.max/min in the interpreter vs try_compile_stats_call |
+| B-2026-08-11-17 | 2026-08-11 | interp | high | The INTERPRETER's `sort_by_key` with a float key returns a COMPLETELY UNSORTED sequence when a NaN is present, while both compiled backends sort correctly with NaN last. Measured on one program, `[3.5, NaN, 1.2, -2.0, 2.7].sort_by_key(|x| x)`: interp gives `3.5 NaN -2 1.2 2.7` (not sorted in any order -- 3.5 stays first), JIT and AOT both give `-2 1.2 2.7 3.5 NaN`. A silent wrong answer AND a run-vs-build divergence. The typechecker deliberately ALLOWS float keys here (stdlib_seq.rs documents the concession) on the grounds that the backends implement bit-level total-order semantics via `karac_float_cmp` -- that is true of codegen and NOT of the interpreter, which appears to use IEEE partial comparison, so NaN makes its sort incoherent. A shipped codegen test (test_e2e_vec_sort_by_key_float_nan_sorts_largest) pins the COMPILED behaviour on this exact input; the interpreter side was never asserted, which is why this survived. | interpreter float ordering |
+| B-2026-08-11-18 | 2026-08-11 | codegen | medium | Chained field access on an Option-unwrap TEMPORARY fails in codegen while working in the interpreter: `get().unwrap().x` where `get() -> Option[P]` errors with 'codegen: cannot resolve field 'x' on this receiver (its type was not recorded for codegen)'. Reproduces with a plain `struct P { x: i64 }` -- no iterator, no generics, no float wrapper. Binding the unwrap first (`let p: P = get().unwrap(); p.x`) compiles and runs correctly on all three backends, so the gap is specifically the un-bound temporary receiver. A loud failure rather than a silent one, but still a run-vs-build divergence: the interpreter prints 5 and codegen refuses to build. | codegen field access |
+| B-2026-08-11-19 | 2026-08-11 | interp+codegen | medium | The DIRECT-on-Vec iterator terminals (`v.max()` / `v.min()`, desugared to the `.iter()` chain) are POSITION-SENSITIVE: they compile in statement/argument position but FAIL when the call is nested inside a string-concat expression. Measured on `let fs: Vec[f64] = [1.5, 2.5, 0.5]`: `println(fs.max().unwrap())` answers 2.5 on interp / JIT / AOT, while `println("max=" + fs.max().unwrap().to_string())` fails on BOTH backends -- interp 'runtime error: method 'max' not found on type 'Vec' (no interpreter dispatch arm)', codegen 'Vec/String method 'max' is not yet supported in codegen'. Both backends agree, so this is a gap rather than a divergence, but the DIAGNOSTIC IS ACTIVELY MISLEADING: it blames `max` for not existing when `max` is fine and the problem is the surrounding expression shape. | direct-Vec iterator terminals |
+| B-2026-08-11-20 | 2026-08-11 | typecheck+codegen | low | `f64.to_bits()` is declared `-> u64` by the typechecker but its value renders as a SIGNED i64 on all three backends: `(-1.0).to_bits()` prints -4616189618054758400 rather than 13830554455654793216 (0xBFF0000000000000). Consistent across interp / JIT / AOT, so not a divergence -- the declared type and the printed value simply disagree whenever the high bit is set, i.e. for every negative float. | float bit introspection |
 
 ### Wontfix (1)
 
@@ -142,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1092 surfaced
 
 </details>
 
-### Fixed (1080)
+### Fixed (1081)
 
-<details><summary>1080 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1081 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1336,6 +1339,88 @@ untouched. Pins: four tests in `tests/typechecker.rs` (the eight-shape
 rejection matrix plus the value-position leg, the per-family remedies, every
 legal form as a guard, and the two collateral paths). |
 | B-2026-08-11-7 | typecheck | high | `Vec[f64].sort()` bypasses the `Ord` gate that design.md § Float semantics REQUIRES -- the spec's own verbatim counter-example compiles | e51d3e7 (gate on Vec/Slice `sort`, Vec `sorted`, Vec/Slice `binary_search`, via a new `require_ord_element` in typechecker/derives.rs. `max`/`min` split to B-2026-08-11-15; `contains` deliberately left allowed — see detail.) |
+| B-2026-08-11-15 | typecheck+codegen | medium | `Vec[f64].max()` / `.min()` return an ORDER-DEPENDENT element instead of erroring, and there is currently no working remedy to point users at -- whic… | FIXED by 3d0064f, in three parts, in the order the row prescribed:
+codegen first, then the typecheck widening, then the gate.
+
+1. `src/codegen/method_call.rs` — the total-order wrappers are admitted to the
+   iterator `max`/`min` arm's element test and to `try_compile_iter_chain_reduce`.
+   The reduce gate keys on `is_trivially_copyable_te`, a PRIMITIVE-name list
+   shared by 36 call sites, so it was NOT widened: a new
+   `is_total_float_wrapper_te` (`src/codegen/assoc_call.rs`) is OR'd in at the
+   one site that needs it. A `{ float }` wrapper is trivially copyable in the
+   sense that gate cares about (no heap payload to double-free in the synthetic
+   `Some(acc) => Some(f(acc, x))` match), but that is not the question the other
+   35 callers ask, and answering it for them would have been a silent change to
+   every one of those sites.
+
+2. `src/typechecker/stdlib_iter.rs` — the numeric-or-String element test admits
+   `F32`/`F64`/`F16`/`Bf16`.
+
+3. The gate itself, plus a per-method harm clause in `require_ord_element`
+   (`src/typechecker/derives.rs`): quoting `sort()`'s "leaves the sequence
+   completely unsorted" under `max`/`min` would describe a symptom those methods
+   do not have.
+
+WHY IT IS LANDABLE NOW AND WAS NOT IN -7. -7 withdrew this gate because the
+remedy dead-ended; the missing precondition was not only codegen but
+B-2026-08-11-13. The wrapper's total order is IEEE totalOrder, which is
+SIGN-SENSITIVE, and nothing at source level chooses a NaN's sign — measured
+before -13 landed, `Vec[F64].sorted()` on `[NaN, 3.0, 1.0]` gave `NaN,1,3` under
+the interpreter and `1,3,NaN` under both compiled backends, because interp
+produced 0xFFF8... and compiled produced 0x7FF8... (confirmed via `to_bits()`).
+Gating on top of that would have swapped a silent wrong answer for a NEW
+run-vs-build gap. -13's construction-side canonicalization removed it, and
+`max`/`min` inherit the fix.
+
+MEASURED, interp / JIT / AOT, all three identical: `[3.0, 1.0, 2.0]` as
+`Vec[F64]` gives max 3 / min 1; `[NaN, 3.0, 1.0]` AND `[3.0, NaN, 1.0]` both
+give max NaN / min 1 — position-independent, which is the property the wrapper
+buys and the raw `f64` path could not provide. On raw `f64` the same three
+inputs gave 3 / NaN / 3, i.e. the answer moved with the NaN.
+
+ONE CLAIM IN THIS ROW WAS WRONG, and one thing I first recorded as a
+correction to it was itself wrong -- both settled by measurement:
+
+  * The row's predicted codegen failure ("no handler for method 'max' on
+    non-identifier receiver") never occurs. Admitting the wrapper at typecheck
+    produces a LOUD, correct deferral from `Iterator.reduce()` instead, because
+    the reduce lowering gates on trivially-copyable elements. That is the gate
+    this fix opens, and it is a different site from the one the row names.
+
+  * The row's `Vec[f64].max()` spelling is CORRECT and I briefly recorded that
+    it was not. Mid-investigation I concluded "`Vec.max()` does not exist on
+    either backend" from a single probe that failed on both. It does exist:
+    `let fs: Vec[f64] = [1.5, 2.5, 0.5]; println(fs.max().unwrap())` answers
+    2.5 on interpreter, JIT and AOT alike (verified with the gate temporarily
+    disabled), and a shipped ASAN fixture has been compiling that exact form
+    all along. What my probe actually hit is a SEPARATE gap, filed as its own
+    row: the direct-Vec terminal desugar is POSITION-SENSITIVE, so
+    `println("max=" + fs.max().unwrap().to_string())` fails on both backends
+    with an error that blames `max` itself. Generalizing from one expression
+    shape's misleading message is what produced the wrong correction; the fix
+    was to vary the shape rather than trust the diagnostic's noun.
+
+The `Stats.max(v)` divergence the row folded in is NOT fixed here and is not the
+remedy the diagnostic names. Re-measured on all three backends it is also
+sharper than recorded: interp 3, JIT NaN, AOT 3 — the JIT is the outlier, not
+"interpreter vs compiled". The row speculated the fix might be shared with
+max/min ("one total-order float reduce that both surfaces call"); it is not —
+this fix routes through the iterator reduce path and does not touch `Stats` —
+so per the row's own instruction it is split out rather than closed here.
+
+Tests: `test_float_iter_max_min_are_gated_and_wrapper_is_accepted`
+(tests/typechecker.rs) asserts gate AND remedy together, since a gate whose
+remedy stops compiling is a regression a rejection-only test reports green on;
+`test_e2e_iter_max_min_over_total_order_wrapper` (tests/codegen.rs) pins the
+NaN-first / NaN-middle agreement.
+
+KNOWN REMAINDER, deliberately not worked around: chained
+`.max().unwrap().value` still fails in codegen ("cannot resolve field 'value'
+on this receiver"). It is PRE-EXISTING and unrelated — it reproduces with a
+plain `struct P { x: i64 }` and an `Option[P]`, no iterator or wrapper involved
+— so it is filed separately rather than papered over. The remedy is fully
+usable via a `let` binding or a `match`, both verified on all three backends,
+and the E2E test spells it the `let` way for exactly this reason. |
 | B-2026-08-11-8 | typecheck | medium | `F64.from(x)` / `F32.from(x)` -- the total-order wrapper constructor that design.md AND the compiler's own `T: Ord` diagnostic both name as THE fix f… | d8ddc56 (three parts: an ordinary Kāra `impl <W> { fn from }` in each of runtime/stdlib/{f32,f64,f16,bf16}.kara makes the call typecheck; a codegen intercept in assoc_call.rs BUILDS the wrapper struct, because codegen does not route path-calls to baked stdlib impls and the call was otherwise reaching the unknown-callee tail as a const i64 0; and type_name_of_expr in expr_ops.rs types the call-result temp so a direct `F64.from(x).value` chain resolves its field. Display is a fourth part: one seam in build_struct_display_parts covering both println and f-strings.) |
 | B-2026-08-11-13 | codegen+interp | medium | `F64`/`F32` ordering and equality depend on the SIGN BIT of a NaN, which is not stable across backends or optimization levels -- so `Vec[F64].sort()`… | FIXED by 284d44a4, by canonicalizing NaN at CONSTRUCTION in all three backends --
 the row's own preferred shape ("doing it at construction is the stronger
