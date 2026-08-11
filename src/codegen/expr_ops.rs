@@ -3852,6 +3852,56 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // `holder.px[i]` — the container reached through a struct
+                // FIELD rather than named by a local (B-2026-08-11-*). Only the
+                // Identifier shape above was resolved, so a field-held
+                // `Vec[u16]` fell through to the default and every widening
+                // cast SIGN-extended: 45517 read back as -20019, 200 from a
+                // `Vec[u8]` as -56. Silent wrong numbers, and AOT-only — the
+                // interpreter carries the value's own type and was correct, so
+                // `--interp` disagreed with the binary.
+                //
+                // `var_elem_type_exprs` is keyed by variable name and has
+                // nothing to say about fields, so resolve the way the
+                // FieldAccess arm does — receiver type name, field index,
+                // field TypeExpr — and then take the container's GENERIC
+                // ARGUMENT. The field's own path is `Vec`, whose last segment
+                // is not a uint name; the element type lives in `generic_args`.
+                if let ExprKind::FieldAccess {
+                    object: recv,
+                    field,
+                } = &object.kind
+                {
+                    let recv_ty = match &recv.kind {
+                        ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
+                        ExprKind::SelfValue => self.var_type_names.get("self"),
+                        _ => None,
+                    };
+                    if let Some(ty) = recv_ty {
+                        if let (Some(names), Some(tes)) = (
+                            self.struct_field_names.get(ty),
+                            self.struct_field_type_exprs.get(ty),
+                        ) {
+                            if let Some(idx) = names.iter().position(|n| n == field) {
+                                if let Some(TypeKind::Path(p)) = tes.get(idx).map(|te| &te.kind) {
+                                    if let Some(args) = &p.generic_args {
+                                        if let Some(crate::ast::GenericArg::Type(elem)) =
+                                            args.last()
+                                        {
+                                            if let TypeKind::Path(ep) = &elem.kind {
+                                                return ep
+                                                    .segments
+                                                    .last()
+                                                    .map(|s| is_uint_name(s.as_str()))
+                                                    .unwrap_or(false);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 // `v[i]` lane read on an unsigned-element `Vector[T, N]` —
                 // same signedness story as the reduction arm above. The
                 // typechecker records the receiver at the Index node's

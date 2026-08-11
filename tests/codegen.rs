@@ -51375,6 +51375,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_unsigned_vec_element_via_struct_field_zero_extends() {
+        // A widening cast on an unsigned Vec element reached through a STRUCT
+        // FIELD sign-extended instead of zero-extending. `expr_is_unsigned_int`
+        // resolved the `Index` arm only when the container was named by a local
+        // (`v[i]`, via `var_elem_type_exprs`); `holder.px[i]` fell through to
+        // the signed default.
+        //
+        // Silent wrong numbers, not a crash, and AOT-only — the interpreter
+        // carries the value's own type and was correct throughout, so `--interp`
+        // disagreed with the binary.
+        //
+        // Found by Cumulus's calibration slice: a master dark is a `Vec[u16]`
+        // held in a struct, and every pixel above 32767 came back negative, so
+        // subtracting the dark ADDED ~65536 at exactly the hot pixels
+        // calibration exists to remove. All three widths are pinned because
+        // each has a distinct wrap point and one arm covers them all — a fix
+        // that only handled u16 would leave the others silently broken.
+        let out = run_program(
+            r#"
+struct H16 { px: Vec[u16] }
+struct H8  { px: Vec[u8] }
+struct H32 { px: Vec[u32] }
+fn main() {
+    let mut a: Vec[u16] = Vec.new(); a.push(45517u16);
+    let mut b: Vec[u8]  = Vec.new(); b.push(200u8);
+    let mut c: Vec[u32] = Vec.new(); c.push(3000000000u32);
+    let h16 = H16 { px: a };
+    let h8  = H8  { px: b };
+    let h32 = H32 { px: c };
+    println(f"{h16.px[0] as f64} {h16.px[0] as i64} {h8.px[0] as i64} {h32.px[0] as i64}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            // Pre-fix this read "-20019 -20019 -56 -1294967296".
+            assert_eq!(out.trim(), "45517 45517 200 3000000000");
+        }
+    }
+
+    #[test]
     fn test_e2e_fstring_in_loop_no_double_free() {
         // Regression: an f-string built inside a `for`-loop body that
         // reassigns the accumulator (`line = line + f"..."`) gave that
