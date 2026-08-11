@@ -5671,11 +5671,48 @@ impl<'a> ConcurrencyChecker<'a> {
                     .and_then(|n| self.function_bodies.get(&n))
                     .map(|f| f.params.as_slice());
                 for (i, arg) in args.iter().enumerate() {
-                    let param_is_mut_ref =
-                        callee_params.and_then(|ps| ps.get(i)).is_some_and(|p| {
-                            matches!(p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_))
-                        });
-                    if arg.mut_marker || param_is_mut_ref {
+                    let param = callee_params.and_then(|ps| ps.get(i));
+                    let param_is_mut_ref = param.is_some_and(|p| {
+                        matches!(p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_))
+                    });
+                    // B-2026-08-11-27. A `shared struct` / `shared enum`
+                    // argument is REFERENCE SEMANTICS, so a callee that mutates
+                    // its parameter mutates the CALLER'S object — but it is
+                    // passed by value, with no `mut` marker (markers are the
+                    // `mut ref T` rule, design.md Feature 4 Part 1½) and no
+                    // `MutRef` in the signature. Both gates above therefore miss
+                    // it, and the call recorded NO write.
+                    //
+                    // That was a miscompile, not a missed optimization:
+                    //
+                    //     shared struct S { mut grads: Vec[Tensor[f32, [?]]] }
+                    //     go(s);                 // pushes + overwrites s.grads[0]
+                    //     let r = s.grads[0];    // reads it
+                    //
+                    // read and write looked independent, auto-par raced them,
+                    // and the shipped default `karac build` printed `0` for `1`
+                    // on ~2% of runs and SEGV'd on ~1.3% — the wrong answer
+                    // being the worse half, since it exits 0 and propagates.
+                    //
+                    // Gated on the callee actually writing that parameter, so a
+                    // read-only shared argument still parallelizes. Same shape
+                    // as the closure-body walk above (B-2026-08-08-17): the
+                    // mutation is real but invisible at the call site, so the
+                    // callee's body is where it has to be found.
+                    let param_is_mutated_shared = param.is_some_and(|p| {
+                        if !self.type_is_shared(&p.ty) {
+                            return false;
+                        }
+                        match &p.pattern.kind {
+                            PatternKind::Binding(n) => self.callee_writes_param(callee, n),
+                            // A destructured shared parameter cannot be matched
+                            // by name against the callee's write set, so fall
+                            // back to serializing: unsound silence is the bug
+                            // this row is about.
+                            _ => true,
+                        }
+                    });
+                    if arg.mut_marker || param_is_mut_ref || param_is_mutated_shared {
                         self.collect_assign_target_defines(&arg.value, writes);
                     }
                     self.collect_expr_inner_writes(&arg.value, writes);
@@ -5774,6 +5811,53 @@ impl<'a> ConcurrencyChecker<'a> {
             }
             _ => {}
         }
+    }
+
+    /// `true` when the type expression names a `shared struct` / `shared enum`
+    /// (B-2026-08-11-27). Such a value is a reference-semantics handle: passing
+    /// it BY VALUE still lets the callee mutate the caller's object, which is
+    /// the whole point of `shared` and the reason the `mut ref` / `mut`-marker
+    /// gates never fire for one.
+    fn type_is_shared(&self, ty: &TypeExpr) -> bool {
+        match &ty.kind {
+            TypeKind::Path(p) => p
+                .segments
+                .first()
+                .is_some_and(|n| self.shared_type_names.contains(n)),
+            _ => false,
+        }
+    }
+
+    /// `true` when the named callee's body writes the parameter bound to
+    /// `param_name` (B-2026-08-11-27).
+    ///
+    /// Gating on this rather than on the shared type alone keeps a READ-ONLY
+    /// shared argument parallelizable — passing a `shared` handle to a function
+    /// that only reads it is common and safe, and blanket-serializing every
+    /// shared argument would cost that. `collect_block_inner_writes` already
+    /// covers both spellings the mutation can take: a direct
+    /// `s.field[i] = …` assignment and a mutating method call like
+    /// `s.field.push(…)`.
+    ///
+    /// Re-entry is guarded through the same name stack the closure walk uses,
+    /// so a self- or mutually-recursive callee terminates instead of expanding
+    /// forever. A guarded bail returns `false`, which matches the pre-existing
+    /// behaviour for that (rare) shape rather than making it newly serial.
+    fn callee_writes_param(&self, callee: &Expr, param_name: &str) -> bool {
+        let Some(name) = self.extract_callee_name(callee) else {
+            return false;
+        };
+        if self.closure_expansion_stack.borrow().contains(&name) {
+            return false;
+        }
+        let Some(func) = self.function_bodies.get(&name).copied() else {
+            return false;
+        };
+        self.closure_expansion_stack.borrow_mut().push(name);
+        let mut writes = HashSet::new();
+        self.collect_block_inner_writes(&func.body, &mut writes);
+        self.closure_expansion_stack.borrow_mut().pop();
+        writes.contains(param_name)
     }
 
     /// Returns `true` if any callee key matching `<Type>.<method>` (or the

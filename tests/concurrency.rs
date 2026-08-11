@@ -4789,3 +4789,75 @@ fn test_move_hazard_option_combinator_receiver_blocks_group() {
         main_fc.parallel_groups
     );
 }
+
+// ── B-2026-08-11-27: a mutated `shared` argument is a write ──────
+
+/// A `shared struct` / `shared enum` argument is REFERENCE SEMANTICS: passing
+/// it by value still lets the callee mutate the caller's object. But it carries
+/// no call-site `mut` marker (markers are the `mut ref T` rule) and no `MutRef`
+/// in the signature, so both of `collect_expr_inner_writes`'s existing gates
+/// missed it and the call recorded NO write.
+///
+/// That was a miscompile on the SHIPPED default build, not a missed
+/// optimization: `writes_it(s)` and the `s.vals.len()` read after it were
+/// grouped as independent and raced. On the row's original `Vec[Tensor]`
+/// fixture the default `karac build` printed `0` for `1` on ~2% of runs and
+/// SEGV'd on ~1.3% over 300 runs of one binary — the wrong answer being the
+/// worse half, since the program exits 0 and the value propagates.
+#[test]
+fn mutated_shared_argument_serializes_against_a_later_read() {
+    let analysis = analyze(
+        "shared struct S { mut vals: Vec[i64] }\n\
+         fn writes_it(s: S) { s.vals.push(9); }\n\
+         fn main() {\n\
+             let s = S { vals: Vec.new() };\n\
+             writes_it(s);\n\
+             let n = s.vals.len();\n\
+             println(f\"{n}\");\n\
+         }",
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "a call that MUTATES its shared argument must not be grouped with a \
+         later read of it; got groups: {:?}",
+        main_fc
+            .parallel_groups
+            .iter()
+            .map(|g| g.statement_indices.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The other half of the gate, and the reason it is keyed on the callee's body
+/// rather than on the shared type alone: passing a `shared` handle to a
+/// function that only READS it is common and safe, so it must stay
+/// parallelizable. Blanket-serializing every shared argument would close the
+/// race by giving up that whole surface.
+#[test]
+fn read_only_shared_argument_is_not_serialized() {
+    let analysis = analyze(
+        "shared struct S { mut vals: Vec[i64] }\n\
+         fn reads_only(s: S) -> i64 { return s.vals.len() }\n\
+         fn main() {\n\
+             let s = S { vals: Vec.new() };\n\
+             let a = reads_only(s);\n\
+             let b = reads_only(s);\n\
+             println(f\"{a}{b}\");\n\
+         }",
+    );
+    let main_fc = get_function(&analysis, "main");
+    // No write is recorded for a read-only shared argument, so whatever the
+    // other admission gates decide, this analysis must not be the thing that
+    // blocks it — assert the write-driven serialization specifically.
+    let serialized_by_us = main_fc
+        .serialization_points
+        .iter()
+        .any(|sp| format!("{sp:?}").contains("reads_only"));
+    assert!(
+        !serialized_by_us,
+        "a read-only shared argument must not be serialized by the mutated-\
+         shared-argument rule; points: {:?}",
+        main_fc.serialization_points
+    );
+}
