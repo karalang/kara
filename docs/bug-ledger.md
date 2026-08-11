@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 233 | 1 |
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
-| codegen-gap | 102 | 0 |
+| codegen-gap | 103 | 1 |
 | run-vs-build | 100 | 0 |
 | missing-feature | 90 | 0 |
 | perf | 63 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 794 | 1 |
+| codegen | 795 | 2 |
 | typecheck | 152 | 0 |
 | interp | 138 | 1 |
 | ownership | 44 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1098 surfaced · 1 open · 1086 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1099 surfaced · 2 open · 1086 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-21 | 2026-08-11 | codegen+interp | high | EVERY un-annotated `let` holding an unsigned value prints SIGNED under both compiled backends while the interpreter prints it correctly -- `let a = 18446744073709551615u64; println(f"{a}")` is -1 under JIT/AOT and correct under `--interp`. An explicit `let a: u64` fixes it, so the value is right and only codegen's signedness classifier is wrong. Separately and in the OPPOSITE direction, the INTERPRETER's `u64.to_string()` renders signed while its f-string of the same value is correct | var_type_names population for un-annotated `let` (src/codegen/stmts.rs) against expr_is_unsigned_int (src/codegen/expr_ops.rs); interpreter to_string for unsigned ints |
+| B-2026-08-11-23 | 2026-08-11 | codegen | low | `Vec[T].sorted_by_key(f)` PASSES `karac check` and then fails at build: "Vec/String method 'sorted_by_key' is not yet supported in codegen". It is the ONLY hole in the six-method sort family -- measured on one `Vec[i64]` program, `sort` / `sort_by` / `sort_by_key` / `sorted` / `sorted_by` all check AND compile, and `sorted_by_key` alone checks-but-does-not-compile. The interpreter implements it correctly (it shares the precompute-keys path with `sort_by_key`, and got the B-2026-08-11-17 float-ordering fix for free), so the program runs under `karac run --interp` and fails under both `karac run` and `karac build`. Fails LOUDLY with an actionable message naming `--interp`, so this is a missing feature rather than a miscompile -- hence low severity despite being a check-vs-build divergence. | the Vec/String method dispatch in codegen — the arm that serves `sorted_by` has no `sorted_by_key` twin; interpreter side is method_call_seq.rs "sorted_by_key" |
 
 ### Wontfix (1)
 
