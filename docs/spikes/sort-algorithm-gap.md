@@ -1021,6 +1021,82 @@ direction: a row kept open out of reluctance to admit a dead end costs the
 queue its meaning, and a finding closed along with its dead-end parent gets
 lost.
 
+## The driftsort baseline was wrong on few-unique — the route is not to parity (B-2026-08-11-10)
+
+Re-measured on 2026-08-11 with a rebuilt harness, now checked into
+[`sortbench/`](sortbench/) so it stops being lost. The rebuild was validated
+before it was believed, on two host-independent numbers this document already
+records:
+
+| | 2026-08-10 | 2026-08-11 rebuild |
+|---|---|---|
+| karac few-unique, instructions | 48.85 M | **48.8 M** |
+| karac sawtooth, instructions | 22.53 M | **22.5 M** |
+| clone-only slope | 1.13–1.23 ms | **1.13–1.24 ms** |
+
+Three significant figures on both instruction counts, from an independently
+written harness. Whatever follows is not a harness artifact.
+
+### The correction
+
+The driftsort side does not hold up. Measured on the same host, in the same
+session, against an input generator mirrored line-for-line from the Kāra one
+and with `black_box` guarding the Rust timing loop:
+
+| pattern | karac | driftsort (this doc, 2026-08-10) | **driftsort (re-measured)** |
+|---|---|---|---|
+| random | 10.92 ms / 72.3 M | 8.2–8.9 ms | **8.65 ms** / 48.2 M |
+| **few-unique** | 5.93 ms / 48.8 M | 3.6–4.1 ms | **1.81 ms** / **14.2 M** |
+| sawtooth | 3.58 ms / 22.5 M | 6.0–6.5 ms | **4.50 ms** / 31.6 M |
+
+Random lands inside the recorded range, which is the control: it is the pattern
+where the generator matters least, and it says the two measurements are of the
+same thing. Few-unique does not — driftsort is **1.81 ms, not 3.6–4.1**, and the
+14.2 M instruction count corroborates it on a metric that does not move between
+hosts. The earlier figure appears never to have been cross-checked against
+instructions; nothing else in this document depends on it.
+
+`black_box` is why the first attempt at this re-measurement was also wrong, in
+the other direction: without it, random measures 6.77 ms rather than 8.65 and
+flatters Rust by 28%. It was only the mismatch against this document's own
+8.2–8.9 that caught it.
+
+### What that does to B-2026-08-11-10
+
+The row was filed as a 1.3–1.5x gap with a **measured route to parity**. Both
+halves change:
+
+- **The gap is bigger than filed: 3.3x wall, 3.4x instructions**, not 1.3–1.5x.
+  So the row is worth *more* than it says, not less.
+- **The route does not reach parity.** The run-builder takes few-unique to
+  34.25 M / 4.15 ms. Against driftsort's 14.2 M / 1.81 ms that is still
+  **2.4x on instructions and 2.3x on wall clock** — the two ratios agree, which
+  is what you want before believing either. It is a real 1.43x improvement and
+  it is not parity, and the row's plan was built on it being parity.
+
+Which makes both options the row proposes worth less than they looked. Option
+(a) (pay down the sawtooth regression) and option (b) (gate on a cardinality
+signal) are both ways to *keep* a 1.43x that leaves 2.4x on the table — and (a)
+in particular spends its effort protecting sawtooth, which is **the pattern
+karac already wins** (22.5 M vs driftsort's 31.6 M; 3.58 ms vs 4.50). Regressing
+your best pattern 10–18% to bank a fraction of your worst is a worse trade than
+the row assumed.
+
+### What the target actually is
+
+14.2 M instructions for 150 k elements is ~95 per element, against karac's ~325.
+driftsort is not doing a merge sort with a better constant on this input; at 8
+distinct keys it is resolving the array in a couple of passes. Anything aimed at
+this gap should be measured against **14.2 M**, and a design that cannot
+plausibly reach the low 20s of millions is not worth building — that is the
+lesson of the budget check two sections up, applied before the code rather than
+after.
+
+Not attempted here, and deliberately: the run-builder was not rebuilt. It was
+reverted and is not in git history, so pursuing option (a) means writing ~500
+lines of emitter first. Doing that to chase a target the same measurement says
+it cannot hit is the mistake this document already made once.
+
 ## Caveats
 
 - **Single host, x86_64 shared container.** Absolute numbers drift a few

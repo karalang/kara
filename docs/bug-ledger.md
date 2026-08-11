@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 118 | 0 |
 | codegen-gap | 100 | 0 |
 | run-vs-build | 98 | 0 |
-| missing-feature | 89 | 1 |
+| missing-feature | 90 | 2 |
 | perf | 63 | 1 |
 | false-positive | 58 | 0 |
 | diagnostics | 47 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 785 | 3 |
-| typecheck | 149 | 3 |
+| typecheck | 150 | 4 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1086 surfaced · 7 open · 1068 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1087 surfaced · 8 open · 1068 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1086 surfaced
 | B-2026-08-11-6 | 2026-08-11 | typecheck | high | A bare TYPE NAME in call position -- `i64(42)`, `F64(1.5)`, `bool(1)`, `String("hi")`, `Vec(1)`, or a named-field user struct `P(1)` -- is accepted by EVERY checking phase, then breaks downstream: the interpreter panics on an `unreachable!` (or raises its own 'This is a compiler bug' internal error) while the compiled backends silently evaluate it to `0`. | src/interpreter/eval_call.rs:2101 (the `unreachable!` whose message already says 'the typechecker accepted a non-callable callee'); the missing rejection belongs in the typechecker's call-callee resolution. |
 | B-2026-08-11-7 | 2026-08-11 | typecheck | high | `Vec[f64].sort()` bypasses the `Ord` gate that design.md § Float semantics REQUIRES -- the spec's own verbatim counter-example compiles. With a NaN present, `sort()` silently leaves the Vec UNSORTED (all three backends agree), so a percentile/statistics program yields wrong answers with no diagnostic. `.sorted()`, `.max()`, `.min()` and `.contains()` on `Vec[f64]` are ungated the same way, while `Map[f64,_]`, `Set[f64]`, `SortedSet[f64]` and free `max(f64,f64)` all gate correctly. | src/typechecker/stdlib_seq.rs:1436 -- the Vec `"sort" | "reverse"` arm calls `expect_no_args` and returns `Type::Unit` with NO element-type Ord check; the Slice twin at :1164 checks mutability only. Working gate to copy: stdlib_map.rs:516/633 (SortedSet/SortedMap element+key Ord). |
 | B-2026-08-11-8 | 2026-08-11 | typecheck | medium | `F64.from(x)` / `F32.from(x)` -- the total-order wrapper constructor that design.md AND the compiler's own `T: Ord` diagnostic both name as THE fix for `f64` in an Ord/Eq/Hash context -- is unimplemented: `no associated function 'from' on type 'F64'`. Every spelling a user would try next fails, and one of them (`F64(1.5)`) panics the interpreter. | the `F64`/`F32` stdlib surface; the diagnostic that prescribes it is the `T: Ord` bound message (it renders "use the total-order wrapper `F64` (`F64.from(x)`)"), and design.md § Float semantics line ~2264 writes `scores.map(F64.from).sort()  # OK`. |
-| B-2026-08-11-10 | 2026-08-11 | codegen | low | `Vec[(i64,i64)].sort_by` on FEW-UNIQUE input (150k pairs over 8 distinct keys) is ~5.39 ms vs driftsort's 3.6-4.1 on this host, and unlike its parent B-2026-08-10-20 this one HAS A MEASURED ROUTE TO PARITY: the stable 2-way quicksort run-builder built for that row takes few-unique to 4.15 ms (1.30x) with instructions 48.85M -> 34.25M (-29.9%) and mispredicts 0.221M -> 0.020M (10x), and it wins 1.23-1.30x at EVERY configuration in the span x base sweep, so the win is robust rather than a tuning artifact. THE BLOCKER IS NOT THIS PATTERN: merging it as-is costs sawtooth 10-18% (2.82 -> 3.22 ms) and random ~5%, so it cannot land unconditionally. Two ways out, neither yet attempted: (a) pay down the sawtooth regression, which is CODE GROWTH rather than algorithm -- sawtooth never executes the quicksort at all, yet its instruction count still rises 4.1% with IDENTICAL branch and mispredict counts, so the cost is phase-1 dispatch bulk on a path that does not use it; or (b) gate the run-builder on a cheap low-cardinality signal so only few-unique input pays for it. | Vec.sort_by / Vec.sort lowering |
+| B-2026-08-11-10 | 2026-08-11 | codegen | low | `Vec[(i64,i64)].sort_by` on FEW-UNIQUE input (150k pairs over 8 distinct keys) is 5.93 ms / 48.8M instructions vs driftsort's 1.81 ms / 14.2M on this host -- a 3.3x gap, NOT the 1.3-1.5x originally filed. The stable 2-way quicksort run-builder built for B-2026-08-10-20 is a real 1.43x (to 34.25M / 4.15 ms) but is NOT a route to parity as this row first claimed: it still leaves 2.4x on instructions and 2.3x on wall clock. Both previously proposed options (pay down the sawtooth regression; gate on a cardinality signal) only bank that 1.43x, and the sawtooth one defends the pattern karac ALREADY WINS (22.5M vs 31.6M). Any future attempt should be budgeted against driftsort's 14.2M -- ~95 instructions per element against karac's ~325 -- before a line is written. | Vec.sort_by / Vec.sort lowering |
+| B-2026-08-11-11 | 2026-08-11 | typecheck | medium | a `ref` to a TUPLE is unusable by every accessor -- `v.get(i).unwrap()` on a `Vec[(i64,i64)]` yields `ref (i64, i64)` and then `.0` is rejected, a tuple pattern is rejected, and annotating it `(i64,i64)` is rejected, while the IDENTICAL shape on a STRUCT element (`.field` on a `ref P`) works fine; the one spelling that typechecks, `.clone()`, is check-green/run-red | tuple-index / tuple-pattern projection through a `ref` receiver |
 
 ### Wontfix (1)
 
