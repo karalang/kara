@@ -20,6 +20,7 @@ that cost is paid once.
 | `drift2.rs` | the Rust/driftsort baseline, input generator mirrored line-for-line |
 | `one.rs` | single-sort Rust driver, for instruction counting |
 | `ir.sh` | host-independent instruction counts via callgrind |
+| `mirror.rs` | faithful Rust mirror of karac's own sort algorithm, `plain` vs `gallop`, for budget-checking a merge-side change without writing an emitter |
 
 ## Running it
 
@@ -29,7 +30,19 @@ python3 measure.py bin 7           # pure-sort wall clock, best-of-7
 rustc -O -o drift2 drift2.rs && ./drift2    # driftsort wall clock
 rustc -O -o one one.rs && ./ir.sh drift     # driftsort instructions
 ./ir.sh                                     # karac instructions
+
+rustc -O -o mirror mirror.rs                # the algorithm mirror
+./mirror few_unique plain                   # correctness (asserts sorted AND stable)
+./mirror few_unique time                    # plain vs gallop wall clock
 ```
+
+**Use `mirror.rs` before writing an emitter.** It runs karac's own algorithm on
+the real input, so a candidate merge-side change can be measured — instructions
+*and* wall clock — in minutes rather than after ~500 lines of IR emission. Its
+own validation is the same checksum below: `plain` must land within ~10% of
+karac. It is also the reason the galloping direction was refuted cheaply
+(spike § Direction 6), and its stability assertion caught a real bug in that
+prototype that produced correctly *sorted* output on every pattern.
 
 ## Method, and why each piece is there
 

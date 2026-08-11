@@ -1119,3 +1119,128 @@ it cannot hit is the mistake this document already made once.
 - The karac/rustc parity comparison holds the algorithm *and* the comparator
   shape fixed. It does not claim karac's codegen is at parity in general —
   only that it is not the cause of this gap.
+
+## Direction 6 — the galloping merge: measured, refuted, and it retires the whole merge-side family (B-2026-08-11-10)
+
+Galloping is *the* textbook answer to few-unique stable sorting — timsort's,
+and therefore Java's and CPython's. karac's merge does not have it. Anyone
+picking this row up would try it, so it was budget-checked first, per this
+document's own standing lesson, and the answer is **no** — with a reason that
+generalises well past galloping itself.
+
+### The mirror, and why a mirror
+
+[`sortbench/mirror.rs`](sortbench/mirror.rs) is a faithful Rust
+reimplementation of `emit_sort_by_mono`'s algorithm — natural-run detection
+with `RUN`-padding, then the pairwise ping-pong merge — plus a galloping
+variant of the same merge, switchable at the command line.
+
+The point of a mirror rather than a kernel probe is § "Why the budget check
+misled": that probe partitioned the full 150k array at every level, so it
+measured the kernel's *asymptotic* cost while the real sort spends most of its
+work on small ranges. A mirror runs the whole algorithm on the real input, so
+every pass sees the run-size distribution the real sort sees.
+
+**It was validated before it was believed.** Against the harness's own
+host-independent checksums, re-measured live in the same session
+(`ir.sh`: few-unique 48.8 M, sawtooth 22.5 M, random 72.3 M):
+
+| | karac | mirror `plain` | |
+|---|---|---|---|
+| few-unique | 48.8 M | 50.5 M | +3.5% |
+| sawtooth | 22.5 M | 24.0 M | +6.7% |
+
+That is the ~10% band this document already records for a hand-written Rust
+mirror of this algorithm. It did **not** start there: the first draft indexed
+slices normally and came out at 68.2 M on few-unique, 40% high, purely on
+Rust's bounds checks — which karac's emitted merge does not have (raw GEPs off
+the data and scratch pointers). A mirror that pays them is measuring a
+different loop. The unchecked version is the one below.
+
+### The result
+
+| pattern | instructions plain → gallop | | wall clock plain → gallop | |
+|---|---|---|---|---|
+| **few-unique** | 50.5 → **40.1 M** | **1.26x** | 5.472 → **5.908 ms** | **0.93x** |
+| sawtooth | 24.0 → 20.4 M | 1.18x | 3.877 → 3.563 ms | 1.09x |
+| random | 50.8 → 61.4 M | 0.83x | 13.222 → 14.044 ms | 0.94x |
+| nearly-sorted | 32.0 → 23.6 M | 1.35x | 4.264 → 4.077 ms | 1.05x |
+| sorted / reverse | 2.8 / 3.4 M | 1.00x | — | — |
+
+**On the target pattern it is a wall-clock regression while removing 26% of the
+instructions.** That is the same signature as the bounds-check hoist above, and
+the same cause: the merge is latency-bound on its loop-carried chain, and a
+gallop's binary search has a *worse* chain than the streaming merge it
+replaces — each probe address depends on the previous comparison's result.
+
+The mechanism was verified to fire, not assumed to:
+
+```
+few_unique    galloped=1619133  elemwise=142975  copies=35145  avg_copy=46
+random        galloped=693      elemwise=1895848
+```
+
+92% of few-unique's merge outputs are bulk-copied, and the adaptive threshold
+correctly switches itself off on random (0.04%). This is a real null result,
+not a dud implementation. A `MIN_GALLOP` sweep confirms it is not a tuning
+miss either — few-unique is flat at **40.3 / 40.3 / 40.3 / 40.1 / 40.1 / 41.1 M**
+for thresholds 1 / 2 / 3 / 4 / 7 / 12, while threshold 1 costs random 27%.
+
+### Why — and why this kills every merge-side direction, not just this one
+
+**Every phase-2 pass writes all `n` elements.** With `RUN = 32` and
+`n = 150 000` that is `ceil(log2(150000/32))` = 13 passes ≈ **1.8 M merge
+outputs, and that volume does not depend on key cardinality at all.**
+Galloping makes an output *cheaper* — a `memcpy` instead of a compare-and-move
+— but cannot make one fewer of them.
+
+Worse, it can only make the *top* passes cheaper. With 8 distinct keys a run of
+length L holds ~8 equal blocks of L/8, so a gallop pays only once L/8 clears
+the threshold. The bottom passes contribute exactly as many outputs as the top
+ones and are untouched. The measured average bulk copy is **46 elements**, not
+the hundreds the idea imagines.
+
+Now put driftsort's 14.2 M next to that: it is ~95 instructions per *element*.
+Spread over 13 passes that would be **7.9 instructions per merge output** —
+less than a single compare-and-move costs. Driftsort is therefore not running a
+cheaper merge. It is running about **three passes**. The gap is pass COUNT, not
+per-pass cost.
+
+And the pass count cannot be bought by raising the insertion base, because
+phase 1 is O(n · RUN):
+
+| RUN | passes | plain | gallop |
+|---|---|---|---|
+| **32** | **13** | **50.5 M** | 40.1 M |
+| 64 | 12 | 58.2 M | 46.9 M |
+| 128 | 11 | 76.8 M | 65.7 M |
+| 256 | 10 | 116.0 M | 106.0 M |
+| 1024 | 8 | 362.4 M | 355.7 M |
+
+One pass saved costs more than the pass. `RUN = 32` is already at the optimum.
+Note also that the gallop column tracks plain at a roughly constant ~10 M
+saving across the whole sweep — exactly what "galloping only reaches the top
+few passes" predicts.
+
+### Standing conclusion, updated
+
+Six directions have now been measured. Four of them — merge-kernel tweaks, RUN
+tuning, the bounds-check hoist, and galloping — optimise the **cost per merge
+output**, and the arithmetic above says that family cannot reach 14.2 M at any
+per-output cost, because `n · log2(n/RUN)` outputs is fixed. The other two
+(the 3-way and 2-way quicksort run-builders) *were* pass-count reducers, but
+both bounded the partition to a `span` and merged above it, so they removed
+only `log2(span/RUN)` of the passes — which is why the better of them landed
+at 34.25 M rather than near the target.
+
+**The one property a future attempt must have is a reduction in the number of
+full passes over the array, and bounding the partition to a span forfeits most
+of it.** That is a much narrower target than "try something faster", and it is
+what this measurement buys.
+
+Not attempted here, deliberately: a full-array stable partition. It is the only
+shape left that satisfies the constraint, but it is a ~500-line emitter whose
+bounded cousin has already been built and reverted once, and this row is
+severity `low` — karac is still 7x faster than driftsort on sorted and
+reverse-sorted input and 1.85x on sawtooth. The measurement is the deliverable;
+the build is a separate decision with better information than it had before.
