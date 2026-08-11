@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 232 | 1 |
+| miscompile | 233 | 1 |
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
 | codegen-gap | 102 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 792 | 2 |
-| typecheck | 152 | 1 |
-| interp | 137 | 2 |
+| codegen | 793 | 2 |
+| typecheck | 152 | 0 |
+| interp | 138 | 3 |
 | ownership | 44 | 0 |
 | autopar | 39 | 0 |
 | other | 36 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1096 surfaced · 3 open · 1082 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1097 surfaced · 3 open · 1083 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -132,7 +132,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1096 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-11-17 | 2026-08-11 | interp | high | The INTERPRETER's `sort_by_key` with a float key returns a COMPLETELY UNSORTED sequence when a NaN is present, while both compiled backends sort correctly with NaN last. Measured on one program, `[3.5, NaN, 1.2, -2.0, 2.7].sort_by_key(|x| x)`: interp gives `3.5 NaN -2 1.2 2.7` (not sorted in any order -- 3.5 stays first), JIT and AOT both give `-2 1.2 2.7 3.5 NaN`. A silent wrong answer AND a run-vs-build divergence. The typechecker deliberately ALLOWS float keys here (stdlib_seq.rs documents the concession) on the grounds that the backends implement bit-level total-order semantics via `karac_float_cmp` -- that is true of codegen and NOT of the interpreter, which appears to use IEEE partial comparison, so NaN makes its sort incoherent. A shipped codegen test (test_e2e_vec_sort_by_key_float_nan_sorts_largest) pins the COMPILED behaviour on this exact input; the interpreter side was never asserted, which is why this survived. | interpreter float ordering |
 | B-2026-08-11-19 | 2026-08-11 | interp+codegen | medium | The DIRECT-on-Vec iterator terminals (`v.max()` / `v.min()`, desugared to the `.iter()` chain) are POSITION-SENSITIVE: they compile in statement/argument position but FAIL when the call is nested inside a string-concat expression. Measured on `let fs: Vec[f64] = [1.5, 2.5, 0.5]`: `println(fs.max().unwrap())` answers 2.5 on interp / JIT / AOT, while `println("max=" + fs.max().unwrap().to_string())` fails on BOTH backends -- interp 'runtime error: method 'max' not found on type 'Vec' (no interpreter dispatch arm)', codegen 'Vec/String method 'max' is not yet supported in codegen'. Both backends agree, so this is a gap rather than a divergence, but the DIAGNOSTIC IS ACTIVELY MISLEADING: it blames `max` for not existing when `max` is fine and the problem is the surrounding expression shape. | direct-Vec iterator terminals |
-| B-2026-08-11-20 | 2026-08-11 | typecheck+codegen | low | `f64.to_bits()` is declared `-> u64` by the typechecker but its value renders as a SIGNED i64 on all three backends: `(-1.0).to_bits()` prints -4616189618054758400 rather than 13830554455654793216 (0xBFF0000000000000). Consistent across interp / JIT / AOT, so not a divergence -- the declared type and the printed value simply disagree whenever the high bit is set, i.e. for every negative float. | float bit introspection |
+| B-2026-08-11-21 | 2026-08-11 | codegen+interp | high | EVERY un-annotated `let` holding an unsigned value prints SIGNED under both compiled backends while the interpreter prints it correctly -- `let a = 18446744073709551615u64; println(f"{a}")` is -1 under JIT/AOT and correct under `--interp`. An explicit `let a: u64` fixes it, so the value is right and only codegen's signedness classifier is wrong. Separately and in the OPPOSITE direction, the INTERPRETER's `u64.to_string()` renders signed while its f-string of the same value is correct | var_type_names population for un-annotated `let` (src/codegen/stmts.rs) against expr_is_unsigned_int (src/codegen/expr_ops.rs); interpreter to_string for unsigned ints |
 
 ### Wontfix (1)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1096 surfaced
 
 </details>
 
-### Fixed (1082)
+### Fixed (1083)
 
-<details><summary>1082 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1083 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1797,6 +1797,16 @@ Test: `e2e_chained_field_access_on_option_result_unwrap` (tests/codegen.rs),
 on the default codegen leg because the divergence is run-vs-build. Full
 `--features llvm` suite green (102 targets, 13431 passed); fmt and clippy
 --all-targets clean. |
+| B-2026-08-11-20 | typecheck+codegen | low | `f64.to_bits()` is declared `-> u64` by the typechecker but its value renders as a SIGNED i64 on all three backends: `(-1.0).to_bits()` prints -46161… | FIXED by 1597660. `expr_is_unsigned_int` (`src/codegen/expr_ops.rs`) gains a
+`to_bits` / `to_bits32` arm returning `true` unconditionally, alongside the
+existing `abs_diff` one -- the two methods whose result signedness is fixed by
+the METHOD rather than the receiver. Recursing on the receiver (what the
+Self-returning methods below it do) is wrong here precisely because the
+receiver is a float, so it answered `false` and codegen emitted `%lld`.
+
+Pin: `e2e_to_bits_renders_unsigned` in `tests/codegen.rs` -- negative, negative
+non-power-of-two, a positive control, `to_bits32`, and the bare `println` path
+alongside the f-string one. |
 
 </details>
 
