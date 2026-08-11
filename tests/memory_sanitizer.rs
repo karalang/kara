@@ -2685,6 +2685,47 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_struct_method_bare_type_param_temp_arg_no_leak() {
+        // B-2026-08-11-3: a generic struct's method whose parameter is the bare
+        // TYPE PARAMETER (`fn push(mut ref self, v: T)`) has its arg
+        // deep-copied at every retaining consume site in the mono body
+        // (`owned_vecstr_params`, B-2026-07-11-35), so the CALLER keeps
+        // ownership of the argument. A fresh TEMPORARY argument therefore had
+        // no owner anywhere and leaked one element buffer per call — 50
+        // iterations leaked 800 bytes in 50 blocks before the fix, while the
+        // program printed the right answer on all three backends.
+        //
+        // Both argument forms are exercised on purpose: the temporary is the
+        // defect, and the NAMED binding next to it is the double-free control —
+        // its own let-drop already owns the buffer, so a caller-side free that
+        // fires for it too would abort under ASAN.
+        assert_clean_asan_run(
+            r#"
+struct Stack[T] { items: Vec[T] }
+impl[T] Stack[T] {
+    fn new() -> Stack[T] { Stack { items: Vec.new() } }
+    fn push(mut ref self, v: T) { self.items.push(v); }
+    fn len(ref self) -> i64 { self.items.len() }
+}
+fn main() {
+    let mut temps: Stack[Vec[i64]] = Stack.new();
+    let mut named: Stack[Vec[i64]] = Stack.new();
+    let mut i: i64 = 0i64;
+    while i < 50i64 {
+        temps.push([i, i + 1i64, i + 2i64]);
+        let v: Vec[i64] = [i, i + 1i64];
+        named.push(v);
+        i = i + 1i64;
+    }
+    println((temps.len() + named.len()).to_string());
+}
+"#,
+            &["100"],
+            "generic_struct_method_bare_type_param_temp_arg_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_generic_enum_heap_payload_bind_return_no_leak_or_double_free() {
         // B-2026-07-13-3: a GENERIC enum's bare-`T` variant payload (`enum
         // Opt[T] { Yes(T) }`) sizes its payload AREA for the erased `T` (1 word)

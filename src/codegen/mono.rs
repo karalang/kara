@@ -1027,6 +1027,85 @@ impl<'ctx> super::Codegen<'ctx> {
         self.closure_fn_types = saved.closure_fn_types;
     }
 
+    /// Is the callee's parameter at `idx` written as a BARE type parameter
+    /// (`v: T`), by value? That is the exact shape B-2026-07-11-35 routes
+    /// through `owned_vecstr_params` — the mono resolves `T` to its concrete
+    /// `Vec`/`String` and every retaining consume site in the body deep-copies
+    /// it, so the caller keeps ownership of the argument and must free a fresh
+    /// temporary itself (B-2026-08-11-3).
+    ///
+    /// Borrow forms (`ref T` / `mut ref T` / `mut Slice[T]`) are excluded: they
+    /// never enter `owned_vecstr_params`, so the callee neither copies nor
+    /// consumes and the caller's own binding still owns the buffer. A param
+    /// spelled with the type param NESTED (`v: Vec[T]`) is excluded too — only
+    /// a single path segment naming one of the callee's own generic params
+    /// matches.
+    ///
+    /// A callee that can hand the parameter BACK OUT is rejected, and the test
+    /// is syntactic rather than a body walk: if the declared return type
+    /// mentions the same type param anywhere (`-> T`, `-> Vec[T]`,
+    /// `-> Option[T]`), the caller's consumer of the RESULT may own the very
+    /// buffer being passed in, and a caller-side free would be the second one.
+    /// This is strictly stronger than `fn_returns_param`, which only recognizes
+    /// a param reaching a return site bare or inside an aggregate literal and so
+    /// answers false for a FORWARDING tail (`fn pick[T](a: T, b: T) -> T {
+    /// id(a) }`) — measured as a real double-free abort, not a hypothetical.
+    /// The leak this fix targets is on a `push`-shaped sink (return type unit,
+    /// or anything not mentioning `T`), which the rule admits.
+    fn generic_param_is_bare_type_param(generic_fn: &Function, idx: usize) -> bool {
+        let Some(param) = generic_fn.params.get(idx) else {
+            return false;
+        };
+        if matches!(
+            param.ty.kind,
+            TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
+        ) {
+            return false;
+        }
+        let TypeKind::Path(path) = &param.ty.kind else {
+            return false;
+        };
+        if path.generic_args.is_some() || path.segments.len() != 1 {
+            return false;
+        }
+        let tp = &path.segments[0];
+        let declares_tp = generic_fn
+            .generic_params
+            .as_ref()
+            .is_some_and(|gp| gp.params.iter().any(|p| &p.name == tp));
+        if !declares_tp {
+            return false;
+        }
+        !generic_fn
+            .return_type
+            .as_ref()
+            .is_some_and(|rt| Self::type_expr_mentions(rt, tp))
+    }
+
+    /// Does `te` name `tp` anywhere in its tree? Used by
+    /// [`Self::generic_param_is_bare_type_param`] to reject a callee whose
+    /// return type could carry a by-value type-param argument back out to the
+    /// caller.
+    fn type_expr_mentions(te: &TypeExpr, tp: &str) -> bool {
+        match &te.kind {
+            TypeKind::Path(p) => {
+                p.segments.iter().any(|s| s == tp)
+                    || p.generic_args.as_ref().is_some_and(|args| {
+                        args.iter().any(|a| match a {
+                            GenericArg::Type(t) => Self::type_expr_mentions(t, tp),
+                            _ => false,
+                        })
+                    })
+            }
+            TypeKind::Ref(inner)
+            | TypeKind::MutRef(inner)
+            | TypeKind::MutSlice(inner)
+            | TypeKind::Array { element: inner, .. } => Self::type_expr_mentions(inner, tp),
+            TypeKind::Tuple(elems) => elems.iter().any(|t| Self::type_expr_mentions(t, tp)),
+            _ => true,
+        }
+    }
+
     pub(super) fn compile_generic_call(
         &mut self,
         name: &str,
@@ -1074,7 +1153,49 @@ impl<'ctx> super::Codegen<'ctx> {
                 && self.llvm_ty_is_vec_struct(val.get_type())
                 && self.string_typed_exprs.contains(&arg_key)
                 && !self.rhs_stages_fstr_acc(&a.value);
-            if is_fresh_string_temp {
+            // B-2026-08-11-3 — the `Vec` sibling of the arm above, and the
+            // third leg B-2026-07-11-35 (mono.rs, the `owned_vecstr_params`
+            // registrar) names but never landed: "paired with per-monomorph
+            // struct-drop synthesis … and caller-side fresh-owned-temp
+            // cleanup". The first two legs shipped; this is the third.
+            //
+            // A param declared as the BARE TYPE PARAMETER (`fn push(mut ref
+            // self, v: T)`) resolves through `subst_monomorph_type_params` to
+            // its concrete `Vec[..]`, so the mono prologue enters it in
+            // `owned_vecstr_params` — which makes every retaining consume site
+            // in the body DEEP-COPY it (`self.items.push(v)` emits the `dcopy`
+            // malloc+memcpy). That is the caller-retains convention: the callee
+            // owns an independent buffer and never frees the caller's, so a
+            // fresh TEMP argument has no owner anywhere and leaks one buffer
+            // per call. A NAMED binding is clean only because its own let-drop
+            // still owns the original — which is why this reads as an
+            // argument-form bug rather than a drop-synthesis one (the
+            // container's per-element drain is correct and does fire; it just
+            // frees the callee's copy).
+            //
+            // Deliberately narrower than `compile_call`'s #20 arm, which
+            // materializes every fresh heap Vec temp: this fires ONLY when the
+            // callee param is written as a bare type param. That is exactly the
+            // set B-2026-07-11-35 converted to deep-copy, so it cannot disturb
+            // the `Vec[T]`-declared param the String arm's note warns about
+            // (that shape MOVES/aliases into the callee's sink, where a
+            // caller-side free would be a second free). `Identifier` args are
+            // excluded by the fresh-temp predicate; collection literals are
+            // admitted explicitly because `expr_yields_fresh_owned_temp` is
+            // Call/MethodCall-only and the headline reproducer passes a literal.
+            let is_collection_literal_arg = matches!(
+                &a.value.kind,
+                ExprKind::ArrayLiteral(_)
+                    | ExprKind::PrefixCollectionLiteral { .. }
+                    | ExprKind::RepeatLiteral { .. }
+            );
+            let is_fresh_bare_type_param_vec_temp = (self.expr_yields_fresh_owned_temp(&a.value)
+                || is_collection_literal_arg)
+                && self.llvm_ty_is_vec_struct(val.get_type())
+                && !self.string_typed_exprs.contains(&arg_key)
+                && !self.rhs_stages_fstr_acc(&a.value)
+                && Self::generic_param_is_bare_type_param(&generic_fn, i);
+            if is_fresh_string_temp || is_fresh_bare_type_param_vec_temp {
                 self.materialize_owned_temp(val, arg_key);
             }
         }
