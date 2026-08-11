@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 228 | 0 |
+| miscompile | 229 | 1 |
 | leak | 157 | 0 |
 | double-free | 118 | 0 |
 | codegen-gap | 100 | 0 |
-| run-vs-build | 95 | 0 |
+| run-vs-build | 96 | 1 |
 | missing-feature | 88 | 0 |
 | perf | 62 | 1 |
 | false-positive | 58 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 782 | 2 |
-| typecheck | 142 | 0 |
+| codegen | 783 | 3 |
+| typecheck | 143 | 1 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,14 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1076 surfaced · 2 open · 1064 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1078 surfaced · 4 open · 1064 fixed** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-10-20 | 2026-08-10 | codegen | medium | `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~1.30x Rust's `sort_by` (karac ~10.6-11.1 ms vs driftsort 8.2-8.9, 150k pairs, this host). Residual of B-2026-08-10-19. THE FIX IS A 2-WAY BRANCHLESS PARTITION RUN-BUILDER, and that is now measured rather than argued: a CALIBRATED kernel benchmark puts a 2-way partition level at 2.34-2.47 ns/element against a branchless merge pass at 4.06-4.11, i.e. 1.66-1.74x cheaper per element, because both of its passes read src[i] with i advancing UNCONDITIONALLY (no loop-carried dependency on the load address, which is what caps the merge) and deeper levels work on cache-resident blocks while every merge pass streams 2.4 MB. PROJECTION on karac's own measured per-pass cost and phase split (total ~10.87 ms = phase 1 ~3.18 + phase 2 ~7.69): quicksort route = phase 1 ~1.74 (insertion base 16, half the shifts) + 3.51 (10 partition levels) + 2.37 (4 merge passes) = ~7.6 ms, i.e. ~1.43x, landing at or just ahead of driftsort and CLOSING the row. THE IR MUST HIT A BUDGET: <= ~15 instructions per element per partition level. The mirror's 2-pass partition is ~11-13; the abandoned 3-way attempt emitted ~47 (it wrote the element to all three buckets every iteration), which at ~4 instr/cycle is ~4.2 ns/element -- WORSE than a merge pass at 3.94, and exactly the wall-clock wash it measured. Check the budget EARLY with cachegrind on the partition loop alone (Ir / elements) before building the rest. Full write-up in docs/spikes/sort-algorithm-gap.md. | Vec.sort_by / Vec.sort lowering |
 | B-2026-08-10-21 | 2026-08-10 | codegen | high | the `UseAfterMove` defensive copy that `cli.rs` promises DOES NOT EXIST for any heap type on the binding-to-binding move path -- `karac check` exits 0 by design, `karac build` exits 0, and the reuse reads freed memory: garbage for String/Vec/struct, a hard SEGFAULT for Map and Set. Filed as a container-source gap; measured, the container read is the one case that IS defended and the 'working' rows were static-literal and `.len()` artifacts | no `UseAfterMove`-keyed mechanism exists in codegen; `src/cli.rs` `is_fatal_ownership_kind` asserts one. Fix funnels: `OwnershipError.consume_span` (spans already computed), `suppress_source_vec_cleanup_for_arg_ex` (single disarm funnel), `emit_clone_fn_for_type_expr` (type-directed copy) |
+| B-2026-08-11-1 | 2026-08-11 | codegen | high | a `Vec[char]` INDEX used directly as a method receiver (`cs[0].to_string()`) loses its `char` type and dispatches to the INTEGER method, so codegen silently prints `120` where the interpreter prints `x` -- the same root gap hard-errors on `VecDeque[char]` and `Array[char, N]` | the indexed-receiver element-TypeExpr lookup in `compile_method_call` (src/codegen/method_call.rs) -- the same resolution B-2026-08-10-13 fixed for sort_by comparator params, still missing for an index expression used directly as a receiver |
+| B-2026-08-11-2 | 2026-08-11 | typecheck | medium | `char` and `bool` receivers skip method-existence checking entirely, so ANY method name passes `karac check` and unifies with ANY return type -- the program then dies at run time under `--interp` or, under `build`, with a message that blames codegen for what is user error | the method-existence check in src/typechecker/expr_method_call.rs -- enforced for String / i64 / f64 / u8, absent for `char` and `bool` |
 
 ### Fixed (1064)
 
