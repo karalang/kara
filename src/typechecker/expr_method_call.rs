@@ -5946,13 +5946,27 @@ impl<'a> super::TypeChecker<'a> {
                 // u8 { fn dbl(self) -> Self { ... } }`) dispatches through the
                 // same impl-table path a `Named` receiver uses: register it as
                 // `(prim, [])` and fall through to the resolution below. The
-                // builtin comparison / cast ops have dedicated backend arms and
-                // their baked stdlib impls (`Ord`/`Eq`/… on primitives) carry a
+                // builtin comparison ops have dedicated backend arms and their
+                // baked stdlib impls (`Ord`/`Eq`/… on primitives) carry a
                 // `(self, other)`-shaped signature that the impl-table dispatch
                 // mis-counts (`a.cmp(b)` → "expects 2 args, found 1"); keep them
                 // on the historical poison-with-diagnostic path. So route ONLY a
                 // NON-builtin method that has a real impl candidate; everything
                 // else falls through to the poison branch. B-2026-07-03-5.
+                //
+                // `cast` was on this list until B-2026-08-11-4 and did not
+                // belong: it names no dispatchable method anywhere. Kāra spells
+                // conversion with the `as` OPERATOR (design.md § Numeric
+                // Semantics defines every legal pair; the fallible int→char form
+                // is the static `char.try_from`), and grepping `src/` and
+                // `runtime/src/` found the string `"cast"` in this list and in no
+                // dispatch arm, trait, test, example or `.kara` source. So the
+                // entry exempted a method that does not exist, which cost two
+                // things: `v.cast()` was check-green then run-red on EVERY
+                // primitive alike, and a user `impl i64 { fn cast(self) -> f64 }`
+                // was unreachable, because the exemption short-circuits ahead of
+                // the impl lookup. Removing it needs no replacement — the normal
+                // path already does the right thing in both directions.
                 //
                 // `char` and `bool` joined the numeric primitives here in
                 // B-2026-08-11-2. They had been left on the silent fall-through
@@ -5975,7 +5989,7 @@ impl<'a> super::TypeChecker<'a> {
                 // used to poison to `Type::Error` too, so `let n: i64 =
                 // c.shout()` passed; now its return type is checked.
                 const PRIMITIVE_VALUE_METHODS: &[&str] =
-                    &["cmp", "eq", "ne", "lt", "le", "gt", "ge", "cast"];
+                    &["cmp", "eq", "ne", "lt", "le", "gt", "ge"];
                 if matches!(
                     &receiver_for_lookup,
                     Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char

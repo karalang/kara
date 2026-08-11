@@ -14398,6 +14398,93 @@ fn test_char_numeric_conversion_typo_names_the_cast() {
 }
 
 #[test]
+fn test_cast_method_rejected_on_every_primitive() {
+    // B-2026-08-11-4. `cast` sat on the `PRIMITIVE_VALUE_METHODS` exemption,
+    // which holds a name off BOTH the impl-table dispatch and the
+    // `NoMethodFound` error. The other entries earn that: `cmp`/`eq`/… have
+    // baked `Eq`/`Ord` impls whose `(self, other)` signature the impl-table
+    // dispatch mis-counts. `cast` had no implementation anywhere — Kāra spells
+    // conversion with the `as` OPERATOR — so the entry exempted a method that
+    // does not exist, leaving `v.cast()` check-green and run-red on every
+    // primitive alike.
+    for (lit, ty) in [
+        ("5i64", "i64"),
+        ("2.5f64", "f64"),
+        ("'x'", "char"),
+        ("true", "bool"),
+        ("5u8", "u8"),
+    ] {
+        let src = format!("fn main() {{ let v = {lit}; let _ = v.cast(); }}");
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("no method 'cast'") && e.message.contains(ty)),
+            "expected 'no method cast' naming '{ty}', got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_user_impl_named_cast_on_a_primitive_is_reachable() {
+    // The second cost of the dead exemption: it short-circuits AHEAD of the impl
+    // lookup, so a user method that happened to be named `cast` was unreachable
+    // on a primitive receiver — the one name in the language you could not
+    // define there. Now it dispatches like any other, and its return type is
+    // enforced.
+    let src = "impl i64 {
+                   fn cast(self) -> f64 { return self as f64 }
+               }
+               impl char {
+                   fn cast(self) -> i64 { return self as i64 }
+               }
+               fn main() {
+                   let x: i64 = 7;
+                   let c: char = 'A';
+                   PLACEHOLDER
+               }";
+    typecheck_ok(&src.replace(
+        "PLACEHOLDER",
+        "let a: f64 = x.cast(); let b: i64 = c.cast(); let _ = a; let _ = b;",
+    ));
+    let errors =
+        typecheck_errors(&src.replace("PLACEHOLDER", "let a: String = x.cast(); let _ = a;"));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'String'") && e.message.contains("f64")),
+        "expected the user cast impl's return type to be checked, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_comparison_op_exemption_survives_the_cast_removal() {
+    // The guard on the change above: the exemption's REAL purpose is the baked
+    // `Eq`/`Ord` impls, whose `(self, other)` signature mis-counts under
+    // impl-table dispatch (`a.cmp(b)` → "expects 2 args, found 1"). Those names
+    // must still pass on every receiver that carries the impl — env_build.rs
+    // registers them for the integers, `bool`, `char` and `String`. (Floats are
+    // deliberately excluded there — IEEE NaN breaks Eq/Ord — which is why they
+    // are not in this list; see B-2026-08-11-9.)
+    for (lit, other) in [
+        ("5i64", "6i64"),
+        ("5u8", "6u8"),
+        ("5i32", "6i32"),
+        ("'x'", "'y'"),
+        ("true", "false"),
+    ] {
+        typecheck_ok(&format!(
+            "fn main() {{ let a = {lit}; \
+             let _ = a.cmp({other}); let _ = a.eq({other}); let _ = a.ne({other}); \
+             let _ = a.lt({other}); let _ = a.le({other}); let _ = a.gt({other}); \
+             let _ = a.ge({other}); }}"
+        ));
+    }
+}
+
+#[test]
 fn test_abs_on_signed_and_float_typechecks() {
     // `abs` is a built-in value-receiver method on signed-integer and float
     // primitives, typed as `-> Self`. It must NOT trip the numeric
