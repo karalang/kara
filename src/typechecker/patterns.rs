@@ -1545,6 +1545,31 @@ impl<'a> super::TypeChecker<'a> {
                 .insert(SpanKey::from_span(&pattern.span), "Tuple".to_string());
             return;
         }
+        // B-2026-08-11-21: a SCALAR binding records its type name too. Codegen
+        // picks `%llu` vs `%lld` from a syntactic classifier whose identifier
+        // arm reads `var_type_names`, and for a `let` with no annotation
+        // nothing populated it — so `let a = 18446744073709551615u64;
+        // println(f"{a}")` printed -1 compiled while the interpreter printed
+        // the value. The annotated spelling was always correct because the
+        // ANNOTATION is what filled that map.
+        //
+        // Recorded here rather than patched into the classifier because
+        // codegen's un-annotated `let` path already ends in
+        // `record_var_type_name` for whatever surface it finds — so one entry
+        // here fixes every consumer of that map at once, which is what the
+        // narrow-int widening and coercion paths need as well.
+        //
+        // Signed sizes are recorded alongside unsigned deliberately: the
+        // classifier then answers "not unsigned" from a present entry rather
+        // than from an absent one, so a future consumer cannot mistake
+        // "unrecorded" for "signed".
+        if matches!(ty, Type::Int(_) | Type::UInt(_)) {
+            if let Some(name) = crate::typechecker::types::method_callee_type_name(ty) {
+                self.pattern_binding_types
+                    .insert(SpanKey::from_span(&pattern.span), name);
+            }
+            return;
+        }
         // `Map[K, V]` / `Set[T]` payload binding (e.g.
         // `match opt { Some(m) => m.len() }`): record the FULL collection
         // `TypeExpr` — like the Tuple arm above, NOT the inner-element form

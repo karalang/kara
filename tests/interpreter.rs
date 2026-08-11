@@ -31816,3 +31816,33 @@ fn direct_vec_iterator_terminals_survive_being_chained() {
         "5\nmax=5\n1\nsum=9\nprod=15\n"
     );
 }
+
+#[test]
+fn unsigned_to_string_matches_fstring_interpolation() {
+    // B-2026-08-11-21 leg 2, and it pointed the OPPOSITE way to leg 1: the
+    // interpreter rendered `u64.to_string()` signed while its f-string of the
+    // same value was correct, and codegen got both right.
+    //
+    // The unsigned check asked `expr_types[receiver span]`, but the parser
+    // gives a MethodCall its receiver's span, so that entry held the call's
+    // `Str` result by the time the interpreter ran — measured as
+    // `expr_types[SpanKey(66, 2)] = Str`. `f"{hi}"` was correct precisely
+    // because its interpolated expression is the bare identifier, whose span
+    // nothing aliases. The receiver type is now stashed at the closing paren,
+    // the leaf span `pow` and the bit intrinsics already use.
+    //
+    // The signed binding is the control: a fix that simply rendered every
+    // `Value::Int` unsigned would turn -1 into 2^64-1.
+    assert_eq!(
+        run("fn main() {\n\
+                 let hi: u64 = 9223372036854775808u64;\n\
+                 let all: u64 = 18446744073709551615u64;\n\
+                 let neg: i64 = 0i64 - 1i64;\n\
+                 println(f\"{hi}\");\n\
+                 println(hi.to_string());\n\
+                 println(all.to_string());\n\
+                 println(neg.to_string());\n\
+             }\n"),
+        "9223372036854775808\n9223372036854775808\n18446744073709551615\n-1\n"
+    );
+}

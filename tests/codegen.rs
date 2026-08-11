@@ -22407,6 +22407,47 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_unannotated_unsigned_let_prints_unsigned() {
+        // B-2026-08-11-21 leg 1. Codegen picks `%llu` vs `%lld` from a
+        // syntactic classifier whose identifier arm reads `var_type_names` —
+        // and nothing populated that map for a `let` with no annotation, so
+        // EVERY inferred binding holding an unsigned value printed signed.
+        // `let a = 18446744073709551615u64` printed -1 compiled while the
+        // interpreter printed the value; the annotated spelling was always
+        // right, because the annotation is what filled the map.
+        //
+        // All five producing shapes from the row (suffixed literal, fn return,
+        // binop, `to_bits`, `reverse_bits`), plus the two controls that were
+        // already correct and must stay so: an ANNOTATED binding, and
+        // interpolating the producing expression directly rather than through a
+        // binding. The signed binding is the control in the other direction — a
+        // fix that made everything unsigned would print it as 2^64-1.
+        assert_eq!(
+            run_program(
+                "fn u64_fn() -> u64 { return 18446744073709551615u64; }\n\
+                 fn main() {\n\
+                     let a = 18446744073709551615u64;\n\
+                     let b = u64_fn();\n\
+                     let c = 9223372036854775808u64 + 0u64;\n\
+                     let x: f64 = 1.5;\n\
+                     let d = x.to_bits();\n\
+                     let e = (18446744073709551615u64).reverse_bits();\n\
+                     let ann: u64 = 18446744073709551615u64;\n\
+                     let neg = 0 - 1;\n\
+                     println(f\"{a} {b} {c} {d} {e}\");\n\
+                     println(f\"{ann} {x.to_bits()} {neg}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some(
+                "18446744073709551615 18446744073709551615 9223372036854775808 \
+                 4609434218613702656 18446744073709551615\n\
+                 18446744073709551615 4609434218613702656 -1\n"
+            ),
+        );
+    }
+
+    #[test]
     fn test_e2e_scalar_to_string_survives_being_chained() {
         // B-2026-08-11-22 — chaining onto a SCALAR's `.to_string()`. Both gates
         // that route this call read `dispatch_key`, which is span-keyed, and
@@ -61191,26 +61232,35 @@ fn main() {
 
     #[test]
     fn test_codegen_primitive_const_u64_max_bit_pattern_preserved() {
-        // u64.MAX bit pattern is 0xFFFF_FFFF_FFFF_FFFF. Codegen's
-        // println uses a signed format — that's a separate concern;
-        // the constant value is correctly emitted as i64-bit-width
-        // 0xFFFF... which, interpreted signed, prints as "-1". The
-        // value parity test below verifies the bit pattern survives by
-        // using it in an unsigned-aware comparison.
-        let out = run_program("fn main() { let x = u64.MAX; println(x); }");
-        if let Some(out) = out {
-            assert_eq!(out.trim(), "-1");
-        }
+        // u64.MAX bit pattern is 0xFFFF_FFFF_FFFF_FFFF, and it now PRINTS as
+        // 18446744073709551615.
+        //
+        // This test previously asserted "-1", with a comment calling the signed
+        // rendering "a separate concern". It was not separate — it was
+        // B-2026-08-11-21, and pinning it here is how a wrong answer survived:
+        // `let x = u64.MAX` is an un-annotated binding, exactly the shape whose
+        // type was never recorded, so codegen's `%llu`/`%lld` classifier fell
+        // back to signed. The interpreter printed the right number the whole
+        // time, so this assertion also pinned a run-vs-build divergence as
+        // expected behaviour.
+        //
+        // Strict `assert_eq!` rather than the tolerant `if let Some(out)` it
+        // used to have: a stale runtime archive must fail this loudly instead of
+        // asserting nothing (CLAUDE.md).
+        assert_eq!(
+            run_program("fn main() { let x = u64.MAX; println(x); }").as_deref(),
+            Some("18446744073709551615\n"),
+        );
     }
 
     #[test]
     fn test_codegen_primitive_const_usize_max() {
-        // v1 is 64-bit only — usize.MAX == u64.MAX. Same signed-print
-        // caveat as the u64 test.
-        let out = run_program("fn main() { let x = usize.MAX; println(x); }");
-        if let Some(out) = out {
-            assert_eq!(out.trim(), "-1");
-        }
+        // v1 is 64-bit only — usize.MAX == u64.MAX. Same correction as the u64
+        // test above (B-2026-08-11-21); this one had pinned "-1" too.
+        assert_eq!(
+            run_program("fn main() { let x = usize.MAX; println(x); }").as_deref(),
+            Some("18446744073709551615\n"),
+        );
     }
 
     #[test]

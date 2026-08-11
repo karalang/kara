@@ -2489,6 +2489,26 @@ impl YieldPointWalker<'_> {
 /// Functions network-boundary by Polymorphic declared-effect candidacy
 /// without any concrete sub-call yield points are omitted from the
 /// table (mirrors `YieldPointsTable`'s presence rule).
+/// Scalar primitives, whose names the state-struct layout deliberately drops —
+/// see the `filter` in `record_entry`.
+fn is_scalar_primitive_type_name(n: &str) -> bool {
+    matches!(
+        n,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "usize"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+    )
+}
+
 pub fn build_state_struct_layouts(
     program: &Program,
     network_yield: &std::collections::HashMap<String, bool>,
@@ -2651,6 +2671,21 @@ impl StateStructLayoutWalker<'_> {
                     entry
                         .span_key
                         .and_then(|k| self.pattern_binding_types.get(&k).cloned())
+                        // A primitive-typed field stays `None` here, which is
+                        // this layout's contract: codegen falls through to its
+                        // primitive-sizing path on an absent entry, and a
+                        // present `"i64"` would send it down the named-type
+                        // path instead.
+                        //
+                        // The filter became necessary when B-2026-08-11-21 made
+                        // the typechecker record scalar binding types — it had
+                        // to, because codegen's `%llu`/`%lld` choice reads that
+                        // map and an un-annotated `let x = <u64>` printed
+                        // signed without it. Every OTHER consumer wants the
+                        // scalar name; this one wants its absence, so the
+                        // narrowing belongs here rather than at the recording
+                        // site.
+                        .filter(|n| !is_scalar_primitive_type_name(n))
                 });
                 self.fields.push(crate::ast::StateStructField {
                     name: entry.name.clone(),

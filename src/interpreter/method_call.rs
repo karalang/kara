@@ -1648,7 +1648,17 @@ impl<'a> super::Interpreter<'a> {
             // elements as span-less `Value::Int`, which stay signed (documented
             // residual; the i64-carrier model can't recover per-element types).
             if let Value::Int(n) = &obj {
-                if self.span_type_is_unsigned64(&object.span) {
+                // B-2026-08-11-21 leg 2: `args_close_span` FIRST. `object.span`
+                // is aliased by this very call — the parser gives a MethodCall
+                // its receiver's span — so `expr_types` there holds the call's
+                // `Str` result, and a u64 receiver read as signed. The
+                // typechecker stashes the receiver type at the closing paren for
+                // exactly this reason (the same hatch `pow` uses); the
+                // receiver-span probe stays as the fallback for the shapes that
+                // are not aliased.
+                if self.span_type_is_unsigned64(args_close_span)
+                    || self.span_type_is_unsigned64(&object.span)
+                {
                     return Value::String(format!("{}", *n as u64));
                 }
             }

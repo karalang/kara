@@ -5014,6 +5014,28 @@ impl<'a> super::TypeChecker<'a> {
         // nominal name so the generic search finds the refinement's own
         // impl (phase-9 step 2, §1C).
         let receiver_for_lookup: Type = receiver_for_method_lookup(&obj_ty);
+        // B-2026-08-11-21 leg 2: stash a SCALAR receiver's type at the
+        // closing-paren span for `to_string`.
+        //
+        // The interpreter renders `Value::Int` signed unless it can see the
+        // receiver was unsigned, and it was asking `expr_types[receiver span]`
+        // — but the parser sets a MethodCall's span equal to its receiver's, so
+        // by the time the interpreter runs that entry holds the CALL's result
+        // (`Str`). Measured: `expr_types[SpanKey(66, 2)] = Str` for
+        // `hi.to_string()`, so the check answered "not unsigned" and
+        // `9223372036854775808u64` printed as its negative two's-complement
+        // twin — while `f"{hi}"`, whose interpolated expression is the bare
+        // identifier and so has an unaliased span, printed it correctly.
+        //
+        // The closing paren is a leaf span no outer expression aliases, and
+        // this is the same escape hatch `pow` and the bit intrinsics already
+        // use through `int_width_at` — see `args_close_span`'s doc on
+        // `infer_method_call`/`eval_method_call`. Recorded for every integer
+        // receiver (not just u64) so the reader gets a definite answer rather
+        // than inferring signedness from an absent entry.
+        if method == "to_string" && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_)) {
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+        }
         // Distinct-type `.raw()` unwrap + no-deref rule (design.md § Distinct
         // Types). A distinct type flows as a nominal `Type::Named { name }`;
         // its built-in `.raw()` returns the underlying base value (recovered
