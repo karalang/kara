@@ -18,10 +18,11 @@ twice as better measurements arrived:
    to **instructions and latency**, and the second of those **withdraws** the
    first's conclusion that the partition direction is ruled out. Instruction
    budgeting was the wrong metric.
-4. *"The calibrated kernel measurement"* — settles it: a 2-way partition level
-   is **1.66–1.74x cheaper per element** than a merge pass, projecting ~1.43x
-   on shuffled input. The direction is **alive**, with a per-element
-   instruction budget the IR must hit.
+4. *"The calibrated kernel measurement"* and *"The budget check"* — settle it:
+   a 2-way partition level is **1.87x cheaper per element** than a merge pass
+   *in karac's own emitted code* (14.38 instructions vs 26.93), clearing the
+   budget those sections set. Projected 1.24–1.43x on shuffled input.
+   **Verdict: GO.**
 
 Everything rejected along the way is listed with the data that rejected it.
 
@@ -805,6 +806,104 @@ Remaining risks, unchanged: this is the x86 shared container and not the
 canonical Apple-silicon bench host, and a mirror is not IR. What has changed
 is that the direction now has a measured payoff and a falsifiable budget
 rather than an argument.
+
+## The budget check, in karac's own emitted code: PASS
+
+The previous section set a falsifiable target — **≤ ~15 instructions per
+element per partition level** — and said to check it early, on the partition
+loop alone, before building anything on top. Done. **14.38. It passes.**
+
+### Method
+
+A temporary scaffold (`KARAC_SORT_PART=K`, since removed) replaced the mono
+sort body with K rounds of exactly the 2-way partition the run-builder would
+use — same `emit_sort_by_inline_compare`, same element loads and stores, same
+alloca machinery — alternating buffers with no copy-back between levels. The
+output is not sorted; only the instruction count is meaningful, and for a
+branchless loop that count does not depend on the data, so unbalanced splits
+cannot distort it.
+
+Ir is linear in K, so the slope cancels allocation, the copy-back and every
+fixed overhead:
+
+| levels | Ir | cond branches | mispredicts |
+|---|---|---|---|
+| 0 | 2,882,005 | 142,757 | 6,254 |
+| 1 | 5,217,249 | 208,488 | 6,302 |
+| 2 | 7,214,176 | 261,610 | 6,315 |
+| 4 | 11,545,547 | 380,358 | 6,357 |
+| 8 | 20,208,365 | 617,867 | 6,323 |
+
+Fit: `Ir = 2,941,517 + 2,157,317 * levels`, residuals ≤0.4% at K=2,4,8.
+
+### Result
+
+| | per element per level |
+|---|---|
+| **instructions** | **14.38** |
+| branches | 0.39 |
+| **mispredicts** | **0.0000** |
+
+Zero mispredicts and 0.39 branches confirm the emitted loop really is
+branchless and that LLVM unrolled it — the take never becomes a branch. The
+figure is also structurally believable: the count pass reduces to a key load,
+a compare and an add (~3), and the scatter to two loads, a compare, a cmov,
+two stores, two adds and a GEP (~9), with loop control amortised by unrolling.
+
+### Against the merge it would replace
+
+Measured the same way, on the same host, from karac's own binaries:
+
+| | instructions/element | vs merge |
+|---|---|---|
+| merge pass | 26.93 | — |
+| **2-way partition level** | **14.38** | **1.87x cheaper** |
+| 3-way partition level (abandoned attempt) | ~47 | 1.75x *more expensive* |
+
+That last row is the retrospective the whole row needed: the 3-way loop cost
+**more than the merge pass it was replacing**, so ten levels replacing nine
+passes could only ever have been a loss. Its wall-clock wash was not bad luck
+or a subtle microarchitectural effect — it was arithmetic, and this is the
+number that would have predicted it in an afternoon.
+
+### Wall clock, and an honest bracket
+
+Timed by the 25-round slope method, even level counts only (odd counts pay a
+copy-back):
+
+| levels | ms/round |
+|---|---|
+| 0 (clone only) | 1.123 |
+| 2 | 2.803 |
+| 4 | 3.335 |
+| 8 | 4.947 |
+
+**3.0–3.2 ns/element/level**, against the merge's measured 3.944
+ns/element/pass. That is a 1.27x time advantage where the instruction count
+says 1.87x and the C mirror said 1.70x — and the gap is explained by a known
+limitation of the probe: **it partitions the full 150k array at every level**,
+so it never sees the cache locality a real recursive quicksort gets once
+blocks drop below L2. The mirror modelled recursive blocking; the probe
+deliberately does not.
+
+So the whole-sort projection is a bracket, not a point:
+
+| | phase 1 | run building | merging | total | vs today |
+|---|---|---|---|---|---|
+| today | 3.18 ms | — | 7.69 ms (13 passes) | **10.87 ms** | — |
+| conservative (probe, no blocking) | 1.74 | 4.65 (10 x 3.1 ns) | 2.37 (4 passes) | **8.76 ms** | 1.24x |
+| with blocking (mirror, 2.34 ns) | 1.74 | 3.51 | 2.37 | **7.62 ms** | 1.43x |
+
+Against driftsort's 8.2–8.9 ms on this host that is **parity at worst, and
+ahead at best**. Both ends of the bracket are worth having; the difference
+between them is entirely whether the implementation recurses into
+cache-resident blocks, which it should.
+
+**Verdict: GO.** The kernel clears its budget in karac's real codegen, is
+provably branchless, and is 1.87x cheaper per element than the merge pass it
+replaces. What remains is the run-builder around it — pivot selection, the
+bounded stack, the short-run policy — all of which already exist in `93b438d`
+and none of which touch the partition loop this measured.
 
 ## Caveats
 
