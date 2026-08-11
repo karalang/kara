@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
 | codegen-gap | 102 | 0 |
-| run-vs-build | 100 | 1 |
+| run-vs-build | 100 | 0 |
 | missing-feature | 90 | 0 |
 | perf | 63 | 0 |
 | false-positive | 58 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 794 | 1 |
 | typecheck | 152 | 0 |
-| interp | 138 | 2 |
+| interp | 138 | 1 |
 | ownership | 44 | 0 |
 | autopar | 39 | 0 |
 | other | 36 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1098 surfaced · 2 open · 1085 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1098 surfaced · 1 open · 1086 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-17 | 2026-08-11 | interp | high | The INTERPRETER's `sort_by_key` with a float key returns a COMPLETELY UNSORTED sequence when a NaN is present, while both compiled backends sort correctly with NaN last. Measured on one program, `[3.5, NaN, 1.2, -2.0, 2.7].sort_by_key(|x| x)`: interp gives `3.5 NaN -2 1.2 2.7` (not sorted in any order -- 3.5 stays first), JIT and AOT both give `-2 1.2 2.7 3.5 NaN`. A silent wrong answer AND a run-vs-build divergence. The typechecker deliberately ALLOWS float keys here (stdlib_seq.rs documents the concession) on the grounds that the backends implement bit-level total-order semantics via `karac_float_cmp` -- that is true of codegen and NOT of the interpreter, which appears to use IEEE partial comparison, so NaN makes its sort incoherent. A shipped codegen test (test_e2e_vec_sort_by_key_float_nan_sorts_largest) pins the COMPILED behaviour on this exact input; the interpreter side was never asserted, which is why this survived. | interpreter float ordering |
 | B-2026-08-11-21 | 2026-08-11 | codegen+interp | high | EVERY un-annotated `let` holding an unsigned value prints SIGNED under both compiled backends while the interpreter prints it correctly -- `let a = 18446744073709551615u64; println(f"{a}")` is -1 under JIT/AOT and correct under `--interp`. An explicit `let a: u64` fixes it, so the value is right and only codegen's signedness classifier is wrong. Separately and in the OPPOSITE direction, the INTERPRETER's `u64.to_string()` renders signed while its f-string of the same value is correct | var_type_names population for un-annotated `let` (src/codegen/stmts.rs) against expr_is_unsigned_int (src/codegen/expr_ops.rs); interpreter to_string for unsigned ints |
 
 ### Wontfix (1)
@@ -143,9 +142,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1098 surfaced
 
 </details>
 
-### Fixed (1085)
+### Fixed (1086)
 
-<details><summary>1085 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1086 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1723,6 +1722,7 @@ now give the right answer, as does the original 648-case harness this was found
 in (`combinations=648`, was 0). Full `cargo test --features llvm` green; ASAN
 clean at the default level and on the `-O0` leg. Also re-ran the sort sweep the
 harness was built for: 648 combinations, 0 failures. |
+| B-2026-08-11-17 | interp | high | The INTERPRETER's `sort_by_key` with a float key returns a COMPLETELY UNSORTED sequence when a NaN is present, while both compiled backends sort corr… | c6c34c3 (two independent causes in one expression: the interpreter's `value_compare` float arm went from `partial_cmp(..).unwrap_or(Equal)` to `total_cmp`, which fixes the incoherence; and BOTH that arm and the runtime's `karac_float_cmp` now canonicalize NaN first, which fixes the provenance split `total_cmp` alone left behind.) |
 | B-2026-08-11-18 | codegen | medium | Chained field access on an Option-unwrap TEMPORARY fails in codegen while working in the interpreter: `get().unwrap().x` where `get() -> Option[P]` e… | FIXED by e23bf9e, in `src/codegen/expr_ops.rs`.
 
 `type_name_of_expr`'s `MethodCall` arm gains the UNWRAPPING siblings, and a new
