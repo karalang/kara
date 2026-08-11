@@ -14239,6 +14239,165 @@ fn test_unknown_primitive_method_poison_no_longer_assignable() {
 }
 
 #[test]
+fn test_unknown_method_on_char_and_bool_errors() {
+    // B-2026-08-11-2. `char` and `bool` were the last two receivers in the
+    // language with NO method-existence check at all: every other primitive
+    // (i64/u32/f64/u8) and every user type rejected a bogus name, these two
+    // accepted anything and poisoned to `Type::Error`. The program then died at
+    // run time — and under `karac build` the message told the author they had
+    // found a CODEGEN BUG and should go add a dispatcher arm, for what is a
+    // plain typo. Same `NoMethodFound` wording as the numeric primitives.
+    for (lit, ty) in [("'x'", "char"), ("true", "bool")] {
+        let src = format!("fn main() {{ let v = {lit}; let _ = v.completely_bogus_method(); }}");
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors.iter().any(
+                |e| e.message.contains("no method 'completely_bogus_method'")
+                    && e.message.contains(ty)
+            ),
+            "expected 'no method' diagnostic naming '{ty}', got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_unknown_char_bool_method_poison_no_longer_unifies() {
+    // The half of B-2026-08-11-2 that made it more than a missing lookup: the
+    // poison `Type::Error` is universally assignable, so ONE bogus call
+    // typechecked as `i64`, as `String`, AND as `Vec[i64]` depending only on the
+    // annotation at the use site — suppressing downstream type errors too. Each
+    // of these four lines must now be rejected on its own.
+    let errors = typecheck_errors(
+        "fn main() {
+             let c: char = 'x';
+             let n: i64 = c.completely_bogus_method();
+             let s: String = c.completely_bogus_method();
+             let v: Vec[i64] = c.another_bogus_one();
+             let b: bool = true;
+             let m: f64 = b.nope();
+             let _ = n; let _ = s; let _ = v; let _ = m;
+         }",
+    );
+    let no_method = errors
+        .iter()
+        .filter(|e| e.message.contains("no method"))
+        .count();
+    assert_eq!(
+        no_method,
+        4,
+        "expected all four bogus char/bool calls rejected, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_char_and_bool_builtin_method_surface_still_typechecks() {
+    // The guard on the tightening above: every name that genuinely dispatches on
+    // a `char`/`bool` receiver must still pass. `clone`/`to_string` come from the
+    // shared scalar intercept; the `is_*` predicates, `to_ascii_*case` and
+    // `to_digit` are char-only intercepts; the comparison ops are the baked
+    // `Ord`/`Eq` impls held on the `PRIMITIVE_VALUE_METHODS` exemption (their
+    // `(self, other)` signature mis-counts under impl-table dispatch).
+    typecheck_ok(
+        "fn main() {
+             let c: char = '7';
+             let _ = c.clone(); let _ = c.to_string();
+             let _ = c.is_alphabetic(); let _ = c.is_numeric();
+             let _ = c.is_alphanumeric(); let _ = c.is_whitespace();
+             let _ = c.is_uppercase(); let _ = c.is_lowercase();
+             let _ = c.is_ascii();
+             let _ = c.to_ascii_uppercase(); let _ = c.to_ascii_lowercase();
+             let _ = c.to_digit(10);
+             let _ = c.eq('7'); let _ = c.ne('7'); let _ = c.lt('8');
+             let _ = c.le('8'); let _ = c.gt('1'); let _ = c.ge('1');
+             let _ = c.cmp('7');
+             let b: bool = true;
+             let _ = b.clone(); let _ = b.to_string();
+             let _ = b.eq(true); let _ = b.ne(true); let _ = b.lt(true);
+             let _ = b.le(true); let _ = b.gt(true); let _ = b.ge(true);
+             let _ = b.cmp(true);
+         }",
+    );
+}
+
+#[test]
+fn test_user_impl_on_char_and_bool_dispatches_and_types_its_return() {
+    // Routing `char`/`bool` through the scalar-primitive arm also routes their
+    // REAL impls through impl-table dispatch, the way numeric primitives already
+    // were. Before B-2026-08-11-2 a genuine `impl char { fn shout(self) ->
+    // String }` call poisoned to `Type::Error` just like a typo did, so
+    // `let n: i64 = c.shout()` typechecked clean. Both halves are pinned here:
+    // the call still resolves, and its return type is now enforced.
+    let src = "trait Dbl {
+                   fn dbl(self) -> String;
+               }
+               impl Dbl for char {
+                   fn dbl(self) -> String { return f\"{self}{self}\" }
+               }
+               impl Dbl for bool {
+                   fn dbl(self) -> String { if self { return \"TT\" } return \"FF\" }
+               }
+               impl char {
+                   fn shout(self) -> String { return f\"{self}!\" }
+               }
+               fn main() {
+                   let c: char = 'x';
+                   let b: bool = true;
+                   PLACEHOLDER
+               }";
+    typecheck_ok(&src.replace(
+        "PLACEHOLDER",
+        "let x: String = c.dbl(); let y: String = b.dbl(); \
+         let z: String = c.shout(); let _ = x; let _ = y; let _ = z;",
+    ));
+    let errors = typecheck_errors(&src.replace(
+        "PLACEHOLDER",
+        "let x: i64 = c.dbl(); let y: i64 = c.shout(); let _ = x; let _ = y;",
+    ));
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|e| e.message.contains("expected 'i64'") && e.message.contains("String"))
+            .count(),
+        2,
+        "expected both char impl-method returns checked against i64, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_char_numeric_conversion_typo_names_the_cast() {
+    // `c.to_i64()` is the exact spelling the dogfood that filed B-2026-08-11-2
+    // guessed. `char` has no numeric-value method at all, so a bare "no method"
+    // sends the author hunting a surface that does not have one; the diagnostic
+    // names the cast instead. `is_digit` gets the same treatment (Rust has it;
+    // Kāra spells it `is_numeric()` / `to_digit(radix)`).
+    for m in ["to_i64()", "as_i64()", "to_int()", "code_point()", "ord()"] {
+        let errors = typecheck_errors(&format!(
+            "fn main() {{ let c: char = '7'; let n: i64 = c.{m}; let _ = n; }}"
+        ));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("no method") && e.message.contains("`c as i64`")),
+            "expected the cast hint for char.{m}, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    let errors = typecheck_errors("fn main() { let c: char = '7'; let _ = c.is_digit(10); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'is_digit'")
+                && e.message.contains("is_numeric()")
+                && e.message.contains("to_digit(radix)")),
+        "expected the is_digit hint, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_abs_on_signed_and_float_typechecks() {
     // `abs` is a built-in value-receiver method on signed-integer and float
     // primitives, typed as `-> Self`. It must NOT trip the numeric

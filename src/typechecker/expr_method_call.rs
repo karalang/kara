@@ -5785,9 +5785,13 @@ impl<'a> super::TypeChecker<'a> {
         // numeric value of `self` as a digit in `radix`, `None` if `self` is not
         // a digit in that radix. `radix` is `u32` (a suffix-free literal
         // promotes); an out-of-range radix (`< 2` or `> 36`) traps at run time,
-        // matching Rust's panic. Interpreter-complete; codegen emits an honest
-        // "not yet supported under `karac build`" error (the Option[u32]
-        // construction lowering is shared with the `checked_to_*` follow-on).
+        // matching Rust's panic. Complete on BOTH backends: the interpreter uses
+        // Rust's `char::to_digit`, codegen classifies the codepoint inline and
+        // wraps the result with the `checked_to_*` Option constructor
+        // (`build_checked_to_int_option`, codegen/method_call.rs). The older
+        // "codegen emits a not-yet-supported error" note here outlived the
+        // lowering that landed it; corrected while wiring B-2026-08-11-2, whose
+        // `is_digit` diagnostic points authors at this method.
         if method == "to_digit" && matches!(&receiver_for_lookup, Type::Char) {
             if args.len() != 1 {
                 self.type_error(
@@ -5937,10 +5941,10 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
             _ => {
-                // A NUMERIC PRIMITIVE receiver (`i64`, `u32`, `f64`, …) with a
-                // USER trait/inherent impl method (`impl Dbl for u8 { fn
-                // dbl(self) -> Self { ... } }`) dispatches through the same
-                // impl-table path a `Named` receiver uses: register it as
+                // A SCALAR PRIMITIVE receiver (`i64`, `u32`, `f64`, `char`,
+                // `bool`) with a USER trait/inherent impl method (`impl Dbl for
+                // u8 { fn dbl(self) -> Self { ... } }`) dispatches through the
+                // same impl-table path a `Named` receiver uses: register it as
                 // `(prim, [])` and fall through to the resolution below. The
                 // builtin comparison / cast ops have dedicated backend arms and
                 // their baked stdlib impls (`Ord`/`Eq`/… on primitives) carry a
@@ -5949,11 +5953,32 @@ impl<'a> super::TypeChecker<'a> {
                 // on the historical poison-with-diagnostic path. So route ONLY a
                 // NON-builtin method that has a real impl candidate; everything
                 // else falls through to the poison branch. B-2026-07-03-5.
+                //
+                // `char` and `bool` joined the numeric primitives here in
+                // B-2026-08-11-2. They had been left on the silent fall-through
+                // below, which made them the ONLY receivers in the language that
+                // accepted any method name at all: `c.completely_bogus()`
+                // typechecked, and because the poison `Type::Error` is
+                // universally assignable it also unified with whatever the use
+                // site asked for (`let n: i64 = …`, `let s: String = …`, `let v:
+                // Vec[i64] = …` all passed off the same call). The program then
+                // died at run time — under `--interp` with "no interpreter
+                // dispatch arm", and under `build` with a message telling the
+                // author they had found a CODEGEN BUG and should go add a
+                // dispatcher arm. A typo on a `char` method is user error; it
+                // must not read as a compiler defect. Their surface is closed
+                // and small (the early intercepts above: `clone`/`to_string` on
+                // both, plus `is_*`/`to_ascii_*case`/`to_digit` on `char`), so
+                // an unknown name here is a genuine typo — exactly the numeric
+                // receivers' argument. Routing real impls through the table is a
+                // second win: a `impl char { fn shout(self) -> String }` call
+                // used to poison to `Type::Error` too, so `let n: i64 =
+                // c.shout()` passed; now its return type is checked.
                 const PRIMITIVE_VALUE_METHODS: &[&str] =
                     &["cmp", "eq", "ne", "lt", "le", "gt", "ge", "cast"];
                 if matches!(
                     &receiver_for_lookup,
-                    Type::Int(_) | Type::UInt(_) | Type::Float(_)
+                    Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
                 ) {
                     if let Some(prim) = method_callee_type_name(&receiver_for_lookup) {
                         if !PRIMITIVE_VALUE_METHODS.contains(&method)
@@ -5982,11 +6007,36 @@ impl<'a> super::TypeChecker<'a> {
                                 self.infer_expr(&arg.value);
                             }
                             if !PRIMITIVE_VALUE_METHODS.contains(&method) {
-                                self.type_error(
-                                    format!("no method '{}' on type '{}'", method, prim),
-                                    span.clone(),
-                                    TypeErrorKind::NoMethodFound,
-                                );
+                                let mut msg = format!("no method '{}' on type '{}'", method, prim);
+                                // `char` has no numeric-value method — the route
+                                // is the cast. This is the exact spelling the
+                                // dogfood that filed B-2026-08-11-2 guessed
+                                // (`c.to_i64()`), so name the replacement rather
+                                // than leaving the author to search a surface
+                                // that does not have one.
+                                if matches!(&receiver_for_lookup, Type::Char) {
+                                    if matches!(
+                                        method,
+                                        "to_i64"
+                                            | "as_i64"
+                                            | "to_int"
+                                            | "to_u32"
+                                            | "as_u32"
+                                            | "code_point"
+                                            | "ord"
+                                    ) {
+                                        msg.push_str(
+                                            ": a `char`'s numeric value comes from the cast — \
+                                             write `c as i64` (or `as u32`)",
+                                        );
+                                    } else if method == "is_digit" {
+                                        msg.push_str(
+                                            ": write `is_numeric()` for the Unicode predicate, \
+                                             or `to_digit(radix)` for the digit's value",
+                                        );
+                                    }
+                                }
+                                self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
                             }
                             return Type::Error;
                         }
@@ -6024,10 +6074,12 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
                     return Type::Error;
                 } else {
-                    // For other non-named types (`String`/`bool`/`char` left on
-                    // the historical silent fall-through — String has a large
-                    // partially-implicit method surface not modelled in the
-                    // impl table), just type-check args and return Error.
+                    // For other non-named types (chiefly a bare `Type::Str`
+                    // receiver, left on the historical silent fall-through —
+                    // String has a large partially-implicit method surface not
+                    // modelled in the impl table), just type-check args and
+                    // return Error. `char`/`bool` used to sit here too; they
+                    // moved up to the scalar-primitive arm in B-2026-08-11-2.
                     for arg in args {
                         self.infer_expr(&arg.value);
                     }
