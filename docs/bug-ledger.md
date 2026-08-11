@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 233 | 0 |
-| leak | 158 | 0 |
+| leak | 159 | 1 |
 | double-free | 119 | 0 |
 | codegen-gap | 103 | 0 |
 | run-vs-build | 100 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 795 | 0 |
+| codegen | 796 | 1 |
 | typecheck | 152 | 0 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1099 surfaced · 0 open · 1088 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1100 surfaced · 1 open · 1088 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-11-24 | 2026-08-11 | codegen | high | A String EQUALITY comparison between an unbound TEMPORARY and a `ref String` PARAMETER leaks the temporary, every evaluation. `hay.substring(0, 4) == needle` inside `fn f(hay: ref String, needle: ref String)` leaks; the same comparison against a LOCAL, or with the temp `let`-bound first, or with an OWNED `String` param, is clean. The leak is unbounded in input size -- the ordinary `substring(i, i+n) == needle` scan loop leaks one allocation per iteration. | the String `==`/`!=` lowering in codegen (the operand-cleanup decision). NOT the RC-elision hint and NOT optimization-dependent -- both ruled out by measurement, see detail. |
 
 ### Wontfix (1)
 
