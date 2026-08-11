@@ -15,9 +15,13 @@ twice as better measurements arrived:
    gap was **entirely branch mispredicts**, not the algorithm. Fixed by a
    per-pass adaptive branchless merge kernel: 1.29x on random.
 3. *"After the fix"* and *"The bounds-check hoist"* — the gap has now flipped
-   to **instructions and latency**, and the last section **withdraws** that
-   one's conclusion that the partition direction is ruled out. Instruction
-   budgeting was the wrong metric; the direction is unresolved.
+   to **instructions and latency**, and the second of those **withdraws** the
+   first's conclusion that the partition direction is ruled out. Instruction
+   budgeting was the wrong metric.
+4. *"The calibrated kernel measurement"* — settles it: a 2-way partition level
+   is **1.66–1.74x cheaper per element** than a merge pass, projecting ~1.43x
+   on shuffled input. The direction is **alive**, with a per-element
+   instruction budget the IR must hit.
 
 Everything rejected along the way is listed with the data that rejected it.
 
@@ -677,6 +681,130 @@ ten levels replacing nine passes is a large win in time while being roughly
 neutral in instructions. If it runs at 6+, the direction is dead for real.
 Nothing measured so far distinguishes those two worlds.
 
+
+## The calibrated kernel measurement: the partition direction is ALIVE
+
+The previous section says the deciding question is achieved **cycles per
+element per partition level**, and that nobody had measured it. Measured now.
+**A 2-way branchless partition level is 1.66–1.74x cheaper per element than a
+branchless merge pass**, and the direction is worth building.
+
+### Calibration first — the step that makes this mirror trustworthy
+
+A mirror already misled this investigation once: the Rust prototype of the
+3-way quicksort projected 1.2x and the IR delivered 0x. So this mirror is
+**calibrated against a kernel karac already emits** before its number for the
+kernel karac lacks is read at all. If it cannot reproduce the merge, its
+partition figure means nothing.
+
+The calibration target was measured, not estimated. A karac program builds
+150k shuffled pairs and pre-sorts each 64-element block **once, in setup**, so
+every natural run is exactly 64: phase 1 then does detection only, no
+insertion padding, and the per-round time is almost purely phase 2's 12 merge
+passes. karac achieves **3.944 ns/element/pass**.
+
+The first mirror attempt **failed that gate** at 6.411 ns — 1.63x off. The
+cause is worth knowing, because it is a trap for anyone writing a C or Rust
+mirror of this kernel: in clang, how the element select is written swings the
+merge by 1.9x.
+
+| merge formulation | ns/element/pass |
+|---|---|
+| direct predicate, struct-valued ternary `dst[k] = t ? x : y` | 7.727 |
+| karac's Ordering-tag lowering, struct ternary | 5.477 |
+| direct predicate, mask arithmetic | 5.108 |
+| direct predicate, per-field ternary | 4.374 |
+| **direct predicate, address select `dst[k] = *(t ? &src[i] : &src[j])`** | **4.033** |
+| *karac, measured* | *3.944* |
+
+Only the address-select form reproduces karac (within 2.3%). Note what that
+says about karac: **its emitted struct `select` is already at the best of the
+five formulations**, comfortably ahead of what the obvious C spelling gets.
+
+### The result
+
+With the merge written in the calibrated form, both kernels in one program,
+three runs (each also asserting its own correctness — the merge must sort, the
+partition must bucket *and* stay stable):
+
+| kernel | ns/element/level | notes |
+|---|---|---|
+| branchless merge pass | 4.06 – 4.11 | calibrated against karac's 3.944 |
+| **2-way partition, 2-pass** | **2.34 – 2.47** | count pass + scatter; 2 loads, 1 store |
+| 2-way partition, 1-pass 2-buffer | 1.90 | 1 load, 2 stores; needs a concatenation |
+
+**Ratio: 1.66–1.74x.** The 2-pass form counts `nlt` first, then scatters with
+`dst[is_lt ? p : q] = x`, so both passes read `src[i]` with `i` advancing
+unconditionally — no loop-carried dependency on the load address, which is
+exactly the property the merge lacks. Deeper levels also work on blocks that
+fit in cache, where every merge pass streams the full 2.4 MB.
+
+The two inner loops, so this is reproducible on another host without the
+scratchpad (element is `struct { long k, v; }`, 150k uniform keys, `cc -O2`):
+
+```c
+// merge pass — the calibration kernel, address-select form
+while (i < mid && j < hi) {
+    int take_a = (src[i].k <= src[j].k);
+    dst[k] = *(take_a ? &src[i] : &src[j]);
+    i += take_a; j += !take_a; k++;
+}
+
+// partition level — the kernel under test, count then scatter
+int nlt = 0;
+for (int i = lo; i < hi; i++) nlt += (cur[i].k < pivot);
+int p = lo, q = lo + nlt;
+for (int i = lo; i < hi; i++) {
+    pair x = cur[i];
+    int is_lt = (x.k < pivot);
+    oth[is_lt ? p : q] = x;          // one store, index selected
+    p += is_lt; q += !is_lt;
+}
+```
+
+Drive the merge over 12 passes from run width 64, and the partition over 10
+levels tracking real (uneven) block boundaries with each block's value range
+supplying its midpoint pivot — a fixed `n / 2^level` block size silently
+desynchronises from the splits the partition actually produces.
+
+### Projection onto the real sort
+
+Using karac's own measured per-pass cost (0.5916 ms/pass at 150k) and the
+observed phase split (total ~10.87 ms = phase 1 ~3.18 + phase 2 ~7.69):
+
+| | current | quicksort route |
+|---|---|---|
+| phase 1 | 3.18 ms (insertion base 32) | ~1.74 ms (base 16, half the shifts) |
+| run building | — | 3.51 ms (10 partition levels) |
+| merging | 7.69 ms (13 passes) | 2.37 ms (4 passes) |
+| **total** | **10.87 ms** | **~7.6 ms** |
+
+That is **~1.43x**, which would put karac at ~7.6 ms against driftsort's
+8.2–8.9 on this host — i.e. at or slightly ahead of it, closing the row.
+
+### The budget the IR has to hit — and why the last attempt missed
+
+This is a projection from a mirror, and the 3-way attempt is proof that a
+sound algorithm can still lose to a fat emitted loop. So the projection comes
+with a **checkable per-element budget**, and the two now reconcile exactly:
+
+- The mirror's 2-pass partition is ~11–13 machine instructions per element per
+  level.
+- The 3-way attempt emitted **~47**, because it wrote the element to all three
+  buckets every iteration. At ~4 instructions/cycle that is ~4.2 ns/element —
+  *worse than a merge pass at 3.94*, which is precisely the wall-clock wash it
+  measured. The model is now consistent end to end.
+
+**So the requirement is: emit ≤ ~15 instructions per element per partition
+level.** That is checkable cheaply and early, long before the whole
+run-builder exists — build the partition loop alone, run one level under
+`cachegrind`, divide Ir by elements. If it comes out near 12, continue; if it
+comes out near 40, stop, because the 3-way already showed how that ends.
+
+Remaining risks, unchanged: this is the x86 shared container and not the
+canonical Apple-silicon bench host, and a mirror is not IR. What has changed
+is that the direction now has a measured payoff and a falsifiable budget
+rather than an argument.
 
 ## Caveats
 
