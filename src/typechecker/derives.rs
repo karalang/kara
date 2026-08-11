@@ -299,11 +299,21 @@ impl<'a> super::TypeChecker<'a> {
             "{receiver}.{method}(): element type '{disp}' has no total order, so the \
              result would not be well-defined"
         );
+        // The harm clause is per-method because the observed wrong answer
+        // differs, and a diagnostic that describes the wrong symptom teaches
+        // the wrong lesson. Both texts are measured, not paraphrased.
+        let harm = if matches!(method, "max" | "min") {
+            "`[3.0, NaN, 1.0].iter().max()` silently SKIPS the NaN and answers 3, \
+             while `[NaN, 3.0, 1.0]` makes BOTH `max()` and `min()` answer NaN — \
+             the result depends on where the NaN sits"
+        } else {
+            "`[3.0, NaN, 1.0, 2.0].sort()` leaves the sequence completely unsorted on \
+             every backend"
+        };
         msg.push_str(&format!(
             "; note: `{float}` is not totally ordered (IEEE-754 NaN), and with a NaN \
              present this silently produces a WRONG ANSWER rather than an error — \
-             `[3.0, NaN, 1.0, 2.0].sort()` leaves the sequence completely unsorted on \
-             every backend. Use the total-order wrapper `{wrapper}` \
+             {harm}. Use the total-order wrapper `{wrapper}` \
              (`{wrapper}.from(x)`), e.g. `xs.iter().map({wrapper}.from).collect()`"
         ));
         self.type_error(msg, span.clone(), TypeErrorKind::TraitBoundNotSatisfied);

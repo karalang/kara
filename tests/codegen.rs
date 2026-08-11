@@ -13238,6 +13238,58 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_max_min_over_total_order_wrapper() {
+        // B-2026-08-11-15 — `max()`/`min()` over a `Vec[F64]`, the remedy the
+        // `f64` gate now prescribes. This is the half that made the gate
+        // landable: -7 withdrew it because admitting the wrapper at typecheck
+        // only moved the failure into codegen, which would have traded a
+        // silent wrong answer for a run-vs-build gap.
+        //
+        // The NaN cases are the point. Under raw IEEE comparison `max`/`min`
+        // are order-DEPENDENT — `[3.0, NaN, 1.0]` skips the NaN and answers 3,
+        // `[NaN, 3.0, 1.0]` makes BOTH answer NaN. Under the wrapper's total
+        // order the answer depends only on the SET: NaN sorts last
+        // (design.md § Float semantics), so max is NaN and min is 1 wherever
+        // the NaN sits. Both orderings are asserted, and they must agree.
+        //
+        // The result is bound with `let` rather than chained as
+        // `.max().unwrap().value`: chained field access on an Option-unwrap
+        // TEMPORARY is a separate, pre-existing codegen gap that reproduces
+        // with a plain struct and no iterator involved, so spelling it that
+        // way here would fail for a reason unrelated to this fix.
+        let out = run_program(
+            "fn main() {\n\
+                 let z: f64 = 0.0;\n\
+                 let nan: f64 = z / z;\n\
+                 let clean: Vec[f64] = [3.0, 1.0, 2.0];\n\
+                 let cw: Vec[F64] = clean.iter().map(F64.from).collect();\n\
+                 let cmax: F64 = cw.iter().max().unwrap();\n\
+                 let cmin: F64 = cw.iter().min().unwrap();\n\
+                 println(cmax.value);\n\
+                 println(cmin.value);\n\
+                 let first: Vec[f64] = [nan, 3.0, 1.0];\n\
+                 let fw: Vec[F64] = first.iter().map(F64.from).collect();\n\
+                 let fmax: F64 = fw.iter().max().unwrap();\n\
+                 let fmin: F64 = fw.iter().min().unwrap();\n\
+                 println(fmax.value);\n\
+                 println(fmin.value);\n\
+                 let mid: Vec[f64] = [3.0, nan, 1.0];\n\
+                 let mw: Vec[F64] = mid.iter().map(F64.from).collect();\n\
+                 let mmax: F64 = mw.iter().max().unwrap();\n\
+                 let mmin: F64 = mw.iter().min().unwrap();\n\
+                 println(mmax.value);\n\
+                 println(mmin.value);\n\
+             }",
+        );
+        if let Some(out) = out {
+            // clean max/min, then NaN-first and NaN-middle: both give NaN/1,
+            // i.e. position-independent, which is the whole property the
+            // wrapper buys and the raw `f64` path could not provide.
+            assert_eq!(out, "3\n1\nNaN\n1\nNaN\n1\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_total_order_float_wrappers() {
         // B-2026-07-22-11 — the total-order `F32`/`F64` wrappers
         // (`struct F32 { value: f32 }`, `#[derive(Eq, Ord, Hash)]`) silently

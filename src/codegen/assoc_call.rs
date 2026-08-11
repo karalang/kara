@@ -3723,6 +3723,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// sign-bit index for a total-order float wrapper (`F32`/`F64`/`F16`/
     /// `Bf16`). `f16` and `bf16` are both 16-bit → `i16`, sign bit 15.
     /// `None` for a non-wrapper name.
+    /// Whether a `TypeExpr` names a total-order float wrapper (`F32` / `F64` /
+    /// `F16` / `Bf16`) — a single-field `{ float }` struct with no heap payload
+    /// and no RC. B-2026-08-11-15 uses this to admit the wrappers to the
+    /// iterator `max`/`min` reduce path without widening the primitive-name
+    /// `is_trivially_copyable_te`, whose other 36 callers ask a different
+    /// ownership question.
+    pub(super) fn is_total_float_wrapper_te(te: &crate::ast::TypeExpr) -> bool {
+        let crate::ast::TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        p.generic_args.is_none()
+            && p.segments.len() == 1
+            && matches!(p.segments[0].as_str(), "F32" | "F64" | "F16" | "Bf16")
+    }
+
     pub(super) fn total_float_wrapper_widths(
         &self,
         type_name: &str,

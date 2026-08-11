@@ -6476,6 +6476,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         | "bool"
                         | "f32"
                         | "f64"
+                        // B-2026-08-11-15: the total-order float wrappers.
+                        // Single-field `{ float }` structs — register-sized,
+                        // no heap, no RC — so the reduce lowering's
+                        // trivially-copyable requirement holds for them, and
+                        // their `>`/`<` emit the wrapper total order.
+                        | "F32"
+                        | "F64"
+                        | "F16"
+                        | "Bf16"
                 )
             );
             if !elem_is_scalar {
@@ -10976,7 +10985,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // right for arbitrary payloads is the deferred piece — non-Copy elements
         // fall through to the loud `--interp` deferral (the interpreter runs
         // them correctly). Scalar reduce (the common numeric case) is exact.
-        if !super::vec_method::is_trivially_copyable_te(&elem_te) {
+        //
+        // B-2026-08-11-15: the total-order float wrappers ride this path too.
+        // `is_trivially_copyable_te` is a PRIMITIVE-name list shared by 36 call
+        // sites, so it is not widened — a `{ float }` wrapper is trivially
+        // copyable in the sense THIS gate cares about (no heap payload to
+        // double-free in the synthetic match), but that is not the same
+        // question the other callers ask, and answering it for them here would
+        // be a silent change to every one of those sites.
+        if !super::vec_method::is_trivially_copyable_te(&elem_te)
+            && !Self::is_total_float_wrapper_te(&elem_te)
+        {
             return Ok(None);
         }
         let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {

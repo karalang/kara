@@ -6740,6 +6740,64 @@ fn test_float_seq_methods_requiring_ord_are_gated() {
 }
 
 #[test]
+fn test_float_iter_max_min_are_gated_and_wrapper_is_accepted() {
+    // B-2026-08-11-15 — the leg B-2026-08-11-7 wrote and then WITHDREW.
+    //
+    // -7 left `max`/`min` ungated on purpose: the harm was real, but the
+    // remedy it would have named did not work. `Vec[F64]` was rejected by the
+    // iterator arm's numeric-or-String element test, so the gate would have
+    // told users to reach for a wrapper that then failed to compile — the
+    // B-2026-08-11-8 shape, a diagnostic that dead-ends. Both halves are
+    // fixed now, so this asserts the pair TOGETHER: the gate fires on `f64`,
+    // and the exact remedy the message prints is accepted.
+    //
+    // Asserting them in one test is deliberate. They are one contract: a gate
+    // whose remedy does not typecheck is a regression even when the gate
+    // itself still fires, and a test that only checked the rejection would
+    // report green in exactly that case.
+    for (label, src) in [
+        (
+            "Iterator.max",
+            "fn main() { let v: Vec[f64] = [1.0]; let _ = v.iter().max(); }",
+        ),
+        (
+            "Iterator.min",
+            "fn main() { let v: Vec[f64] = [1.0]; let _ = v.iter().min(); }",
+        ),
+    ] {
+        let joined = typecheck_errors(src)
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            joined.contains("has no total order"),
+            "{label} on Vec[f64] must be rejected, got: {joined}"
+        );
+        assert!(
+            joined.contains("F64.from"),
+            "{label} diagnostic must name the working remedy, got: {joined}"
+        );
+        // The harm clause is per-method: quoting `sort()`'s "leaves the
+        // sequence completely unsorted" here would describe a symptom this
+        // method does not have, and teach the wrong lesson about the fix.
+        assert!(
+            joined.contains("where the NaN sits"),
+            "{label} must describe ITS OWN harm (order-dependence), got: {joined}"
+        );
+    }
+    // The remedy, spelled exactly as the diagnostic prints it.
+    typecheck_ok(
+        "fn main() {\n\
+             let xs: Vec[f64] = [3.0, 1.0];\n\
+             let w: Vec[F64] = xs.iter().map(F64.from).collect();\n\
+             let _ = w.iter().max();\n\
+             let _ = w.iter().min();\n\
+         }",
+    );
+}
+
+#[test]
 fn test_float_seq_methods_not_requiring_ord_stay_allowed() {
     // The other half of B-2026-08-11-7: the gate must not over-reach.
     //
@@ -6774,17 +6832,20 @@ fn test_float_seq_methods_not_requiring_ord_stay_allowed() {
     );
     // Non-float element types are untouched.
     typecheck_ok("fn main() { let mut v: Vec[i64] = [2, 1]; v.sort(); let _ = v.max(); }");
-    // `max`/`min` on `Vec[f64]` stay ALLOWED for now, deliberately and
-    // against this row's original fix shape. They are genuinely
-    // order-dependent with a NaN present, but every remedy measured is worse
-    // than the disease: `Vec[F64].max()` fails in CODEGEN even when admitted
-    // at typecheck ("no handler for method 'max'"), and `Stats.max(v)` is
-    // itself wrong AND backend-divergent on the same input (NaN first: interp
-    // 3, JIT NaN). Gating them would ship a diagnostic whose advice
-    // dead-ends, which is exactly what B-2026-08-11-8 was filed for. Tracked
-    // as B-2026-08-11-15; this assertion pins the current, deliberate state
-    // so the decision is revisited rather than drifted into.
-    typecheck_ok("fn main() { let v: Vec[f64] = [1.0]; let _ = v.max(); let _ = v.min(); }");
+    // `max`/`min` on `Vec[f64]` WERE deliberately left allowed here, and are
+    // now gated — B-2026-08-11-15 revisited the decision this assertion
+    // existed to force. The reason they were allowed was never that the harm
+    // was acceptable; it was that the remedy did not work end to end, so the
+    // gate would have shipped advice that dead-ends (the B-2026-08-11-8
+    // shape). Both blockers are gone: the wrapper is admitted at typecheck and
+    // carried by the codegen reduce path, and B-2026-08-11-13 canonicalized
+    // NaN so the wrapper's total order is identical on all three backends.
+    //
+    // The positive assertion now lives in
+    // `test_float_iter_max_min_are_gated_and_wrapper_is_accepted`, which pins
+    // gate AND remedy together. What stays here is the over-reach half: a
+    // non-float element must be untouched by any of it.
+    typecheck_ok("fn main() { let v: Vec[i64] = [1]; let _ = v.max(); let _ = v.min(); }");
 }
 
 // Full front-end pipeline INCLUDING the desugar pass (`desugar_program`),

@@ -41208,6 +41208,15 @@ fn main() {
         // first element ("|x" — the separator is structural, not
         // emptiness-gated). LSan guards the join/concat result + separator
         // temp ownership.
+        //
+        // B-2026-08-11-15 moved the float leg from `Vec[f64]` to `Vec[F64]`:
+        // `max`/`min` on an IEEE float are now gated (the answer is
+        // order-dependent with a NaN present), so this fixture keeps its
+        // memory-safety coverage on the path users are actually directed to.
+        // That is strictly MORE for ASAN than the old spelling, not less — the
+        // element is a struct rather than a scalar, and the `unwrap_or`
+        // default is now a constructed `F64` temporary whose ownership LSan
+        // also has to see balanced.
         assert_clean_asan_run(
             r#"
 fn main() {
@@ -41227,8 +41236,11 @@ fn main() {
     let none: Vec[String] = [];
     println(none.join(",").len());
     let fs: Vec[f64] = [1.5, 2.5, 0.5];
-    println(fs.max().unwrap_or(0.0));
-    println(fs.min().unwrap_or(0.0));
+    let fw: Vec[F64] = fs.iter().map(F64.from).collect();
+    let fmax: F64 = fw.max().unwrap_or(F64.from(0.0));
+    let fmin: F64 = fw.min().unwrap_or(F64.from(0.0));
+    println(fmax.value);
+    println(fmin.value);
 }
 "#,
             &[
