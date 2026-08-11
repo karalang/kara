@@ -99,9 +99,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 100 | 0 |
 | missing-feature | 90 | 0 |
 | perf | 64 | 0 |
-| false-positive | 58 | 0 |
+| false-positive | 59 | 1 |
 | diagnostics | 47 | 0 |
-| crash | 44 | 1 |
+| crash | 44 | 0 |
 | soundness | 42 | 0 |
 | other | 27 | 0 |
 | use-after-free | 18 | 0 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 803 | 3 |
+| codegen | 803 | 2 |
 | typecheck | 152 | 0 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
 | autopar | 40 | 0 |
-| other | 38 | 0 |
+| other | 39 | 1 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1109 surfaced · 3 open · 1094 fixed · 2 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1110 surfaced · 3 open · 1095 fixed · 2 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-29 | 2026-08-11 | codegen | high | SEGV (exit 139) on a DEFAULT `karac build`: a struct with a `Map`/`Set` field, bound out of a `Result`'s `Ok(..)` match arm and then passed BY VALUE to a function, dereferences a wild pointer in `karac_map_free_with_drop_vec`. `karac check` is clean and the interpreter prints the right answer. Five conditions, all necessary -- `Option` instead of `Result` is clean, a `Vec` field is clean, using the value inline instead of passing it is clean. | `karac_map_free_with_drop_vec` -- the ASAN frame is `#0 karac_map_free_with_drop_vec` called directly from `main`, on `SEGV on unknown address 0x0b`, i.e. the Map handle slot holds a non-pointer when the drop runs. Family: B-2026-08-07-19 (`struct { s: Result[Map,E] }`) is the INVERSE nesting and is fixed. |
 | B-2026-08-11-30 | 2026-08-11 | codegen | medium | A fresh-temp `Result[struct]` passed BY VALUE leaks every `Vec` field of the Ok payload -- one allocation per Vec field, the buffer itself, while `String` fields of the same struct are freed correctly. The `match` is irrelevant (a callee that ignores the parameter still leaks) and so is a second heap field: the row's original 'needs another heap field / a scalar companion is not enough' matrix was an artifact of probing with a MATCHING callee. LEG A, opposite polarity and still unexplained: a `Map`/`Set` field leaks ~600 B when the Result is LET-BOUND before the match, where leg B's let-bound form is clean | same area as B-2026-08-11-29 (`Result[struct-with-container-field]` drop across a by-value boundary); may or may not be one fix with it -- the trigger conditions differ materially, see detail. |
 | B-2026-08-11-33 | 2026-08-11 | codegen | medium | A `#[derive(Eq)]` STRUCT temporary carrying a HEAP field, compared against a `ref` param, leaks that field every evaluation: `mk(hay) == other` with `fn mk(s: ref String) -> P { P { name: s.substring(0, 4) } }` and `other: ref P` leaks 4 B / 1 alloc under LSan. Sibling of B-2026-08-11-24 (the String-equality form, fixed) with the same operand pairing -- unbound temp vs `ref` param -- but a DIFFERENT lowering, so that fix does not reach it. NOTE THE FILING CORRECTION: B-2026-08-11-24 measured this shape as CLEAN and concluded its scope was narrow to String equality. That control built the struct's String field from a LITERAL, which allocates nothing and therefore cannot leak; the operand pairing was right and the payload was not. With a `substring`-built field it reproduces every time. A pinned `#[ignore]`d fixture (asan_derive_eq_struct_heap_field_vs_ref_param) reproduces it under `cargo test --features llvm --test memory_sanitizer -- --ignored`. | `compile_struct_eq` in src/codegen/expr_ops.rs — the derived-struct `==`/`!=` path; the fresh temp operand is never materialized or dropped. The String sibling was fixed in exprs.rs (B-2026-08-11-24) and does NOT cover this. |
+| B-2026-08-11-34 | 2026-08-11 | other | medium | `tests/codegen.rs`'s `run_program` harness FAILS MODULE VERIFICATION on a program that `karac build` and `karac run --interp` both compile and run correctly: "Function return type does not match operand type of return inst! ret { ptr } %field / i64" and a matching call-parameter mismatch, on a multi-struct program where a fn returns a struct with a `Map` field. So the E2E harness can REJECT source the shipped compiler accepts -- the opposite of the failure mode its own comments are written against, and it means an E2E pin cannot always be written for a shape the CLI handles. | tests/codegen.rs run_program_capturing_inner pass list vs karac build |
 
 ### Wontfix (2)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1109 surfaced
 
 </details>
 
-### Fixed (1094)
+### Fixed (1095)
 
-<details><summary>1094 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1095 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2109,6 +2109,66 @@ spelling; re-entry guarded through the closure walk's name stack).
 Pins: two tests in `tests/concurrency.rs` -- the mutation case, stash-proven red
 against the pre-fix analysis, and the read-only case as the over-serialization
 guard. Both use a plain `Vec[i64]` shared struct. |
+| B-2026-08-11-29 | codegen | high | SEGV (exit 139) on a DEFAULT `karac build`: a struct with a `Map`/`Set` field, bound out of a `Result`'s `Ok(..)` match arm and then passed BY VALUE… | FIXED — the row's hypothesis was the right family but the wrong member. It is
+not a missing Map/Set half on a promotion arm; it is the WHOLE-BINDING sibling
+of `wrapper_arm_moves_heap_field_to_free_fn`, which had only ever detected a
+moved FIELD.
+
+WHAT ACTUALLY HAPPENS, read off the IR and confirmed by valgrind rather than
+inferred. The Ok arm binds the struct and passes it BY VALUE, so the callee owns
+it and ends with `__karac_drop_struct_S`, which frees the Map. The arm's source
+payload drop stayed armed, so `main`'s `respl.ok` block called
+`karac_drop_Map_String_i64` on the same handle: valgrind reports an invalid read
+inside `karac_map_free_with_drop_vec` over a block already freed by `main`, from
+a `karac_map_new` allocation. Not a double free at two call sites — a
+use-after-free with both ends inside `main`.
+
+Two false leads are worth recording because each looked decisive:
+
+  - `take()` appeared to free nothing. Grepping its IR for `drop_Map`/
+    `karac_map_free` returns zero hits — the callee's free is spelled
+    `__karac_drop_struct_S`, one level up. The by-value param IS callee-owned.
+  - `main` appeared to hold only ONE Map drop, which argued against a double
+    free at all. It does hold one; the other free is the callee's, inlined.
+
+WHY THE EXISTING GATE MISSED IT. The arm-suppression condition is
+`!(borrow_only && wrapper) || heap_field_moved_to_free_fn || binding_owns_
+payload`. For `Ok(s) => take(s)`: `wrapper` is true; `borrow_only` is
+SPURIOUSLY true, because `consume_class` scores a free-fn argument as
+entry-copied (the exact blind spot the `heap_field` override was added for);
+`heap_field_moved_to_free_fn` is false because the arm passes `s`, not `s.a`;
+and `binding_owns_payload` is false because `field_copy_supported` excludes
+`Map`/`Set`, so the struct is not entry-copy supported. Nothing fired.
+
+That last clause is also the whole explanation for the row's sharpest control:
+a `Vec[String]` field IS entry-copy supported, so `binding_owns_payload` is
+already true and suppression already fires. Verified in the IR before touching
+anything — the Vec variant emits `respl.suppress.at.*` on BOTH arms (20
+occurrences), the Map variant only on the Err arm (10). The new condition is
+therefore additive on the shape that already worked, which is what keeps the
+control clean rather than merely appearing to.
+
+THE FIX: `wrapper_arm_moves_whole_binding_to_free_fn`, gated to a non-shared
+user struct binding, plus `consume_class::bindings_passed_whole_to_free_fn_arg`
+(bare identifier arguments only — `take(s.a)` is the field case and
+`take(s.a.len())` reads rather than moves). Added as one more override on the
+same condition, so both move shapes are handled at one site.
+
+VERIFIED on the row's seven-row table plus an Err-arm variant: both crashing
+shapes (Map, Set) now agree with the interpreter, and all five over-fire
+controls stay clean — `Option` instead of `Result`, no wrapper, a bare Map
+payload, inline use, and the `Vec` field. Under valgrind with `--leak-check=full`
+the fixed Map, Set and Vec binaries report 0 errors and no leaks, which is the
+direction that matters here: the repair is "stop the SOURCE freeing", so
+over-suppressing would leak instead of crash.
+
+TEST-INFRA NOTE, filed separately: a single program combining all seven shapes
+fails MODULE VERIFICATION inside `tests/codegen.rs`'s harness ("Function return
+type does not match operand type of return inst") while `karac build` and
+`karac run --interp` both compile and run that same program correctly, with and
+without this fix. The pin is therefore written as one small program per shape.
+That divergence is not this bug and is not caused by it, but it means the E2E
+harness can reject a program the compiler accepts. |
 | B-2026-08-11-31 | other | medium | `tests/par_codegen.rs` -- the ONLY lane that threads `ConcurrencyAnalysis` into codegen -- had no JIT leg at all, so the DEFAULT `karac build` config… | FIXED by 43face1. `jit_dispatch_par` in `tests/par_codegen.rs` compiles each test program to IR with both analyses threaded and executes it through the sibling `karac_jit_runner`, gated on `KARAC_TEST_JIT=1`; two CI steps schedule it on x86 and arm64. Verified by negative control (a corrupted expectation fails the JIT leg), and hardened to panic rather than soft-skip so it cannot silently become vacuous. |
 | B-2026-08-11-32 | codegen | high | a widening cast on an unsigned `Vec` element read through a struct FIELD sign-extends instead of zero-extending -- `h.px[0] as f64` on a `Vec[u16]` h… | 023bc9a |
 
