@@ -27270,7 +27270,8 @@ fn main() {
     /// `to_bits` (positive, +0.0, and the sign-bit-only -0.0 pattern), a
     /// `bits_as_f64` round-trip, `to_bits32` + `bits_as_f32` round-trip, and the
     /// XOR-fold an integer sink for a float kernel relies on — every value
-    /// byte-identical to the interpreter oracle.
+    /// byte-identical to the interpreter oracle (true as of B-2026-08-11-20;
+    /// the `-0.0` line disagreed with the interpreter before it).
     #[test]
     fn e2e_float_to_bits_codegen() {
         if let Some(out) = run_program(
@@ -27289,9 +27290,47 @@ fn main() {
                  println(acc);\n\
              }",
         ) {
+            // B-2026-08-11-20: the `-0.0` line read `-9223372036854775808`
+            // until this row. `to_bits` is declared `-> u64`, and the
+            // interpreter has always printed the unsigned `9223372036854775808`
+            // for it — so despite the "byte-identical to the interpreter
+            // oracle" claim above, this expectation was pinning a real
+            // interp-vs-codegen divergence rather than agreement. It was the
+            // ONE value in this test with the high bit set, which is the only
+            // place the two renderings differ.
             assert_eq!(
                 out,
-                "4611911198408756429\n0\n-9223372036854775808\n2.1\n1069547520\n1.5\n2251799813685248\n"
+                "4611911198408756429\n0\n9223372036854775808\n2.1\n1069547520\n1.5\n2251799813685248\n"
+            );
+        }
+    }
+
+    /// B-2026-08-11-20 — `to_bits` / `to_bits32` render UNSIGNED under codegen.
+    /// Both are declared `-> u64` / `-> u32`, but codegen picks the printf
+    /// conversion from `expr_is_unsigned_int`, a syntactic classifier that had
+    /// no arm for them: it recursed on the receiver, which is a FLOAT, got
+    /// `false`, and emitted `%lld`. So every float with the sign bit set
+    /// printed its signed reinterpretation under JIT and AOT while the
+    /// interpreter printed the declared unsigned value — a real backend split,
+    /// not a shared convention. `(-1.0).to_bits()` was -4616189618054758400
+    /// against the interpreter's 13830554455654793216.
+    ///
+    /// Positive values are the control: they agree either way, which is exactly
+    /// why this survived — only the sign bit distinguishes the two renderings.
+    #[test]
+    fn e2e_to_bits_renders_unsigned() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(f\"{(0.0 - 1.0).to_bits()}\");\n\
+                 println(f\"{(0.0 - 2.5).to_bits()}\");\n\
+                 println(f\"{(1.0).to_bits()}\");\n\
+                 println(f\"{(0.0 - 1.0).to_bits32()}\");\n\
+                 println((0.0 - 1.0).to_bits());\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "13830554455654793216\n13836183955189006336\n4607182418800017408\n3212836864\n13830554455654793216\n"
             );
         }
     }

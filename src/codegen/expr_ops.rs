@@ -3732,6 +3732,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 if method == "abs_diff" {
                     return true;
                 }
+                // `to_bits` / `to_bits32` are IEEE bit reinterpretations of a
+                // FLOAT receiver, declared `-> u64` / `-> u32` by the
+                // typechecker. Unconditionally unsigned, like `abs_diff` — and
+                // unlike the Self-returning methods below, recursing on the
+                // receiver is wrong here: the receiver is a float, so it
+                // answers `false` and the result prints signed.
+                //
+                // B-2026-08-11-20: without this arm `(-1.0).to_bits()` rendered
+                // -4616189618054758400 under JIT and AOT where the interpreter
+                // printed 13830554455654793216 — a real backend split, for
+                // every float with the sign bit set. The value itself was
+                // always correct; only this classifier's answer was wrong,
+                // which is why binding through an annotated `u64` first
+                // (`let b: u64 = x.to_bits()`) printed correctly via the
+                // identifier arm above.
+                if matches!(method.as_str(), "to_bits" | "to_bits32") {
+                    return true;
+                }
                 // Builtin integer scalar methods that return `Self` carry the
                 // receiver's signedness, so a `u64`-receiver result with the
                 // high bit set must print unsigned (`1u64.reverse_bits()` is
