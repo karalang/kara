@@ -40288,6 +40288,69 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_element_field_move_by_assignment_no_double_free() {
+        // B-2026-08-11-25 — `out = stats[0].region` moves a heap field out of a
+        // struct held as a Vec ELEMENT into an EXISTING binding. Nothing
+        // cap-zeroed the field in its owner, so the owner's drop freed the
+        // buffer the target now owned: `free(): double free detected in tcache
+        // 2` on both compiled backends, with `karac check` silent and the
+        // interpreter correct.
+        //
+        // THE PAYLOAD MUST BE BUILT AT RUN TIME. A `String` LITERAL field is
+        // static, so the second free lands on a non-heap pointer and passes
+        // silently — the row records that two early controls looked clean for
+        // exactly this reason and nearly went in as false conditions. Hence
+        // `String.new()` + `push_str` and a `+` concat here, never a literal.
+        //
+        // ASAN is the only gate that can tell the FIX from a relabelling: the
+        // repair is to stop the owner freeing, so an over-broad version turns
+        // the double free into a per-iteration leak, which the value pins in
+        // tests/codegen.rs cannot see. The loop is here to make such a leak
+        // accumulate rather than hide.
+        assert_clean_asan_run(
+            r#"
+struct S { region: String, revenue: i64 }
+struct V { xs: Vec[i64] }
+fn main() {
+    let mut stats: Vec[S] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 40 {
+        let mut nm = String.new();
+        nm.push_str("region");
+        stats.push(S { region: nm, revenue: (i * 7) % 11 });
+        i = i + 1;
+    }
+    let mut best: i64 = 0;
+    let mut best_region = String.new();
+    let mut j: i64 = 0;
+    while j < stats.len() {
+        if stats[j].revenue > best {
+            best = stats[j].revenue;
+            best_region = stats[j].region;
+        }
+        j = j + 1;
+    }
+    let a = "no".to_string();
+    let b = "rth".to_string();
+    let mut cat: Vec[S] = Vec.new();
+    cat.push(S { region: a + b, revenue: 1 });
+    let mut out = String.new();
+    out = cat[0].region;
+    let mut vs: Vec[V] = Vec.new();
+    let mut inner: Vec[i64] = Vec.new();
+    inner.push(9);
+    vs.push(V { xs: inner });
+    let mut got: Vec[i64] = Vec.new();
+    got = vs[0].xs;
+    println(f"{best} {best_region.len()} {out} {got.len()}");
+}
+"#,
+            &["10 6 north 1"],
+            "vec_element_field_move_by_assignment_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_chained_scalar_to_string_no_leak_no_double_free() {
         // B-2026-08-11-22 — the fix reroutes which calls reach the String-copy
         // path, and that path both mallocs a fresh buffer AND frees the

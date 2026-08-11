@@ -7332,6 +7332,45 @@ impl<'ctx> super::Codegen<'ctx> {
                 let rhs_is_fresh = self.rhs_yields_fresh_ref(value);
                 let rhs_is_fstring = self.rhs_stages_fstr_acc(value);
                 let val = self.compile_expr(value)?;
+                // B-2026-08-11-25 — the ASSIGNMENT twin of the field-move-out
+                // cap-zeroing the Let arm does (see the `vec_elem_types` block
+                // there). `out = stats[0].region` moves a heap field out of a
+                // struct, and the target now owns that buffer — but nothing
+                // cap-zeroed the field in its owner, so the owner's drop freed
+                // it too: `free(): double free detected in tcache 2`, on both
+                // compiled backends, with `karac check` silent and the
+                // interpreter correct.
+                //
+                // Emitted AFTER `compile_expr(value)` on purpose: these zero the
+                // SOURCE's cap in place, so running them first would hand the
+                // target a cap of 0 and turn the double free into a leak.
+                //
+                // The same three calls as the Let arm, with the same gates, so
+                // the two paths cannot drift: the shallow `obj.field` /
+                // `self.field` forms take the dedicated suppressor (skipped for
+                // a caller-retains `owned_struct_params` source, which is
+                // deep-copied instead), and any DEEPER place — which is what a
+                // Vec element is, `stats[0].region` — takes the place-chain
+                // sibling. That deeper-place suppressor already handled this
+                // exact shape; only the Let arm had ever called it.
+                let target_is_heap_local = matches!(&target.kind, ExprKind::Identifier(n)
+                    if self.vec_elem_types.contains_key(n.as_str()));
+                if target_is_heap_local {
+                    if let ExprKind::FieldAccess { object, .. } = &value.kind {
+                        let obj_name = match &object.kind {
+                            ExprKind::Identifier(obj) => Some(obj.as_str()),
+                            ExprKind::SelfValue => Some("self"),
+                            _ => None,
+                        };
+                        if let Some(obj) = obj_name {
+                            if !self.owned_struct_params.contains(obj) {
+                                self.suppress_struct_field_move_into_literal(value);
+                                self.disarm_struct_field_move_bodies(value);
+                            }
+                        }
+                        self.suppress_place_field_struct_move_source(value);
+                    }
+                }
                 // B-2026-07-31-17 (Assign twin of the Let guard): a RHS that
                 // TERMINATES the current block (`x = { return 5; };`) leaves
                 // no live insertion point — emitting the store would place

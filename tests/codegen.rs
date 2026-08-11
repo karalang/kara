@@ -22407,6 +22407,65 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_element_field_move_by_assignment_and_its_controls() {
+        // B-2026-08-11-25 — the value half. `out = stats[0].region` moves a
+        // heap field out of a struct held as a Vec element into an EXISTING
+        // binding; the field was never cap-zeroed in its owner, so the owner's
+        // drop freed it too and the binary aborted with a double free BEFORE
+        // flushing stdout — so the program looked like it produced no output at
+        // all, which reads as a startup failure.
+        //
+        // The four ABORTING shapes from the row (String field, `Vec[i64]`
+        // field, an unrelated earlier read of the same field, and a source
+        // built by `+` rather than `push_str`) and the four CONTROLS that were
+        // already clean and that an over-broad fix would regress: the `let`
+        // form, a plain struct binding, a tuple element, and a Vec with no
+        // struct at all.
+        //
+        // Payloads are built at RUN TIME throughout. A `String` literal field
+        // is static, so a stray second free lands on a non-heap pointer and
+        // passes silently — the row records two early controls that looked
+        // clean for exactly that reason. The ASAN sibling in
+        // tests/memory_sanitizer.rs is what proves the repair is not a leak.
+        assert_eq!(
+            run_program(
+                "struct R { region: String }\n\
+                 struct V { xs: Vec[i64] }\n\
+                 fn main() {\n\
+                     let mut s1 = String.new(); s1.push_str(\"north\");\n\
+                     let mut a1: Vec[R] = Vec.new(); a1.push(R { region: s1 });\n\
+                     let mut o1 = String.new(); o1 = a1[0].region;\n\
+                     let mut iv: Vec[i64] = Vec.new(); iv.push(7);\n\
+                     let mut a2: Vec[V] = Vec.new(); a2.push(V { xs: iv });\n\
+                     let mut o2: Vec[i64] = Vec.new(); o2 = a2[0].xs;\n\
+                     let mut s3 = String.new(); s3.push_str(\"east\");\n\
+                     let mut a3: Vec[R] = Vec.new(); a3.push(R { region: s3 });\n\
+                     let pre = a3[0].region.len();\n\
+                     let mut o3 = String.new(); o3 = a3[0].region;\n\
+                     let c1 = \"so\".to_string(); let c2 = \"uth\".to_string();\n\
+                     let mut a4: Vec[R] = Vec.new(); a4.push(R { region: c1 + c2 });\n\
+                     let mut o4 = String.new(); o4 = a4[0].region;\n\
+                     let mut s5 = String.new(); s5.push_str(\"west\");\n\
+                     let mut a5: Vec[R] = Vec.new(); a5.push(R { region: s5 });\n\
+                     let o5 = a5[0].region;\n\
+                     let mut s6 = String.new(); s6.push_str(\"up\");\n\
+                     let h6 = R { region: s6 };\n\
+                     let mut o6 = String.new(); o6 = h6.region;\n\
+                     let mut s7 = String.new(); s7.push_str(\"down\");\n\
+                     let t7 = (R { region: s7 }, 1);\n\
+                     let mut o7 = String.new(); o7 = t7.0.region;\n\
+                     let mut s8 = String.new(); s8.push_str(\"flat\");\n\
+                     let mut a8: Vec[String] = Vec.new(); a8.push(s8);\n\
+                     let mut o8 = String.new(); o8 = a8[0];\n\
+                     println(f\"{o1} {o2.len()} {pre} {o3} {o4} {o5} {o6} {o7} {o8}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("north 1 4 east south west up down flat\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_unannotated_unsigned_let_prints_unsigned() {
         // B-2026-08-11-21 leg 1. Codegen picks `%llu` vs `%lld` from a
         // syntactic classifier whose identifier arm reads `var_type_names` —
