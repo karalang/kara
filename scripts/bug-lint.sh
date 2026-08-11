@@ -9,7 +9,8 @@
 #   4. a `fixed` row carries a fix SHA (warn-only — pre-convention rows may lack one)
 #   5. cross-repo (if kara-katas is found): every `kata:N` ledger row is cited by
 #      that kata's README, and every B-ID in a kata README exists in the ledger
-#   6. canonical JSON encoding — see scripts/bug-ledger-normalize.py
+#   6. every SHA cited in a `fix` field resolves to a commit in this repo
+#   7. canonical JSON encoding — see scripts/bug-ledger-normalize.py
 set -euo pipefail
 cd "$(dirname "$0")/.."
 LEDGER="docs/bug-ledger.jsonl"
@@ -127,6 +128,96 @@ if kd.exists():
                 errs.append(f"kata {num} README cites {bid} which is not in the ledger")
 else:
     warns.append(f"kata repo not found at {katas_dir} (set KARA_KATAS_DIR) — skipped cross-repo link check")
+
+# ── 6. fix-SHA resolvability ─────────────────────────────────────────────
+# A `fix` field's whole job is to point at the commit that fixed the bug. A
+# citation that resolves to nothing is worse than an empty field: it reads as
+# an answer and silently is not one, and the ledger is the project's memory —
+# `git show <sha>` is how anyone re-derives WHY a fix looks the way it does.
+#
+# These go dangling by an ordinary, blameless route: the local dev flow commits
+# inside a worktree, records the SHA, then rebases before the fast-forward, so
+# the recorded SHA is the PRE-rebase one and dies with the old commit. Nothing
+# ever noticed, because nothing ever looked.
+#
+# Token rule: 7-40 hex containing BOTH a digit and a letter. The digit
+# requirement drops ordinary words that happen to be all-hex ("defaced",
+# "effaced"); the letter requirement drops line numbers, counts and dates
+# ("1809 allocations"). It costs a real SHA only when all 8 chars land in a-f,
+# which is ~0.04% of commits — and the cost there is a skipped check, never a
+# false accusation.
+def _git(*a, inp=None):
+    import subprocess
+    return subprocess.run(["git", *a], input=inp, capture_output=True, text=True)
+
+SHA = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
+
+# Rows whose dangling SHA could not be recovered by the 2026-08-11 repair
+# sweep. Two shapes: the fix commit's message never cited the B-ID (so there is
+# nothing to match on), or the row cites several SHAs and which one died is
+# ambiguous. THIS LIST EXISTS TO SHRINK — if you can identify the real commit
+# for one of these, fix the row and delete the entry. Do NOT add to it to make
+# a new row pass; a fresh dangling SHA means the SHA is wrong, and the fix is
+# to correct it while you still remember what it was.
+DANGLING_GRANDFATHERED = {
+    "B-2026-06-12-6", "B-2026-06-19-14", "B-2026-06-20-7", "B-2026-06-20-8",
+    "B-2026-06-20-9", "B-2026-06-20-10", "B-2026-06-20-11", "B-2026-06-20-12",
+    "B-2026-06-20-13", "B-2026-06-20-18", "B-2026-06-30-10", "B-2026-07-12-1",
+    "B-2026-07-12-2", "B-2026-07-12-31", "B-2026-07-16-20", "B-2026-07-16-21",
+    "B-2026-07-17-16", "B-2026-07-18-13", "B-2026-07-23-15", "B-2026-07-23-17",
+    "B-2026-07-23-18", "B-2026-07-23-21", "B-2026-07-23-23", "B-2026-07-23-26",
+    "B-2026-07-28-5", "B-2026-07-29-9", "B-2026-07-29-11", "B-2026-08-03-3",
+    "B-2026-08-03-10", "B-2026-08-04-11", "B-2026-08-05-7", "B-2026-08-05-34",
+    "B-2026-08-05-38", "B-2026-08-06-9", "B-2026-08-06-31", "B-2026-08-07-13",
+    "B-2026-08-07-20", "B-2026-08-07-25", "B-2026-08-08-5", "B-2026-08-08-6",
+    "B-2026-08-08-17", "B-2026-08-08-19", "B-2026-08-09-10", "B-2026-08-09-12",
+    "B-2026-08-09-21", "B-2026-08-10-3", "B-2026-08-10-21",
+}
+
+# A SHALLOW clone has almost no history, so every SHA would look dangling and
+# the check would report ~900 false violations. Skip loudly rather than lie —
+# and note that `actions/checkout` is depth-1 BY DEFAULT, which is why the CI
+# job that runs this sets `fetch-depth: 0`.
+if _git("rev-parse", "--git-dir").returncode != 0:
+    warns.append("not a git repository — skipped fix-SHA resolvability check")
+elif _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+    warns.append(
+        "shallow clone — skipped fix-SHA resolvability check "
+        "(needs full history; set `fetch-depth: 0` on actions/checkout)"
+    )
+else:
+    cites = {r["id"]: set(SHA.findall(r.get("fix", "") or "")) for r in rows}
+    cites = {k: v for k, v in cites.items() if v}
+    every = sorted({t for v in cites.values() for t in v})
+    if every:
+        # One batch call, not one per token — ~940 tokens would otherwise be
+        # ~940 process spawns and turn a millisecond gate into half a minute.
+        # `--batch-check` echoes the RESOLVED sha for a hit and `<input>
+        # missing` for a miss, so only the miss lines carry the input token.
+        probe = _git("cat-file", "--batch-check",
+                     inp="\n".join(t + "^{commit}" for t in every)).stdout
+        gone = {l.split("^{commit}")[0] for l in probe.splitlines()
+                if l.rstrip().endswith(("missing", "ambiguous"))}
+        stale = 0
+        for bid, toks in sorted(cites.items()):
+            dead = sorted(toks & gone)
+            if not dead:
+                continue
+            where = "errs" if bid not in DANGLING_GRANDFATHERED else "warns"
+            msg = (f"{bid}: fix cites {', '.join(dead)}, which resolve(s) to no commit "
+                   f"in this repo (pre-rebase SHA?)")
+            if where == "errs":
+                errs.append(msg)
+            else:
+                stale += 1
+        if stale:
+            warns.append(
+                f"{stale} grandfathered row(s) still cite a dangling fix SHA — "
+                "see DANGLING_GRANDFATHERED in scripts/bug-lint.sh; the list exists to shrink"
+            )
+        for bid in sorted(DANGLING_GRANDFATHERED - {b for b in cites if cites[b] & gone}):
+            warns.append(f"{bid}: grandfathered as dangling but now resolves — "
+                         "remove it from DANGLING_GRANDFATHERED")
 
 for w in warns: print(f"WARN  {w}")
 for e in errs: print(f"ERROR {e}")

@@ -67,6 +67,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `Bug-ledger integrity` below resolves every SHA a `fix` field cites
+          # against this repo's history. `actions/checkout` is depth-1 by
+          # DEFAULT, and in a shallow clone essentially no cited SHA is present
+          # — the check would either report ~900 false violations or (as it
+          # actually does) detect the shallow clone and skip itself, which
+          # would leave the rule enforced only on developer machines. That is
+          # the same "convention nobody can check" shape that let the ledger's
+          # JSON encoding drift four times in one day (B-2026-08-07-13).
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
