@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 158 | 1 |
 | double-free | 118 | 0 |
 | codegen-gap | 100 | 0 |
-| run-vs-build | 96 | 1 |
+| run-vs-build | 97 | 1 |
 | missing-feature | 88 | 0 |
 | perf | 62 | 1 |
 | false-positive | 58 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 784 | 4 |
-| typecheck | 143 | 1 |
+| typecheck | 144 | 1 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1079 surfaced · 5 open · 1064 fixed** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1080 surfaced · 5 open · 1065 fixed** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -133,12 +133,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1079 surfaced
 | B-2026-08-10-20 | 2026-08-10 | codegen | medium | `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~1.30x Rust's `sort_by` (karac ~10.6-11.1 ms vs driftsort 8.2-8.9, 150k pairs, this host). Residual of B-2026-08-10-19. VERDICT: GO -- build the 2-way branchless partition run-builder. The kernel was emitted through karac's real machinery and MEASURED, not projected: 14.38 instructions per element per partition level against the merge pass's 26.93, i.e. 1.87x cheaper, clearing the <= ~15 budget this row set. 0.39 branches and 0.0000 mispredicts per element per level confirm the loop is genuinely branchless and unrolled. Wall clock 3.0-3.2 ns/element/level against the merge's 3.944. PROJECTED WHOLE SORT, as a bracket rather than a point: 8.76 ms (1.24x) using the probe's number, which is CONSERVATIVE because the probe partitions the full 150k array at every level and so never gets the cache locality a recursive quicksort has once blocks fall under L2; 7.62 ms (1.43x) using the C mirror's 2.34 ns/element/level, which does model recursive blocking. Against driftsort's 8.2-8.9 that is parity at worst and ahead at best. THE RETROSPECTIVE THAT MATTERS: the abandoned 3-way partition cost ~47 instructions/element/level, i.e. 1.75x MORE than the merge pass it replaced, so ten levels replacing nine passes could only ever have been a loss -- its wall-clock wash was arithmetic, and this one number would have predicted it in an afternoon. Full write-up in docs/spikes/sort-algorithm-gap.md. | Vec.sort_by / Vec.sort lowering |
 | B-2026-08-10-21 | 2026-08-10 | codegen | medium | the `UseAfterMove` defensive copy that `cli.rs` promises DOES NOT EXIST for any heap type on the binding-to-binding move path -- `karac check` exits 0 by design, `karac build` exits 0, and the reuse reads freed memory: garbage for String/Vec/struct, a hard SEGFAULT for Map and Set. Filed as a container-source gap; measured, the container read is the one case that IS defended and the 'working' rows were static-literal and `.len()` artifacts | no `UseAfterMove`-keyed mechanism exists in codegen; `src/cli.rs` `is_fatal_ownership_kind` asserts one. Fix funnels: `OwnershipError.consume_span` (spans already computed), `suppress_source_vec_cleanup_for_arg_ex` (single disarm funnel), `emit_clone_fn_for_type_expr` (type-directed copy) |
 | B-2026-08-11-1 | 2026-08-11 | codegen | high | a `Vec[char]` INDEX used directly as a method receiver (`cs[0].to_string()`) loses its `char` type and dispatches to the INTEGER method, so codegen silently prints `120` where the interpreter prints `x` -- the same root gap hard-errors on `VecDeque[char]` and `Array[char, N]` | the indexed-receiver element-TypeExpr lookup in `compile_method_call` (src/codegen/method_call.rs) -- the same resolution B-2026-08-10-13 fixed for sort_by comparator params, still missing for an index expression used directly as a receiver |
-| B-2026-08-11-2 | 2026-08-11 | typecheck | medium | `char` and `bool` receivers skip method-existence checking entirely, so ANY method name passes `karac check` and unifies with ANY return type -- the program then dies at run time under `--interp` or, under `build`, with a message that blames codegen for what is user error | the method-existence check in src/typechecker/expr_method_call.rs -- enforced for String / i64 / f64 / u8, absent for `char` and `bool` |
 | B-2026-08-11-3 | 2026-08-11 | codegen | medium | a GENERIC struct with a `Vec[T]` field monomorphized at `T = Vec[i64]` never drains its elements' buffers at drop -- every unconsumed element leaks its whole buffer, while the identical NON-generic `struct Holder { items: Vec[Vec[i64]] }` is clean and `Stack[String]` is clean | `emit_struct_drop_synthesis_mono` / the `Vec[T]` field element resolution it drives (src/codegen/synth_drop.rs) -- resolves a bare-T monomorph to `String` correctly, not to a nested `Vec` |
+| B-2026-08-11-4 | 2026-08-11 | typecheck | low | `v.cast()` on ANY primitive receiver passes `karac check` and then fails at run time -- `cast` sits on the PRIMITIVE_VALUE_METHODS exemption but is not implemented on any backend, so the exemption guards nothing and only holds the hole open | the PRIMITIVE_VALUE_METHODS list in src/typechecker/expr_method_call.rs |
 
-### Fixed (1064)
+### Fixed (1065)
 
-<details><summary>1064 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1065 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1236,6 +1236,18 @@ stash-proven red with an explicit heap-use-after-free. |
 | B-2026-08-10-17 | typecheck | medium | a `return` NESTED inside a closure body (in an `if` / loop) is typechecked against `()` instead of the closure's return type, so an early return from… | 819af61 |
 | B-2026-08-10-18 | codegen | medium | an explicit `return` inside an ITERATOR ADAPTOR closure (`map`/`filter`/`any`/`all`/`retain`) fails codegen with `Terminator found in the middle of a… | c0c8842 |
 | B-2026-08-10-19 | codegen | medium | `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~1.66x Rust's `sort_by` (karac 14.82 ms vs driftsort 8.93 ms, 150k pairs, this host, both progr… | 31485cd |
+| B-2026-08-11-2 | typecheck | medium | `char` and `bool` receivers skip method-existence checking entirely, so ANY method name passes `karac check` and unifies with ANY return type -- the… | FIXED by c2be671. `char` and `bool` receivers now route through the
+SCALAR-PRIMITIVE arm in `src/typechecker/expr_method_call.rs` -- the same arm
+`i64`/`u32`/`f64`/`u8` have used since B-2026-07-03-5. One `matches!` gains
+`Type::Bool | Type::Char`, which buys both halves at once: a method with no impl
+candidate is rejected `no method 'X' on type 'char'` (`NoMethodFound`) instead of
+poisoning to `Type::Error`, and a method that HAS one dispatches through the impl
+table and gets a real return type. `char` numeric-conversion typos (`to_i64` /
+`as_i64` / `to_int` / `to_u32` / `as_u32` / `code_point` / `ord`) and `is_digit`
+carry a hint naming the spelling that exists. Pins: five tests in
+`tests/typechecker.rs` -- the bogus-name matrix, the four-annotation unification
+case, the full real char/bool surface, user impls on both (dispatch AND return
+type), and the hint. |
 
 </details>
 
