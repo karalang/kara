@@ -5824,6 +5824,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 &[
                                     BasicMetadataValueEnum::from(data),
                                     BasicMetadataValueEnum::from(len),
+                                    BasicMetadataValueEnum::from(i64_t.const_int(1, false)),
                                 ],
                                 "",
                             )
@@ -9047,6 +9048,10 @@ impl<'ctx> super::Codegen<'ctx> {
         /// quarter of a pass and at 150k elements 0.17% of the sort;
         /// shorter inputs skip it entirely and keep the pre-existing path.
         const PROBE: u64 = 256;
+        /// Below this length the probe is not worth running, and keeping it at
+        /// or above the partition's own leaf `SPAN` is what guarantees a
+        /// handed-back range can never re-enter the partition path.
+        const PART_MIN: u64 = 4096;
 
         let i64_t = self.context.i64_type();
         let void_t = self.context.void_type();
@@ -9061,10 +9066,42 @@ impl<'ctx> super::Codegen<'ctx> {
         self.closure_counter += 1;
         let elem_mangle = self.llvm_type_to_mangle_str(elem_ty);
         let name = format!("__vec_{}_sort_by_mono_{}", elem_mangle, id);
-        let fn_ty = void_t.fn_type(&[ptr_ty.into(), i64_t.into()], false);
+        // Third parameter: `allow_part`. Call sites pass 1; the partition
+        // helper passes 0 when it hands a range back, which is what stops an
+        // abandoned range from being re-probed and bounced straight back.
+        let fn_ty = void_t.fn_type(&[ptr_ty.into(), i64_t.into(), i64_t.into()], false);
         let sort_fn = self
             .module
             .add_function(&name, fn_ty, Some(Linkage::Internal));
+        // Declared here, defined after this function's body: the two are
+        // mutually recursive, so the declaration has to exist first.
+        let qpart_name = format!("__vec_{}_qpart_{}", elem_mangle, id);
+        let qpart_ty = void_t.fn_type(
+            &[
+                ptr_ty.into(),
+                ptr_ty.into(),
+                i64_t.into(),
+                i64_t.into(),
+                i64_t.into(),
+                i64_t.into(),
+            ],
+            false,
+        );
+        let qpart_fn = self
+            .module
+            .add_function(&qpart_name, qpart_ty, Some(Linkage::Internal));
+        // The entry probe lives in its OWN function rather than inline here.
+        // Measured: inlining the user comparator two more times into this
+        // function cost sawtooth 22.5M -> 23.4M and nearly-sorted 31.5M ->
+        // 32.9M — patterns that never take the partition path at all. The
+        // probe itself is under 0.05M (sorted and reverse, whose whole sort is
+        // 1.0M and 1.8M, did not move); the loss was phase 2 being compiled
+        // differently in a bigger function.
+        let probe_name = format!("__vec_{}_sprobe_{}", elem_mangle, id);
+        let probe_ty = i64_t.fn_type(&[ptr_ty.into(), i64_t.into()], false);
+        let probe_fn = self
+            .module
+            .add_function(&probe_name, probe_ty, Some(Linkage::Internal));
 
         // Save outer codegen state — we're about to compile into a new fn.
         // Same save/restore dance as `emit_sort_by_inline_thunk`.
@@ -9162,6 +9199,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let p2_tail = self.context.append_basic_block(sort_fn, "p2.tail");
         let p2_pass_end = self.context.append_basic_block(sort_fn, "p2.pass.end");
         let p2_done = self.context.append_basic_block(sort_fn, "p2.done");
+        // Entry probe — the O(1) cardinality/orderedness sample that decides
+        // whether the partition path is worth trying at all (B-2026-08-11-10
+        // § Direction 7).
+        let pt_chk = self.context.append_basic_block(sort_fn, "pt.chk");
+        let pt_call = self.context.append_basic_block(sort_fn, "pt.call");
+        let pt_go = self.context.append_basic_block(sort_fn, "pt.go");
         let copy_back = self.context.append_basic_block(sort_fn, "copy.back");
         let fini = self.context.append_basic_block(sort_fn, "fini");
         let exit = self.context.append_basic_block(sort_fn, "exit");
@@ -9298,7 +9341,66 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(runs2_a, runs1).unwrap();
         self.builder.build_store(start_a, zero).unwrap();
         self.builder.build_store(nr_a, zero).unwrap();
-        self.builder.build_unconditional_branch(p1_chk).unwrap();
+        self.builder.build_unconditional_branch(pt_chk).unwrap();
+
+        // ── Entry probe: is the partition path worth trying? ────────────────
+        // Out of line, in `__vec_<m>_sprobe_<id>` — see the declaration above
+        // for the measurement that put it there.
+        self.builder.position_at_end(pt_chk);
+        let allow_part = sort_fn.get_nth_param(2).unwrap().into_int_value();
+        let allow_b = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, allow_part, zero, "pt.allow")
+            .unwrap();
+        let big = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SGT,
+                len,
+                i64_t.const_int(PART_MIN, false),
+                "pt.big",
+            )
+            .unwrap();
+        let try_part = self.builder.build_and(allow_b, big, "pt.try").unwrap();
+        self.builder
+            .build_conditional_branch(try_part, pt_call, p1_chk)
+            .unwrap();
+
+        self.builder.position_at_end(pt_call);
+        let probe_r = self
+            .builder
+            .build_call(probe_fn, &[data.into(), len.into()], "pt.r")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let accept = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, probe_r, zero, "pt.accept")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(accept, pt_go, p1_chk)
+            .unwrap();
+
+        // The partition borrows the scratch phase 2 already allocated, so it
+        // needs nothing of its own, and `fini` frees all three buffers on the
+        // way out exactly as the merge path does.
+        self.builder.position_at_end(pt_go);
+        self.builder
+            .build_call(
+                qpart_fn,
+                &[
+                    data.into(),
+                    scratch.into(),
+                    zero.into(),
+                    len.into(),
+                    one.into(),
+                    zero.into(),
+                ],
+                "",
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(fini).unwrap();
 
         // ── Phase 1: split the array into maximal sorted runs ───────────────
         // `while start < len`
@@ -10623,6 +10725,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(exit);
         self.builder.build_return(None).unwrap();
 
+        // sort_fn is complete, so the mutually recursive partner can be
+        // defined now.
+        self.emit_sort_partition_body(qpart_fn, sort_fn, params, body, elem_ty, elem_type_name)?;
+        self.emit_sort_probe_body(probe_fn, params, body, elem_ty, elem_type_name)?;
+
         // Restore outer state.
         self.type_subst = saved_subst;
         self.loop_stack = saved_loop_stack;
@@ -10637,6 +10744,905 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         Ok(sort_fn)
+    }
+
+    /// splitmix64's finalizer. Used to derive pivot indices deterministically
+    /// from a range's `(lo, hi, depth)`, so a build is reproducible and a
+    /// pivot is still uncorrelated with any structure in the input.
+    fn emit_splitmix64(&mut self, seed: IntValue<'ctx>) -> IntValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        let b = &self.builder;
+        let z = b
+            .build_int_add(seed, i64_t.const_int(0x9E37_79B9_7F4A_7C15, false), "sm.z")
+            .unwrap();
+        let s30 = b
+            .build_right_shift(z, i64_t.const_int(30, false), false, "sm.s30")
+            .unwrap();
+        let x1 = b.build_xor(z, s30, "sm.x1").unwrap();
+        let m1 = b
+            .build_int_mul(x1, i64_t.const_int(0xBF58_476D_1CE4_E5B9, false), "sm.m1")
+            .unwrap();
+        let s27 = b
+            .build_right_shift(m1, i64_t.const_int(27, false), false, "sm.s27")
+            .unwrap();
+        let x2 = b.build_xor(m1, s27, "sm.x2").unwrap();
+        let m2 = b
+            .build_int_mul(x2, i64_t.const_int(0x94D0_49BB_1331_11EB, false), "sm.m2")
+            .unwrap();
+        let s31 = b
+            .build_right_shift(m2, i64_t.const_int(31, false), false, "sm.s31")
+            .unwrap();
+        b.build_xor(m2, s31, "sm.out").unwrap()
+    }
+
+    /// Emit the body of `__vec_<m>_qpart_<id>` — the full-array stable
+    /// partition of B-2026-08-11-10 § Direction 7, ported from the validated
+    /// mirror at `docs/spikes/sortbench/mirror.rs`.
+    ///
+    /// `void qpart(data, scratch, lo, hi, in_a, depth)` sorts `[lo,hi)`, whose
+    /// live elements are in `data` iff `in_a`, and leaves the result sorted,
+    /// stable and **in `data`**. It ping-pongs between the two buffers exactly
+    /// as phase 2 does, borrowing phase 2's own scratch, so it allocates
+    /// nothing.
+    ///
+    /// Why this beats a merge on low-cardinality input, and why the bounded
+    /// run-builder reverted for B-2026-08-10-20 could not: a merge pass writes
+    /// all `n` elements no matter what the keys are, so `n·log2(n/RUN)` merge
+    /// outputs is fixed. A partition can **stop early** — a range whose every
+    /// element ties with the pivot is already sorted and stable — so 8 distinct
+    /// keys resolve in ~3 levels rather than 13 passes. Measured 2.5x
+    /// instructions and 1.75x wall clock on that shape; see the spike.
+    ///
+    /// Stability is the count-then-scatter shape: one pass counts, a second
+    /// walks the range in order writing each element to one of two advancing
+    /// cursors, so relative order is preserved within both halves.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_sort_partition_body(
+        &mut self,
+        qpart_fn: FunctionValue<'ctx>,
+        sort_fn: FunctionValue<'ctx>,
+        params: &[ClosureParam],
+        body: &Expr,
+        elem_ty: BasicTypeEnum<'ctx>,
+        elem_type_name: Option<&str>,
+    ) -> Result<(), String> {
+        /// Ranges at or below this hand off to the merge. Kept at or below the
+        /// entry probe's own length floor so a handoff can never re-probe.
+        const SPAN: u64 = 4096;
+        /// Partition levels before forcing the merge. Each level splits into
+        /// two strictly smaller non-empty ranges, so this is a backstop, not a
+        /// normal exit — but it is what preserves the O(n log n) worst case
+        /// that a randomised-pivot partition would otherwise give up.
+        const DEPTH_MAX: u64 = 64;
+        /// Partition a range only if at least `len / GATE` of its elements tie
+        /// with the pivot, i.e. estimated distinct keys <= GATE. Measured
+        /// crossover is between 64 and 128 distinct keys, matching the
+        /// arithmetic (partitioning costs two passes per level against the
+        /// merge's one, so it wins while 2·log2(d) < log2(n/RUN)).
+        const GATE: u64 = 64;
+
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_zero();
+        let one = i64_t.const_int(1, false);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
+        let saved_pct = self.pending_closure_fn_type.take();
+        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        self.current_fn = Some(qpart_fn);
+
+        let data = qpart_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let scratch = qpart_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let lo = qpart_fn.get_nth_param(2).unwrap().into_int_value();
+        let hi = qpart_fn.get_nth_param(3).unwrap().into_int_value();
+        let in_a = qpart_fn.get_nth_param(4).unwrap().into_int_value();
+        let depth = qpart_fn.get_nth_param(5).unwrap().into_int_value();
+
+        let bb = |s: &Self, n: &str| s.context.append_basic_block(qpart_fn, n);
+        let entry = bb(self, "entry");
+        let leaf = bb(self, "leaf");
+        let leaf_cp = bb(self, "leaf.cp");
+        let leaf_call = bb(self, "leaf.call");
+        let pv = bb(self, "pivot");
+        let cnt_chk = bb(self, "cnt.chk");
+        let cnt_body = bb(self, "cnt.body");
+        let gate_chk = bb(self, "gate.chk");
+        let alleq_chk = bb(self, "alleq.chk");
+        let alleq = bb(self, "alleq");
+        let alleq_cp = bb(self, "alleq.cp");
+        let pick = bb(self, "pick");
+        let sc_chk = bb(self, "sc.chk");
+        let sc_body = bb(self, "sc.body");
+        let rec = bb(self, "rec");
+        let l_eq = bb(self, "l.eq");
+        let l_eq_cp = bb(self, "l.eq.cp");
+        let l_rec = bb(self, "l.rec");
+        let r_disp = bb(self, "r.disp");
+        let r_eq = bb(self, "r.eq");
+        let r_eq_cp = bb(self, "r.eq.cp");
+        let r_rec = bb(self, "r.rec");
+        let ret = bb(self, "ret");
+
+        // ── entry: pick the live/dead buffers, bail to the merge if small ──
+        self.builder.position_at_end(entry);
+        let piv_a = self.create_entry_alloca(qpart_fn, "piv", elem_ty);
+        let nlt_a = self.create_entry_alloca(qpart_fn, "nlt", i64_t.into());
+        let nle_a = self.create_entry_alloca(qpart_fn, "nle", i64_t.into());
+        let ii_a = self.create_entry_alloca(qpart_fn, "qi", i64_t.into());
+        let lc_a = self.create_entry_alloca(qpart_fn, "lcur", i64_t.into());
+        let rc_a = self.create_entry_alloca(qpart_fn, "rcur", i64_t.into());
+        let split_a = self.create_entry_alloca(qpart_fn, "split", i64_t.into());
+
+        let len = self.builder.build_int_sub(hi, lo, "q.len").unwrap();
+        let elem_size = elem_ty.size_of().unwrap();
+        let span_bytes = self
+            .builder
+            .build_int_mul(len, elem_size, "q.bytes")
+            .unwrap();
+        let in_a_b = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, in_a, zero, "q.ina")
+            .unwrap();
+        let live = self
+            .builder
+            .build_select(in_a_b, data, scratch, "q.live")
+            .unwrap()
+            .into_pointer_value();
+        let dead = self
+            .builder
+            .build_select(in_a_b, scratch, data, "q.dead")
+            .unwrap()
+            .into_pointer_value();
+        // Addresses of this range in each buffer — the only two the copies use.
+        let d_lo = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[lo], "q.d.lo")
+                .unwrap()
+        };
+        let s_lo = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, scratch, &[lo], "q.s.lo")
+                .unwrap()
+        };
+        let small = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SLE,
+                len,
+                i64_t.const_int(SPAN, false),
+                "q.small",
+            )
+            .unwrap();
+        let deep = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SGE,
+                depth,
+                i64_t.const_int(DEPTH_MAX, false),
+                "q.deep",
+            )
+            .unwrap();
+        // Computed here rather than in `leaf`: `alleq` needs it too, and
+        // `leaf` does not dominate `alleq`.
+        let need_cp = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, in_a, zero, "q.needcp")
+            .unwrap();
+        let bail = self.builder.build_or(small, deep, "q.bail").unwrap();
+        self.builder
+            .build_conditional_branch(bail, leaf, pv)
+            .unwrap();
+
+        // ── leaf: bring the range home to `data`, then merge-sort it ───────
+        // `allow_part = 0` on the callee: without it an abandoned range would
+        // be re-probed, accepted by the sampling estimate that the exact tie
+        // count just rejected, and handed straight back here — the same range,
+        // the same pivot, forever.
+        self.builder.position_at_end(leaf);
+        self.builder
+            .build_conditional_branch(need_cp, leaf_cp, leaf_call)
+            .unwrap();
+        self.builder.position_at_end(leaf_cp);
+        self.builder
+            .build_memcpy(d_lo, 8, s_lo, 8, span_bytes)
+            .unwrap();
+        self.builder.build_unconditional_branch(leaf_call).unwrap();
+        self.builder.position_at_end(leaf_call);
+        self.builder
+            .build_call(sort_fn, &[d_lo.into(), len.into(), zero.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(ret).unwrap();
+
+        // ── pivot: median of three splitmix-chosen samples ─────────────────
+        // A FIXED-POSITION median-of-3 is not interchangeable here. Sampling
+        // lo / lo+len/2 / hi-1 is degenerate on periodic input: on a sawtooth
+        // those hold 0, 0 and 999, the median is 0, and 0 is the range MINIMUM,
+        // so each level peels off only the copies of the minimum. Measured at
+        // 2328.7M instructions against the merge's 23.8M — ~100x.
+        self.builder.position_at_end(pv);
+        let h_lo = self
+            .builder
+            .build_int_mul(lo, i64_t.const_int(0x9E37_79B9_7F4A_7C15, false), "q.h1")
+            .unwrap();
+        let h_hi = self
+            .builder
+            .build_int_mul(hi, i64_t.const_int(0xBF58_476D_1CE4_E5B9, false), "q.h2")
+            .unwrap();
+        let h_dp = self
+            .builder
+            .build_int_mul(depth, i64_t.const_int(0x94D0_49BB_1331_11EB, false), "q.h3")
+            .unwrap();
+        let hx = self.builder.build_xor(h_lo, h_hi, "q.hx").unwrap();
+        let seed0 = self.builder.build_xor(hx, h_dp, "q.seed").unwrap();
+        let s1 = self.emit_splitmix64(seed0);
+        let s2 = self.emit_splitmix64(s1);
+        let s3 = self.emit_splitmix64(s2);
+        let mut idxs = Vec::with_capacity(3);
+        for (n, s) in [("a", s1), ("b", s2), ("c", s3)] {
+            let m = self
+                .builder
+                .build_int_unsigned_rem(s, len, &format!("q.pv.{n}.m"))
+                .unwrap();
+            idxs.push(
+                self.builder
+                    .build_int_add(lo, m, &format!("q.pv.{n}.i"))
+                    .unwrap(),
+            );
+        }
+        let mut vals = Vec::with_capacity(3);
+        for (n, ix) in ["a", "b", "c"].iter().zip(&idxs) {
+            let addr = unsafe {
+                self.builder
+                    .build_in_bounds_gep(elem_ty, live, &[*ix], &format!("q.pv.{n}.p"))
+                    .unwrap()
+            };
+            vals.push(
+                self.builder
+                    .build_load(elem_ty, addr, &format!("q.pv.{n}.v"))
+                    .unwrap(),
+            );
+        }
+        // Select the median's INDEX rather than its value: i64 selects are
+        // unconditionally safe for every element type this path admits.
+        let c_ab = self.emit_sort_by_inline_compare(
+            qpart_fn,
+            params,
+            body,
+            elem_type_name,
+            vals[0],
+            vals[1],
+        )?;
+        let c_bc = self.emit_sort_by_inline_compare(
+            qpart_fn,
+            params,
+            body,
+            elem_type_name,
+            vals[1],
+            vals[2],
+        )?;
+        let c_ac = self.emit_sort_by_inline_compare(
+            qpart_fn,
+            params,
+            body,
+            elem_type_name,
+            vals[0],
+            vals[2],
+        )?;
+        let lt = |s: &mut Self, c: IntValue<'ctx>, n: &str| {
+            s.builder
+                .build_int_compare(inkwell::IntPredicate::SLT, c, zero, n)
+                .unwrap()
+        };
+        let ab = lt(self, c_ab, "q.ab");
+        let bc = lt(self, c_bc, "q.bc");
+        let ac = lt(self, c_ac, "q.ac");
+        let t1 = self
+            .builder
+            .build_select(ac, idxs[2], idxs[0], "q.t1")
+            .unwrap()
+            .into_int_value();
+        let m1 = self
+            .builder
+            .build_select(bc, idxs[1], t1, "q.m1")
+            .unwrap()
+            .into_int_value();
+        let t2 = self
+            .builder
+            .build_select(bc, idxs[2], idxs[1], "q.t2")
+            .unwrap()
+            .into_int_value();
+        let m2 = self
+            .builder
+            .build_select(ac, idxs[0], t2, "q.m2")
+            .unwrap()
+            .into_int_value();
+        let med = self
+            .builder
+            .build_select(ab, m1, m2, "q.med")
+            .unwrap()
+            .into_int_value();
+        let med_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, live, &[med], "q.med.p")
+                .unwrap()
+        };
+        let med_v = self.builder.build_load(elem_ty, med_p, "q.med.v").unwrap();
+        self.builder.build_store(piv_a, med_v).unwrap();
+        self.builder.build_store(nlt_a, zero).unwrap();
+        self.builder.build_store(nle_a, zero).unwrap();
+        self.builder.build_store(ii_a, lo).unwrap();
+        self.builder.build_unconditional_branch(cnt_chk).unwrap();
+
+        // ── count: one pass tallies BOTH `< pivot` and `<= pivot` ──────────
+        // Two tallies from one comparison is what lets the split predicate be
+        // chosen without a second pass, folds the old `t = 1` retry into the
+        // same pass, and hands the gate below its answer for free.
+        self.builder.position_at_end(cnt_chk);
+        let ci = self
+            .builder
+            .build_load(i64_t, ii_a, "q.ci")
+            .unwrap()
+            .into_int_value();
+        let c_go = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, ci, hi, "q.c.go")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(c_go, cnt_body, gate_chk)
+            .unwrap();
+
+        self.builder.position_at_end(cnt_body);
+        let cv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, live, &[ci], "q.cv.p")
+                .unwrap()
+        };
+        let cv = self.builder.build_load(elem_ty, cv_p, "q.cv").unwrap();
+        let pv_v = self.builder.build_load(elem_ty, piv_a, "q.pv.v").unwrap();
+        let cc =
+            self.emit_sort_by_inline_compare(qpart_fn, params, body, elem_type_name, cv, pv_v)?;
+        let is_lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, cc, zero, "q.is.lt")
+            .unwrap();
+        let is_le = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLE, cc, zero, "q.is.le")
+            .unwrap();
+        for (slot, bit, n) in [(nlt_a, is_lt, "nlt"), (nle_a, is_le, "nle")] {
+            let cur = self
+                .builder
+                .build_load(i64_t, slot, &format!("q.{n}.v"))
+                .unwrap()
+                .into_int_value();
+            let inc = self
+                .builder
+                .build_int_z_extend(bit, i64_t, &format!("q.{n}.z"))
+                .unwrap();
+            let nv = self
+                .builder
+                .build_int_add(cur, inc, &format!("q.{n}.n"))
+                .unwrap();
+            self.builder.build_store(slot, nv).unwrap();
+        }
+        let ci_n = self
+            .builder
+            .build_load(i64_t, ii_a, "q.ci2")
+            .unwrap()
+            .into_int_value();
+        let ci_n1 = self.builder.build_int_add(ci_n, one, "q.ci.n").unwrap();
+        self.builder.build_store(ii_a, ci_n1).unwrap();
+        self.builder.build_unconditional_branch(cnt_chk).unwrap();
+
+        // ── gate: abandon, having written nothing ──────────────────────────
+        // `neq / len` is an unbiased estimate of 1 / distinct-keys for a
+        // randomly chosen pivot, and it is already computed. A range that
+        // fails is merged exactly as it is today, so the decision is per
+        // range, not a mode: a mixed input partitions the part that pays.
+        self.builder.position_at_end(gate_chk);
+        let nlt_v = self
+            .builder
+            .build_load(i64_t, nlt_a, "q.nlt")
+            .unwrap()
+            .into_int_value();
+        let nle_v = self
+            .builder
+            .build_load(i64_t, nle_a, "q.nle")
+            .unwrap()
+            .into_int_value();
+        let neq = self.builder.build_int_sub(nle_v, nlt_v, "q.neq").unwrap();
+        let scaled = self
+            .builder
+            .build_int_mul(neq, i64_t.const_int(GATE, false), "q.neq.s")
+            .unwrap();
+        let poor = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, scaled, len, "q.poor")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(poor, leaf, alleq_chk)
+            .unwrap();
+
+        // ── all-equal: sorted and stable already; this is the early exit ───
+        self.builder.position_at_end(alleq_chk);
+        let no_lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, nlt_v, zero, "q.nolt")
+            .unwrap();
+        let all_le = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, nle_v, len, "q.allle")
+            .unwrap();
+        let is_eq = self.builder.build_and(no_lt, all_le, "q.iseq").unwrap();
+        self.builder
+            .build_conditional_branch(is_eq, alleq, pick)
+            .unwrap();
+
+        self.builder.position_at_end(alleq);
+        self.builder
+            .build_conditional_branch(need_cp, alleq_cp, ret)
+            .unwrap();
+        self.builder.position_at_end(alleq_cp);
+        self.builder
+            .build_memcpy(d_lo, 8, s_lo, 8, span_bytes)
+            .unwrap();
+        self.builder.build_unconditional_branch(ret).unwrap();
+
+        // ── pick the split predicate ───────────────────────────────────────
+        //   nlt > 0            split on `<` at nlt; the right half is entirely
+        //                      equal iff nle == len (the pivot was the maximum)
+        //   nlt == 0           split on `<=` at nle; the LEFT half is then the
+        //                      block equal to the pivot — sorted, stable, and
+        //                      needing no recursion
+        // Both halves are always non-empty (the pivot is drawn from the range),
+        // which is what makes the recursion terminate.
+        self.builder.position_at_end(pick);
+        let split = self
+            .builder
+            .build_select(no_lt, nle_v, nlt_v, "q.split")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(split_a, split).unwrap();
+        let not_lt0 = self.builder.build_not(no_lt, "q.notlt0").unwrap();
+        let right_eq = self.builder.build_and(not_lt0, all_le, "q.req").unwrap();
+        let mid = self.builder.build_int_add(lo, split, "q.mid").unwrap();
+        self.builder.build_store(lc_a, lo).unwrap();
+        self.builder.build_store(rc_a, mid).unwrap();
+        self.builder.build_store(ii_a, lo).unwrap();
+        self.builder.build_unconditional_branch(sc_chk).unwrap();
+
+        // ── scatter: one in-order pass, two advancing cursors ──────────────
+        // This is the whole stability argument: elements are visited in
+        // original order and appended to their side, so relative order is
+        // preserved within each half. Branchless — the destination index is a
+        // select and both cursors advance by a bool.
+        self.builder.position_at_end(sc_chk);
+        let si = self
+            .builder
+            .build_load(i64_t, ii_a, "q.si")
+            .unwrap()
+            .into_int_value();
+        let s_go = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, si, hi, "q.s.go")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(s_go, sc_body, rec)
+            .unwrap();
+
+        self.builder.position_at_end(sc_body);
+        let sv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, live, &[si], "q.sv.p")
+                .unwrap()
+        };
+        let sv = self.builder.build_load(elem_ty, sv_p, "q.sv").unwrap();
+        let pv_v2 = self.builder.build_load(elem_ty, piv_a, "q.pv.v2").unwrap();
+        let sc =
+            self.emit_sort_by_inline_compare(qpart_fn, params, body, elem_type_name, sv, pv_v2)?;
+        let s_lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, sc, zero, "q.s.lt")
+            .unwrap();
+        let s_le = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLE, sc, zero, "q.s.le")
+            .unwrap();
+        let goes_left = self
+            .builder
+            .build_select(no_lt, s_le, s_lt, "q.left")
+            .unwrap()
+            .into_int_value();
+        let lcur = self
+            .builder
+            .build_load(i64_t, lc_a, "q.lc")
+            .unwrap()
+            .into_int_value();
+        let rcur = self
+            .builder
+            .build_load(i64_t, rc_a, "q.rc")
+            .unwrap()
+            .into_int_value();
+        let dst_i = self
+            .builder
+            .build_select(goes_left, lcur, rcur, "q.dsti")
+            .unwrap()
+            .into_int_value();
+        let dst_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, dead, &[dst_i], "q.dst.p")
+                .unwrap()
+        };
+        self.builder.build_store(dst_p, sv).unwrap();
+        let l_inc = self
+            .builder
+            .build_int_z_extend(goes_left, i64_t, "q.linc")
+            .unwrap();
+        let r_bit = self.builder.build_not(goes_left, "q.rbit").unwrap();
+        let r_inc = self
+            .builder
+            .build_int_z_extend(r_bit, i64_t, "q.rinc")
+            .unwrap();
+        let l_n = self.builder.build_int_add(lcur, l_inc, "q.lc.n").unwrap();
+        let r_n = self.builder.build_int_add(rcur, r_inc, "q.rc.n").unwrap();
+        self.builder.build_store(lc_a, l_n).unwrap();
+        self.builder.build_store(rc_a, r_n).unwrap();
+        let si2 = self
+            .builder
+            .build_load(i64_t, ii_a, "q.si2")
+            .unwrap()
+            .into_int_value();
+        let si_n = self.builder.build_int_add(si2, one, "q.si.n").unwrap();
+        self.builder.build_store(ii_a, si_n).unwrap();
+        self.builder.build_unconditional_branch(sc_chk).unwrap();
+
+        // ── recurse: the scatter moved both halves to the other buffer ─────
+        self.builder.position_at_end(rec);
+        let nin = self.builder.build_int_sub(one, in_a, "q.nin").unwrap();
+        let dep_n = self.builder.build_int_add(depth, one, "q.dep.n").unwrap();
+        let split_v = self
+            .builder
+            .build_load(i64_t, split_a, "q.split.v")
+            .unwrap()
+            .into_int_value();
+        let mid_v = self.builder.build_int_add(lo, split_v, "q.mid.v").unwrap();
+        // A half that is entirely equal is finished — only its parity needs
+        // fixing. `nin == 0` means the live copy is in scratch.
+        let nin_z = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, nin, zero, "q.nin.z")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(no_lt, l_eq, l_rec)
+            .unwrap();
+
+        self.builder.position_at_end(l_eq);
+        self.builder
+            .build_conditional_branch(nin_z, l_eq_cp, r_disp)
+            .unwrap();
+        self.builder.position_at_end(l_eq_cp);
+        let l_bytes = self
+            .builder
+            .build_int_mul(split_v, elem_size, "q.l.bytes")
+            .unwrap();
+        self.builder
+            .build_memcpy(d_lo, 8, s_lo, 8, l_bytes)
+            .unwrap();
+        self.builder.build_unconditional_branch(r_disp).unwrap();
+
+        self.builder.position_at_end(l_rec);
+        self.builder
+            .build_call(
+                qpart_fn,
+                &[
+                    data.into(),
+                    scratch.into(),
+                    lo.into(),
+                    mid_v.into(),
+                    nin.into(),
+                    dep_n.into(),
+                ],
+                "",
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(r_disp).unwrap();
+
+        self.builder.position_at_end(r_disp);
+        self.builder
+            .build_conditional_branch(right_eq, r_eq, r_rec)
+            .unwrap();
+
+        self.builder.position_at_end(r_eq);
+        self.builder
+            .build_conditional_branch(nin_z, r_eq_cp, ret)
+            .unwrap();
+        self.builder.position_at_end(r_eq_cp);
+        let d_mid = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[mid_v], "q.d.mid")
+                .unwrap()
+        };
+        let s_mid = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, scratch, &[mid_v], "q.s.mid")
+                .unwrap()
+        };
+        let r_len = self.builder.build_int_sub(hi, mid_v, "q.r.len").unwrap();
+        let r_bytes = self
+            .builder
+            .build_int_mul(r_len, elem_size, "q.r.bytes")
+            .unwrap();
+        self.builder
+            .build_memcpy(d_mid, 8, s_mid, 8, r_bytes)
+            .unwrap();
+        self.builder.build_unconditional_branch(ret).unwrap();
+
+        self.builder.position_at_end(r_rec);
+        self.builder
+            .build_call(
+                qpart_fn,
+                &[
+                    data.into(),
+                    scratch.into(),
+                    mid_v.into(),
+                    hi.into(),
+                    nin.into(),
+                    dep_n.into(),
+                ],
+                "",
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(ret).unwrap();
+
+        self.builder.position_at_end(ret);
+        self.builder.build_return(None).unwrap();
+
+        self.loop_stack = saved_loop_stack;
+        self.var_type_names = saved_var_types;
+        self.variables = saved_vars;
+        self.current_fn = saved_fn;
+        self.closure_fn_types = saved_cfn;
+        self.pending_closure_fn_type = saved_pct;
+        self.branch_cancel_ptr = saved_cancel_ptr;
+        if let Some(b) = saved_bb {
+            self.builder.position_at_end(b);
+        }
+        Ok(())
+    }
+
+    /// Emit the body of `__vec_<m>_sprobe_<id>`: the O(1) entry probe for the
+    /// partition path (B-2026-08-11-10 § Direction 7). Returns 1 if the range
+    /// looks worth partitioning.
+    ///
+    /// It has to be O(1) in `len`, because both full-pass placements lose.
+    /// Probing BEFORE phase 1 costs one counting pass (~1.3M instructions at
+    /// 150k), which is 42% of an already-sorted input's entire budget — and
+    /// sorted/reverse are the shapes this sort beats driftsort 7x on. Probing
+    /// AFTER phase 1 is free for those, but by then phase 1 has spent ~14.5M
+    /// insertion-padding an input whose natural runs are ~2 long, and the
+    /// partition throws that work away.
+    ///
+    /// 512 samples settle both halves of the question. The count of samples
+    /// TYING with a randomly chosen pivot estimates cardinality — the same
+    /// quantity the partition's own counting pass gates on, so entry and
+    /// recursion agree on what they are measuring — and the fraction of
+    /// sampled ADJACENT PAIRS already in order estimates what phase 1's run
+    /// detection would find. Both are needed: cardinality alone would send an
+    /// input that is ALREADY SORTED over few keys down the partition path,
+    /// when phase 1 resolves it in a single run.
+    fn emit_sort_probe_body(
+        &mut self,
+        probe_fn: FunctionValue<'ctx>,
+        params: &[ClosureParam],
+        body: &Expr,
+        elem_ty: BasicTypeEnum<'ctx>,
+        elem_type_name: Option<&str>,
+    ) -> Result<(), String> {
+        const PROBE_N: u64 = 512;
+        const PART_GATE: u64 = 64;
+        const ORD_PCT: u64 = 95;
+
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_zero();
+        let one = i64_t.const_int(1, false);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
+        let saved_pct = self.pending_closure_fn_type.take();
+        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        self.current_fn = Some(probe_fn);
+
+        let data = probe_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let len = probe_fn.get_nth_param(1).unwrap().into_int_value();
+
+        let entry = self.context.append_basic_block(probe_fn, "entry");
+        let lchk = self.context.append_basic_block(probe_fn, "l.chk");
+        let lbody = self.context.append_basic_block(probe_fn, "l.body");
+        let decide = self.context.append_basic_block(probe_fn, "decide");
+
+        self.builder.position_at_end(entry);
+        let s_a = self.create_entry_alloca(probe_fn, "s", i64_t.into());
+        let rng_a = self.create_entry_alloca(probe_fn, "rng", i64_t.into());
+        let tie_a = self.create_entry_alloca(probe_fn, "tie", i64_t.into());
+        let ord_a = self.create_entry_alloca(probe_fn, "ord", i64_t.into());
+        let piv_a = self.create_entry_alloca(probe_fn, "piv", elem_ty);
+
+        let seed0 = self
+            .builder
+            .build_xor(
+                len,
+                i64_t.const_int(0xA076_1D64_78BD_642F, false),
+                "pt.seed0",
+            )
+            .unwrap();
+        let seed = self.emit_splitmix64(seed0);
+        self.builder.build_store(rng_a, seed).unwrap();
+        let pidx = self
+            .builder
+            .build_int_unsigned_rem(seed, len, "pt.pidx")
+            .unwrap();
+        let pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[pidx], "pt.pp")
+                .unwrap()
+        };
+        let pvv = self.builder.build_load(elem_ty, pp, "pt.pv").unwrap();
+        self.builder.build_store(piv_a, pvv).unwrap();
+        self.builder.build_store(tie_a, zero).unwrap();
+        self.builder.build_store(ord_a, zero).unwrap();
+        self.builder.build_store(s_a, zero).unwrap();
+        // Sampling an ADJACENT PAIR needs `idx + 1` in range, so draw from
+        // `len - 1`. The caller only reaches here for `len > PART_MIN`.
+        let len_m1 = self.builder.build_int_sub(len, one, "pt.len.m1").unwrap();
+        self.builder.build_unconditional_branch(lchk).unwrap();
+
+        self.builder.position_at_end(lchk);
+        let sv = self
+            .builder
+            .build_load(i64_t, s_a, "pt.s.v")
+            .unwrap()
+            .into_int_value();
+        let go = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SLT,
+                sv,
+                i64_t.const_int(PROBE_N, false),
+                "pt.go",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(go, lbody, decide)
+            .unwrap();
+
+        self.builder.position_at_end(lbody);
+        let r = self
+            .builder
+            .build_load(i64_t, rng_a, "pt.r")
+            .unwrap()
+            .into_int_value();
+        let r2 = self.emit_splitmix64(r);
+        self.builder.build_store(rng_a, r2).unwrap();
+        let idx = self
+            .builder
+            .build_int_unsigned_rem(r2, len_m1, "pt.i")
+            .unwrap();
+        let idx1 = self.builder.build_int_add(idx, one, "pt.i1").unwrap();
+        let xp = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[idx], "pt.xp")
+                .unwrap()
+        };
+        let x = self.builder.build_load(elem_ty, xp, "pt.x").unwrap();
+        let yp = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[idx1], "pt.yp")
+                .unwrap()
+        };
+        let y = self.builder.build_load(elem_ty, yp, "pt.y").unwrap();
+        let pv2 = self.builder.build_load(elem_ty, piv_a, "pt.pv2").unwrap();
+        let ct =
+            self.emit_sort_by_inline_compare(probe_fn, params, body, elem_type_name, x, pv2)?;
+        let tie_b = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, ct, zero, "pt.tie.b")
+            .unwrap();
+        let co = self.emit_sort_by_inline_compare(probe_fn, params, body, elem_type_name, x, y)?;
+        let ord_b = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLE, co, zero, "pt.ord.b")
+            .unwrap();
+        for (slot, bit, n) in [(tie_a, tie_b, "tie"), (ord_a, ord_b, "ord")] {
+            let cur = self
+                .builder
+                .build_load(i64_t, slot, &format!("pt.{n}.v"))
+                .unwrap()
+                .into_int_value();
+            let inc = self
+                .builder
+                .build_int_z_extend(bit, i64_t, &format!("pt.{n}.z"))
+                .unwrap();
+            let nv = self
+                .builder
+                .build_int_add(cur, inc, &format!("pt.{n}.n"))
+                .unwrap();
+            self.builder.build_store(slot, nv).unwrap();
+        }
+        let sv2 = self
+            .builder
+            .build_load(i64_t, s_a, "pt.s2")
+            .unwrap()
+            .into_int_value();
+        let sn = self.builder.build_int_add(sv2, one, "pt.s.n").unwrap();
+        self.builder.build_store(s_a, sn).unwrap();
+        self.builder.build_unconditional_branch(lchk).unwrap();
+
+        self.builder.position_at_end(decide);
+        let tie_v = self
+            .builder
+            .build_load(i64_t, tie_a, "pt.tie.f")
+            .unwrap()
+            .into_int_value();
+        let ord_v = self
+            .builder
+            .build_load(i64_t, ord_a, "pt.ord.f")
+            .unwrap()
+            .into_int_value();
+        let tie_scaled = self
+            .builder
+            .build_int_mul(tie_v, i64_t.const_int(PART_GATE, false), "pt.tie.s")
+            .unwrap();
+        let card_ok = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SGE,
+                tie_scaled,
+                i64_t.const_int(PROBE_N, false),
+                "pt.card.ok",
+            )
+            .unwrap();
+        let ord_scaled = self
+            .builder
+            .build_int_mul(ord_v, i64_t.const_int(100, false), "pt.ord.s")
+            .unwrap();
+        let shuffled = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SLT,
+                ord_scaled,
+                i64_t.const_int(PROBE_N * ORD_PCT, false),
+                "pt.shuffled",
+            )
+            .unwrap();
+        let accept = self
+            .builder
+            .build_and(card_ok, shuffled, "pt.accept")
+            .unwrap();
+        let out = self
+            .builder
+            .build_int_z_extend(accept, i64_t, "pt.out")
+            .unwrap();
+        self.builder.build_return(Some(&out)).unwrap();
+
+        self.loop_stack = saved_loop_stack;
+        self.var_type_names = saved_var_types;
+        self.variables = saved_vars;
+        self.current_fn = saved_fn;
+        self.closure_fn_types = saved_cfn;
+        self.pending_closure_fn_type = saved_pct;
+        self.branch_cancel_ptr = saved_cancel_ptr;
+        if let Some(b) = saved_bb {
+            self.builder.position_at_end(b);
+        }
+        Ok(())
     }
 
     /// One merge step: `dst[k] = src[idx]; idx += 1; k += 1`. Shared by the

@@ -1,7 +1,7 @@
 # Build products of gen.py / the Rust drivers. Regenerate with the commands in
 # README.md — none of it is worth versioning, and `bin/` alone is ~24 MB.
-bin/
-gen/
+bin*/
+gen*/
 mirror
 mrun
 one

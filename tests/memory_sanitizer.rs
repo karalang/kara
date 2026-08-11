@@ -40255,6 +40255,67 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_sort_by_partition_path_in_bounds() {
+        // B-2026-08-11-10 § Direction 7 — `Vec.sort_by` on a low-cardinality
+        // input above the entry probe's length floor takes the full-array
+        // stable partition instead of the merge. That path writes through raw
+        // GEPs into the phase-2 scratch it borrows, with two cursors advancing
+        // from opposite ends of a computed split, so an off-by-one in the split
+        // or in the parity copy-back is an out-of-bounds write rather than a
+        // wrong answer.
+        //
+        // 5000 elements over 8 keys is chosen to exercise all three exits:
+        // above SPAN it partitions, the halves fall below SPAN and hand back to
+        // the merge, and the equal blocks take the all-equal early return.
+        // Elements are `i64` and an all-int struct because those are the only
+        // shapes `should_use_mono_vec_sort_by_for` admits — no heap-owning
+        // element ever reaches this path, so the class here is bounds, not
+        // ownership.
+        //
+        // The second half sorts 5000 records that ALL compare equal and checks
+        // every one is still at its original index: that is the all-equal early
+        // exit returning a range it declared sorted, and stability is the only
+        // thing that can catch it having reordered anything.
+        assert_clean_asan_run(
+            r#"
+struct K { key: i64, ord: i64 }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut seed: i64 = 12345;
+    let mut i: i64 = 0;
+    while i < 5000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        v.push(seed % 8);
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.cmp(b));
+    let mut inv: i64 = 0;
+    let mut sum: i64 = 0;
+    let mut j: i64 = 1;
+    while j < v.len() { if v[j] < v[j - 1] { inv = inv + 1; } j = j + 1; }
+    let mut t: i64 = 0;
+    while t < v.len() { sum = sum + v[t] * (t % 7); t = t + 1; }
+    println(f"{inv}");
+    println(f"{sum}");
+
+    let mut w: Vec[K] = Vec.new();
+    let mut m: i64 = 0;
+    while m < 5000 { w.push(K { key: 7, ord: m }); m = m + 1; }
+    w.sort_by(|a, b| a.key.cmp(b.key));
+    let mut bad: i64 = 0;
+    let mut q: i64 = 0;
+    while q < w.len() { if w[q].ord != q { bad = bad + 1; } q = q + 1; }
+    println(f"{bad}");
+}
+"#,
+            // inversions, an order-sensitive checksum, and stability violations
+            // through the all-equal exit.
+            &["0", "52493", "0"],
+            "vec_sort_by_partition_path_in_bounds",
+        );
+    }
+
+    #[test]
     fn asan_vec_sorted_by_heap_clone_no_leak_no_double_free() {
         // B-2026-07-20-8 — `Vec[String].sorted_by(cmp)` is the comparator
         // sibling of `sorted()`: deep-clone the receiver, `sort_by(cmp)` the

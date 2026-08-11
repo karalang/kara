@@ -1376,3 +1376,72 @@ The budget check this row demanded is now positive: the design reaches
 18.4–22.4 M against a stated bar of "the low 20s of millions", it holds every
 other pattern at parity, and both of its gates are free. That is the
 information the emitter decision was waiting on.
+
+### Built — and the gap is closed
+
+*2026-08-11. `emit_sort_by_mono` in `src/codegen/vec_method.rs`.*
+
+The mirror said go, so it was built. Measured with the harness in
+`sortbench/`, before and after on the same container, baseline reproducing this
+document's own recorded checksum (48.8 M / 22.5 M) exactly:
+
+    pattern         instructions           driftsort   was        now
+    few-unique      48.8M -> 13.2M  3.70x     14.2M    3.44x behind   1.08x AHEAD
+    sawtooth        22.5M -> 23.4M  0.96x     31.6M    1.40x ahead    1.35x ahead
+    random          72.3M -> 72.1M  1.00x     48.2M    1.50x behind   unchanged
+    nearly-sorted   31.5M -> 32.9M  0.96x
+    sorted           1.0M ->  1.0M  1.00x
+    reverse          1.8M ->  1.8M  1.00x
+
+Wall clock on the target, same session, same slope method: **4.760 ms →
+1.742 ms (2.73x)**, against driftsort's 1.514 ms best / 1.764 ms bulk average.
+So on the pattern this row filed as 3.3x behind, karac now runs **fewer
+instructions than driftsort** and lands at wall-clock parity.
+
+Read wall clock on the other five rows as noise. They swing several percent in
+both directions against *identical* instruction counts, and `sorted` /
+`reverse` sit at 0.03–0.4 ms, which is under the slope method's floor. The
+instruction column is the deterministic one, and it says those patterns did not
+change.
+
+**The 4% on sawtooth and nearly-sorted is real, and it is not what it looks
+like.** It is not the probe: `sorted` and `reverse` call the probe on every
+sort and did not move off 1.0 M and 1.8 M, which bounds it under 0.05 M. It is
+not the partition running: neither pattern ever passes the gate. It is not the
+call-graph change either — the obvious suspect was that `qpart` calling back
+into the merge gives it a second caller, but deleting that call (a deliberately
+incorrect build, valid to measure because these two patterns never reach
+`qpart`) made both *worse*, 24.4 M and 34.4 M. What is left is codegen jitter:
+perturbing the module around a 60-block function moves these two patterns a few
+percent in either direction, and the shipped arrangement is the better end of
+the range that was measured.
+
+#### What the emitter does
+
+`__vec_<m>_qpart_<id>(data, scratch, lo, hi, in_a, depth)`, mutually recursive
+with the merge sort, borrowing phase 2's scratch so it allocates nothing:
+
+- **Two gates, each where it is free.** `__vec_<m>_sprobe_<id>` samples 512
+  elements once at entry and answers both halves of the question — ties with a
+  random pivot estimate cardinality, ordered adjacent pairs estimate what phase
+  1 would find. Inside the recursion, `neq = nle - nlt` is already computed by
+  the partition's own counting pass, so every range re-decides for nothing and
+  a mixed input partitions the part that pays.
+- **One counting pass tallies both `< pivot` and `<= pivot`**, which chooses
+  the split predicate without a second pass and folds the old `t = 1` retry
+  into it.
+- **Count-then-scatter** with two cursors over one in-order walk — the whole
+  stability argument.
+- **`allow_part` on the merge sort's signature.** Without it an abandoned range
+  is re-probed, accepted by the sampling estimate that the exact tie count just
+  rejected, and handed straight back: same range, same pivot, forever.
+- **Depth limit 64**, which is what keeps the worst case O(n log n) after
+  introducing a randomised pivot.
+
+Verification: a 756-case sweep (6 patterns × 14 sizes × 9 cardinalities,
+straddling the probe floor and the gate) asserting sorted *and* stable, with
+the oracle itself validated by poisoning it; `i64`, all-int-struct and heap
+`String` element types; the full `--features llvm` suite; ASAN at the default
+level and the `-O0` leg. Note that `should_use_mono_vec_sort_by_for` admits
+only `i64` and all-int structs, so no heap-owning element ever reaches this
+path — the memory-safety class here is bounds, not ownership.

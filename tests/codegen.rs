@@ -22277,6 +22277,66 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_partition_path_low_cardinality() {
+        // B-2026-08-11-10 § Direction 7 — above the entry probe's length floor,
+        // a low-cardinality `sort_by` leaves the merge entirely and takes the
+        // full-array stable partition. Strict `assert_eq!` rather than the
+        // tolerant `if let Some(out)` form: a stale runtime archive must fail
+        // this loudly instead of asserting nothing (CLAUDE.md).
+        //
+        // Three properties in one program, because the partition can violate
+        // each independently:
+        //   - 6000 elements over 5 keys must come out SORTED (inv == 0),
+        //   - and STABLE (the second field is the original index, so any
+        //     reordering of equal keys shows up as ord != expected), which is
+        //     what the count-then-scatter shape exists to preserve;
+        //   - a run of 6000 records that ALL compare equal must survive the
+        //     all-equal early exit untouched — that branch returns a range
+        //     declaring it sorted without writing it, so only stability can
+        //     catch it having moved anything.
+        //
+        // 6000 straddles the geometry deliberately: > 4096 so the probe fires,
+        // with halves < 4096 so the leaf hands back to the merge and the
+        // ping-pong parity copy-back is exercised too.
+        assert_eq!(
+            run_program(
+                "struct R { key: i64, ord: i64 }\n\
+                 fn main() {\n\
+                     let mut v: Vec[R] = Vec.new();\n\
+                     let mut seed: i64 = 12345;\n\
+                     let mut i: i64 = 0;\n\
+                     while i < 6000 {\n\
+                         seed = (seed * 1103515245 + 12345) % 2147483648;\n\
+                         v.push(R { key: seed % 5, ord: i });\n\
+                         i = i + 1;\n\
+                     }\n\
+                     v.sort_by(|a, b| a.key.cmp(b.key));\n\
+                     let mut inv: i64 = 0;\n\
+                     let mut unstable: i64 = 0;\n\
+                     let mut j: i64 = 1;\n\
+                     while j < 6000 {\n\
+                         if v[j].key < v[j - 1].key { inv = inv + 1; }\n\
+                         if v[j].key == v[j - 1].key {\n\
+                             if v[j].ord < v[j - 1].ord { unstable = unstable + 1; }\n\
+                         }\n\
+                         j = j + 1;\n\
+                     }\n\
+                     let mut w: Vec[R] = Vec.new();\n\
+                     let mut m: i64 = 0;\n\
+                     while m < 6000 { w.push(R { key: 3, ord: m }); m = m + 1; }\n\
+                     w.sort_by(|a, b| a.key.cmp(b.key));\n\
+                     let mut moved: i64 = 0;\n\
+                     let mut q: i64 = 0;\n\
+                     while q < 6000 { if w[q].ord != q { moved = moved + 1; } q = q + 1; }\n\
+                     println(f\"{inv} {unstable} {moved}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("0 0 0\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_vec_get_unwrap_struct_element_loop() {
         // B-2026-07-14-16 (struct leg) regression: reading many `Vec[Struct]`
         // elements via `v.get(j).unwrap()` in a loop. An earlier version of the
