@@ -95,14 +95,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 233 | 1 |
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
-| codegen-gap | 102 | 1 |
+| codegen-gap | 102 | 0 |
 | run-vs-build | 100 | 1 |
 | missing-feature | 90 | 0 |
 | perf | 63 | 0 |
 | false-positive | 58 | 0 |
 | diagnostics | 47 | 0 |
+| crash | 43 | 1 |
 | soundness | 42 | 0 |
-| crash | 42 | 0 |
 | other | 25 | 0 |
 | use-after-free | 18 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 793 | 2 |
+| codegen | 794 | 2 |
 | typecheck | 152 | 0 |
-| interp | 138 | 3 |
+| interp | 138 | 2 |
 | ownership | 44 | 0 |
 | autopar | 39 | 0 |
 | other | 36 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1097 surfaced · 3 open · 1083 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1098 surfaced · 3 open · 1084 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-17 | 2026-08-11 | interp | high | The INTERPRETER's `sort_by_key` with a float key returns a COMPLETELY UNSORTED sequence when a NaN is present, while both compiled backends sort correctly with NaN last. Measured on one program, `[3.5, NaN, 1.2, -2.0, 2.7].sort_by_key(|x| x)`: interp gives `3.5 NaN -2 1.2 2.7` (not sorted in any order -- 3.5 stays first), JIT and AOT both give `-2 1.2 2.7 3.5 NaN`. A silent wrong answer AND a run-vs-build divergence. The typechecker deliberately ALLOWS float keys here (stdlib_seq.rs documents the concession) on the grounds that the backends implement bit-level total-order semantics via `karac_float_cmp` -- that is true of codegen and NOT of the interpreter, which appears to use IEEE partial comparison, so NaN makes its sort incoherent. A shipped codegen test (test_e2e_vec_sort_by_key_float_nan_sorts_largest) pins the COMPILED behaviour on this exact input; the interpreter side was never asserted, which is why this survived. | interpreter float ordering |
-| B-2026-08-11-19 | 2026-08-11 | interp+codegen | medium | The DIRECT-on-Vec iterator terminals (`v.max()` / `v.min()`, desugared to the `.iter()` chain) are POSITION-SENSITIVE: they compile in statement/argument position but FAIL when the call is nested inside a string-concat expression. Measured on `let fs: Vec[f64] = [1.5, 2.5, 0.5]`: `println(fs.max().unwrap())` answers 2.5 on interp / JIT / AOT, while `println("max=" + fs.max().unwrap().to_string())` fails on BOTH backends -- interp 'runtime error: method 'max' not found on type 'Vec' (no interpreter dispatch arm)', codegen 'Vec/String method 'max' is not yet supported in codegen'. Both backends agree, so this is a gap rather than a divergence, but the DIAGNOSTIC IS ACTIVELY MISLEADING: it blames `max` for not existing when `max` is fine and the problem is the surrounding expression shape. | direct-Vec iterator terminals |
 | B-2026-08-11-21 | 2026-08-11 | codegen+interp | high | EVERY un-annotated `let` holding an unsigned value prints SIGNED under both compiled backends while the interpreter prints it correctly -- `let a = 18446744073709551615u64; println(f"{a}")` is -1 under JIT/AOT and correct under `--interp`. An explicit `let a: u64` fixes it, so the value is right and only codegen's signedness classifier is wrong. Separately and in the OPPOSITE direction, the INTERPRETER's `u64.to_string()` renders signed while its f-string of the same value is correct | var_type_names population for un-annotated `let` (src/codegen/stmts.rs) against expr_is_unsigned_int (src/codegen/expr_ops.rs); interpreter to_string for unsigned ints |
+| B-2026-08-11-22 | 2026-08-11 | codegen | medium | CHAINING ONTO A SCALAR'S `.to_string()` BREAKS CODEGEN TWO WAYS, both check-green and both interpreter-correct: `n.to_string().to_string()` PANICS the compiler at src/codegen/method_call.rs:2683 ("Found IntValue ... but expected the StructValue variant" -- it loads the i64 and treats it as a String struct), and `n.to_string().len()` is a clean but wrong error ("codegen: no handler for method 'to_string'"). Measured on i64, f64 and bool. Breaking the chain with a `let` fixes both, and a String-typed receiver (`s.to_string().to_string()`) is fine -- it is specifically a further call chained onto a SCALAR's to_string. Same chained-call span-aliasing family as B-2026-08-11-19, different table. | chained method-call receiver typing |
 
 ### Wontfix (1)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1097 surfaced
 
 </details>
 
-### Fixed (1083)
+### Fixed (1084)
 
-<details><summary>1083 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1084 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1797,6 +1797,82 @@ Test: `e2e_chained_field_access_on_option_result_unwrap` (tests/codegen.rs),
 on the default codegen leg because the divergence is run-vs-build. Full
 `--features llvm` suite green (102 targets, 13431 passed); fmt and clippy
 --all-targets clean. |
+| B-2026-08-11-19 | interp+codegen | medium | The DIRECT-on-Vec iterator terminals (`v.max()` / `v.min()`, desugared to the `.iter()` chain) are POSITION-SENSITIVE: they compile in statement/argu… | FIXED — the desugar gate was reading a side table through a key that CANNOT
+distinguish the calls in a chain.
+
+THE ROW'S PREMISE WAS WRONG, and the correction is the useful part. This is not
+about string concatenation and not about "position". `let s =
+xs.max().unwrap().to_string();` fails with no concat anywhere, while
+`println(xs.max().unwrap() + 1)` — a binary operand, the shape the row blamed —
+works fine. THE TRIGGER IS ONE EXTRA METHOD CALL CHAINED ONTO THE RESULT.
+Measured across seven positions: bare statement, `let`-bound then concatenated,
+arithmetic operand, f-string interpolation, struct-literal field and call
+argument all work; every spelling that chains a further call onto the terminal
+failed.
+
+MECHANISM, PROVEN RATHER THAN INFERRED. Dumping `method_callee_types` for the
+working and failing programs shows ONE entry, at the SAME key:
+
+    println(xs.max().unwrap())               SpanKey(48, 2) -> Vec.max
+    let s = xs.max().unwrap().to_string()    SpanKey(48, 2) -> i64.to_string
+
+The parser sets a MethodCall's span equal to its RECEIVER's span, so every call
+in a chain hashes to one key and the last write wins. `src/lowering.rs` gated
+the `.iter()` insertion on that entry's head being "Vec"/"VecDeque"; with
+`.to_string()` chained the entry read `i64.to_string`, the head test failed, no
+`.iter()` was inserted, and the backends met a raw `Vec.max()` they do not
+implement. Hence the misleading nouns this row was filed for: interp "method
+'max' not found on type 'Vec'", codegen "Vec/String method 'max' is not yet
+supported" — both blaming `max`, which was never the problem.
+
+THE FIX IS TO STOP RE-DERIVING THE DECISION. `infer_method_call`'s Vec/VecDeque
+narrowing arm is the one place that actually decides a call is a direct
+iterable-collection terminal, so it now records the site itself, in a dedicated
+`TypeCheckResult::direct_iter_terminals` set, and the lowering asks that instead
+of reconstructing the answer from a receiver-type NAME. The two sides can no
+longer disagree about what the narrowing means.
+
+The new table is keyed by `SpanKey::for_method_call` — the CLOSING-PAREN span,
+a leaf no outer expression aliases. Both halves of that were already in the
+codebase and simply unused here: `SpanKey::for_method_call` is documented as the
+key "that disambiguates chained calls", and `infer_method_call`'s own
+`args_close_span` parameter carries a doc comment describing precisely this
+aliasing ("`span` ... the parser sets equal to the receiver's span, so ... any
+outer chained `MethodCall` clobbers `expr_types[span]`"). The infrastructure was
+there; this side table just wasn't using it.
+
+DELIBERATELY NOT RE-KEYED GLOBALLY. `method_callee_types` has 6 insert sites and
+7 readers (monomorphization, codegen/method_call, codegen/lazyframe x2,
+unsafe_lint, must_use_lint x2), any of which may depend on today's
+last-write-wins behaviour. Re-keying it is a strictly larger change than this
+row, and the collision remains latent for those consumers.
+
+VERIFIED, both backends: all four terminals (`sum` / `product` / `max` / `min`)
+on `Vec` and on `VecDeque`, chained; and the narrowing is intact —
+`SortedSet.max()` / `.min()` keep their own surfaces and are NOT rewritten
+(pinned separately, since moving the decision into the typechecker could have
+widened it).
+
+TWO THINGS THIS DOES NOT FIX, both pre-existing and both confirmed independent
+of the desugar:
+  - `Vec[String]` iterator terminals are unsupported in codegen. The error now
+    names `iter` rather than `max`, which still reads oddly for someone who
+    wrote neither — but the USER-WRITTEN explicit `v.iter().max()` produces the
+    identical error, which is what proves the desugar is not the cause.
+  - Chaining onto a SCALAR's `.to_string()` breaks codegen in two ways, both
+    interp-correct: `n.to_string().len()` is a clean error ("no handler for
+    method 'to_string'") for i64 / f64 / bool, and `n.to_string().to_string()`
+    PANICS the compiler at src/codegen/method_call.rs:2683 ("Found IntValue but
+    expected the StructValue variant") — it loads the i64 and treats it as a
+    String struct. Same chained-call span-aliasing family as this row, different
+    table. Filed separately.
+    (Measured twice: a first pass reported these as silent wrong ANSWERS —
+    printing a constant 3, and once printing a string from an unrelated
+    program. Both were artifacts of a probe script that fell through to a STALE
+    binary when the build failed without the word "error" on stderr. Checking
+    the exit code instead showed rc=101, a panic. Worth recording because the
+    false reading was the more alarming one and would have gone into the ledger
+    as a miscompile.) |
 | B-2026-08-11-20 | typecheck+codegen | low | `f64.to_bits()` is declared `-> u64` by the typechecker but its value renders as a SIGNED i64 on all three backends: `(-1.0).to_bits()` prints -46161… | FIXED by 1597660. `expr_is_unsigned_int` (`src/codegen/expr_ops.rs`) gains a
 `to_bits` / `to_bits32` arm returning `true` unconditionally, alongside the
 existing `abs_diff` one -- the two methods whose result signedness is fixed by
