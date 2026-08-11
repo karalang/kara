@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 233 | 1 |
+| miscompile | 233 | 0 |
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
 | codegen-gap | 103 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 795 | 2 |
+| codegen | 795 | 1 |
 | typecheck | 152 | 0 |
-| interp | 138 | 1 |
+| interp | 138 | 0 |
 | ownership | 44 | 0 |
 | autopar | 39 | 0 |
 | other | 36 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1099 surfaced · 2 open · 1086 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1099 surfaced · 1 open · 1087 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-21 | 2026-08-11 | codegen+interp | high | EVERY un-annotated `let` holding an unsigned value prints SIGNED under both compiled backends while the interpreter prints it correctly -- `let a = 18446744073709551615u64; println(f"{a}")` is -1 under JIT/AOT and correct under `--interp`. An explicit `let a: u64` fixes it, so the value is right and only codegen's signedness classifier is wrong. Separately and in the OPPOSITE direction, the INTERPRETER's `u64.to_string()` renders signed while its f-string of the same value is correct | var_type_names population for un-annotated `let` (src/codegen/stmts.rs) against expr_is_unsigned_int (src/codegen/expr_ops.rs); interpreter to_string for unsigned ints |
 | B-2026-08-11-23 | 2026-08-11 | codegen | low | `Vec[T].sorted_by_key(f)` PASSES `karac check` and then fails at build: "Vec/String method 'sorted_by_key' is not yet supported in codegen". It is the ONLY hole in the six-method sort family -- measured on one `Vec[i64]` program, `sort` / `sort_by` / `sort_by_key` / `sorted` / `sorted_by` all check AND compile, and `sorted_by_key` alone checks-but-does-not-compile. The interpreter implements it correctly (it shares the precompute-keys path with `sort_by_key`, and got the B-2026-08-11-17 float-ordering fix for free), so the program runs under `karac run --interp` and fails under both `karac run` and `karac build`. Fails LOUDLY with an actionable message naming `--interp`, so this is a missing feature rather than a miscompile -- hence low severity despite being a check-vs-build divergence. | the Vec/String method dispatch in codegen — the arm that serves `sorted_by` has no `sorted_by_key` twin; interpreter side is method_call_seq.rs "sorted_by_key" |
 
 ### Wontfix (1)
@@ -143,9 +142,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1099 surfaced
 
 </details>
 
-### Fixed (1086)
+### Fixed (1087)
 
-<details><summary>1086 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1087 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1883,6 +1882,84 @@ receiver is a float, so it answered `false` and codegen emitted `%lld`.
 Pin: `e2e_to_bits_renders_unsigned` in `tests/codegen.rs` -- negative, negative
 non-power-of-two, a positive control, `to_bits32`, and the bare `println` path
 alongside the f-string one. |
+| B-2026-08-11-21 | codegen+interp | high | EVERY un-annotated `let` holding an unsigned value prints SIGNED under both compiled backends while the interpreter prints it correctly -- `let a = 1… | FIXED, both legs, and they turned out to be the SAME defect seen from two sides:
+a type recorded against a span that something else overwrites.
+
+LEG 1 (codegen, the inferred `let`) — fixed UPSTREAM of the classifier, which is
+what the row asked for. Codegen's un-annotated `let` path already ends in
+`record_var_type_name` for whatever surface it finds in `pattern_binding_types`;
+the gap was that the TYPECHECKER never wrote an entry there for a scalar. It
+records Tuple, Map/Set, Option/Result and generic user structs, and primitives
+fell straight through. One arm in `bind_pattern_types`
+(`src/typechecker/patterns.rs`) recording `Type::Int(_) | Type::UInt(_)` via the
+existing `method_callee_type_name` therefore fixes every consumer of
+`var_type_names` at once, rather than patching the `%llu`/`%lld` classifier
+alone -- so the narrow-int widening and coercion paths the row flagged are
+covered by the same entry. Signed sizes are recorded alongside unsigned on
+purpose: the classifier now answers "not unsigned" from a PRESENT entry instead
+of from an absent one, so no future consumer can mistake "unrecorded" for
+"signed".
+
+LEG 2 (interpreter, `u64.to_string()`) — the interpreter ALREADY had an unsigned
+arm; it was asking the wrong span. `span_type_is_unsigned64(&object.span)` reads
+`expr_types`, and the parser sets a MethodCall's span equal to its RECEIVER's,
+so by the time the interpreter runs that entry holds the CALL's result. Measured
+directly rather than inferred: for `hi.to_string()`,
+`expr_types[SpanKey(66, 2)] = Str`. That is also exactly why `f"{hi}"` was
+correct all along -- its interpolated expression is the bare identifier, whose
+span nothing aliases -- which is the asymmetry the row found so surprising.
+
+The typechecker now stashes an integer receiver's type at the CLOSING-PAREN span
+for `to_string`, and the interpreter reads there first, falling back to the
+receiver span for unaliased shapes. That hatch is not new: `args_close_span`
+exists for precisely this, its doc comment on both `infer_method_call` and
+`eval_method_call` describes this clobber, and `pow` plus the bit intrinsics
+already read through it via `int_width_at`. `to_string` simply never opted in.
+
+VERIFIED interp == JIT == AOT, character for character, on all five producing
+shapes from the row (suffixed literal, fn return, binop, `to_bits`,
+`reverse_bits`) plus `to_string` on both a bound and an annotated u64, `usize`,
+and the two controls that were already correct and had to stay so: an annotated
+binding, and interpolating the producing expression directly. A SIGNED binding
+is the control in the other direction -- a fix that simply rendered every
+`Value::Int` unsigned would turn -1 into 2^64-1, and both pins assert it stays
+-1.
+
+TWO CONSEQUENCES THE SUITE SURFACED, both worth recording.
+
+  1. TWO EXISTING TESTS WERE PINNING THE BUG AS EXPECTED OUTPUT.
+     `test_codegen_primitive_const_u64_max_bit_pattern_preserved` and
+     `..._usize_max` asserted "-1" for `let x = u64.MAX; println(x)`, with a
+     comment calling the signed rendering "a separate concern; the constant
+     value is correctly emitted". It was not separate -- it was this bug, and
+     `let x = u64.MAX` is exactly the un-annotated shape leg 1 is about. Both
+     now assert 18446744073709551615. This is how the row's "invisible for over
+     a month" happened: the wrong answer had a green test defending it. Both
+     were also on the tolerant `if let Some(out)` form, which asserts NOTHING
+     when the runtime archive is missing, so they were tightened to strict
+     `assert_eq!` while being corrected.
+
+  2. THE COROUTINE STATE-STRUCT LAYOUT WANTS THE ABSENCE, uniquely.
+     `state_struct_layout_primitive_typed_bindings_have_none_type_name`
+     documents a real contract -- codegen falls through to its primitive-sizing
+     path on an ABSENT entry, so a present "i64" would send it down the
+     named-type path instead. Recording scalar names broke that assertion, and
+     the assertion was RIGHT: this was a genuine risk of miscompiled coroutine
+     state, not a stale expectation. Every other consumer of the map wants the
+     scalar name, so the narrowing was put at that one reader (a filter in
+     `record_entry`, src/cli.rs) rather than at the recording site.
+
+FOURTH INSTANCE OF ONE ROOT CAUSE, which is now the thing worth carrying
+forward. B-2026-08-11-19 (the direct-Vec iterator desugar), B-2026-08-11-22
+(both `to_string` routing gates), and now this row's leg 2 are all the same
+mechanism: a side table keyed by `SpanKey::from_span` on a method call, whose
+span the parser aliases to the receiver's, so a chain -- or merely a call
+wrapping an identifier -- collapses to one key and the last write wins. Each has
+been fixed by giving that ONE consumer a different signal: a dedicated
+collision-free table (-19), the receiver's own static type (-22), the
+closing-paren stash (here). None re-keyed `method_callee_types` or `expr_types`,
+so the collision is still latent for every other consumer. The recurrence rate
+suggests the next one is a matter of when. |
 | B-2026-08-11-22 | codegen | medium | CHAINING ONTO A SCALAR'S `.to_string()` BREAKS CODEGEN TWO WAYS, both check-green and both interpreter-correct: `n.to_string().to_string()` PANICS th… | FIXED — and the row's HYPOTHESIS WAS RIGHT: it is the same span-aliasing
 mechanism as B-2026-08-11-19, in the two gates that route a `to_string` call.
 
