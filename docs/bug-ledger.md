@@ -97,12 +97,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 118 | 0 |
 | codegen-gap | 100 | 0 |
 | run-vs-build | 97 | 1 |
-| missing-feature | 88 | 0 |
+| missing-feature | 89 | 1 |
 | perf | 62 | 1 |
 | false-positive | 58 | 0 |
 | diagnostics | 47 | 1 |
-| soundness | 41 | 0 |
-| crash | 41 | 0 |
+| soundness | 42 | 1 |
+| crash | 42 | 1 |
 | other | 24 | 0 |
 | use-after-free | 18 | 1 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 784 | 4 |
-| typecheck | 144 | 1 |
+| typecheck | 147 | 4 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1081 surfaced · 6 open · 1065 fixed** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1084 surfaced · 9 open · 1065 fixed** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1081 surfaced
 | B-2026-08-11-3 | 2026-08-11 | codegen | medium | a GENERIC struct with a `Vec[T]` field monomorphized at `T = Vec[i64]` never drains its elements' buffers at drop -- every unconsumed element leaks its whole buffer, while the identical NON-generic `struct Holder { items: Vec[Vec[i64]] }` is clean and `Stack[String]` is clean | `emit_struct_drop_synthesis_mono` / the `Vec[T]` field element resolution it drives (src/codegen/synth_drop.rs) -- resolves a bare-T monomorph to `String` correctly, not to a nested `Vec` |
 | B-2026-08-11-4 | 2026-08-11 | typecheck | low | `v.cast()` on ANY primitive receiver passes `karac check` and then fails at run time -- `cast` sits on the PRIMITIVE_VALUE_METHODS exemption but is not implemented on any backend, so the exemption guards nothing and only holds the hole open | the PRIMITIVE_VALUE_METHODS list in src/typechecker/expr_method_call.rs |
 | B-2026-08-11-5 | 2026-08-11 | parser | high | EVERY parse-phase diagnostic raised inside an f-string interpolation hole is DISCARDED. Two consequences: (a) a hard syntax error degrades SILENTLY to literal text -- `println(f"typo={n.}")` passes `karac check` and prints `typo={n.}` on all three backends; (b) recoverable errors go unenforced -- `f"{takes(ref xs)}"` compiles clean while the identical call outside an f-string is a hard parse error. | src/parser/exprs.rs:771 -- `let result = crate::parse(&wrapper);` consumes only `result.program.items`; `result.errors` and `result.fix_edits` are dropped on the floor. |
+| B-2026-08-11-6 | 2026-08-11 | typecheck | high | A bare TYPE NAME in call position -- `i64(42)`, `F64(1.5)`, `bool(1)`, `String("hi")`, `Vec(1)`, or a named-field user struct `P(1)` -- is accepted by EVERY checking phase, then breaks downstream: the interpreter panics on an `unreachable!` (or raises its own 'This is a compiler bug' internal error) while the compiled backends silently evaluate it to `0`. | src/interpreter/eval_call.rs:2101 (the `unreachable!` whose message already says 'the typechecker accepted a non-callable callee'); the missing rejection belongs in the typechecker's call-callee resolution. |
+| B-2026-08-11-7 | 2026-08-11 | typecheck | high | `Vec[f64].sort()` bypasses the `Ord` gate that design.md § Float semantics REQUIRES -- the spec's own verbatim counter-example compiles. With a NaN present, `sort()` silently leaves the Vec UNSORTED (all three backends agree), so a percentile/statistics program yields wrong answers with no diagnostic. `.sorted()`, `.max()`, `.min()` and `.contains()` on `Vec[f64]` are ungated the same way, while `Map[f64,_]`, `Set[f64]`, `SortedSet[f64]` and free `max(f64,f64)` all gate correctly. | src/typechecker/stdlib_seq.rs:1436 -- the Vec `"sort" | "reverse"` arm calls `expect_no_args` and returns `Type::Unit` with NO element-type Ord check; the Slice twin at :1164 checks mutability only. Working gate to copy: stdlib_map.rs:516/633 (SortedSet/SortedMap element+key Ord). |
+| B-2026-08-11-8 | 2026-08-11 | typecheck | medium | `F64.from(x)` / `F32.from(x)` -- the total-order wrapper constructor that design.md AND the compiler's own `T: Ord` diagnostic both name as THE fix for `f64` in an Ord/Eq/Hash context -- is unimplemented: `no associated function 'from' on type 'F64'`. Every spelling a user would try next fails, and one of them (`F64(1.5)`) panics the interpreter. | the `F64`/`F32` stdlib surface; the diagnostic that prescribes it is the `T: Ord` bound message (it renders "use the total-order wrapper `F64` (`F64.from(x)`)"), and design.md § Float semantics line ~2264 writes `scores.map(F64.from).sort()  # OK`. |
 
 ### Fixed (1065)
 
