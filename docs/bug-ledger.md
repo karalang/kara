@@ -1259,7 +1259,32 @@ carry a hint naming the spelling that exists. Pins: five tests in
 `tests/typechecker.rs` -- the bogus-name matrix, the four-annotation unification
 case, the full real char/bool surface, user impls on both (dispatch AND return
 type), and the hint. |
-| B-2026-08-11-3 | codegen | medium | a generic struct's method whose parameter is the TYPE PARAMETER leaks a fresh TEMPORARY argument's buffer -- `s.push([1i64,2i64])` on a `Stack[T]` le… | a6dbf30 |
+| B-2026-08-11-3 | codegen | medium | a generic struct's method whose parameter is the TYPE PARAMETER leaks a fresh TEMPORARY argument's buffer -- `s.push([1i64,2i64])` on a `Stack[T]` le… | FIXED by 3dd2e4b, in `src/codegen/mono.rs`.
+
+`compile_generic_call` now materializes a fresh heap Vec/String temp into the
+caller's scope when the callee's param at that index is written as a bare type
+param AND the callee's declared return type does not mention that type param
+(the new `generic_param_is_bare_type_param` + `type_expr_mentions`). That is
+the third of the three legs B-2026-07-11-35's comment names — the deep-copy
+registration and per-monomorph struct-drop synthesis shipped; caller-side
+fresh-owned-temp cleanup never did.
+
+The return-type guard is load-bearing, not defensive. Without it the fix aborts
+`e2e_return_owned_generic_param_no_double_free` and
+`test_e2e_generic_forward_owned_string_param_no_double_free` with a real
+`free(): double free detected in tcache 2`: `fn echo[T](x: T) -> T { x }` is
+also a bare type param, and the caller's binding for the RESULT already owns
+the buffer. The test is syntactic rather than a body walk because
+`fn_returns_param` answers false for a forwarding tail — `pick[T](a: T, b: T)
+-> T { id(a) }` and `nest[T](x: T) -> T { id(id(x)) }` both slip past it and
+both were measured aborting. An unrecognized return shape answers "mentions
+it", so the conservative direction is a leak, never a double free.
+
+Regression test: `asan_generic_struct_method_bare_type_param_temp_arg_no_leak`
+(`tests/memory_sanitizer.rs`), 50 iterations so LSan sees accumulation, pushing
+a temporary and a named binding side by side — the named one is the
+double-free control. Verified to FAIL pre-fix. Full `--features llvm` suite
+green (102 targets, 13399 passed, 0 failed). |
 | B-2026-08-11-4 | typecheck | low | `v.cast()` on ANY primitive receiver passes `karac check` and then fails at run time -- `cast` sits on the PRIMITIVE_VALUE_METHODS exemption but is n… | FIXED by 0aca4db. `"cast"` dropped from `PRIMITIVE_VALUE_METHODS`
 (`src/typechecker/expr_method_call.rs`); no replacement needed, because the
 normal path already does the right thing in both directions. Pins: three tests
