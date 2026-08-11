@@ -13233,3 +13233,111 @@ fn positional_profile_arg_carries_no_deletion() {
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.fix_edits.is_empty());
 }
+
+// ── B-2026-08-11-5: parse diagnostics inside f-string holes ──────
+
+/// LEG A, the severe one. An interpolation hole is re-parsed by wrapping it in
+/// a synthetic `fn __interp__() { … }` and calling `parse` recursively; that
+/// arm used to read only the resulting `program` and drop `errors` entirely.
+/// A hole that failed to parse then fell back to emitting its own source as
+/// LITERAL TEXT, so `f"typo={n.}"` compiled clean and printed `typo={n.}` on
+/// all three backends — unanimous silent-wrong-output, which is precisely the
+/// shape the 3-backend differential oracle cannot see.
+#[test]
+fn interp_hole_parse_errors_are_reported_not_swallowed() {
+    for src in [
+        r#"fn main() { let n = 1; println(f"typo={n.}"); }"#,
+        r#"fn main() { let n = 1; println(f"trunc={n * }"); }"#,
+        r#"fn main() { let x = 1; println(f"{x as}"); }"#,
+        r#"fn main() { println(f"{[1,2}"); }"#,
+        r#"fn main() { println(f"{foo(,)}"); }"#,
+    ] {
+        let result = karac::parse(src);
+        assert!(
+            !result.errors.is_empty(),
+            "a hole that does not parse must report; silently passed: {src}"
+        );
+    }
+}
+
+/// The diagnostic has to land INSIDE the hole, not on the wrapper. The nested
+/// parse numbers spans against `fn __interp__() { … }`, so an un-rebased span
+/// points into a synthetic prologue that does not exist in the user's file.
+#[test]
+fn interp_hole_parse_error_span_is_rebased_onto_the_real_source() {
+    let src = "fn main() {\n    let n = 1;\n    println(f\"typo={n.}\");\n}\n";
+    let result = karac::parse(src);
+    let e = result
+        .errors
+        .first()
+        .expect("expected a parse error for the malformed hole");
+    assert_eq!(e.span.line, 3, "error must point at the f-string's line");
+    // The hole starts well into the line; an un-rebased span would sit at the
+    // wrapper's own column ~19.
+    assert!(
+        e.span.column > 15,
+        "column {} looks like a wrapper coordinate, not a rebased one",
+        e.span.column
+    );
+    assert!(
+        src[e.span.offset..].starts_with('}') || src[e.span.offset..].starts_with('.'),
+        "offset {} does not land in the hole",
+        e.span.offset
+    );
+}
+
+/// LEG B. When the nested parse RECOVERS it still produced an expression, so
+/// the program compiled and behaved correctly — but the diagnostic that should
+/// have rejected it was gone, leaving a documented rule (design.md Feature 4
+/// Part 1½: `ref` is never legal at a call site) enforced in statement position
+/// and unenforced one character inside an f-string.
+#[test]
+fn interp_hole_recoverable_errors_are_enforced() {
+    let outside = karac::parse(
+        "fn takes(xs: ref Vec[i64]) -> i64 { return xs.len() }\n\
+         fn main() { let xs: Vec[i64] = Vec.new(); let n = takes(ref xs); }\n",
+    );
+    let inside = karac::parse(
+        "fn takes(xs: ref Vec[i64]) -> i64 { return xs.len() }\n\
+         fn main() { let xs: Vec[i64] = Vec.new(); println(f\"{takes(ref xs)}\"); }\n",
+    );
+    for (label, r) in [("outside", &outside), ("in-hole", &inside)] {
+        assert!(
+            r.errors.iter().any(|e| e.message.contains("call sites")),
+            "{label}: the call-site `ref` rule must be enforced"
+        );
+        // The fix-edit map is keyed by the DIAGNOSTIC's span, not the edit's
+        // own range, so the merge has to rebase the key AND the edit. Deriving
+        // the key from the edit loses the association and `karac fix` finds no
+        // replacement — which is the Mend-loop half of this row.
+        assert_eq!(
+            r.fix_edits.len(),
+            1,
+            "{label}: expected the machine-applicable deletion to survive"
+        );
+        let edit = r.fix_edits.values().next().unwrap();
+        assert_eq!(edit.replacement, "", "{label}: edit should be a deletion");
+    }
+}
+
+/// The guard: a WELL-FORMED hole must stay silent. The wrapper contributes its
+/// own `;` and closing brace, so a careless merge manufactures spurious errors
+/// for holes that parsed perfectly — including nested f-strings, whose inner
+/// parse runs the same path again.
+#[test]
+fn well_formed_interp_holes_report_nothing() {
+    for src in [
+        r#"fn main() { let n = 1; println(f"a={n} b={n + 1}"); }"#,
+        r#"fn main() { let n = 1; println(f"{n as f64}"); }"#,
+        r#"fn main() { let v: Vec[i64] = Vec.new(); println(f"{v.len()}"); }"#,
+        r#"fn main() { let n = 1; println(f"outer={f"inner={n}"}"); }"#,
+        r#"fn main() { let n = 1; println(f"{n:>8}"); }"#,
+    ] {
+        let result = karac::parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "well-formed hole reported {:?} for: {src}",
+            result.errors
+        );
+    }
+}

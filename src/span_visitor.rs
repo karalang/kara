@@ -596,19 +596,36 @@ fn visit_field_pattern(fp: &FieldPattern, visit: &mut impl FnMut(&Span)) {
 // expression-reachable surface; keep the two in lockstep when the AST
 // grows a node — a missed arm leaves a stale span, which is exactly the
 // bug class this fixes.
-pub fn shift_expr_spans(e: &mut Expr, hole_offset: usize, hole_line: usize, hole_column: usize) {
+/// Rebase ONE span from the synthetic `fn __interp__() { … }` wrapper back onto
+/// the enclosing source.
+///
+/// Split out of `shift_expr_spans` for B-2026-08-11-5: the nested parse of an
+/// interpolation hole produces DIAGNOSTICS and FIX-EDITS as well as an
+/// expression, and all three need the identical rebase. Keeping one
+/// implementation is the point — a second copy of these two deltas would be
+/// free to drift, and a diagnostic that points at the wrong line is barely
+/// better than the discarded one it replaces.
+pub fn shift_interp_span(s: &mut Span, hole_offset: usize, hole_line: usize, hole_column: usize) {
     const PREFIX_LEN: usize = "fn __interp__() { ".len(); // 18
     let offset_delta = hole_offset as isize - PREFIX_LEN as isize;
     // RAW begins at wrapper column PREFIX_LEN + 1 (1-indexed) on line 1.
     let col_delta = hole_column as isize - (PREFIX_LEN as isize + 1);
+    // `.max(0)` matters only for the diagnostic path: an expression span always
+    // starts at or past the prefix, but a parse ERROR can point INTO the
+    // synthetic prologue (offset < PREFIX_LEN), which would wrap to a huge
+    // `usize` and produce a nonsense span rather than a clamped one.
+    s.offset = (s.offset as isize + offset_delta).max(0) as usize;
+    if s.line <= 1 {
+        s.column = (s.column as isize + col_delta).max(1) as usize;
+        s.line = hole_line;
+    } else {
+        s.line = hole_line + s.line - 1;
+    }
+}
+
+pub fn shift_expr_spans(e: &mut Expr, hole_offset: usize, hole_line: usize, hole_column: usize) {
     visit_expr_spans_mut(e, &mut |s| {
-        s.offset = (s.offset as isize + offset_delta) as usize;
-        if s.line <= 1 {
-            s.column = (s.column as isize + col_delta).max(1) as usize;
-            s.line = hole_line;
-        } else {
-            s.line = hole_line + s.line - 1;
-        }
+        shift_interp_span(s, hole_offset, hole_line, hole_column)
     });
 }
 

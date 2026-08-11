@@ -769,6 +769,75 @@ impl super::Parser {
                             // point into the hole (B-2026-06-09-1a).
                             let wrapper = format!("fn __interp__() {{ {}; }}", expr_src);
                             let result = crate::parse(&wrapper);
+                            // B-2026-08-11-5: a `ParseResult` has THREE fields
+                            // and this arm used to read only `program`, so every
+                            // diagnostic and fix-edit the nested parse produced
+                            // was destroyed here. Two things went wrong with
+                            // that. A hard syntax error fell to the `Text`
+                            // fallback below and re-emitted the malformed source
+                            // as literal characters — `f"typo={n.}"` printed
+                            // `typo={n.}` on all three backends with
+                            // `All checks passed`, which the 3-backend
+                            // differential oracle cannot catch because all three
+                            // agree. And a RECOVERABLE error vanished, so rules
+                            // enforced in statement position went unenforced one
+                            // character inside a hole (`f"{takes(ref xs)}"`
+                            // compiled, while the same call outside did not).
+                            //
+                            // Rebase both onto the enclosing source with the
+                            // same deltas the expression itself gets. `SpanKey`
+                            // and `TextEdit` are offset-keyed, so they need only
+                            // the offset half — but it must be the SAME offset
+                            // arithmetic, hence the shared helper.
+                            let nested_errors = result.errors.len();
+                            for mut err in result.errors {
+                                crate::span_visitor::shift_interp_span(
+                                    &mut err.span,
+                                    offset,
+                                    line,
+                                    column,
+                                );
+                                self.errors.push(err);
+                            }
+                            for (key, mut edit) in result.fix_edits {
+                                // The map is keyed by the DIAGNOSTIC's span
+                                // (`SpanKey::from_span(diag_span)`), which is not
+                                // the edit's own range — `record_call_site_mode_
+                                // deletion` deletes the token while keying on the
+                                // error. So both need rebasing, separately;
+                                // deriving the key from the edit instead loses
+                                // the association and `karac fix` silently finds
+                                // no replacement for the diagnostic.
+                                let mut key_span = crate::token::Span {
+                                    offset: key.0,
+                                    length: key.1,
+                                    line,
+                                    column,
+                                };
+                                let mut edit_span = crate::token::Span {
+                                    offset: edit.offset,
+                                    length: edit.length,
+                                    line,
+                                    column,
+                                };
+                                crate::span_visitor::shift_interp_span(
+                                    &mut key_span,
+                                    offset,
+                                    line,
+                                    column,
+                                );
+                                crate::span_visitor::shift_interp_span(
+                                    &mut edit_span,
+                                    offset,
+                                    line,
+                                    column,
+                                );
+                                edit.offset = edit_span.offset;
+                                self.fix_edits.insert(
+                                    crate::resolver::SpanKey(key_span.offset, key_span.length),
+                                    edit,
+                                );
+                            }
                             let expr = result.program.items.into_iter().find_map(|item| {
                                 if let crate::ast::Item::Function(f) = item {
                                     f.body.stmts.into_iter().find_map(|s| {
@@ -789,9 +858,27 @@ impl super::Parser {
                                     spec,
                                 ));
                             } else {
-                                parsed_parts.push(crate::ast::ParsedInterpolationPart::Text(
-                                    format!("{{{}}}", raw),
-                                ));
+                                // The hole did not parse. Do NOT fall back to
+                                // emitting the malformed source as literal text
+                                // — that fallback is what turned a syntax error
+                                // into silently-wrong output. With the rebase
+                                // above, the nested parse has normally already
+                                // produced the precise diagnostic, so the hole
+                                // is simply dropped from the parts list and the
+                                // program fails to compile, as it should.
+                                //
+                                // If the nested parse somehow produced NO
+                                // diagnostic, say so here rather than let the
+                                // hole disappear without a word: silence is the
+                                // exact failure this row is about, and a
+                                // hole that neither parses nor explains itself
+                                // would reintroduce it in a new shape.
+                                if nested_errors == 0 {
+                                    self.error(&format!(
+                                        "could not parse interpolation `{{{}}}`",
+                                        raw
+                                    ));
+                                }
                             }
                         }
                     }
