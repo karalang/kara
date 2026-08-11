@@ -517,6 +517,37 @@ pub(crate) fn binding_fields_passed_to_free_fn_arg(
     out
 }
 
+/// Sibling of [`binding_fields_passed_to_free_fn_arg`] for the WHOLE binding:
+/// which of `names` are passed BY VALUE, bare, as a free-function argument
+/// (`take(s)`)?
+///
+/// Same blind spot, one level up. `classify_binding_in_expr` scores a free-fn
+/// argument as entry-copied / non-consuming, so an arm whose whole body is
+/// `take(s)` reads as borrow-only — but a by-value struct param is
+/// callee-owned and the callee's `__karac_drop_struct_<S>` frees its heap
+/// (B-2026-08-11-29).
+///
+/// Only a BARE identifier counts. `take(s.a)` is the field case the sibling
+/// handles, and `take(s.a.len())` / `take(f(s))` read rather than move.
+pub(crate) fn bindings_passed_whole_to_free_fn_arg(names: &[String], e: &Expr) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    walk_exprs(e, &mut |x| {
+        if let ExprKind::Call { callee, args } = &x.kind {
+            if !matches!(&callee.kind, ExprKind::Identifier(_)) {
+                return;
+            }
+            for a in args {
+                if let ExprKind::Identifier(n) = &a.value.kind {
+                    if names.iter().any(|m| m == n) {
+                        out.push(n.clone());
+                    }
+                }
+            }
+        }
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

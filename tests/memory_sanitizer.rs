@@ -40536,6 +40536,62 @@ fn main() {
     }
 
     #[test]
+    fn asan_result_struct_wrapper_map_field_moved_to_callee_no_use_after_free() {
+        // B-2026-08-11-29 — `match mk() { Ok(s) => take(s) }` where `S` has a
+        // `Map`/`Set` field. The by-value struct param is CALLEE-owned, so
+        // `take` ends in `__karac_drop_struct_S` and frees the Map; the arm's
+        // source payload drop stayed armed and freed it again. It surfaced as a
+        // plain SEGV (exit 139) on a default build, with `karac check` clean and
+        // the interpreter correct — valgrind names it precisely: an invalid read
+        // in `karac_map_free_with_drop_vec` over a block already freed by main.
+        //
+        // ASAN is the gate that separates the fix from a relabelling, because
+        // the repair is "stop the SOURCE freeing": suppress one too many and the
+        // Map leaks instead. LSan (the Linux leg) is what catches that, and the
+        // `Vec`-field arm below is here because it was ALREADY suppressed
+        // through a different predicate — it must stay exactly as clean.
+        assert_clean_asan_run(
+            r#"
+enum E { Missing(String) }
+struct Sm { a: Map[String, i64] }
+struct Ss { a: Set[String] }
+struct Sv { a: Vec[String] }
+fn mk_map() -> Result[Sm, E] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("k", 1);
+    Ok(Sm { a: m })
+}
+fn mk_set() -> Result[Ss, E] {
+    let mut s: Set[String] = Set.new();
+    s.insert("k");
+    Ok(Ss { a: s })
+}
+fn mk_vec() -> Result[Sv, E] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("k");
+    Ok(Sv { a: v })
+}
+fn take_map(s: Sm) -> i64 { return s.a.len(); }
+fn take_set(s: Ss) -> i64 { return s.a.len(); }
+fn take_vec(s: Sv) -> i64 { return s.a.len(); }
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 30 {
+        match mk_map() { Ok(s) => { total = total + take_map(s); }, Err(_e) => { total = total + 100; } }
+        match mk_set() { Ok(s) => { total = total + take_set(s); }, Err(_e) => { total = total + 100; } }
+        match mk_vec() { Ok(s) => { total = total + take_vec(s); }, Err(_e) => { total = total + 100; } }
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            &["90"],
+            "result_struct_wrapper_map_field_moved_to_callee_no_use_after_free",
+        );
+    }
+
+    #[test]
     fn asan_vec_element_field_move_by_assignment_no_double_free() {
         // B-2026-08-11-33 — `out = stats[0].region` moves a heap field out of a
         // struct held as a Vec ELEMENT into an EXISTING binding. Nothing

@@ -22407,6 +22407,89 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_result_struct_wrapper_moved_to_callee_and_its_controls() {
+        // B-2026-08-11-29 — the value half. `match mk() { Ok(s) => take(s) }`
+        // where `S` has a `Map`/`Set` field SEGV'd on a default build (exit
+        // 139), with `karac check` clean and the interpreter correct, so the
+        // compiled binary produced no output at all rather than a diagnostic.
+        //
+        // One small program per shape rather than one combined one: a single
+        // program holding all of them trips an unrelated module-verification
+        // failure that reproduces ONLY through this harness — `karac build` and
+        // `karac run --interp` both compile and run the combined program
+        // correctly, with and without this fix. Kept split so this pin tests
+        // the row rather than that.
+        //
+        // The two crashing shapes:
+        let map_field = "enum E { Missing(String) }\n\
+             struct Sm { a: Map[String, i64] }\n\
+             fn mk() -> Result[Sm, E] { let mut m: Map[String, i64] = Map.new(); m.insert(\"k\", 1); Ok(Sm { a: m }) }\n\
+             fn take(s: Sm) { println(f\"{s.a.len()}\"); }\n\
+             fn main() { match mk() { Ok(s) => take(s), Err(_e) => println(\"e\") } }\n";
+        assert_eq!(run_program(map_field).as_deref(), Some("1\n"));
+
+        let set_field = "enum E { Missing(String) }\n\
+             struct Ss { a: Set[String] }\n\
+             fn mk() -> Result[Ss, E] { let mut s: Set[String] = Set.new(); s.insert(\"k\"); Ok(Ss { a: s }) }\n\
+             fn take(s: Ss) { println(f\"{s.a.len()}\"); }\n\
+             fn main() { match mk() { Ok(s) => take(s), Err(_e) => println(\"e\") } }\n";
+        assert_eq!(run_program(set_field).as_deref(), Some("1\n"));
+
+        // The same move out of the ERR arm — the detector keys on the arm's
+        // pattern, not on `Ok` specifically.
+        let err_arm = "struct Er { m: Map[String, i64] }\n\
+             fn mk() -> Result[i64, Er] { let mut m: Map[String, i64] = Map.new(); m.insert(\"k\", 1); return Err(Er { m: m }); }\n\
+             fn take(e: Er) { println(f\"{e.m.len()}\"); }\n\
+             fn main() { match mk() { Ok(v) => println(f\"{v}\"), Err(e) => take(e) } }\n";
+        assert_eq!(run_program(err_arm).as_deref(), Some("1\n"));
+
+        // The over-fire controls, each already clean and each a shape a broader
+        // fix would plausibly regress into a LEAK by suppressing a source drop
+        // that is the only owner.
+        //
+        // `Option` rather than `Result` — the sharpest, since the two share most
+        // of this machinery.
+        let option_wrapper = "struct Sm { a: Map[String, i64] }\n\
+             fn mk() -> Option[Sm] { let mut m: Map[String, i64] = Map.new(); m.insert(\"k\", 1); return Some(Sm { a: m }); }\n\
+             fn take(s: Sm) { println(f\"{s.a.len()}\"); }\n\
+             fn main() { match mk() { Some(s) => take(s), None => println(\"n\") } }\n";
+        assert_eq!(run_program(option_wrapper).as_deref(), Some("1\n"));
+
+        // No wrapper at all.
+        let no_wrapper = "struct Sm { a: Map[String, i64] }\n\
+             fn mk() -> Sm { let mut m: Map[String, i64] = Map.new(); m.insert(\"k\", 1); return Sm { a: m }; }\n\
+             fn take(s: Sm) { println(f\"{s.a.len()}\"); }\n\
+             fn main() { take(mk()); }\n";
+        assert_eq!(run_program(no_wrapper).as_deref(), Some("1\n"));
+
+        // A bare Map payload — no struct to wrap it.
+        let bare_payload = "enum E { Missing(String) }\n\
+             fn mk() -> Result[Map[String, i64], E] { let mut m: Map[String, i64] = Map.new(); m.insert(\"k\", 1); Ok(m) }\n\
+             fn take(m: Map[String, i64]) { println(f\"{m.len()}\"); }\n\
+             fn main() { match mk() { Ok(m) => take(m), Err(_e) => println(\"e\") } }\n";
+        assert_eq!(run_program(bare_payload).as_deref(), Some("1\n"));
+
+        // Consumed INLINE in the arm rather than passed by value.
+        let inline_use = "enum E { Missing(String) }\n\
+             struct Sm { a: Map[String, i64] }\n\
+             fn mk() -> Result[Sm, E] { let mut m: Map[String, i64] = Map.new(); m.insert(\"k\", 1); Ok(Sm { a: m }) }\n\
+             fn main() { match mk() { Ok(s) => println(f\"{s.a.len()}\"), Err(_e) => println(\"e\") } }\n";
+        assert_eq!(run_program(inline_use).as_deref(), Some("1\n"));
+
+        // A `Vec` field, which was ALREADY suppressed through a different
+        // predicate (the struct is entry-copy supported, so
+        // `inline_result_payload_binding_registers_own_drop` is true). It must
+        // stay exactly as clean — this is the control that the new condition is
+        // additive rather than a behaviour change.
+        let vec_field = "enum E { Missing(String) }\n\
+             struct Sv { a: Vec[String] }\n\
+             fn mk() -> Result[Sv, E] { let mut v: Vec[String] = Vec.new(); v.push(\"k\"); Ok(Sv { a: v }) }\n\
+             fn take(s: Sv) { println(f\"{s.a.len()}\"); }\n\
+             fn main() { match mk() { Ok(s) => take(s), Err(_e) => println(\"e\") } }\n";
+        assert_eq!(run_program(vec_field).as_deref(), Some("1\n"));
+    }
+
+    #[test]
     fn test_e2e_vec_element_field_move_by_assignment_and_its_controls() {
         // B-2026-08-11-25 — the value half. `out = stats[0].region` moves a
         // heap field out of a struct held as a Vec element into an EXISTING

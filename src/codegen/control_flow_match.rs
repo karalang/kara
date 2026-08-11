@@ -691,8 +691,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `__karac_drop_<S>` both fire on the same buffer.
                         let binding_owns_payload =
                             self.inline_result_payload_binding_registers_own_drop(&arm.pattern);
+                        // B-2026-08-11-29 — the WHOLE binding moved by value
+                        // into a free fn, the sibling of the field case above.
+                        // The callee owns a by-value struct param and drops it,
+                        // so the source payload must be suppressed exactly as it
+                        // is when a field is moved.
+                        let whole_binding_moved_to_free_fn = self
+                            .wrapper_arm_moves_whole_binding_to_free_fn(
+                                &arm.pattern,
+                                &arm.body,
+                                arm.guard.as_ref(),
+                            );
                         if !(borrow_only && wrapper)
                             || heap_field_moved_to_free_fn
+                            || whole_binding_moved_to_free_fn
                             || binding_owns_payload
                         {
                             self.suppress_inline_result_payload_cleanup_at(slot, &arm.pattern);
@@ -9687,6 +9699,68 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(root)
                 .is_some_and(|tn| self.struct_field_is_heap(tn, field))
         })
+    }
+
+    /// Does a fresh-temp inline `Result` arm pass its WHOLE `Ok(_)`/`Err(_)`
+    /// struct-wrapper binding BY VALUE to a free function (`Ok(s) => take(s)`)?
+    ///
+    /// The whole-binding sibling of `wrapper_arm_moves_heap_field_to_free_fn`,
+    /// and it exists for the same reason one level up: `consume_class` scores a
+    /// free-fn argument as entry-copied, so the arm reads as borrow-only and the
+    /// wrapper gate keeps the source payload drop armed — but a by-value struct
+    /// param is CALLEE-OWNED, and the callee ends with
+    /// `__karac_drop_struct_<S>`, which frees the field's heap. Both then free
+    /// it: measured as a use-after-free in `karac_map_free_with_drop_vec`,
+    /// surfacing as a plain SEGV on a default build (B-2026-08-11-29).
+    ///
+    /// Why the field sibling did not already cover it: it looks for
+    /// `take(s.a)`, and this shape passes `s` itself.
+    ///
+    /// Why a `Vec`-field wrapper never crashed, and why this does not change it:
+    /// a Vec/String field makes the struct entry-copy supported, so
+    /// `inline_result_payload_binding_registers_own_drop` is already true and
+    /// suppression already fires. `Map`/`Set` fields are excluded from that
+    /// predicate (`field_copy_supported`), which is what left this shape as the
+    /// only one reaching the arm with the source drop still armed. Adding a
+    /// second true term to a condition that is already true for Vec is a no-op
+    /// there.
+    fn wrapper_arm_moves_whole_binding_to_free_fn(
+        &self,
+        pattern: &Pattern,
+        body: &Expr,
+        guard: Option<&Expr>,
+    ) -> bool {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return false;
+        };
+        let mut names: Vec<String> = Vec::new();
+        for p in patterns {
+            let PatternKind::Binding(name) = &p.kind else {
+                continue;
+            };
+            let key = (p.span.offset, p.span.length);
+            let Some(tn) = self.pattern_binding_types.get(&key) else {
+                continue;
+            };
+            // A non-shared user struct only: a shared handle is refcounted (the
+            // callee does not free it), and a non-struct payload never reaches
+            // the wrapper gate at all.
+            if self.struct_types.contains_key(tn.as_str())
+                && !self.shared_types.contains_key(tn.as_str())
+            {
+                names.push(name.clone());
+            }
+        }
+        if names.is_empty() {
+            return false;
+        }
+        let mut moved = super::consume_class::bindings_passed_whole_to_free_fn_arg(&names, body);
+        if let Some(g) = guard {
+            moved.extend(super::consume_class::bindings_passed_whole_to_free_fn_arg(
+                &names, g,
+            ));
+        }
+        !moved.is_empty()
     }
 
     /// Is field `field` of struct `struct_name` a heap-owning `String`/`Vec`/
