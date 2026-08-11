@@ -3220,6 +3220,60 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return Some(recv_ty);
                 }
+                // B-2026-08-11-18 — the UNWRAPPING siblings the arm above
+                // deliberately excludes. They return the PAYLOAD, so `recv_ty`
+                // ("Option" / "Result") is the wrong answer and the exclusion
+                // was correct; what was missing is the payload's own name.
+                // Without it `get().unwrap().x` failed `karac build` with the
+                // loud "cannot resolve field 'x'" while the interpreter ran it
+                // — and `let p: P = get().unwrap(); p.x` worked, because `p`
+                // gets a `var_type_names` entry and the chain gets nothing.
+                // The same asymmetry as B-2026-08-06-19 and B-2026-08-09-7,
+                // one method-name set over.
+                //
+                // Which generic arg holds the payload depends on the method:
+                // `unwrap`/`expect`/`unwrap_or`/`unwrap_or_else` yield `T`
+                // (arg 0 for both `Option[T]` and `Result[T, E]`), while
+                // `unwrap_err` yields `E` (arg 1, `Result` only — `Option` has
+                // no error arm to unwrap). Getting that index wrong is not a
+                // failed lookup but a MISCOMPILE: it would read `T`'s field
+                // layout out of an `E` value. `map_or` / `map_or_else` are
+                // absent because they return the CLOSURE's result, which the
+                // receiver's instantiation does not name at all.
+                //
+                // Sits after the `fn_return_type_names` probe, so a user type
+                // named `Option` with its own `unwrap` still wins.
+                if let Some(payload_idx) = Self::unwrap_payload_idx(&recv_ty, method) {
+                    if let Some(inst_te) = self.unwrap_receiver_inst(object) {
+                        if let TypeKind::Path(p) = &inst_te.kind {
+                            if let Some(GenericArg::Type(payload)) =
+                                p.generic_args.as_ref().and_then(|a| a.get(payload_idx))
+                            {
+                                if let TypeKind::Path(pp) = &payload.kind {
+                                    if let Some(n) = pp.segments.last() {
+                                        // Gated on codegen having a LAYOUT for
+                                        // the payload. A struct is the target
+                                        // case; an enum is admitted because a
+                                        // NESTED wrapper (`Option[Option[P]]`)
+                                        // makes the intermediate's type name
+                                        // `Option`, and answering it is what
+                                        // lets the outer link of
+                                        // `x.unwrap().unwrap().f` resolve. A
+                                        // primitive payload still answers None
+                                        // — it has no fields, and naming it
+                                        // here would hand `field_index_for` a
+                                        // type it cannot index.
+                                        if self.struct_field_names.contains_key(n.as_str())
+                                            || self.enum_layouts.contains_key(n.as_str())
+                                        {
+                                            return Some(n.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 // B-2026-08-06-19 — a GENERIC impl method returning a bare type
                 // PARAM: `impl[T] Box[T] { fn take(self) -> T }`. `w.take().f`
                 // failed `karac build` with "cannot resolve field 'f'" while the
@@ -5661,6 +5715,87 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `enum_has_heap_payload` routing). Both keys are now absolute even
     /// inside f-string interpolations (B-2026-06-09-1 fixed the wrapper-
     /// relative span collision at the parser).
+    /// The receiver's wrapper INSTANTIATION for the unwrapping-sibling payload
+    /// lookup in `type_name_of_expr` — `Option[P]` / `Result[P, E]`, generic
+    /// args intact (B-2026-08-11-18).
+    ///
+    /// A CALL receiver (`get().unwrap().x`) is resolved through the callee's
+    /// DECLARED return type, and that probe runs FIRST, before
+    /// `enum_inst_type_of_expr`. Two reasons, in order of importance:
+    ///
+    ///  1. `enum_inst_type_of_expr`'s last resort is a span lookup, and the
+    ///     parser gives a `MethodCall` its RECEIVER's span — the collision
+    ///     B-2026-08-06-19, B-2026-08-06-12 and B-2026-08-05-28 all trace to.
+    ///     Consulting it first on a call receiver risks answering with a
+    ///     neighbouring expression's record instead of failing cleanly.
+    ///  2. `fn_return_type_names` keeps only the bare head segment, so it says
+    ///     "Option" and drops the `[P]` that is the entire point here. The
+    ///     full-TypeExpr table exists for exactly this (see `declare_function`,
+    ///     whose comment names the `Option[T]` / `Result[T, E]` generic arg).
+    ///
+    /// An IDENTIFIER receiver (`o.unwrap().x`) still goes through
+    /// `enum_inst_type_of_expr`, which reads `enum_inst_var_types`.
+    /// Which generic arg of the receiver's wrapper holds what an unwrapping
+    /// sibling RETURNS, or `None` when `method` is not one (B-2026-08-11-18).
+    ///
+    /// `unwrap`/`expect`/`unwrap_or`/`unwrap_or_else` yield `T` — arg 0 of both
+    /// `Option[T]` and `Result[T, E]`. `unwrap_err` yields `E`, arg 1, and is
+    /// `Result`-only since `Option` has no error arm. The index is not
+    /// cosmetic: a wrong one reads `T`'s field layout out of an `E` value,
+    /// which is a miscompile rather than a failed lookup.
+    ///
+    /// `map_or` / `map_or_else` are deliberately absent — they return the
+    /// CLOSURE's result, which the receiver's instantiation does not name.
+    fn unwrap_payload_idx(recv_ty: &str, method: &str) -> Option<usize> {
+        match (recv_ty, method) {
+            ("Option" | "Result", "unwrap" | "expect" | "unwrap_or" | "unwrap_or_else") => Some(0),
+            ("Result", "unwrap_err") => Some(1),
+            _ => None,
+        }
+    }
+
+    fn unwrap_receiver_inst(&self, object: &Expr) -> Option<TypeExpr> {
+        // A CHAINED unwrap (`x.unwrap().unwrap().f`, i.e. a nested
+        // `Option[Option[P]]`): the receiver is itself an unwrapping sibling,
+        // so its instantiation is the INNER receiver's payload. Recursing here
+        // rather than in `type_name_of_expr` keeps the whole chain resolving
+        // with full generic args — the head name alone would lose the `[P]`
+        // the next link needs.
+        if let ExprKind::MethodCall {
+            object: inner,
+            method,
+            ..
+        } = &object.kind
+        {
+            if let Some(inner_ty) = self.type_name_of_expr(inner) {
+                if let Some(idx) = Self::unwrap_payload_idx(&inner_ty, method) {
+                    if let Some(inst) = self.unwrap_receiver_inst(inner) {
+                        if let TypeKind::Path(p) = &inst.kind {
+                            if let Some(GenericArg::Type(payload)) =
+                                p.generic_args.as_ref().and_then(|a| a.get(idx))
+                            {
+                                return Some(payload.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let ExprKind::Call { callee, .. } = &object.kind {
+            let key = match &callee.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                    Some(format!("{}.{}", segments[0], segments[1]))
+                }
+                _ => None,
+            };
+            if let Some(te) = key.and_then(|k| self.fn_return_type_exprs.get(&k)) {
+                return Some(te.clone());
+            }
+        }
+        self.enum_inst_type_of_expr(object)
+    }
+
     pub(super) fn enum_inst_type_of_expr(&self, expr: &Expr) -> Option<TypeExpr> {
         if let ExprKind::Identifier(name) = &expr.kind {
             if let Some(t) = self.enum_inst_var_types.get(name) {

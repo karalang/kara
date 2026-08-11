@@ -7396,6 +7396,84 @@ fn main() {
         assert_eq!(out, "6\n6\n");
     }
 
+    /// B-2026-08-11-18 — a chained FIELD ACCESS on an UNWRAPPING sibling's
+    /// return: `get().unwrap().x` where `get() -> Option[P]`.
+    ///
+    /// Same run-vs-build shape as B-2026-08-06-19 above, one method-name set
+    /// over: `karac check` passed, the interpreter printed the right answer,
+    /// and `karac build` failed with "cannot resolve field 'x' on this
+    /// receiver", while `let p: P = get().unwrap(); p.x` built and ran.
+    ///
+    /// The cause is a deliberate exclusion. B-2026-08-09-7 taught
+    /// `type_name_of_expr` the wrapper-PRESERVING combinators (`map`,
+    /// `and_then`, …), which return the receiver's own type, and its comment
+    /// explicitly left out the unwrapping siblings because they return the
+    /// PAYLOAD — for which "Option" is the wrong answer. That exclusion was
+    /// right; what was missing was the payload's own name.
+    ///
+    /// The row characterized this as "the un-bound temporary receiver", and
+    /// that is measurably too broad: `plain().x` on a struct-returning fn and
+    /// `P { x: 11 }.x` on a literal are both un-bound temporaries and both
+    /// always worked. Those two are carried here as live controls, since they
+    /// are what localize the bug to the unwrap family rather than to
+    /// temporaries. So is `get().unwrap().double()` — a METHOD call on the
+    /// same receiver, which resolves through a different path and never
+    /// failed.
+    ///
+    /// `unwrap_err` is the load-bearing case for the payload INDEX: it yields
+    /// `E`, not `T`, so answering arg 0 for it would read `P`'s field layout
+    /// out of a `Q` value — a miscompile, not a failed lookup. Before the
+    /// index was made method-dependent this arm failed loudly, which is the
+    /// safe direction and is why it was caught rather than shipped.
+    ///
+    /// The nested `Option[Option[P]]` chain pins the recursion: the
+    /// intermediate payload is itself a wrapper, so the resolver must carry
+    /// full generic args (`Option[P]`) rather than a head name, or the outer
+    /// link loses the `[P]` it needs.
+    ///
+    /// `env.args().len()` seeds every payload so nothing is a compile-time
+    /// constant (B-2026-08-04-17).
+    #[test]
+    fn e2e_chained_field_access_on_option_result_unwrap() {
+        let src = r#"
+struct P { x: i64 }
+struct Q { y: i64 }
+
+impl P { fn double(self) -> i64 { self.x * 2 } }
+
+fn get(n: i64) -> Option[P] { Some(P { x: 5 + n }) }
+fn getres(n: i64) -> Result[P, Q] { Ok(P { x: 9 + n }) }
+fn geterr(n: i64) -> Result[P, Q] { Err(Q { y: 99 + n }) }
+fn nested(n: i64) -> Option[Option[P]] { Some(Some(P { x: 42 + n })) }
+fn plain(n: i64) -> P { P { x: 7 + n } }
+
+fn main() {
+    let n: i64 = env.args().len();
+    println(get(n).unwrap().x);
+    println(get(n).expect("missing").x);
+    println(get(n).unwrap_or(P { x: 0 }).x);
+    println(getres(n).unwrap().x);
+    println(geterr(n).unwrap_err().y);
+    println(nested(n).unwrap().unwrap().x);
+    let o: Option[P] = Some(P { x: 3 + n });
+    println(o.unwrap().x);
+    println(plain(n).x);
+    println(P { x: 11 + n }.x);
+    println(get(n).unwrap().double());
+    let b: P = get(n).unwrap();
+    println(b.x);
+}
+"#;
+        // n = 1. unwrap/expect/unwrap_or on Option[P] → 6; Result Ok → 10;
+        // unwrap_err → Q's field, 100 (NOT P's layout); nested → 43;
+        // identifier receiver → 4; then the three controls (7+1, 11+1,
+        // double of 6) and the bound form.
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("6\n6\n6\n10\n100\n43\n4\n8\n12\n12\n6\n")
+        );
+    }
+
     /// B-2026-08-06-19 — a chained FIELD ACCESS on a GENERIC method's return.
     ///
     /// `w.take().f` passed `karac check`, ran correctly under the interpreter,
