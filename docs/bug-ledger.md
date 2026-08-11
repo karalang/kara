@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 58 | 0 |
 | diagnostics | 47 | 0 |
 | soundness | 42 | 0 |
-| crash | 42 | 1 |
+| crash | 42 | 0 |
 | other | 25 | 0 |
 | use-after-free | 18 | 0 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 788 | 2 |
-| typecheck | 151 | 2 |
+| typecheck | 151 | 1 |
 | interp | 135 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1091 surfaced · 3 open · 1077 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1091 surfaced · 2 open · 1078 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-6 | 2026-08-11 | typecheck | high | A bare TYPE NAME in call position -- `i64(42)`, `F64(1.5)`, `bool(1)`, `String("hi")`, `Vec(1)`, or a named-field user struct `P(1)` -- is accepted by EVERY checking phase, then breaks downstream: the interpreter panics on an `unreachable!` (or raises its own 'This is a compiler bug' internal error) while the compiled backends silently evaluate it to `0`. | src/interpreter/eval_call.rs:2101 (the `unreachable!` whose message already says 'the typechecker accepted a non-callable callee'); the missing rejection belongs in the typechecker's call-callee resolution. |
 | B-2026-08-11-15 | 2026-08-11 | typecheck+codegen | medium | `Vec[f64].max()` / `.min()` return an ORDER-DEPENDENT element instead of erroring, and there is currently no working remedy to point users at -- which is why B-2026-08-11-7 gated `sort`/`sorted`/`binary_search` but deliberately left these alone. Measured: `[3.0, NaN, 1.0].max()` silently skips the NaN and answers 3, while `[NaN, 3.0, 1.0]` makes BOTH `max()` and `min()` answer NaN -- the result depends on where the NaN sits. The two obvious remedies are both broken: (a) `Vec[F64].max()`, the wrapper -7's own sort gate prescribes, is rejected at typecheck by the iterator arm's numeric-or-String element test, and when that test is widened to admit the wrapper it then FAILS IN CODEGEN with 'no handler for method max on non-identifier receiver' -- i.e. it would trade a wrong answer for a run-vs-build gap; (b) `Stats.max(v)`, the f64-shaped alternative, is itself wrong AND BACKEND-DIVERGENT -- on `[NaN, 3.0, 1.0]` the interpreter answers 3 and the JIT answers NaN. Fixing (a) is the real task: add the codegen max/min-over-wrapper arm, then widen the element test, then gate. That makes `F64` a COMPLETE answer instead of a partial one. | `max`/`min` on a float sequence: the numeric-or-String element test and the (withdrawn) Ord gate in typechecker/stdlib_iter.rs `"max" | "min"`; the missing codegen dispatcher arm for max/min over a wrapper struct; and Stats.max/min in the interpreter vs try_compile_stats_call |
 | B-2026-08-11-10 | 2026-08-11 | codegen | low | `Vec[(i64,i64)].sort_by` on FEW-UNIQUE input (150k pairs over 8 distinct keys) is 5.93 ms / 48.8M instructions vs driftsort's 1.81 ms / 14.2M on this host -- a 3.3x gap, NOT the 1.3-1.5x originally filed. The stable 2-way quicksort run-builder built for B-2026-08-10-20 is a real 1.43x (to 34.25M / 4.15 ms) but is NOT a route to parity as this row first claimed: it still leaves 2.4x on instructions and 2.3x on wall clock. Both previously proposed options (pay down the sawtooth regression; gate on a cardinality signal) only bank that 1.43x, and the sawtooth one defends the pattern karac ALREADY WINS (22.5M vs 31.6M). Any future attempt should be budgeted against driftsort's 14.2M -- ~95 instructions per element against karac's ~325 -- before a line is written. | Vec.sort_by / Vec.sort lowering |
 
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1091 surfaced
 
 </details>
 
-### Fixed (1077)
+### Fixed (1078)
 
-<details><summary>1077 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1078 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1329,6 +1328,14 @@ something the original four did not:
     only test that exercises the diagnostic-span-keyed `fix_edits` merge
     through the real `cmd_fix` path -- the half of the fix that fails silently
     (correct edit, orphaned key, zero fixes applied) rather than loudly. |
+| B-2026-08-11-6 | typecheck | high | A bare TYPE NAME in call position -- `i64(42)`, `F64(1.5)`, `bool(1)`, `String("hi")`, `Vec(1)`, or a named-field user struct `P(1)` -- is accepted b… | FIXED by fc9c3fb. The rejection lives on the bare-identifier arm of
+`infer_expr` (`src/typechecker/exprs.rs`), with a per-family remedy built by
+`type_name_in_value_position_message` (`src/typechecker/expr_ops.rs`). It fires
+only when every real resolution has failed, so the legal bare-name forms --
+enum variants, distinct types, the comptime `Type` pseudovalue -- are
+untouched. Pins: four tests in `tests/typechecker.rs` (the eight-shape
+rejection matrix plus the value-position leg, the per-family remedies, every
+legal form as a guard, and the two collateral paths). |
 | B-2026-08-11-7 | typecheck | high | `Vec[f64].sort()` bypasses the `Ord` gate that design.md § Float semantics REQUIRES -- the spec's own verbatim counter-example compiles | e51d3e7 (gate on Vec/Slice `sort`, Vec `sorted`, Vec/Slice `binary_search`, via a new `require_ord_element` in typechecker/derives.rs. `max`/`min` split to B-2026-08-11-15; `contains` deliberately left allowed — see detail.) |
 | B-2026-08-11-8 | typecheck | medium | `F64.from(x)` / `F32.from(x)` -- the total-order wrapper constructor that design.md AND the compiler's own `T: Ord` diagnostic both name as THE fix f… | d8ddc56 (three parts: an ordinary Kāra `impl <W> { fn from }` in each of runtime/stdlib/{f32,f64,f16,bf16}.kara makes the call typecheck; a codegen intercept in assoc_call.rs BUILDS the wrapper struct, because codegen does not route path-calls to baked stdlib impls and the call was otherwise reaching the unknown-callee tail as a const i64 0; and type_name_of_expr in expr_ops.rs types the call-result temp so a direct `F64.from(x).value` chain resolves its field. Display is a fourth part: one seam in build_struct_display_parts covering both println and f-strings.) |
 | B-2026-08-11-13 | codegen+interp | medium | `F64`/`F32` ordering and equality depend on the SIGN BIT of a NaN, which is not stable across backends or optimization levels -- so `Vec[F64].sort()`… | FIXED by 284d44a4, by canonicalizing NaN at CONSTRUCTION in all three backends --
