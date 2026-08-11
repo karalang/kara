@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 47 | 0 |
 | crash | 43 | 0 |
 | soundness | 42 | 0 |
-| other | 25 | 0 |
+| other | 26 | 0 |
 | use-after-free | 18 | 0 |
 
 ### By surface
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
 | autopar | 39 | 0 |
-| other | 36 | 0 |
+| other | 37 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1101 surfaced · 2 open · 1088 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1102 surfaced · 2 open · 1089 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
@@ -143,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1101 surfaced
 
 </details>
 
-### Fixed (1088)
+### Fixed (1089)
 
-<details><summary>1088 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1089 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2032,6 +2032,14 @@ more by having them consult the receiver's own type instead. Neither re-keyed
 the map. A consumer that needs the key and cannot use either workaround will hit
 this again. |
 | B-2026-08-11-23 | codegen | low | `Vec[T].sorted_by_key(f)` PASSES `karac check` and then fails at build: "Vec/String method 'sorted_by_key' is not yet supported in codegen" | a243f2a (folded into the existing `sorted_by` arm in src/codegen/vec_method.rs rather than copied — the two are one desugar with a different inner method) |
+| B-2026-08-11-26 | other | medium | the codegen suite's JIT lane — the ONE lane whose stated job is run==build parity — fed codegen `ownership: None` while its AOT twin fed `Some(&owner… | FIXED by 883fcbe1 — `jit_dispatch` now takes the `OwnershipCheckResult` the harness ALREADY computes a few lines above the dispatch, and forwards it to `compile_to_ir_with_options`, so the JIT leg's codegen arguments match its AOT twin's `compile_to_object_with_options(..., Some(&ownership), None, ...)` argument for argument.
+
+`concurrency` stays `None` on BOTH legs, deliberately, and that is parity rather than a second half-fix: `tests/codegen.rs` is the SEQUENTIAL lane by design and `tests/par_codegen.rs` is the auto-par one (its own comments name the split — "`tests/codegen.rs`'s harness compiles without `concurrency_analyze`"). The bar for this lane is its AOT twin, not cli.rs.
+
+VERIFIED both legs, full suite, on the same tree:
+    KARAC_TEST_JIT=1 cargo test --features llvm --test codegen  →  2902 passed, 0 failed
+                     cargo test --features llvm --test codegen  →  2902 passed, 0 failed
+Before the fix the JIT leg was 2900 passed / 2 failed with the AOT leg at 2902 / 0 — and the 2900 that passed anyway are why this sat undetected: only a test whose outcome DEPENDS on an ownership hint can see the starvation, and until B-2026-08-10-21 landed its two pins, the suite had none. |
 
 </details>
 
