@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 229 | 0 |
-| leak | 158 | 1 |
+| leak | 158 | 0 |
 | double-free | 119 | 0 |
 | codegen-gap | 100 | 0 |
 | run-vs-build | 98 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 786 | 2 |
+| codegen | 786 | 1 |
 | typecheck | 150 | 3 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1088 surfaced · 6 open · 1071 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1088 surfaced · 5 open · 1072 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-3 | 2026-08-11 | codegen | medium | a generic struct's method whose parameter is the TYPE PARAMETER leaks a fresh TEMPORARY argument's buffer -- `s.push([1i64,2i64])` on a `Stack[T]` leaks while the same call with a NAMED binding is clean. The row's original framing (a `Vec[T]` field's element resolution at drop, char/element-type specific) is REFUTED by measurement: the drop synthesis already resolves the monomorph correctly, and `Vec[String]` leaks too | the caller-side temporary cleanup for a mono'd generic METHOD whose param is a bare `T` -- NOT `emit_struct_drop_synthesis_mono`, which was instrumented and shown to select the right per-element drain for the leaking monomorph |
 | B-2026-08-11-5 | 2026-08-11 | parser | high | EVERY parse-phase diagnostic raised inside an f-string interpolation hole is DISCARDED. Two consequences: (a) a hard syntax error degrades SILENTLY to literal text -- `println(f"typo={n.}")` passes `karac check` and prints `typo={n.}` on all three backends; (b) recoverable errors go unenforced -- `f"{takes(ref xs)}"` compiles clean while the identical call outside an f-string is a hard parse error. | src/parser/exprs.rs:771 -- `let result = crate::parse(&wrapper);` consumes only `result.program.items`; `result.errors` and `result.fix_edits` are dropped on the floor. |
 | B-2026-08-11-6 | 2026-08-11 | typecheck | high | A bare TYPE NAME in call position -- `i64(42)`, `F64(1.5)`, `bool(1)`, `String("hi")`, `Vec(1)`, or a named-field user struct `P(1)` -- is accepted by EVERY checking phase, then breaks downstream: the interpreter panics on an `unreachable!` (or raises its own 'This is a compiler bug' internal error) while the compiled backends silently evaluate it to `0`. | src/interpreter/eval_call.rs:2101 (the `unreachable!` whose message already says 'the typechecker accepted a non-callable callee'); the missing rejection belongs in the typechecker's call-callee resolution. |
 | B-2026-08-11-7 | 2026-08-11 | typecheck | high | `Vec[f64].sort()` bypasses the `Ord` gate that design.md § Float semantics REQUIRES -- the spec's own verbatim counter-example compiles. With a NaN present, `sort()` silently leaves the Vec UNSORTED (all three backends agree), so a percentile/statistics program yields wrong answers with no diagnostic. `.sorted()`, `.max()`, `.min()` and `.contains()` on `Vec[f64]` are ungated the same way, while `Map[f64,_]`, `Set[f64]`, `SortedSet[f64]` and free `max(f64,f64)` all gate correctly. | src/typechecker/stdlib_seq.rs:1436 -- the Vec `"sort" | "reverse"` arm calls `expect_no_args` and returns `Type::Unit` with NO element-type Ord check; the Slice twin at :1164 checks mutability only. Working gate to copy: stdlib_map.rs:516/633 (SortedSet/SortedMap element+key Ord). |
@@ -147,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1088 surfaced
 
 </details>
 
-### Fixed (1071)
+### Fixed (1072)
 
-<details><summary>1071 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1072 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1260,6 +1259,7 @@ carry a hint naming the spelling that exists. Pins: five tests in
 `tests/typechecker.rs` -- the bogus-name matrix, the four-annotation unification
 case, the full real char/bool surface, user impls on both (dispatch AND return
 type), and the hint. |
+| B-2026-08-11-3 | codegen | medium | a generic struct's method whose parameter is the TYPE PARAMETER leaks a fresh TEMPORARY argument's buffer -- `s.push([1i64,2i64])` on a `Stack[T]` le… | a6dbf30 |
 | B-2026-08-11-4 | typecheck | low | `v.cast()` on ANY primitive receiver passes `karac check` and then fails at run time -- `cast` sits on the PRIMITIVE_VALUE_METHODS exemption but is n… | FIXED by 0aca4db. `"cast"` dropped from `PRIMITIVE_VALUE_METHODS`
 (`src/typechecker/expr_method_call.rs`); no replacement needed, because the
 normal path already does the right thing in both directions. Pins: three tests
