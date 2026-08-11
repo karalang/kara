@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 235 | 0 |
-| leak | 160 | 2 |
+| leak | 161 | 2 |
 | double-free | 120 | 0 |
 | codegen-gap | 103 | 0 |
 | run-vs-build | 100 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 802 | 3 |
+| codegen | 803 | 3 |
 | typecheck | 152 | 0 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1108 surfaced · 3 open · 1093 fixed · 2 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1109 surfaced · 3 open · 1094 fixed · 2 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-24 | 2026-08-11 | codegen | high | A String EQUALITY comparison between an unbound TEMPORARY and a `ref String` PARAMETER leaks the temporary, every evaluation. `hay.substring(0, 4) == needle` inside `fn f(hay: ref String, needle: ref String)` leaks; the same comparison against a LOCAL, or with the temp `let`-bound first, or with an OWNED `String` param, is clean. The leak is unbounded in input size -- the ordinary `substring(i, i+n) == needle` scan loop leaks one allocation per iteration. | the String `==`/`!=` lowering in codegen (the operand-cleanup decision). NOT the RC-elision hint and NOT optimization-dependent -- both ruled out by measurement, see detail. |
 | B-2026-08-11-29 | 2026-08-11 | codegen | high | SEGV (exit 139) on a DEFAULT `karac build`: a struct with a `Map`/`Set` field, bound out of a `Result`'s `Ok(..)` match arm and then passed BY VALUE to a function, dereferences a wild pointer in `karac_map_free_with_drop_vec`. `karac check` is clean and the interpreter prints the right answer. Five conditions, all necessary -- `Option` instead of `Result` is clean, a `Vec` field is clean, using the value inline instead of passing it is clean. | `karac_map_free_with_drop_vec` -- the ASAN frame is `#0 karac_map_free_with_drop_vec` called directly from `main`, on `SEGV on unknown address 0x0b`, i.e. the Map handle slot holds a non-pointer when the drop runs. Family: B-2026-08-07-19 (`struct { s: Result[Map,E] }`) is the INVERSE nesting and is fixed. |
 | B-2026-08-11-30 | 2026-08-11 | codegen | medium | A fresh-temp `Result[struct]` passed BY VALUE leaks every `Vec` field of the Ok payload -- one allocation per Vec field, the buffer itself, while `String` fields of the same struct are freed correctly. The `match` is irrelevant (a callee that ignores the parameter still leaks) and so is a second heap field: the row's original 'needs another heap field / a scalar companion is not enough' matrix was an artifact of probing with a MATCHING callee. LEG A, opposite polarity and still unexplained: a `Map`/`Set` field leaks ~600 B when the Result is LET-BOUND before the match, where leg B's let-bound form is clean | same area as B-2026-08-11-29 (`Result[struct-with-container-field]` drop across a by-value boundary); may or may not be one fix with it -- the trigger conditions differ materially, see detail. |
+| B-2026-08-11-33 | 2026-08-11 | codegen | medium | A `#[derive(Eq)]` STRUCT temporary carrying a HEAP field, compared against a `ref` param, leaks that field every evaluation: `mk(hay) == other` with `fn mk(s: ref String) -> P { P { name: s.substring(0, 4) } }` and `other: ref P` leaks 4 B / 1 alloc under LSan. Sibling of B-2026-08-11-24 (the String-equality form, fixed) with the same operand pairing -- unbound temp vs `ref` param -- but a DIFFERENT lowering, so that fix does not reach it. NOTE THE FILING CORRECTION: B-2026-08-11-24 measured this shape as CLEAN and concluded its scope was narrow to String equality. That control built the struct's String field from a LITERAL, which allocates nothing and therefore cannot leak; the operand pairing was right and the payload was not. With a `substring`-built field it reproduces every time. A pinned `#[ignore]`d fixture (asan_derive_eq_struct_heap_field_vs_ref_param) reproduces it under `cargo test --features llvm --test memory_sanitizer -- --ignored`. | `compile_struct_eq` in src/codegen/expr_ops.rs — the derived-struct `==`/`!=` path; the fresh temp operand is never materialized or dropped. The String sibling was fixed in exprs.rs (B-2026-08-11-24) and does NOT cover this. |
 
 ### Wontfix (2)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1108 surfaced
 
 </details>
 
-### Fixed (1093)
+### Fixed (1094)
 
-<details><summary>1093 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1094 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2034,6 +2034,7 @@ more by having them consult the receiver's own type instead. Neither re-keyed
 the map. A consumer that needs the key and cannot use either workaround will hit
 this again. |
 | B-2026-08-11-23 | codegen | low | `Vec[T].sorted_by_key(f)` PASSES `karac check` and then fails at build: "Vec/String method 'sorted_by_key' is not yet supported in codegen" | a243f2a (folded into the existing `sorted_by` arm in src/codegen/vec_method.rs rather than copied — the two are one desugar with a different inner method) |
+| B-2026-08-11-24 | codegen | high | A String EQUALITY comparison between an unbound TEMPORARY and a `ref String` PARAMETER leaks the temporary, every evaluation | 7239101 (one arm in src/codegen/exprs.rs: extend the surface-`Binary` fresh-owned-operand free from `Add` to `Eq`/`NotEq`, gated on the OPERANDS being String-shaped since a comparison yields i1) |
 | B-2026-08-11-25 | codegen | high | DOUBLE FREE on both compiled backends: a heap field of a struct held as a Vec ELEMENT, read back by ASSIGNMENT to an existing binding (`out = stats[0… | FIXED — the Assign arm never called the field-move-out suppressors the Let arm
 has called since B-2026-08-03-8 / B-2026-08-01-31. Three lines of dispatch, not
 new machinery.
