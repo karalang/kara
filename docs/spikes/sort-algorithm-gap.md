@@ -1,7 +1,8 @@
 # `Vec.sort_by` vs Rust's `sort_by` — where the gap actually is
 
-**Status:** two fixes landed, and the remaining gap is ~1.30x on
-shuffled-uniform input only (B-2026-08-10-20, open).
+**Status:** two fixes landed. The remaining ~1.30x on shuffled-uniform input
+has now had five directions measured against it and none closes it
+(B-2026-08-10-20); treat it as the cost of the algorithm, not a pending fix.
 
 **Read the sections in order — later ones correct earlier ones.** This
 document was written as the investigation ran, and its conclusions changed
@@ -18,11 +19,13 @@ twice as better measurements arrived:
    to **instructions and latency**, and the second of those **withdraws** the
    first's conclusion that the partition direction is ruled out. Instruction
    budgeting was the wrong metric.
-4. *"The calibrated kernel measurement"* and *"The budget check"* — settle it:
-   a 2-way partition level is **1.87x cheaper per element** than a merge pass
-   *in karac's own emitted code* (14.38 instructions vs 26.93), clearing the
-   budget those sections set. Projected 1.24–1.43x on shuffled input.
-   **Verdict: GO.**
+4. *"The calibrated kernel measurement"* and *"The budget check"* — said a
+   2-way partition level is 1.87x cheaper per element than a merge pass and
+   projected 1.24–1.43x. **Both are superseded by the last section**, which
+   built the thing: it is never faster than the merge on shuffled input at any
+   configuration. The budget was measured on one huge range and so captured
+   the kernel's asymptotic cost, not its cost at the range sizes a recursion
+   actually produces.
 
 Everything rejected along the way is listed with the data that rejected it.
 
@@ -904,6 +907,103 @@ provably branchless, and is 1.87x cheaper per element than the merge pass it
 replaces. What remains is the run-builder around it — pivot selection, the
 bounded stack, the short-run policy — all of which already exist in `93b438d`
 and none of which touch the partition loop this measured.
+
+## Built it. It does not pay on the target case — and the budget check is why
+
+The budget check said GO. The run-builder was then written, verified and
+measured, and **on shuffled-uniform input it is never faster than the merge**,
+at any configuration. It was not merged. This section records the result and,
+more usefully, why the budget check pointed the wrong way.
+
+### What was built
+
+A stable 2-way quicksort run-builder, ~500 lines of emitter:
+
+- `__vec_<m>_qs_<id>(data, scratch, lo, hi)` — count-then-scatter partition
+  into alternating buffers, borrowing **phase 2's own scratch at matching
+  indices**, so unlike the 3-way attempt it needs *no allocation at all*.
+- Progress without a 3-way equal block: the split predicate is
+  `cmp(x, pivot) < t` with `t` loop-invariant, and the partition simply
+  re-runs with `t = 1` when `nlt == 0`. The retry cannot return 0 (the pivot
+  is `<= pivot`), so the left half is then the block of elements equal to the
+  pivot — already sorted and stable, no recursion needed. Two passes restore
+  buffer parity, so nothing downstream knows a retry happened. **One kernel,
+  not two.**
+- Bounded explicit stack (`span / (base + 1)` by disjointness), fixed-seed
+  xorshift pivot, insertion base case, and a phase-1 policy that accumulates
+  only *consecutive* short runs so a long run ends the accumulation and is
+  recorded untouched.
+
+It is correct: 98/98 pattern × size combinations, element-type coverage
+(`i64`, mixed-width tuple, named struct), agreeing across AOT, LLJIT and the
+interpreter.
+
+### The result
+
+| pattern | main | + run-builder | instructions | mispredicts |
+|---|---|---|---|---|
+| random | 11.11 ms | 11.73 ms (**0.95x**) | 74.05 → 82.18 M (**+11%**) | 0.192 → 0.364 M |
+| **few-unique** | 5.39 ms | **4.15 ms (1.30x)** | 48.85 → **34.25 M (−29.9%)** | 0.221 → **0.020 M** |
+| sawtooth | 2.82 ms | 3.22 ms (0.87x) | 22.53 → 23.46 M (+4.1%) | unchanged |
+
+And a sweep of the configuration space, to rule out a tuning miss:
+
+| config | random | few-unique | sawtooth |
+|---|---|---|---|
+| span 512 | 12.39 | 5.90 | 3.11 |
+| span 2048 | 12.27 | 5.49 | 3.15 |
+| span 8192 | 12.04 | 4.84 | 3.34 |
+| span 16384 | 12.33 | 4.51 | 3.31 |
+| span 65536 | 11.85 | 7.21 | 3.11 |
+| span 16384, base 32 | 11.81 | 4.70 | 3.30 |
+| span 16384, base 64 | **11.17** | **4.38** | 3.14 |
+| *main* | *11.11* | *5.39* | *2.82* |
+
+**Nothing beats main on random.** The best configuration reaches parity.
+Few-unique wins 1.23–1.30x throughout; sawtooth loses 10–18% throughout.
+
+### Why the budget check misled — the lesson worth keeping
+
+The probe measured **14.38 instructions per element per partition level** and
+that number was correct. It was measured the wrong way round: the probe
+partitioned the **full 150k array at every level**, so every loop had a huge
+trip count, unrolled well, and amortised its per-range setup to nothing. It
+measured the kernel's *asymptotic* cost.
+
+A real quicksort spends most of its work on *small* ranges. Recursing from
+16384 down to a base of 16 means roughly `2 * span / base` ranges, most of
+them near the base size, and each one pays a fixed cost — pivot xorshift plus
+a 64-bit `urem`, stack push/pop, block dispatch, two helper calls — over very
+few elements, with loops too short to unroll usefully. The merge has no such
+problem: every pass runs one long loop per run pair, so it sits near *its*
+asymptotic cost already.
+
+So the comparison "14.38 vs 26.93" was never between comparable things. The
+correct budget would have measured the partition **at the range sizes the
+recursion actually produces** — a geometric mix from `span` down to `base`,
+not one range of `n`. Concretely, the probe should have partitioned
+`n / 2^d`-sized blocks at level `d`, exactly as the C mirror did, rather than
+the whole array each time.
+
+That also explains, retrospectively, why the C mirror was closer to right
+(1.70x, and it *did* model recursive blocking) than the karac probe (1.87x on
+instructions) — and why even the mirror was optimistic: it modelled recursion
+but still in C, without the per-range helper calls and `urem` the IR pays.
+
+### Standing conclusion
+
+Five directions have now been measured against the shuffled-uniform residual —
+merge-kernel tweaks, RUN tuning, the bounds-check hoist, a 3-way quicksort
+run-builder, and a 2-way one — and none of them closes it. The remaining
+~1.30x should be treated as the cost of the algorithm karac has, not as a bug
+with a pending fix.
+
+The one unexploited finding is **few-unique**, where the run-builder is a
+genuine 1.23–1.30x with a 30% instruction reduction and a 10x mispredict
+reduction. Anything that pursues it has to earn back the sawtooth regression
+first, which is code-growth rather than algorithm — sawtooth never executes
+the quicksort at all, yet its instruction count rises 4.1% with identical
+branch and mispredict counts.
 
 ## Caveats
 
