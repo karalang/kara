@@ -1302,6 +1302,88 @@ fn main() {
     /// and reduction E2E tests would silently validate only the sequential
     /// fallback's output (which happens to match by design, masking any
     /// real lowering regression).
+    /// The JIT half of this lane (B-2026-08-11-26's remainder). Compiles the
+    /// program to IR with BOTH analyses threaded and executes it through the
+    /// sibling `karac_jit_runner` binary — the same mechanism
+    /// `tests/codegen.rs` uses, and the same one `karac run` ships.
+    ///
+    /// Deliberately spawns the runner rather than JITting in-process: the
+    /// runner statically links the runtime, so this test binary needs none of
+    /// the `KARAC_SPAWN_SITES` stand-in scaffolding `tests/codegen.rs` carries
+    /// for its own link. That matters more here than there — auto-par programs
+    /// are exactly the ones that read those spawn-site globals, so borrowing
+    /// the test binary's neutral stand-ins could quietly change what the
+    /// program under test does.
+    #[cfg(feature = "llvm")]
+    fn jit_dispatch_par(
+        program: &karac::ast::Program,
+        ownership: &karac::ownership::OwnershipCheckResult,
+        analysis: &karac::concurrency::ConcurrencyAnalysis,
+    ) -> Option<String> {
+        use karac::codegen::compile_to_ir_with_options;
+        use std::io::Write;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static JIT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        // Codegen failure is a compiler/test bug, not an environment gap —
+        // panic rather than soft-skip, mirroring the AOT leg just below.
+        let ir = match compile_to_ir_with_options(
+            program,
+            Some(ownership),
+            Some(analysis),
+            None,
+            None,
+        ) {
+            Ok(ir) => ir,
+            Err(e) => panic!("compile_to_ir failed for par JIT dispatch: {}", e),
+        };
+
+        let id = JIT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let ir_path = format!("/tmp/karac_par_jit_{}_{}.ll", std::process::id(), id);
+        {
+            let mut f = std::fs::File::create(&ir_path).expect("create par IR tempfile");
+            f.write_all(ir.as_bytes()).expect("write par IR");
+        }
+
+        let runner = env!("CARGO_BIN_EXE_karac_jit_runner");
+        let mut cmd = std::process::Command::new(runner);
+        cmd.arg(&ir_path);
+        // `env.args()` parity, same reason as the sequential lane: unset, the
+        // runtime falls back to the RUNNER's argv (len 2) instead of the
+        // program's own (len 1 under AOT), so any test folding
+        // `env.args().len()` into its output would diverge by one.
+        cmd.env("KARAC_PROGRAM_ARGS", &ir_path);
+
+        // Same 60s watchdog as the AOT leg. Auto-par programs are the ones
+        // that can actually hang (a wedged worker or an unsignalled join), so
+        // the bound is the point, not a formality.
+        let output =
+            super::common::output_with_hang_watchdog(cmd, std::time::Duration::from_secs(60));
+
+        let _ = std::fs::remove_file(&ir_path);
+
+        // A `None` here is a spawn failure or a 60s hang — NOT an environment
+        // gap. The runner is a cargo-built sibling binary that is always
+        // present (`CARGO_BIN_EXE_*` resolves at compile time), and this lane
+        // needs no runtime archive, so there is nothing legitimate to
+        // soft-skip for. Returning `None` would hand every caller its
+        // `let Some(out) = … else { return }` early-out and make all ~255
+        // tests pass while executing nothing — the exact shape
+        // B-2026-08-11-26 was filed for, reproduced inside the lane built to
+        // close it. Fail loudly instead. (The AOT leg keeps its soft-skip
+        // because a missing `libkarac_runtime.a` genuinely is an environment
+        // gap; this leg has no such dependency.)
+        let output = output.unwrap_or_else(|| {
+            panic!(
+                "par JIT lane: `karac_jit_runner` produced no output (spawn failure or \
+                 >60s hang). This is a real failure, not missing setup — the lane cannot \
+                 soft-skip without silently voiding every test on it."
+            )
+        });
+
+        Some(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
     fn run_program(src: &str) -> Option<String> {
         use karac::codegen::{compile_to_object, link_executable};
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -1327,6 +1409,29 @@ fn main() {
         // Thread type info so method-call network fan-out (A2b-2 Phase 2 Slice 2)
         // is enabled end-to-end, as the real CLI pipeline does.
         let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
+
+        // B-2026-08-11-26's deferred remainder: run==build parity for the
+        // AUTO-PAR surface. `KARAC_TEST_JIT=1` reroutes this lane through the
+        // JIT, exactly as `tests/codegen.rs` does, so the same ~150 programs
+        // are executed by both backends off one source.
+        //
+        // The sequential lane had this and the auto-par lane did not, which
+        // left the DEFAULT `karac build` configuration — auto-par is on unless
+        // `KARAC_AUTO_PAR=0` — with no parity coverage of any width. The
+        // sequential lane cannot stand in for it: it compiles with
+        // `concurrency: None`, so every auto-par lowering is dead there. A
+        // divergence that only appears once a loop is parallelized is
+        // invisible to it by construction.
+        //
+        // `Some(&analysis)` is as load-bearing here as `Some(&ownership)` was
+        // in -26 itself: passing `None` would emit sequential IR under a name
+        // claiming to test the parallel backend — the same "lane runs with
+        // degraded inputs" shape that row was filed for, which is why both are
+        // threaded together.
+        #[cfg(feature = "llvm")]
+        if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1") {
+            return jit_dispatch_par(&parsed.program, &ownership, &analysis);
+        }
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_par_e2e_{}_{}.o", std::process::id(), id);

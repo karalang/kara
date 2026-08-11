@@ -449,6 +449,21 @@ jobs:
         env:
           KARAC_TEST_JIT: "1"
 
+      # The same parity assertion for the AUTO-PAR surface — B-2026-08-11-26's
+      # deferred remainder. The step above covers `tests/codegen.rs`, which
+      # compiles with `concurrency: None`, so every auto-par lowering is dead
+      # on it: it cannot detect a divergence that only appears once a loop is
+      # parallelized. `tests/par_codegen.rs` is the lane that threads
+      # `ConcurrencyAnalysis` into codegen, and it had no JIT leg at all, which
+      # left the DEFAULT `karac build` configuration (auto-par is on unless
+      # `KARAC_AUTO_PAR=0`) with no run==build coverage of any width. The AOT
+      # `Auto-par codegen E2E` step is the oracle; this re-runs the same
+      # compiled binary through the JIT, so it adds run time, not build time.
+      - name: Auto-par E2E via LLJIT (run==build parity)
+        run: cargo test --features llvm --test par_codegen
+        env:
+          KARAC_TEST_JIT: "1"
+
   # The `--features llvm` codegen + producer-mode E2E on **Apple silicon
   # (arm64)** — the one non-x86_64, non-Linux leg that runs real binaries, so
   # it is the first step of the additive-interop "4-target CI matrix" (roadmap
@@ -516,6 +531,16 @@ jobs:
       # not build time.
       - name: Codegen E2E via LLJIT (arm64 run==build parity)
         run: cargo test --features llvm --test codegen
+        env:
+          KARAC_TEST_JIT: "1"
+
+      # Auto-par parity on arm64 (B-2026-08-11-26's remainder). Worth running
+      # on BOTH arches for the same reason its sequential sibling is: the
+      # x86 leg cannot see an arm64-only stripping or ABI difference, and
+      # auto-par adds a second arch-sensitive axis on top — thread spawn and
+      # the atomics the reduction lowering emits.
+      - name: Auto-par E2E via LLJIT (arm64 run==build parity)
+        run: cargo test --features llvm --test par_codegen
         env:
           KARAC_TEST_JIT: "1"
 
