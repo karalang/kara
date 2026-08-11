@@ -467,6 +467,103 @@ ahead freely. That, and not pass counts, is driftsort's remaining edge.
 Refiled as B-2026-08-10-20.
 
 
+## After the fix: the gap flipped from mispredicts to instructions (B-2026-08-10-20)
+
+The section above closes with "a partition loop has no dependency chain, that
+is driftsort's remaining edge" and hands that to B-2026-08-10-20. Measuring it
+before building it says the direction is **not worth taking**, and the reason
+is that the adaptive kernel already spent the payoff it was counting on.
+
+Instruction and mispredict counts for one 150k shuffled sort, all differenced
+against a clone-only twin on the same host:
+
+| build | instructions | mispredicts | time |
+|---|---|---|---|
+| natural-run, branchy merge (pre-19) | 52.79 M | 1.061 M | 14.22 ms |
+| **adaptive kernel (shipped)** | **74.07 M** | **0.192 M** | **11.05 ms** |
+| 3-way quicksort run-builder (`93b438d`) | 87.02 M | 0.485 M | ~14 ms (wash) |
+| driftsort | 48.56 M | 0.233 M | 8.2–8.9 ms |
+
+Read the first two rows against the last one and the whole picture inverts:
+
+- **Before B-2026-08-10-19**, karac ran 1.09x driftsort's instructions and
+  4.56x its mispredicts. It was mispredict-bound.
+- **After**, karac runs **1.53x** driftsort's instructions and **0.82x** its
+  mispredicts — it now mispredicts *less often than driftsort does*. It is
+  instruction-bound.
+
+The branchless kernel bought its 1.29x by spending instructions to buy
+mispredicts: +21.3 M instructions for −0.87 M mispredicts. That was a good
+trade at ~20 cycles per mispredict, and it is a trade that can only be made
+once.
+
+### Why that kills the partition direction
+
+The 3-way quicksort row in the table is the same trade made badly: **+34.2 M
+instructions to save 0.58 M mispredicts**, which cancel almost exactly — a
+complete, quantitative explanation of the wall-clock wash that the original
+prototype could not account for. It also settles the contradiction flagged in
+that section (removing the copy-back "changed nothing"): `memcpy` is only
+9.57 M instructions, 10.6% of the program, so the copy-back was never where
+the cost was.
+
+Where it actually was, from the emitted loop: the branchless 3-way scatter
+writes the element to **all three buckets on every iteration**. For a 16-byte
+element that is 6 stores per element per level, plus three cursor updates —
+about 47 instructions per element per partition level.
+
+Budget the 2-way alternating-buffer rewrite against that, using measured
+per-element instruction costs (adaptive build: 74.07 M total, less ~0.9 M for
+run detection and ~9.6 M for insertion padding, over 1.95 M merge elements):
+
+| | instructions/element |
+|---|---|
+| branchless merge element | ~33 |
+| 3-way partition element (measured) | ~47 |
+| tight 2-way partition element (estimated) | ~24 |
+
+Ten partition levels at 24 replaces nine merge passes at 33: 240 vs 297, a
+saving of ~57 instructions per element, or **~8.6 M — about 12%**. That is
+the *best case* for roughly a thousand lines of IR in a load-bearing sort,
+and it no longer has a mispredict win stacked on top of it, because there are
+only 0.192 M mispredicts left to remove.
+
+**So the row's stated fix is worth ~12% at best.** Not the 1.3x it is filed
+for.
+
+### What is actually worth doing instead
+
+The same accounting names cheaper levers with comparable payoff, because the
+target is now instructions per merge element rather than the algorithm:
+
+- **Hoist the two per-element bounds checks.** The branchless kernel tests
+  `a < mid` and `b < hi` on every element. Running `min(mid - a, hi - b)`
+  iterations with no bounds test and re-checking only at the block boundary
+  removes ~5 instructions per element — **~9.8 M, about 13%** — which is
+  *more* than the full 2-way partition rewrite, for a fraction of the work.
+  This is the recommended next step.
+- Fewer instructions in the element move itself. A `(i64, i64)` element costs
+  2 loads, 2 selects and 2 stores because it is selected as a whole struct.
+
+### RUN is still not a lever, re-measured
+
+Worth re-testing after the kernel change, since the original "flat within 3%"
+finding was taken under the branchy merge and a cheaper phase 2 should in
+principle favour a smaller insertion base. It does not — swept with a
+temporary `KARAC_SORT_RUN` override so one build covers every point:
+
+| pattern | RUN=4 | RUN=8 | RUN=16 | RUN=32 | RUN=64 |
+|---|---|---|---|---|---|
+| random | 11.05 | 11.06 | 10.59 | 10.79 | 11.20 |
+| few-unique | 5.26 | 5.44 | 5.14 | 5.67 | 6.14 |
+| sawtooth | 3.00 | 2.93 | 2.99 | 2.89 | 2.86 |
+
+Flat within ~3% on random across a **16x** range of RUN, which means the
+insertion cost per element and the extra-pass cost stay balanced over the
+whole range. Only RUN=64 is clearly worse, and only on few-unique. Not a
+lever, under either kernel.
+
+
 ## Caveats
 
 - **Single host, x86_64 shared container.** Absolute numbers drift a few
