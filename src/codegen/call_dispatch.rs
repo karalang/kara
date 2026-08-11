@@ -6336,6 +6336,26 @@ impl<'ctx> super::Codegen<'ctx> {
         arg_expr: &Expr,
         apply_shared_transfer: bool,
     ) {
+        // B-2026-08-10-21 — the source of a `UseAfterMove` keeps its cleanup.
+        //
+        // Every one of this helper's ~87 call sites funnels here, which is why
+        // the disarm half of the defensive copy is a single edit: at a move the
+        // ownership pass flagged as reused, the consumer has been handed an
+        // independent deep copy at the identifier load, so the source still
+        // owns its original buffer and must still free it. Disarming here would
+        // leave that buffer with no owner (a leak) while the later read stayed
+        // valid — the mirror of the pre-fix bug, which disarmed the source and
+        // let the consumer's free dangle it.
+        //
+        // Ordering note: this is the ONLY place the two halves have to agree.
+        // If a future path copies without consulting this set, it double-frees;
+        // if it skips the disarm without copying, it leaks.
+        if self
+            .uam_copied_sites
+            .contains(&(arg_expr.span.offset, arg_expr.span.length))
+        {
+            return;
+        }
         // Tuple field move-out (`let s = t.N`, `f(t.N)`, `return t.N`): the
         // heap field is moved into the consumer, but the tuple `t` still carries
         // its `track_tuple_var` drop (B-2026-06-11-4 part a), which would free

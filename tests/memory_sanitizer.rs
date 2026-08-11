@@ -45119,6 +45119,64 @@ fn main() {
         );
     }
 
+    /// B-2026-08-10-21 under ASAN — the `UseAfterMove` defensive copy, and the
+    /// first fixture of that mechanism the suite has ever been able to hold.
+    ///
+    /// It could not exist before this bug's fix: `tests/common/mod.rs`'s
+    /// ownership gate refused any program with ownership errors, on the
+    /// premise that "`karac check` would reject it, so codegen is being fed
+    /// input it never sees in production". That premise is exactly backwards
+    /// for `UseAfterMove` — `cli.rs` excludes it from the fatal set by design,
+    /// so production compiles and runs these. The gate now mirrors
+    /// `is_fatal_ownership_kind`, which is what makes this lane reachable.
+    /// That structural blind spot is why the copy could be entirely absent
+    /// without a single one of ~1000 memory fixtures noticing.
+    ///
+    /// Both failure directions are memory bugs, which is why ASAN rather than
+    /// output alone. No copy: the consumer's free dangles the source's later
+    /// read (use-after-free, then a double free at scope exit). A copy whose
+    /// source disarm still fires: the source's buffer has no owner (LSan
+    /// catches the leak). The two halves are inseparable, and this fixture is
+    /// what holds them together.
+    ///
+    /// Every payload is read BYTE-WISE (`println` of the string itself, never
+    /// `.len()`) — a `.len()` read never dereferences the buffer, which is
+    /// precisely how the pre-existing `e2e_let_move_source_frozen` pin passed
+    /// against a copy that did not exist.
+    #[test]
+    fn asan_use_after_move_defensive_copy_frees_each_buffer_once() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. String: move into a binding whose scope ends, then read the source.
+        let s: String = f"al{i}";
+        { let keep: String = s; println(keep); }
+        println(s);
+        // 2. Vec[String]: element-deep — an outer-only copy would share these.
+        let mut w: Vec[String] = Vec.new();
+        w.push(f"bb{i}");
+        { let keep: Vec[String] = w; println(keep[0]); }
+        println(w[0]);
+        // 3. CONTROL — no reuse, so no copy may be made. A copy here without
+        // the source disarm would leak the original every pass.
+        let d: String = f"dd{i}";
+        let moved: String = d;
+        println(moved);
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "al0", "al0", "bb0", "bb0", "dd0", "al1", "al1", "bb1", "bb1", "dd1", "al2", "al2",
+                "bb2", "bb2", "dd2", "al3", "al3", "bb3", "bb3", "dd3", "end",
+            ],
+            "use_after_move_defensive_copy",
+        );
+    }
+
     /// B-2026-08-08-25 leg 1, the CHAIN interaction — one owner, not zero.
     ///
     /// `suppress_inline_option_result_binding_move` disarms a source binding

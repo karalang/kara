@@ -3899,7 +3899,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     new_meta
                 });
+                // B-2026-08-10-21 — a `let` whose RHS is a binding the
+                // ownership pass flagged as moved-and-reused gets an
+                // independent buffer, and the source keeps its own (the disarm
+                // half is in `suppress_source_vec_cleanup_for_arg_ex`).
+                //
+                // Deliberately the LET site rather than every identifier load.
+                // The first build copied at the load, which also fired where
+                // the consumer only BORROWS — nothing owned the copy and it
+                // leaked (measured: 32 bytes in
+                // `asan_heap_env_vec_owner_arg_pass_borrow_freed_no_leak`). A
+                // `let` destination always registers its own cleanup, so here
+                // the copy provably has an owner.
                 let val = self.compile_expr(value)?;
+                let val = self.uam_defensive_copy(value, val);
                 // Type-changing shadow dance (step 3 of 3 — pure-new tags).
                 // The RHS is compiled; drop the OLD metadata and reinstate the
                 // NEW binding's class tags so every later use of the new

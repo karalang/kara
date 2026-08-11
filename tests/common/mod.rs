@@ -276,8 +276,39 @@ pub fn link_or_skip(result: Result<(), String>) -> Option<()> {
     None
 }
 
+/// Does this ownership kind actually stop a `karac build` / fail `karac check`?
+///
+/// B-2026-08-10-21 — this MUST mirror `cli.rs`'s `is_fatal_ownership_kind`,
+/// which is the production gate. The two advisory kinds are excluded there
+/// deliberately (`RcFallbackNote` is a perf note; `UseAfterMove` carries a
+/// machine-applicable `.clone()` fix and compiles by design), so `karac check`
+/// exits 0 and `karac build` succeeds on them.
+///
+/// The gate below used to fail on EVERY kind, justified by "`karac check` would
+/// reject it, so codegen is being fed input it never sees in production". That
+/// premise is exactly backwards for the advisory kinds: production not only
+/// sees them, it is documented to accept them. The effect was that the
+/// ~1000-fixture memory suite structurally could not contain a single test of
+/// the defensive-copy mechanism whose correctness `UseAfterMove`'s non-fatal
+/// status depends on — which is how B-2026-08-10-21 (that copy never existed
+/// for any heap type) survived undetected.
+///
+/// `RcFallbackNote` is listed for symmetry with the production gate; it rides
+/// `notes` rather than `errors` today, so it is not reachable here.
+fn ownership_kind_blocks_production(kind: &karac::ownership::OwnershipErrorKind) -> bool {
+    use karac::ownership::OwnershipErrorKind as K;
+    !matches!(kind, K::RcFallbackNote | K::UseAfterMove)
+}
+
 pub fn assert_ownership_clean(ownership: &karac::ownership::OwnershipCheckResult, src: &str) {
-    if ownership.errors.is_empty() {
+    // Only the kinds production actually rejects gate the suite — see
+    // `ownership_kind_blocks_production`.
+    let blocking: Vec<&karac::ownership::OwnershipError> = ownership
+        .errors
+        .iter()
+        .filter(|e| ownership_kind_blocks_production(&e.kind))
+        .collect();
+    if blocking.is_empty() {
         return;
     }
     let thread = std::thread::current();
@@ -293,9 +324,10 @@ pub fn assert_ownership_clean(ownership: &karac::ownership::OwnershipCheckResult
         }
     }) {
         eprintln!(
-            "[ownership-gate] {test_name}: {} ownership error(s) grandfathered — \
-             see OWNERSHIP_GATE_GRANDFATHERED in tests/common/mod.rs",
-            ownership.errors.len()
+            "[ownership-gate] {test_name}: {} blocking ownership error(s) \
+             grandfathered — see OWNERSHIP_GATE_GRANDFATHERED in \
+             tests/common/mod.rs",
+            blocking.len()
         );
         return;
     }
@@ -305,9 +337,9 @@ pub fn assert_ownership_clean(ownership: &karac::ownership::OwnershipCheckResult
          input it never sees in production. Fix the test program, or (for a latent \
          compiler bug) file a docs/bug-ledger.jsonl entry and grandfather the test \
          in tests/common/mod.rs:\n",
-        ownership.errors.len()
+        blocking.len()
     );
-    for e in &ownership.errors {
+    for e in &blocking {
         msg.push_str(&format!(
             "  {}:{}: {} [{:?}]\n",
             e.span.line, e.span.column, e.message, e.kind

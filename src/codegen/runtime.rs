@@ -4264,6 +4264,63 @@ impl<'ctx> super::Codegen<'ctx> {
         self.maybe_defensive_copy_param_arg(ret_expr, val)
     }
 
+    /// B-2026-08-10-21 — the copy half of the `UseAfterMove` defensive copy.
+    ///
+    /// Fires only at an identifier load whose span the ownership pass flagged
+    /// as a consume site with a later use, so it is inert for every program
+    /// that draws no `UseAfterMove` warning. At a flagged site the consumer
+    /// gets an independent buffer while the source keeps its own — the disarm
+    /// half (`suppress_source_vec_cleanup_for_arg_ex`) is what leaves the
+    /// source's cleanup armed to free it.
+    ///
+    /// SCOPED TO THE `{ptr,len,cap}` FAMILY (`String`, `Vec`, `VecDeque`), and
+    /// the scoping is load-bearing rather than lazy:
+    /// `emit_vecstr_defensive_copy` self-gates on the value's LLVM shape and
+    /// returns anything else untouched, so the types not yet covered — `Map`,
+    /// `Set`, and user structs — behave exactly as they did before this
+    /// existed. That makes partial coverage MONOTONE: it removes
+    /// use-after-frees without inventing a double free anywhere, so the
+    /// remaining families can land separately instead of forcing one
+    /// all-or-nothing change across the move subsystem. They are filed, with
+    /// their reproductions, rather than left implicit.
+    ///
+    /// The element type comes from the variable's own tables, so a
+    /// `Vec[String]` copies element-deep (`emit_vecstr_defensive_copy` walks
+    /// String/Vec/Map/Set inners); a `String` has no element table and its
+    /// bytes are `i8`.
+    pub(super) fn uam_defensive_copy(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let ExprKind::Identifier(name) = &expr.kind else {
+            return val;
+        };
+        let name = name.as_str();
+        if !self
+            .uam_consume_sites
+            .contains(&(expr.span.offset, expr.span.length))
+        {
+            return val;
+        }
+        let vec_ty = self.vec_struct_type();
+        if val.get_type() != vec_ty.into() {
+            return val;
+        }
+        let elem_ty: BasicTypeEnum<'ctx> = self
+            .vec_elem_types
+            .get(name)
+            .copied()
+            .unwrap_or_else(|| self.context.i8_type().into());
+        let elem_te = self.var_elem_type_exprs.get(name).cloned();
+        let copied = self.emit_vecstr_defensive_copy(val, elem_ty, elem_te.as_ref());
+        // Record that this site really was copied — the disarm skip keys on
+        // this, so the two halves cannot drift apart as the copy widens.
+        self.uam_copied_sites
+            .insert((expr.span.offset, expr.span.length));
+        copied
+    }
+
     pub(super) fn maybe_defensive_copy_param_arg(
         &mut self,
         arg_expr: &Expr,

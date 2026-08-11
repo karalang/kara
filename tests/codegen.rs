@@ -10482,34 +10482,32 @@ fn main() {
     /// the interpreter moved to MATCH these (already-correct) behaviors, so
     /// this twin guards the target semantics from drifting. Same program as
     /// `tests/interpreter.rs`'s `test_let_move_source_frozen`.
-    /// B-2026-08-10-21 — the `UseAfterMove` defensive copy does not exist.
+    /// B-2026-08-10-21 — the `UseAfterMove` defensive copy, for the
+    /// `{ptr,len,cap}` family.
     ///
     /// `src/cli.rs`'s `is_fatal_ownership_kind` keeps `UseAfterMove` non-fatal
     /// for `build` on a stated promise: "codegen defensive-copies the reuse, so
-    /// the binary is memory-safe". Measured, that copy is not emitted for a
-    /// binding-to-binding move of ANY heap type. `karac check` exits 0 ("All
-    /// checks passed" — the kind is excluded from `total_errors` by design),
-    /// `karac build` exits 0, and the program reads freed memory.
+    /// the binary is memory-safe". That copy did not exist for ANY heap type —
+    /// `karac check` printed "All checks passed", `karac build` exited 0, and
+    /// the reuse read freed memory. These cases are the promise made true for
+    /// `String` / `Vec` / `VecDeque`.
     ///
-    /// Every case below is the same shape: move the value into a binding whose
-    /// scope ENDS, then read the source afterwards. That ordering is the whole
-    /// experiment — with the read before the destination dies, the alias is
-    /// still live and every case "passes" by timing, which is what makes this
-    /// easy to mis-measure.
+    /// The shape is the experiment: move the value into a binding whose scope
+    /// ENDS, then read the source after it. With the read placed BEFORE the
+    /// destination dies, the alias is still live and every case passes by
+    /// timing — which is how this survived, and why case 2 matters.
     ///
-    /// Cases 2 and 3 are hard SEGFAULTS, not garbage output.
+    /// Case 2 (`Vec[i64]`) is pinned separately from the String cases because
+    /// the pre-existing `e2e_let_move_source_frozen` reads the moved-from Vec
+    /// with `.len()`, which loads the length word and never dereferences the
+    /// buffer. That test passed throughout and does not demonstrate a copy;
+    /// `w[1]` is what does.
     ///
-    /// This is `#[ignore]`d rather than absent so the shapes are recorded
-    /// executably. Note it can only become a live ASAN fixture once
-    /// `tests/common/mod.rs`'s ownership gate admits `UseAfterMove` programs —
-    /// it currently refuses them on the premise that "`karac check` would
-    /// reject it", which is false for exactly this kind. That is why the
-    /// ~1000-fixture memory suite contains no test of the mechanism whose
-    /// correctness `UseAfterMove`'s non-fatal status depends on.
+    /// Case 3 is element-deep: a `Vec[String]` copy that duplicated only the
+    /// outer buffer would leave the element `String`s shared.
     #[test]
-    #[ignore = "B-2026-08-10-21: the UseAfterMove defensive copy is not emitted for any heap type"]
-    fn test_e2e_use_after_move_defensive_copy_still_missing() {
-        // 1. String — prints garbage bytes.
+    fn test_e2e_use_after_move_defensive_copy_vecstr_family() {
+        // 1. String.
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -10521,35 +10519,7 @@ fn main() {
             .as_deref(),
             Some("alpha\n")
         );
-        // 2. Map — SEGFAULT.
-        assert_eq!(
-            run_program(
-                "fn main() {\n\
-                     let mut m: Map[String, i64] = Map.new();\n\
-                     m.insert(f\"k\", 7i64);\n\
-                     { let keep: Map[String, i64] = m; }\n\
-                     println(m.get(f\"k\").unwrap_or(0i64));\n\
-                 }"
-            )
-            .as_deref(),
-            Some("7\n")
-        );
-        // 3. Set — SEGFAULT.
-        assert_eq!(
-            run_program(
-                "fn main() {\n\
-                     let mut st: Set[i64] = Set.new();\n\
-                     st.insert(9i64);\n\
-                     { let keep: Set[i64] = st; }\n\
-                     println(st.contains(9i64));\n\
-                 }"
-            )
-            .as_deref(),
-            Some("true\n")
-        );
-        // 4. `Vec[i64]` — prints a garbage word. Worth pinning explicitly
-        // because `e2e_let_move_source_frozen` reads only `.len()`, which never
-        // dereferences the buffer, so it passes while this fails.
+        // 2. `Vec[i64]` — read an ELEMENT, not `.len()`.
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -10562,7 +10532,105 @@ fn main() {
             .as_deref(),
             Some("22\n")
         );
-        // 5. A struct carrying a heap field — prints an empty String.
+        // 3. `Vec[String]` — element depth.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut w: Vec[String] = Vec.new();\n\
+                     w.push(f\"alpha\");\n\
+                     { let keep: Vec[String] = w; }\n\
+                     println(w[0]);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\n")
+        );
+        // 4. The reproduction this bug was filed from: the doubly-moved value
+        // comes out of a container. The container READ was always defended
+        // (`clone_owned_vec_index_element`); what failed was the plain
+        // binding-to-binding move after it.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let names: Vec[String] = [f\"alpha\"];\n\
+                     let mut out: String = f\"\";\n\
+                     {\n\
+                         let n = names[0];\n\
+                         let _keep: String = n;\n\
+                         out = n;\n\
+                     }\n\
+                     println(out);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\n")
+        );
+        // 5. CONTROL — a program with no `UseAfterMove` at all must be
+        // untouched. The copy is gated on the ownership pass's flagged spans,
+        // so the overwhelming majority of programs emit exactly what they did
+        // before.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let s: String = f\"alpha\";\n\
+                     let keep: String = s;\n\
+                     println(keep);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\n")
+        );
+    }
+
+    /// B-2026-08-10-21 — what the defensive copy does NOT yet cover, pinned as
+    /// a visibly deferred gap rather than left silently absent.
+    ///
+    /// The copy is scoped to the `{ptr,len,cap}` family. `Map`, `Set` and user
+    /// structs still alias on a reused move: the first two SEGFAULT, the struct
+    /// prints an empty field.
+    ///
+    /// The scoping is deliberate and the safety argument is why they can be
+    /// deferred at all. The disarm skip keys on whether a copy was actually
+    /// emitted (`uam_copied_sites`), not on the flagged span, so an uncovered
+    /// type keeps BOTH its old copy behaviour and its old disarm — it is
+    /// exactly as it was, not half-converted. Keying the skip on the flagged
+    /// span instead was measured to turn case 3 here into
+    /// `free(): double free detected in tcache 2`, which is worse than the
+    /// wrong output it replaced.
+    ///
+    /// Closing these means giving each family its type-directed copy at the
+    /// same hook: `emit_map_clone_fn` for `Map`/`Set`, and the struct
+    /// deep-copy for a user struct.
+    #[test]
+    #[ignore = "B-2026-08-10-21: the defensive copy does not yet cover Map/Set/struct moves"]
+    fn test_e2e_use_after_move_defensive_copy_map_set_struct_still_open() {
+        // 1. Map — SEGFAULT.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut m: Map[String, i64] = Map.new();\n\
+                     m.insert(f\"k\", 7i64);\n\
+                     { let keep: Map[String, i64] = m; }\n\
+                     println(m.get(f\"k\").unwrap_or(0i64));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("7\n")
+        );
+        // 2. Set — SEGFAULT.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut st: Set[i64] = Set.new();\n\
+                     st.insert(9i64);\n\
+                     { let keep: Set[i64] = st; }\n\
+                     println(st.contains(9i64));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("true\n")
+        );
+        // 3. A struct carrying a heap field — prints an empty String.
         assert_eq!(
             run_program(
                 "struct H { name: String }\n\

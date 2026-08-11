@@ -3996,6 +3996,39 @@ pub(super) struct Codegen<'ctx> {
     /// when the element is itself a Vec/String/Slice/Map. Without this,
     /// LLVM-type-only tracking can't distinguish `Vec[String]` from
     /// `Vec[Vec[T]]` (both store `vec_struct_type` as the element LLVM type).
+    /// B-2026-08-10-21 — span keys of the CONSUME sites the ownership pass
+    /// reported a `UseAfterMove` for, straight from
+    /// `OwnershipCheckResult::use_after_move_consume_sites`.
+    ///
+    /// `UseAfterMove` is non-fatal for `build` on the documented promise that
+    /// "codegen defensive-copies the reuse, so the binary is memory-safe"
+    /// (`cli.rs`'s `is_fatal_ownership_kind`). This is the set that makes the
+    /// promise true. Two consumers, and BOTH are required at every flagged
+    /// site:
+    ///
+    ///   * the identifier load deep-copies the moved value, so the consumer
+    ///     gets its own buffer;
+    ///   * `suppress_source_vec_cleanup_for_arg_ex` skips the source disarm, so
+    ///     the source keeps its own buffer AND its own cleanup.
+    ///
+    /// A copy without the disarm-skip leaks the source; a disarm-skip without
+    /// the copy turns the use-after-free into a double free. Empty for any
+    /// program the ownership pass reported no `UseAfterMove` on, which is the
+    /// overwhelming majority — nothing changes for them.
+    pub(crate) uam_consume_sites: std::collections::HashSet<(usize, usize)>,
+    /// B-2026-08-10-21 — the flagged sites at which a defensive copy was
+    /// ACTUALLY emitted, recorded by `uam_defensive_copy`.
+    ///
+    /// The disarm skip keys on THIS set, not on `uam_consume_sites`, and the
+    /// distinction is the whole safety argument. The copy currently covers the
+    /// `{ptr,len,cap}` family only; skipping the disarm at a site where no copy
+    /// was made leaves two owners of one buffer — measured as
+    /// `free(): double free detected in tcache 2` on a struct-typed move, which
+    /// is strictly worse than the wrong-output it replaced. Keying on
+    /// "a copy happened" makes the pair inseparable by construction, so
+    /// widening the copy to more types can never get out of step with the
+    /// disarm.
+    pub(crate) uam_copied_sites: std::collections::HashSet<(usize, usize)>,
     pub(crate) var_elem_type_exprs: HashMap<String, TypeExpr>,
     /// Per `Array[T, N]` BINDING: the element `TypeExpr` `T` (B-2026-07-30-3).
     ///
@@ -8228,6 +8261,8 @@ impl<'ctx> Codegen<'ctx> {
             map_key_types: HashMap::new(),
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),
+            uam_consume_sites: std::collections::HashSet::new(),
+            uam_copied_sites: std::collections::HashSet::new(),
             var_elem_type_exprs: HashMap::new(),
             array_elem_type_exprs: HashMap::new(),
             closure_ret_vec_te: HashMap::new(),
@@ -8372,6 +8407,9 @@ impl<'ctx> Codegen<'ctx> {
         // `borrowed_param_dec_skip` then treat each as a pure balanced borrow
         // (no caller arg inc, no callee exit dec). Empty unless the flag is set
         // — the ownership pass gates the walk — so nothing changes by default.
+        // B-2026-08-10-21 — the `UseAfterMove` defensive-copy sites.
+        self.uam_consume_sites
+            .extend(ow.use_after_move_consume_sites.iter().copied());
         for (fn_name, recs) in &ow.elidable_ref_params {
             self.rc_elide_ref_params
                 .insert(fn_name.clone(), recs.clone());

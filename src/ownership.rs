@@ -665,6 +665,23 @@ impl std::fmt::Display for OwnershipError {
 pub struct OwnershipCheckResult {
     /// Inferred parameter modes: function name → [(param_name, mode)].
     pub param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
+    /// B-2026-08-10-21 — span keys (`(offset, length)`) of every CONSUME site
+    /// that a `UseAfterMove` diagnostic reported, i.e. every move whose source
+    /// is read again afterwards.
+    ///
+    /// Exists because `UseAfterMove` is deliberately NON-FATAL for `karac
+    /// build` (`cli.rs`'s `is_fatal_ownership_kind`), on the documented promise
+    /// that "codegen defensive-copies the reuse, so the binary is memory-safe".
+    /// That copy has to be told WHERE, and the ownership pass is the only phase
+    /// that knows: it already computes both spans for the diagnostic. Shipping
+    /// them as plain span data keeps codegen-containment intact — no analysis
+    /// moves into codegen, and no LLVM type moves out of it.
+    ///
+    /// Consumed by codegen's `uam_consume_sites`, which does two things at each
+    /// flagged site: deep-copy the value being moved, and skip the source's
+    /// cleanup disarm. Both are required — a copy alone leaks the source, a
+    /// disarm-skip alone turns the use-after-free into a double free.
+    pub use_after_move_consume_sites: std::collections::HashSet<(usize, usize)>,
     /// RC-elision safety set (env `KARAC_RC_ELIDE_REF_PARAMS`): function name →
     /// `(param_name, position)` of every `Ref`-mode parameter that is sound to
     /// RC-elide — no call site passes it a fresh rvalue and its function never
@@ -1444,8 +1461,21 @@ impl<'a> OwnershipChecker<'a> {
             crate::rc_elide::safe_elidable_ref_params(self.program, &self.param_modes)
         };
 
+        // B-2026-08-10-21 — harvest the consume site of every `UseAfterMove`
+        // for codegen's defensive copy. Derived from the diagnostics rather
+        // than recomputed, so the set and the warning can never disagree about
+        // which moves are reused: if the user was told, codegen copies.
+        let use_after_move_consume_sites: std::collections::HashSet<(usize, usize)> = self
+            .errors
+            .iter()
+            .filter(|e| e.kind == OwnershipErrorKind::UseAfterMove)
+            .filter_map(|e| e.consume_span.as_ref())
+            .map(|sp| (sp.offset, sp.length))
+            .collect();
+
         OwnershipCheckResult {
             param_modes: self.param_modes,
+            use_after_move_consume_sites,
             elidable_ref_params,
             closure_param_modes: self.closure_param_modes,
             closure_captures: self.closure_captures,
