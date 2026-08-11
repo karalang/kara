@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 229 | 0 |
 | leak | 158 | 1 |
-| double-free | 118 | 0 |
+| double-free | 119 | 0 |
 | codegen-gap | 100 | 0 |
 | run-vs-build | 98 | 0 |
 | missing-feature | 90 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 785 | 2 |
+| codegen | 786 | 2 |
 | typecheck | 150 | 3 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1087 surfaced · 6 open · 1070 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1088 surfaced · 6 open · 1071 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -147,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1087 surfaced
 
 </details>
 
-### Fixed (1070)
+### Fixed (1071)
 
-<details><summary>1070 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1071 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1280,7 +1280,26 @@ rejected, the operators and the real float methods left working, a user
 cross-check that the direct-method surface now agrees with the `T: Ord` bound
 surface. |
 | B-2026-08-11-1 | codegen+typecheck | high | a `Vec[char]` INDEX used directly as a method receiver (`cs[0].to_string()`) loses its `char` type and dispatches to the INTEGER method, so codegen s… | 7372313 (three root causes: the `char` name in register_var_from_type_expr, the Array element-TypeExpr fallback at the indexed-receiver site, and VecDeque in the typechecker's scalar index arm) |
-| B-2026-08-11-11 | typecheck | medium | a borrow-returning accessor's payload handed through `unwrap_or` (`m.get(k).unwrap_or(d)`, `v.get(i).unwrap_or(d)`) is an ALIAS of the container's st… | FIXED by bf43b275. `unwrap_or`'s PRESENT path now deep-clones the payload when the receiver is a borrow-returning accessor, so the result the caller owns is not the container's stored buffer. Reuses the match path's own shape gate -- split out of `borrow_get_payload_clone_te` as `borrow_payload_clone_te_gate` -- so the two paths agree on which payloads are safe to clone and how deep. Pins: e2e `test_e2e_borrow_accessor_unwrap_or_clones_heap_payload` (6 cases incl. the scalar and absent-key controls) and asan `asan_borrow_accessor_unwrap_or_clones_heap_payload`, both stash-proven red -- the ASAN one with an explicit double-free. |
+| B-2026-08-11-11 | typecheck | medium | TWO defects at the tuple receiver, filed together and NOT one bug: (a) tuple-index projection through a `ref` is rejected while the identical struct-… | FIXED by 3abdda1, in two independent places, because the row's "one root
+cause" guess was wrong (see the correction below).
+
+1. `src/typechecker/exprs.rs`, the `TupleIndex` arm now peels `Ref`/`MutRef`
+   before matching `Type::Tuple`, exactly as `infer_field_access` already did
+   for struct receivers. Projection yields the element's BY-VALUE type -- a read
+   through a borrow, not a reborrow -- so nothing downstream learns a new shape,
+   and the out-of-bounds arm still fires through the peel.
+
+2. `src/typechecker/expr_method_call.rs`, a tuple receiver reaching method
+   dispatch is now rejected `no method 'X' on type '(i64, i64)'`, and the
+   `to_string` intercept gained a `Type::Tuple` arm gated on every element being
+   Display -- typing the one method tuples actually have is what lets the
+   rejection land without taking it down too.
+
+Pins: three tests in `tests/typechecker.rs` -- projection through a ref
+(including nested, plus the surviving bounds check), method-existence checking
+on both by-value and ref tuples (plus all three poison-unification spellings),
+and `to_string` surviving AND being typed `String`. |
+| B-2026-08-11-12 | codegen | high | a borrow-returning accessor's payload handed through `unwrap_or` (`m.get(k).unwrap_or(d)`, `v.get(i).unwrap_or(d)`) is an ALIAS of the container's st… | FIXED by bf43b275. `unwrap_or`'s PRESENT path now deep-clones the payload when the receiver is a borrow-returning accessor, so the result the caller owns is not the container's stored buffer. Reuses the match path's own shape gate -- split out of `borrow_get_payload_clone_te` as `borrow_payload_clone_te_gate` -- so the two paths agree on which payloads are safe to clone and how deep. Pins: e2e `test_e2e_borrow_accessor_unwrap_or_clones_heap_payload` (6 cases incl. the scalar and absent-key controls) and asan `asan_borrow_accessor_unwrap_or_clones_heap_payload`, both stash-proven red -- the ASAN one with an explicit double-free. |
 
 </details>
 
