@@ -1244,3 +1244,135 @@ bounded cousin has already been built and reverted once, and this row is
 severity `low` — karac is still 7x faster than driftsort on sorted and
 reverse-sorted input and 1.85x on sawtooth. The measurement is the deliverable;
 the build is a separate decision with better information than it had before.
+
+## Direction 7 — the full-array stable partition: measured, and it works
+
+*2026-08-11. Budget-checked in the mirror before any emitter, same as
+Direction 6. Harness: `sortbench/mirror.rs`, mode `part`.*
+
+This is the shape § Direction 6 left standing, and the first of seven
+directions that improves the target pattern **without charging any other
+pattern for it**.
+
+    pattern         instructions              wall clock
+                    merge  -> partition       merge  -> partition
+    few-unique      49.7M  -> 19.8M   2.5x    6.377  -> 3.640 ms   1.75x
+    sawtooth        23.8M  -> 23.8M   1.00x   4.015  -> 4.398 ms
+    random          50.0M  -> 50.0M   1.00x   13.804 -> 12.273 ms
+    nearly-sorted   31.5M  -> 31.6M   1.00x   5.048  -> 5.203 ms
+    sorted           3.1M  ->  3.1M   1.00x   2.157  -> 2.218 ms
+    reverse          3.7M  ->  3.7M   1.00x   2.225  -> 1.974 ms
+
+Instructions on the five non-target patterns are unchanged **to three
+significant figures**, because on those inputs the algorithm *is* today's
+algorithm — see the gates below. Read the wall-clock column on those rows as
+noise and nothing else: it swings ±11% (random 13.804 → 12.273) against an
+identical instruction count, which is this shared 4-vCPU container's floor. The
+few-unique row is the one that matters, and there instructions and wall clock
+**agree in direction** — precisely what galloping failed to do.
+
+Across eight pivot seeds few-unique lands at 18.4 / 18.9 / 18.9 / 19.6 / 19.8 /
+19.9 / 21.1 / 22.4 M, so the honest figure is 2.2x–2.7x and the table above
+quotes the median. Against driftsort's 14.2 M the residual gap falls from
+**3.4x to ~1.4x**.
+
+### Why this one reduces passes when the bounded run-builder could not
+
+Same kernel as the reverted B-2026-08-10-20 attempt — a stable 2-way
+count-then-scatter partition into alternating buffers, borrowing phase 2's own
+scratch, so still no extra allocation. The inversion is *which end of the
+recursion it occupies*:
+
+    bounded (reverted)   merge ABOVE a span, partition BELOW it
+                         -> removes log2(span/RUN) passes off the bottom,
+                            and pays a partition's fixed per-range cost on
+                            ranges near its base size
+    full-array (this)    partition from n DOWN to a span, merge below
+                         -> removes the top passes, and every partition it
+                            performs is on a large range
+
+And it can **stop early**, which no merge can: when every element of a range
+compares equal to the pivot, that range is sorted *and* stable and is finished.
+That is the entire mechanism, and the instrumentation shows it firing exactly as
+the theory predicts — on few-unique, `partitions=12, all_equal_exits=8,
+merged=0`. Eight all-equal exits for eight distinct keys, and **not one merge
+pass over the array**.
+
+Two details the kernel needs, neither optional:
+
+- **The pivot must be randomised, not a fixed-position median-of-3.** Sampling
+  `lo`, `lo+len/2`, `hi-1` is degenerate on periodic input: on the sawtooth
+  (`i % 1000` repeated 150 times) those positions hold 0, 0 and 999, the median
+  is 0, and 0 is the range *minimum*, so each level peels off only the 150
+  copies of the minimum. Measured **2328.7 M instructions**, ~100x the merge.
+  Median-of-3-random samples fixes it. (The reverted emitter already specified
+  "pivot xorshift plus a 64-bit urem" — this is why.)
+- **One counting pass tallies both `< pivot` and `<= pivot`.** That lets the
+  split predicate be chosen without a second pass, and folds the old `t=1`
+  retry into the same pass: `nlt == 0` means the left block is exactly the
+  elements equal to the pivot, already sorted and stable, needing no recursion.
+
+### The two gates, each placed where it costs nothing
+
+An ungated partition is unshippable — it is 11–13x *worse* on sorted and
+reverse (3.1 M → 40.2 M, 3.7 M → 39.7 M) and 1.3–2.7x worse on random,
+sawtooth and nearly-sorted. Getting the gate free was most of the work, and two
+plausible placements both lose:
+
+    probe before phase 1   a full counting pass is ~1.3 M instructions, which is
+                           42% of sorted's entire 3.1 M. sorted -> 4.4 M,
+                           reverse -> 5.0 M. These are the patterns karac beats
+                           driftsort 7x on.
+    probe after phase 1    free for sorted/reverse, but few-unique goes 19.4 M
+                           -> 33.9 M: phase 1's RUN=32 insertion padding costs
+                           ~14.5 M on an input whose natural runs are ~2 long,
+                           and the partition then discards that work. 33.9 M is
+                           no better than the 34.25 M run-builder already
+                           rejected.
+
+So the entry decision must precede phase 1 **and** be O(1) in n. 256 random
+samples settle both halves of it:
+
+- **distinct keys among the sample** estimates cardinality — 8 true keys reads
+  8, 1000 reads 231, all-distinct reads 256;
+- **fraction of sampled adjacent pairs already in order** estimates what phase 1
+  would find — sorted 100%, nearly-sorted 99%, shuffled ~57–61%.
+
+Both are needed. Cardinality alone would partition an input that is *already
+sorted over few keys*, which phase 1 resolves in a single run.
+
+Inside the recursion the gate is exact and genuinely free: `part_once`'s
+counting pass has already computed `neq = nle - nlt`, the number of elements
+tying with a random pivot, so `len/neq` is an unbiased cardinality estimate
+**available before a single element is written**. A range that fails it
+abandons having moved no data, and the caller merges it exactly as today. So
+the decision is per-range, not a global mode: a mixed input partitions the part
+that pays and merges the part that does not.
+
+### Where the gate threshold actually belongs — measured, not assumed
+
+Sweeping cardinality with the partition forced on (`GATE=100000`), so the
+crossover is a property of the algorithms rather than of the gate:
+
+    distinct keys      2     8    32    64   128   256   512
+    merge          38.7M 49.7M 53.0M 52.0M 51.0M 50.5M 50.5M
+    partition       7.6M 22.4M 30.7M 36.8M 60.6M 64.8M 67.0M
+    ratio           5.1x  2.2x  1.7x  1.4x  0.84x 0.78x 0.75x
+
+The crossover is between 64 and 128 distinct keys. The analytic prediction is
+that partitioning wins while `2·log2(d) < log2(n/RUN) = 12.2` — two passes per
+level against the merge's one — i.e. `d < 68`. Measurement and arithmetic
+agree, which is the corroboration worth having before trusting either.
+
+`GATE = 64` therefore sits just on the winning side of a crossover it was not
+tuned to. The estimator undercounts at high cardinality (128 true keys read as
+108, 256 as 157) by ordinary coupon-collector shrinkage, which pushes the
+effective trigger down to a true `d ≲ 66` — conservative in the right
+direction.
+
+### What this leaves
+
+The budget check this row demanded is now positive: the design reaches
+18.4–22.4 M against a stated bar of "the low 20s of millions", it holds every
+other pattern at parity, and both of its gates are free. That is the
+information the emitter decision was waiting on.

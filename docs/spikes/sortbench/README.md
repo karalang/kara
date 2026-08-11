@@ -20,7 +20,7 @@ that cost is paid once.
 | `drift2.rs` | the Rust/driftsort baseline, input generator mirrored line-for-line |
 | `one.rs` | single-sort Rust driver, for instruction counting |
 | `ir.sh` | host-independent instruction counts via callgrind |
-| `mirror.rs` | faithful Rust mirror of karac's own sort algorithm, `plain` vs `gallop`, for budget-checking a merge-side change without writing an emitter |
+| `mirror.rs` | faithful Rust mirror of karac's own sort algorithm — `plain` vs `gallop` vs `part` — for budget-checking a candidate change without writing an emitter |
 
 ## Running it
 
@@ -33,16 +33,32 @@ rustc -O -o one one.rs && ./ir.sh drift     # driftsort instructions
 
 rustc -O -o mirror mirror.rs                # the algorithm mirror
 ./mirror few_unique plain                   # correctness (asserts sorted AND stable)
-./mirror few_unique time                    # plain vs gallop wall clock
+./mirror few_unique time                    # plain vs gallop vs part wall clock
+./mirror few_unique stats                   # did the mechanism actually fire?
+GATE=100000 ./mirror k128 part              # force partitioning, ignore the gate
 ```
+
+`mirror.rs` knobs, all environment variables: `SPAN` (partition hands off to the
+merge below this size), `GATE` (partition only when estimated distinct keys
+<= this; `0` disables both gates), `ORDERED` (merge when this % of sampled
+adjacent pairs are already ordered), `SEED` (pivot stream — few-unique moves
+18.4-22.4M across seeds, so quote a range, not one run). Patterns `k2`, `k64`,
+`k512`, ... are "N distinct keys, shuffled", for sweeping the cardinality axis.
 
 **Use `mirror.rs` before writing an emitter.** It runs karac's own algorithm on
 the real input, so a candidate merge-side change can be measured — instructions
 *and* wall clock — in minutes rather than after ~500 lines of IR emission. Its
 own validation is the same checksum below: `plain` must land within ~10% of
-karac. It is also the reason the galloping direction was refuted cheaply
-(spike § Direction 6), and its stability assertion caught a real bug in that
+karac. It is the reason the galloping direction was refuted cheaply (spike
+§ Direction 6) and the full-array stable partition was confirmed cheaply
+(§ Direction 7), and its stability assertion has already caught a real bug in a
 prototype that produced correctly *sorted* output on every pattern.
+
+**`stats` mode exists because "it compiled" is not evidence the mechanism
+fired.** It reports partition count, elements partitioned, all-equal early
+exits, gate abandonments and parity copies. On few-unique the partition shows
+`all_equal_exits=8` against 8 distinct keys and `merged=0` — that correspondence
+is what makes the result trustworthy rather than a number that came out low.
 
 ## Method, and why each piece is there
 
