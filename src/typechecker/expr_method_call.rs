@@ -5872,11 +5872,51 @@ impl<'a> super::TypeChecker<'a> {
                         .unwrap_or(false);
                     struct_display || enum_display
                 }
+                // A tuple renders when every element does (B-2026-08-11-11).
+                // `to_string` was the ONE method that worked on a tuple, but it
+                // was not typed here — it fell through to the poison branch and
+                // merely happened to have a runtime dispatch arm, so
+                // `let n: i64 = t.to_string()` type-checked just as readily as
+                // the `String` binding. Typing it is what lets the arm below
+                // reject every other name without taking the one that works
+                // down with it.
+                Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_display(e)),
                 _ => false,
             };
             if is_display_named {
                 return Type::Str;
             }
+        }
+        // A TUPLE receiver reaching this point has no method (B-2026-08-11-11).
+        // Tuples were the last receiver kind still on the unconditional
+        // silent-poison fall-through that `char`/`bool` left in B-2026-08-11-2:
+        // `method_callee_type_name` returns `None` for `Type::Tuple`, so the
+        // scalar-primitive arm below skips them entirely and EVERY call
+        // poisoned to `Type::Error` — universally assignable, so
+        // `let s: String = t.bogus()` type-checked clean and the program then
+        // died in the backend. Their whole surface is `to_string`, typed by the
+        // intercept directly above, so anything still here is a typo.
+        //
+        // This is placed AFTER every legitimate intercept rather than in the
+        // arm below, because that arm is keyed on `method_callee_type_name`
+        // and a tuple has no name to look up. Giving it one would also feed the
+        // `method_callee_types` side-table that codegen's `dispatch_key` reads,
+        // pointing dispatch at a name no impl can ever be registered under —
+        // an early return keeps the fix inside the typechecker.
+        if matches!(&receiver_for_lookup, Type::Tuple(_)) {
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            self.type_error(
+                format!(
+                    "no method '{}' on type '{}'",
+                    method,
+                    type_display(&receiver_for_lookup)
+                ),
+                span.clone(),
+                TypeErrorKind::NoMethodFound,
+            );
+            return Type::Error;
         }
         let (type_name, type_args) = match &receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),

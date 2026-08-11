@@ -14599,6 +14599,105 @@ fn test_generic_ord_bound_still_gates_floats_the_same_way() {
 }
 
 #[test]
+fn test_tuple_index_projects_through_a_ref() {
+    // B-2026-08-11-11. `.0` on a `ref (i64, i64)` and `.a` on a `ref P` are the
+    // same operation on two aggregate kinds, but only the struct side peeled the
+    // borrow, so the value `Vec.get(i).unwrap()` returns was unusable — and
+    // `get` is the safe accessor the language steers people toward over
+    // indexing. Projection yields the element's BY-VALUE type, matching
+    // `infer_field_access`.
+    typecheck_ok(
+        "fn main() {
+             let mut v: Vec[(i64, i64)] = Vec.new();
+             v.push((7, 8));
+             let e = v.get(0).unwrap();
+             let a: i64 = e.0;
+             let b: i64 = e.1;
+             let _ = a + b;
+         }",
+    );
+    // Nested, so the peel is not just a one-level special case.
+    typecheck_ok(
+        "fn main() {
+             let mut v: Vec[(i64, (i64, i64))] = Vec.new();
+             v.push((1, (7, 8)));
+             let e = v.get(0).unwrap();
+             let n: i64 = e.1.0;
+             let _ = n;
+         }",
+    );
+    // The bounds check still fires through the borrow — the peel must not
+    // swallow the out-of-range arm.
+    let errors = typecheck_errors(
+        "fn main() {
+             let mut v: Vec[(i64, i64)] = Vec.new();
+             v.push((7, 8));
+             let e = v.get(0).unwrap();
+             let _ = e.5;
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("out of bounds")),
+        "expected the out-of-bounds arm to survive the ref peel, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_tuple_receiver_gets_method_existence_checking() {
+    // B-2026-08-11-11. Tuples were the last receiver kind on the unconditional
+    // silent-poison fall-through that `char`/`bool` left in B-2026-08-11-2:
+    // `method_callee_type_name` returns `None` for `Type::Tuple`, so the
+    // scalar-primitive arm skipped them and EVERY call poisoned to
+    // `Type::Error` — universally assignable, hence the second half here.
+    for src in [
+        "fn main() { let t = (7, 8); let _ = t.completely_bogus(); }",
+        "fn main() { let mut v: Vec[(i64,i64)] = Vec.new(); v.push((7,8)); \
+         let _ = v.get(0).unwrap().clone(); }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("no method") && e.message.contains("(i64, i64)")),
+            "expected a NoMethodFound naming the tuple type, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    // The poison was universally assignable, which is what made it dangerous:
+    // every one of these type-checked clean before the fix.
+    for ann in ["String", "i64", "Vec[i64]"] {
+        let errors = typecheck_errors(&format!(
+            "fn main() {{ let t = (7, 8); let x: {ann} = t.bogus(); let _ = x; }}"
+        ));
+        assert!(
+            !errors.is_empty(),
+            "`let x: {ann} = t.bogus()` must not typecheck"
+        );
+    }
+}
+
+#[test]
+fn test_tuple_to_string_survives_and_is_typed() {
+    // The guard on the rejection above: `to_string` is the ONE method a tuple
+    // has, and it was not typed either — it fell through to the same poison
+    // branch and merely happened to have a runtime dispatch arm. Typing it is
+    // what lets the rejection land without taking the working method with it,
+    // so both halves are pinned: it still resolves, AND it is now `String`
+    // rather than poison.
+    typecheck_ok("fn main() { let t = (7, 8); let s: String = t.to_string(); let _ = s; }");
+    let errors =
+        typecheck_errors("fn main() { let t = (7, 8); let n: i64 = t.to_string(); let _ = n; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'i64'") && e.message.contains("String")),
+        "tuple to_string must be typed String, not poison, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_abs_on_signed_and_float_typechecks() {
     // `abs` is a built-in value-receiver method on signed-integer and float
     // primitives, typed as `-> Self`. It must NOT trip the numeric

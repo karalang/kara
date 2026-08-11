@@ -3535,6 +3535,24 @@ impl<'a> super::TypeChecker<'a> {
 
             ExprKind::TupleIndex { object, index } => {
                 let obj_ty = self.infer_expr(object);
+                // Project through a borrow, exactly as `infer_field_access`
+                // does for a struct receiver (B-2026-08-11-11). `.0` on a
+                // `ref (i64, i64)` and `.a` on a `ref P` are the same
+                // operation on two aggregate kinds, but only the struct side
+                // peeled, so `v.get(i).unwrap().0` on a `Vec[(i64,i64)]` was
+                // rejected `tuple index on non-tuple type 'ref (i64, i64)'`
+                // while the struct spelling type-checked. `Vec.get` is the
+                // safe accessor the language steers people toward over
+                // indexing, so the shape it returns has to be usable; the
+                // workaround was to abandon `get` for `v[i].0`.
+                //
+                // Like the field case, the projection yields the element's
+                // BY-VALUE type — a read through a borrow, not a reborrow —
+                // so nothing downstream has to learn a new shape.
+                let obj_ty = match &obj_ty {
+                    Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                    _ => obj_ty,
+                };
                 match &obj_ty {
                     Type::Tuple(types) => {
                         let idx = *index as usize;
