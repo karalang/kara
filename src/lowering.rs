@@ -803,7 +803,6 @@ impl<'a> Lowerer<'a> {
         // The direct-terminal desugar below keys `method_callee_types` by the
         // method-call span (== the receiver's span in this AST) — capture it
         // before the kind borrow.
-        let expr_span = expr.span.clone();
         // Recurse into sub-expressions first.
         match &mut expr.kind {
             ExprKind::Binary { left, right, .. } => {
@@ -864,8 +863,10 @@ impl<'a> Lowerer<'a> {
                 object,
                 args,
                 method,
+                args_close_span,
                 ..
             } => {
+                let args_close_span = args_close_span.clone();
                 self.lower_expr(object);
                 for a in args {
                     self.lower_expr(&mut a.value);
@@ -884,23 +885,32 @@ impl<'a> Lowerer<'a> {
                 // an unrecorded span is left alone (codegen's loud dispatch
                 // error stays the fail-closed path).
                 if matches!(method.as_str(), "sum" | "product" | "max" | "min") {
-                    // `expr_types` can't answer "what is the receiver" here —
-                    // a MethodCall shares its receiver's span, so that map
-                    // holds whichever type was recorded last (usually the
-                    // call's result). `method_callee_types` exists precisely
-                    // for this: receiver type NAME keyed by the method-call
-                    // span.
+                    // Ask the typechecker's routing arm directly rather than
+                    // re-deriving its decision from a receiver-type name.
+                    //
+                    // B-2026-08-11-19: this used to read
+                    // `method_callee_types[SpanKey::from_span(expr_span)]` and
+                    // test for a "Vec"/"VecDeque" head. That map is keyed by
+                    // the call's own span, which the parser sets equal to the
+                    // RECEIVER's span — so every call in a chain collapses to
+                    // one key and the last write wins. For
+                    // `xs.max().unwrap().to_string()` the entry ended up
+                    // `i64.to_string`, the head test failed, no `.iter()` was
+                    // inserted, and both backends then reported the raw `max`
+                    // as an unsupported method — blaming `max`, which was
+                    // fine, for a defect in the surrounding chain. Nothing
+                    // about the concat in the original report mattered; one
+                    // extra chained call was enough.
+                    //
+                    // `direct_iter_terminals` is keyed by the closing-paren
+                    // span, a leaf no outer expression aliases, and is
+                    // populated at the one place that actually makes the
+                    // Vec/VecDeque narrowing decision — so the two sides can
+                    // no longer disagree about it.
                     let recv_is_iterable_collection = self
                         .tc
-                        .method_callee_types
-                        .get(&SpanKey::from_span(&expr_span))
-                        .is_some_and(|n| {
-                            // Entries are "Type.method" — match the receiver head.
-                            // Vec/VecDeque only — sorted collections keep
-                            // their own min/max surfaces (see the typecheck
-                            // routing arm's narrowing note).
-                            matches!(n.split('.').next().unwrap_or(""), "Vec" | "VecDeque")
-                        });
+                        .direct_iter_terminals
+                        .contains(&SpanKey::for_method_call(&object.span, &args_close_span));
                     if recv_is_iterable_collection {
                         let recv_span = object.span.clone();
                         let inner = std::mem::replace(

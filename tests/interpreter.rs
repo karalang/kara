@@ -31735,3 +31735,26 @@ fn split_at_mut_past_the_end_panics_rather_than_clamping() {
         "2 0"
     );
 }
+
+#[test]
+fn direct_vec_iterator_terminals_survive_being_chained() {
+    // B-2026-08-11-19, interpreter leg. The desugar of `v.max()` into
+    // `v.iter().max()` is shared by both backends, and its gate used to be
+    // keyed by the call's own span — which the parser sets equal to the
+    // receiver's, so a chain collapsed to one key and the last write won. One
+    // extra chained call then skipped the rewrite and the interpreter reported
+    // "method 'max' not found on type 'Vec' (no interpreter dispatch arm)",
+    // blaming a method that was fine.
+    assert_eq!(
+        run("fn main() {\n\
+                 let xs: Vec[i64] = [1, 5, 3];\n\
+                 println(xs.max().unwrap());\n\
+                 println(\"max=\" + xs.max().unwrap().to_string());\n\
+                 let s = xs.min().unwrap().to_string();\n\
+                 println(s);\n\
+                 println(\"sum=\" + xs.sum().to_string());\n\
+                 println(\"prod=\" + xs.product().to_string());\n\
+             }\n"),
+        "5\nmax=5\n1\nsum=9\nprod=15\n"
+    );
+}

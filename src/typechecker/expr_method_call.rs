@@ -3859,6 +3859,19 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(item_ty) = vec_like_item {
+                // B-2026-08-11-19: tell the lowering desugar, from here, that
+                // THIS call is a direct-on-collection terminal. It used to
+                // re-derive that by reading `method_callee_types[span]` back —
+                // but `span` is the receiver's span (see this function's
+                // `args_close_span` doc), so every call in a chain shares one
+                // key and the last write wins. `xs.max().unwrap().to_string()`
+                // therefore recorded `i64.to_string` over `Vec.max`, the gate
+                // saw a non-Vec head, no `.iter()` was inserted, and both
+                // backends reported the raw `max` as an unsupported method.
+                // Keyed on the closing paren, which is a leaf span no outer
+                // expression aliases.
+                self.direct_iter_terminals
+                    .insert(SpanKey::for_method_call(&object.span, args_close_span));
                 return self.infer_iterator_method(&item_ty, method, args, span, false);
             }
         }

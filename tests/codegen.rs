@@ -22407,6 +22407,65 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_direct_vec_iterator_terminals_survive_being_chained() {
+        // B-2026-08-11-19 — `v.max()` / `.min()` / `.sum()` / `.product()`
+        // without an `.iter()` hop are desugared to the `.iter().<terminal>()`
+        // chain the backends implement. The desugar's gate used to read a
+        // side-table keyed by the call's own span — which the parser sets equal
+        // to the RECEIVER's span, so every call in a chain collapses to one key
+        // and the last write wins. One extra chained call was enough to
+        // overwrite `Vec.max` with `i64.to_string`; the gate then saw a non-Vec
+        // head, skipped the rewrite, and both backends reported the raw `max`
+        // as an unsupported method — blaming `max`, which was fine.
+        //
+        // Each line below chains at least one further call onto the terminal,
+        // which is the shape that used to fail. The bare form is included as
+        // the control: it always worked, so a regression there means the
+        // desugar broke rather than the key.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let xs: Vec[i64] = [1, 5, 3];\n\
+                     println(xs.max().unwrap());\n\
+                     println(\"max=\" + xs.max().unwrap().to_string());\n\
+                     let s = xs.min().unwrap().to_string();\n\
+                     println(s);\n\
+                     println(\"sum=\" + xs.sum().to_string());\n\
+                     println(\"prod=\" + xs.product().to_string());\n\
+                     let mut d: VecDeque[i64] = VecDeque.new();\n\
+                     d.push_back(4);\n\
+                     d.push_back(9);\n\
+                     println(\"dmax=\" + d.max().unwrap().to_string());\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("5\nmax=5\n1\nsum=9\nprod=15\ndmax=9\n"),
+        );
+    }
+
+    #[test]
+    fn test_e2e_sorted_set_min_max_still_bypass_the_iterator_desugar() {
+        // The other side of B-2026-08-11-19's gate. SortedSet/SortedMap keep
+        // their OWN min/max surfaces and must NOT be rewritten into an
+        // `.iter()` chain — the desugar is narrowed to Vec/VecDeque receivers,
+        // and moving the narrowing decision into the typechecker (where it is
+        // actually made) must not have widened it.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut s: SortedSet[i64] = SortedSet.new();\n\
+                     s.insert(4);\n\
+                     s.insert(9);\n\
+                     println(\"mx=\" + s.max().unwrap().to_string());\n\
+                     println(\"mn=\" + s.min().unwrap().to_string());\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("mx=9\nmn=4\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_vec_sort_by_partition_path_low_cardinality() {
         // B-2026-08-11-10 § Direction 7 — above the entry probe's length floor,
         // a low-cardinality `sort_by` leaves the merge entirely and takes the
