@@ -45795,4 +45795,64 @@ fn main() with reads(FileSystem) {{
             "file_nested_vec_closed",
         );
     }
+
+    /// B-2026-08-11-30 LEG B, tightened. A fresh-temp `Result[S, E]` passed BY
+    /// VALUE leaks every `Vec` field of the `Ok` payload struct — one
+    /// allocation per Vec field, the Vec's own buffer, regardless of element
+    /// count. `String` fields of the same struct are freed correctly.
+    ///
+    /// The callee here IGNORES its parameter entirely, which is the point: the
+    /// row filed this as needing a `match` and a second heap field, and neither
+    /// is required. `#[ignore]`d rather than deleted so the repro is runnable
+    /// (`cargo test --features llvm --test memory_sanitizer -- --ignored`)
+    /// instead of living only in ledger prose.
+    #[test]
+    #[ignore = "B-2026-08-11-30 leg B: fresh-temp Result[struct-with-Vec] param leaks the Vec buffer"]
+    fn asan_result_temp_param_leaks_vec_field() {
+        assert_clean_asan_run(
+            r#"
+enum E { Missing(String) }
+struct S { b: Vec[String] }
+fn mk() -> Result[S, E] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("x");
+    return Ok(S { b: v });
+}
+fn take(r: Result[S, E]) { println("got"); }
+fn main() { take(mk()); println("end"); }
+"#,
+            &["got", "end"],
+            "result_temp_param_vec_field",
+        );
+    }
+
+    /// B-2026-08-11-30 LEG A. A `Map` field of the same shape leaks when the
+    /// `Result` is LET-BOUND before the match — the opposite polarity from leg
+    /// B, and the reason the row keeps them as two legs. Matching the call
+    /// inline is clean.
+    #[test]
+    #[ignore = "B-2026-08-11-30 leg A: let-bound Result[struct-with-Map] leaks on match"]
+    fn asan_result_let_bound_leaks_map_field() {
+        assert_clean_asan_run(
+            r#"
+enum E { Missing(String) }
+struct S { a: Map[String, i64] }
+fn mk() -> Result[S, E] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("k", 1);
+    return Ok(S { a: m });
+}
+fn main() {
+    let r = mk();
+    match r {
+        Ok(s) => println(f"{s.a.len()}"),
+        Err(_e) => println("err"),
+    }
+    println("end");
+}
+"#,
+            &["1", "end"],
+            "result_let_bound_map_field",
+        );
+    }
 }
