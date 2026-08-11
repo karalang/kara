@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 88 | 0 |
 | perf | 62 | 1 |
 | false-positive | 58 | 0 |
-| diagnostics | 46 | 0 |
+| diagnostics | 47 | 1 |
 | soundness | 41 | 0 |
 | crash | 41 | 0 |
 | other | 24 | 0 |
@@ -119,14 +119,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
-| parser | 12 | 0 |
+| parser | 13 | 1 |
 | lexer | 4 | 0 |
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1080 surfaced · 5 open · 1065 fixed** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1081 surfaced · 6 open · 1065 fixed** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1080 surfaced
 | B-2026-08-11-1 | 2026-08-11 | codegen | high | a `Vec[char]` INDEX used directly as a method receiver (`cs[0].to_string()`) loses its `char` type and dispatches to the INTEGER method, so codegen silently prints `120` where the interpreter prints `x` -- the same root gap hard-errors on `VecDeque[char]` and `Array[char, N]` | the indexed-receiver element-TypeExpr lookup in `compile_method_call` (src/codegen/method_call.rs) -- the same resolution B-2026-08-10-13 fixed for sort_by comparator params, still missing for an index expression used directly as a receiver |
 | B-2026-08-11-3 | 2026-08-11 | codegen | medium | a GENERIC struct with a `Vec[T]` field monomorphized at `T = Vec[i64]` never drains its elements' buffers at drop -- every unconsumed element leaks its whole buffer, while the identical NON-generic `struct Holder { items: Vec[Vec[i64]] }` is clean and `Stack[String]` is clean | `emit_struct_drop_synthesis_mono` / the `Vec[T]` field element resolution it drives (src/codegen/synth_drop.rs) -- resolves a bare-T monomorph to `String` correctly, not to a nested `Vec` |
 | B-2026-08-11-4 | 2026-08-11 | typecheck | low | `v.cast()` on ANY primitive receiver passes `karac check` and then fails at run time -- `cast` sits on the PRIMITIVE_VALUE_METHODS exemption but is not implemented on any backend, so the exemption guards nothing and only holds the hole open | the PRIMITIVE_VALUE_METHODS list in src/typechecker/expr_method_call.rs |
+| B-2026-08-11-5 | 2026-08-11 | parser | high | EVERY parse-phase diagnostic raised inside an f-string interpolation hole is DISCARDED. Two consequences: (a) a hard syntax error degrades SILENTLY to literal text -- `println(f"typo={n.}")` passes `karac check` and prints `typo={n.}` on all three backends; (b) recoverable errors go unenforced -- `f"{takes(ref xs)}"` compiles clean while the identical call outside an f-string is a hard parse error. | src/parser/exprs.rs:771 -- `let result = crate::parse(&wrapper);` consumes only `result.program.items`; `result.errors` and `result.fix_edits` are dropped on the floor. |
 
 ### Fixed (1065)
 
