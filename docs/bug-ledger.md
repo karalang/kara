@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 232 | 1 |
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
-| codegen-gap | 102 | 2 |
+| codegen-gap | 102 | 1 |
 | run-vs-build | 100 | 1 |
 | missing-feature | 90 | 0 |
 | perf | 63 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 792 | 3 |
+| codegen | 792 | 2 |
 | typecheck | 152 | 1 |
 | interp | 137 | 2 |
 | ownership | 44 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1096 surfaced · 4 open · 1081 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1096 surfaced · 3 open · 1082 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-17 | 2026-08-11 | interp | high | The INTERPRETER's `sort_by_key` with a float key returns a COMPLETELY UNSORTED sequence when a NaN is present, while both compiled backends sort correctly with NaN last. Measured on one program, `[3.5, NaN, 1.2, -2.0, 2.7].sort_by_key(|x| x)`: interp gives `3.5 NaN -2 1.2 2.7` (not sorted in any order -- 3.5 stays first), JIT and AOT both give `-2 1.2 2.7 3.5 NaN`. A silent wrong answer AND a run-vs-build divergence. The typechecker deliberately ALLOWS float keys here (stdlib_seq.rs documents the concession) on the grounds that the backends implement bit-level total-order semantics via `karac_float_cmp` -- that is true of codegen and NOT of the interpreter, which appears to use IEEE partial comparison, so NaN makes its sort incoherent. A shipped codegen test (test_e2e_vec_sort_by_key_float_nan_sorts_largest) pins the COMPILED behaviour on this exact input; the interpreter side was never asserted, which is why this survived. | interpreter float ordering |
-| B-2026-08-11-18 | 2026-08-11 | codegen | medium | Chained field access on an Option-unwrap TEMPORARY fails in codegen while working in the interpreter: `get().unwrap().x` where `get() -> Option[P]` errors with 'codegen: cannot resolve field 'x' on this receiver (its type was not recorded for codegen)'. Reproduces with a plain `struct P { x: i64 }` -- no iterator, no generics, no float wrapper. Binding the unwrap first (`let p: P = get().unwrap(); p.x`) compiles and runs correctly on all three backends, so the gap is specifically the un-bound temporary receiver. A loud failure rather than a silent one, but still a run-vs-build divergence: the interpreter prints 5 and codegen refuses to build. | codegen field access |
 | B-2026-08-11-19 | 2026-08-11 | interp+codegen | medium | The DIRECT-on-Vec iterator terminals (`v.max()` / `v.min()`, desugared to the `.iter()` chain) are POSITION-SENSITIVE: they compile in statement/argument position but FAIL when the call is nested inside a string-concat expression. Measured on `let fs: Vec[f64] = [1.5, 2.5, 0.5]`: `println(fs.max().unwrap())` answers 2.5 on interp / JIT / AOT, while `println("max=" + fs.max().unwrap().to_string())` fails on BOTH backends -- interp 'runtime error: method 'max' not found on type 'Vec' (no interpreter dispatch arm)', codegen 'Vec/String method 'max' is not yet supported in codegen'. Both backends agree, so this is a gap rather than a divergence, but the DIAGNOSTIC IS ACTIVELY MISLEADING: it blames `max` for not existing when `max` is fine and the problem is the surrounding expression shape. | direct-Vec iterator terminals |
 | B-2026-08-11-20 | 2026-08-11 | typecheck+codegen | low | `f64.to_bits()` is declared `-> u64` by the typechecker but its value renders as a SIGNED i64 on all three backends: `(-1.0).to_bits()` prints -4616189618054758400 rather than 13830554455654793216 (0xBFF0000000000000). Consistent across interp / JIT / AOT, so not a divergence -- the declared type and the printed value simply disagree whenever the high bit is set, i.e. for every negative float. | float bit introspection |
 
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1096 surfaced
 
 </details>
 
-### Fixed (1081)
+### Fixed (1082)
 
-<details><summary>1081 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1082 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1725,6 +1724,79 @@ now give the right answer, as does the original 648-case harness this was found
 in (`combinations=648`, was 0). Full `cargo test --features llvm` green; ASAN
 clean at the default level and on the `-O0` leg. Also re-ran the sort sweep the
 harness was built for: 648 combinations, 0 failures. |
+| B-2026-08-11-18 | codegen | medium | Chained field access on an Option-unwrap TEMPORARY fails in codegen while working in the interpreter: `get().unwrap().x` where `get() -> Option[P]` e… | FIXED by e23bf9e, in `src/codegen/expr_ops.rs`.
+
+`type_name_of_expr`'s `MethodCall` arm gains the UNWRAPPING siblings, and a new
+`unwrap_receiver_inst` resolves the receiver's wrapper instantiation with
+generic args intact.
+
+ROOT CAUSE, and it is a deliberate exclusion rather than an oversight.
+B-2026-08-09-7 taught this same arm the wrapper-PRESERVING combinators
+(`map`/`map_err`/`and_then`/`or_else`/`filter`), which return the receiver's own
+type, and its comment explicitly lists the unwrapping siblings as NOT covered
+because they return the PAYLOAD -- for which `recv_ty` ("Option") is the wrong
+answer. That reasoning was right. What was missing is the payload's own name,
+which needs the receiver's generic ARGS, and `fn_return_type_names` keeps only
+the bare head segment. The full-TypeExpr table (`fn_return_type_exprs`) already
+existed for exactly this reason -- `declare_function`'s comment names the
+`Option[T]` / `Result[T, E]` generic arg it recovers -- it was simply never
+consulted from this path.
+
+Two parts:
+
+1. `unwrap_payload_idx` -- which generic arg the method returns. Arg 0 for
+   `unwrap` / `expect` / `unwrap_or` / `unwrap_or_else` (`T` in both
+   `Option[T]` and `Result[T, E]`); arg 1 for `unwrap_err` (`E`, `Result`-only
+   -- `Option` has no error arm). `map_or` / `map_or_else` are excluded because
+   they return the CLOSURE's result, which the receiver's instantiation does
+   not name at all. The lookup sits after the `fn_return_type_names` probe, so
+   a user type named `Option` with its own `unwrap` still wins.
+
+2. `unwrap_receiver_inst` -- the receiver's instantiation. A CALL receiver
+   resolves through the callee's declared return TypeExpr, and that probe runs
+   FIRST, before `enum_inst_type_of_expr`, whose last resort is a span lookup:
+   the parser gives a `MethodCall` its RECEIVER's span, the collision
+   B-2026-08-06-19, -12 and B-2026-08-05-28 all trace to, so consulting it
+   first on a call receiver risks a neighbouring record instead of a clean
+   miss. An IDENTIFIER receiver still goes through `enum_inst_var_types`.
+
+THE ROW'S CHARACTERIZATION WAS TOO BROAD and the correction matters, because it
+is what localizes the bug. The row said "the gap is specifically the un-bound
+temporary receiver". Measured, it is not about temporaries at all:
+`plain().x` (a struct-returning fn) and `P { x: 11 }.x` (a struct literal) are
+both un-bound temporaries and both always compiled, and
+`get().unwrap().double()` -- a METHOD call on the very same receiver -- also
+always worked, because method dispatch resolves through a different path. Only
+FIELD access on an unwrap-family result failed. All three are carried in the
+test as live controls.
+
+TWO THINGS THE ADVERSARIAL PASS CHANGED, both found by trying to break the fix
+rather than by confirming it:
+
+  * `unwrap_err` was excluded in the first version, on the reasoning that its
+    payload sits at a different index. That was SAFE -- it failed loudly rather
+    than resolving wrongly -- but it left the same gap one method over, so the
+    index was made method-dependent instead. This is the case worth being
+    careful about: answering arg 0 for `unwrap_err` would read `T`'s field
+    layout out of an `E` value, a miscompile rather than a failed lookup.
+    `Result[P, Q]` with `Err(Q { y: 99 })` reading 99 is the assertion that
+    pins it.
+  * The nested `Option[Option[P]]` chain failed, because the intermediate
+    payload is itself a wrapper and the first gate admitted only structs.
+    `unwrap_receiver_inst` now recurses through a chained unwrap, and the gate
+    admits `enum_layouts` too. The recursion lives in the instantiation
+    resolver rather than the name lookup on purpose: the next link needs the
+    full `Option[P]`, and a head name would drop the `[P]`.
+
+MEASURED on interpreter / JIT / AOT, all identical: single unwrap 6, `expect`
+6, `unwrap_or` 6, `Result` Ok 10, `unwrap_err` 100, nested chain 43, identifier
+receiver 4, plus the three controls. Before the fix the six chained forms
+failed `karac build` while the interpreter ran every one of them.
+
+Test: `e2e_chained_field_access_on_option_result_unwrap` (tests/codegen.rs),
+on the default codegen leg because the divergence is run-vs-build. Full
+`--features llvm` suite green (102 targets, 13431 passed); fmt and clippy
+--all-targets clean. |
 
 </details>
 
