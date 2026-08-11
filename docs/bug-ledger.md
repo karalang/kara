@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 234 | 1 |
+| miscompile | 234 | 0 |
 | leak | 160 | 2 |
 | double-free | 120 | 1 |
 | codegen-gap | 103 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 801 | 6 |
+| codegen | 801 | 5 |
 | typecheck | 152 | 0 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
-| autopar | 40 | 1 |
+| autopar | 40 | 0 |
 | other | 37 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1106 surfaced · 6 open · 1089 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1106 surfaced · 5 open · 1090 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-24 | 2026-08-11 | codegen | high | A String EQUALITY comparison between an unbound TEMPORARY and a `ref String` PARAMETER leaks the temporary, every evaluation. `hay.substring(0, 4) == needle` inside `fn f(hay: ref String, needle: ref String)` leaks; the same comparison against a LOCAL, or with the temp `let`-bound first, or with an OWNED `String` param, is clean. The leak is unbounded in input size -- the ordinary `substring(i, i+n) == needle` scan loop leaks one allocation per iteration. | the String `==`/`!=` lowering in codegen (the operand-cleanup decision). NOT the RC-elision hint and NOT optimization-dependent -- both ruled out by measurement, see detail. |
 | B-2026-08-11-25 | 2026-08-11 | codegen | high | DOUBLE FREE on both compiled backends: a heap field of a struct held as a Vec ELEMENT, read back by ASSIGNMENT to an existing binding (`out = stats[0].region`), aborts with `free(): double free detected in tcache 2`. The `let` form of the same read is clean (that leg was fixed), a plain struct BINDING is clean, and a tuple element is clean -- it is specifically the Vec-element + assignment pair. `karac check` passes and the interpreter is correct. | the field-move-out cap-zeroing path for an ASSIGNMENT whose source is `<vec>[i].<heapfield>`. Family: B-2026-08-03-8 / B-2026-08-01-31 fixed the `let x = h.f` form; B-2026-08-04-19 is the precedent for an assignment twin of a fixed `let` bug. |
-| B-2026-08-11-27 | 2026-08-11 | autopar+codegen | high | NONDETERMINISTIC SILENT WRONG ANSWER on the DEFAULT `karac build`: a 13-line program that overwrites a `Vec[Tensor]` element through a `shared struct` (`s.grads[0] = old + g`) prints `0` instead of `1` on ~2% of runs and SEGVs on ~1.3%, measured over 300 runs of one binary. Auto-par is the trigger — `KARAC_AUTO_PAR=0` is 0 failures in 200 — and the crashing frame is `karac_clone_Tensor_f32` inside `__par_branch_0_1` on a runtime worker thread. The wrong answer is the worse half: the program exits 0 and lies | the auto-par admission decision for `go(s)`'s body and the `Tensor` element clone it hoists into `__par_branch_0_1` — the ASAN frame is `karac_clone_Tensor_f32` called from `__par_branch_0_1` on a `karac_runtime::worker_loop` thread, so the question is why this body was admitted, not how the clone is emitted. Start at the three auto-par admission changes in the window: 7fe2b6dd (2026-08-11, induction-step skip tied to the loop counter by name), 4e01841e (2026-08-08, a closure call writes what the closure captured), eb21d86e (2026-08-05, auto-par admits `frozen` values). NOT bisected — see the detail. |
 | B-2026-08-11-28 | 2026-08-11 | codegen | low | RESIDUAL of B-2026-08-10-9, split out per the live-remainder rule: on SHUFFLED-UNIFORM input the mono `sort_by` is still ~1.6x Rust's driftsort. 50a50e8 replaced the fixed-32-run merge sort with a natural-run merge sort, which was the right fix and moved the ORDERED patterns enormously (sorted and reverse went from 39-54x behind to roughly 2x AHEAD -- measured here at 0.47x and 0.52x). It deliberately did not move the shuffled case, and the closing note records that in its own numbers: `random 14.91 -> 14.60 ms (UNCHANGED)`, because shuffled input has ~2-element natural runs so the RUN padding reproduces the old run length and the old pass count. MEASURED FRESH (hyperfine, 10 runs each, clone subtracted via an identical kernel minus the sort call; 25 rounds x 150k (i64,i64) pairs, x86 container): kara pure sort 260.6 ms vs rust 159.0 ms = 1.64x. Same kernel by pattern: shuffled 1.51x total / 1.64x pure, sorted 0.47x, reverse 0.52x. SEVERITY LOW deliberately -- shuffled-uniform is the regime where an adaptive sort has least to exploit, driftsort is a strong baseline, and 1.6x on the hardest pattern while beating it 2x on ordered input is a defensible place to sit. Filed so the remainder is visible in the work queue rather than only inside a closed row's prose, NOT as a claim that it must be closed. CAVEAT: single host, x86_64 shared container, not the canonical Apple-silicon bench host. NEXT STEP if picked up: compare the emitted merge inner loop against driftsort's on shuffled input; the run-detection phase is already known not to help there, so any remaining gap is in the merge itself. | mono sort_by lowering (natural-run merge sort, 50a50e8) |
 | B-2026-08-11-29 | 2026-08-11 | codegen | high | SEGV (exit 139) on a DEFAULT `karac build`: a struct with a `Map`/`Set` field, bound out of a `Result`'s `Ok(..)` match arm and then passed BY VALUE to a function, dereferences a wild pointer in `karac_map_free_with_drop_vec`. `karac check` is clean and the interpreter prints the right answer. Five conditions, all necessary -- `Option` instead of `Result` is clean, a `Vec` field is clean, using the value inline instead of passing it is clean. | `karac_map_free_with_drop_vec` -- the ASAN frame is `#0 karac_map_free_with_drop_vec` called directly from `main`, on `SEGV on unknown address 0x0b`, i.e. the Map handle slot holds a non-pointer when the drop runs. Family: B-2026-08-07-19 (`struct { s: Result[Map,E] }`) is the INVERSE nesting and is fixed. |
 | B-2026-08-11-30 | 2026-08-11 | codegen | medium | The two NON-CRASHING siblings of B-2026-08-11-29, same area (a container field of a struct inside a `Result` crossing a by-value boundary), different trigger conditions and different symptom -- a silent leak instead of a SEGV. LEG A: a `Map`/`Set` field leaks ~600 B when the Result is `let`-bound before the match, while matching the call inline is clean. LEG B: a `Vec` field leaks one allocation per Vec, but only when the struct ALSO has another heap field and the Result is a fresh temp passed as an argument. | same area as B-2026-08-11-29 (`Result[struct-with-container-field]` drop across a by-value boundary); may or may not be one fix with it -- the trigger conditions differ materially, see detail. |
@@ -147,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1106 surfaced
 
 </details>
 
-### Fixed (1089)
+### Fixed (1090)
 
-<details><summary>1089 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1090 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2044,6 +2043,18 @@ VERIFIED both legs, full suite, on the same tree:
     KARAC_TEST_JIT=1 cargo test --features llvm --test codegen  →  2902 passed, 0 failed
                      cargo test --features llvm --test codegen  →  2902 passed, 0 failed
 Before the fix the JIT leg was 2900 passed / 2 failed with the AOT leg at 2902 / 0 — and the 2900 that passed anyway are why this sat undetected: only a test whose outcome DEPENDS on an ownership hint can see the starvation, and until B-2026-08-10-21 landed its two pins, the suite had none. |
+| B-2026-08-11-27 | autopar+codegen | high | NONDETERMINISTIC SILENT WRONG ANSWER on the DEFAULT `karac build`: a 13-line program that overwrites a `Vec[Tensor]` element through a `shared struct… | FIXED by 7dfc17c. `collect_expr_inner_writes`'s `Call` arm
+(`src/concurrency.rs`) now records a write on an argument whose parameter is a
+SHARED type AND whose callee body writes that parameter, alongside the existing
+`mut`-marker and `MutRef` gates. Two helpers: `type_is_shared` (against the
+`shared_type_names` set the checker already builds) and `callee_writes_param`
+(walks the callee body with the existing `collect_block_inner_writes`, which
+covers both the `s.f[i] = …` assignment spelling and the `s.f.push(…)` method
+spelling; re-entry guarded through the closure walk's name stack).
+
+Pins: two tests in `tests/concurrency.rs` -- the mutation case, stash-proven red
+against the pre-fix analysis, and the read-only case as the over-serialization
+guard. Both use a plain `Vec[i64]` shared struct. |
 
 </details>
 
