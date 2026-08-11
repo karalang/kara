@@ -2737,7 +2737,10 @@ impl<'a> ConcurrencyChecker<'a> {
                 _ => unreachable!("filtered above"),
             };
             self.recognize_reductions_in_block(body, out, frozen);
-            if let Some((accumulator, op)) = self.classify_loop_body(body, attributes) {
+            let induction_var = loop_induction_var(expr);
+            if let Some((accumulator, op)) =
+                self.classify_loop_body(body, attributes, induction_var.as_deref())
+            {
                 // B-2026-07-16-6 soundness gate: the reduction lowering runs
                 // this body on MULTIPLE worker threads, so any value the body
                 // touches that is reachable from outside one iteration is
@@ -3079,6 +3082,7 @@ impl<'a> ConcurrencyChecker<'a> {
         &self,
         body: &Block,
         attributes: &[Attribute],
+        induction_var: Option<&str>,
     ) -> Option<(String, ReductionOp)> {
         // `#[par_order_free]` opts into the collect-shape recognizer
         // (`acc.push(x)` and `if cond { acc.push(x); }`). Other loops
@@ -3119,8 +3123,27 @@ impl<'a> ConcurrencyChecker<'a> {
                     // explicit `while`-loop counter would be tagged as the
                     // reduction accumulator and fight whichever real
                     // accumulator the loop also writes to.
-                    if induction_step_via_assign(value, &name) {
-                        // i = i + const_lit — loop-counter step; ignored.
+                    //
+                    // B-2026-08-11-16: that skip MUST be tied to the loop's own
+                    // counter by NAME. The shape test alone matches any
+                    // literal-step accumulator, so `while i < n { b = b + f(x);
+                    // a = a + 1; }` classified `b` as the reduction and silently
+                    // IGNORED `a` — neither reduced nor rejected. The lowering
+                    // then rebinds only the accumulator and the loop variable
+                    // per worker and captures everything else, so `a`'s writes
+                    // landed in per-worker copies and the parent kept its
+                    // pre-loop value: a wrong answer, no diagnostic. Naming the
+                    // counter makes any OTHER literal-step write a reduction
+                    // candidate, which is what it is — and two distinct
+                    // candidates then decline the loop below, exactly as two
+                    // distinct non-literal accumulators already did. Note the
+                    // same statement wrapped in `if cond { .. }` was always
+                    // treated as a reduction by `conditional_acc_update_shape`,
+                    // so the bare form was the odd one out.
+                    if induction_step_via_assign(value, &name) && induction_var == Some(name.as_str())
+                    {
+                        // i = i + const_lit — the loop's own counter step;
+                        // ignored.
                     } else {
                         let op = reduction_binary_shape(value, &name)?;
                         match reduction {
@@ -3145,9 +3168,13 @@ impl<'a> ConcurrencyChecker<'a> {
                     };
                     // Mirror of the Assign-branch induction-first rule:
                     // `i += 1` matches the `+` reduction shape, so check
-                    // for the counter-step shape first.
-                    if red_op == ReductionOp::Add && is_int_literal(value) {
-                        // i += const_lit — loop-counter step; ignored.
+                    // for the counter-step shape first — and, per
+                    // B-2026-08-11-16, only for the loop's OWN counter.
+                    if red_op == ReductionOp::Add
+                        && is_int_literal(value)
+                        && induction_var == Some(name.as_str())
+                    {
+                        // i += const_lit — the loop's own counter step; ignored.
                         continue;
                     }
                     match reduction {
@@ -6548,6 +6575,31 @@ fn is_int_literal(expr: &Expr) -> bool {
 /// rewrites every primitive binop into a method-call dispatch before
 /// the CLI runs concurrencycheck — without the second arm, the
 /// recognizer fires only for the test pipeline that skips lowering).
+/// The loop's OWN induction variable, when it has one: a `for` pattern
+/// binding, or the variable tested by a `while k < end` condition.
+///
+/// This is what lets `classify_loop_body` tell a loop counter apart from an
+/// accumulator that merely shares its shape (B-2026-08-11-16). Returning
+/// `None` is always safe: every literal-step write is then treated as a
+/// reduction candidate, so a loop with a counter this cannot name declines the
+/// lowering rather than dropping a variable. `parse_lt_condition` is the same
+/// matcher the cost model and the fan-out lowering use, and it accepts both the
+/// pre-lowering `Binary { Lt, .. }` and the post-lowering `Call(.., "lt")`
+/// spellings — so the answer here agrees with the shape codegen will actually
+/// lower.
+fn loop_induction_var(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::For { pattern, .. } => match &pattern.kind {
+            PatternKind::Binding(name) => Some(name.clone()),
+            _ => None,
+        },
+        ExprKind::While { condition, .. } => {
+            crate::par_cost::parse_lt_condition(condition).map(|(name, _)| name)
+        }
+        _ => None,
+    }
+}
+
 fn induction_step_via_assign(value: &Expr, acc_name: &str) -> bool {
     match &value.kind {
         ExprKind::Binary {

@@ -1417,6 +1417,45 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_mixed_step_accumulators_survive_auto_par() {
+        // B-2026-08-11-16 — the wrong-ANSWER pin. It has to live in THIS file:
+        // `tests/codegen.rs`'s harness compiles without `concurrency_analyze`,
+        // so auto-par never fires there and the same assertion passed pre-fix,
+        // asserting nothing. Verified by stashing the fix — this fails without
+        // it, that one did not.
+        //
+        // `a = a + 1` has the same syntactic shape as the loop counter
+        // `i = i + 1`, so the induction-step skip used to swallow it: the loop
+        // was lowered as a reduction over `c` alone, while `a` and `b` were
+        // captured rather than reduced and every worker incremented its own
+        // copy. They then read their PRE-LOOP values. `a` starts at 1 so the
+        // failure is distinguishable from "read zero" — pre-fix this printed
+        // `1 0 3` instead of `4 6 3`.
+        assert_eq!(
+            run_program(
+                "fn f(x: i64) -> i64 { return 1i64; }\n\
+                 fn n() -> i64 { return 3i64; }\n\
+                 fn main() {\n\
+                     let bound = n();\n\
+                     let mut a: i64 = 1i64;\n\
+                     let mut b: i64 = 0i64;\n\
+                     let mut c: i64 = 0i64;\n\
+                     let mut i: i64 = 0i64;\n\
+                     while i < bound {\n\
+                         c = c + f(i);\n\
+                         a = a + 1i64;\n\
+                         b = b + 2i64;\n\
+                         i = i + 1i64;\n\
+                     }\n\
+                     println(f\"{a} {b} {c}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("4 6 3\n"),
+        );
+    }
+
+    #[test]
     fn disjoint_indexed_write_loop_emits_a_fanout_worker() {
         let ir = ir_for_analyzed(FANOUT_KERNEL_SRC);
         assert!(

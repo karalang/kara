@@ -2527,6 +2527,99 @@ fn test_reduction_recognized_for_add_while_loop() {
 }
 
 #[test]
+fn test_reduction_declined_when_a_second_literal_step_accumulator_is_present() {
+    // B-2026-08-11-16 — the induction-shape skip has to be tied to the loop's
+    // OWN counter by name. The shape test alone (`x = x + <literal>`) matches
+    // any literal-step accumulator, so this loop classified `b` as the
+    // reduction and silently IGNORED `a`: neither reduced nor rejected. The
+    // fan-out lowering rebinds only the accumulator and the loop variable per
+    // worker and captures everything else, so `a`'s writes landed in per-worker
+    // copies and the parent kept its pre-loop value — a wrong answer with no
+    // diagnostic. Two distinct accumulators must decline the loop, exactly as
+    // two distinct non-literal ones already did.
+    let analysis = analyze(
+        r#"
+        fn f(x: i64) -> i64 { return 1i64; }
+        fn main() {
+            let mut a: i64 = 0i64;
+            let mut b: i64 = 0i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                b = b + f(i);
+                a = a + 1i64;
+                i = i + 1i64;
+            }
+            println(a);
+            println(b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "two distinct accumulators must decline, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_still_recognized_when_counter_shares_the_literal_step_shape() {
+    // The other side of the same gate: naming the counter must not cost the
+    // ordinary case its lowering. `i = i + 1` is still folded as the counter
+    // step, so the real accumulator is still recognized.
+    let analysis = analyze(
+        r#"
+        fn f(x: i64) -> i64 { return 1i64; }
+        fn main() {
+            let mut b: i64 = 0i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                b = b + f(i);
+                i = i + 1i64;
+            }
+            println(b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "expected one reduction, got {:?}",
+        main_fc.loop_reductions
+    );
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "b");
+}
+
+#[test]
+fn test_reduction_declined_for_second_literal_step_accumulator_compound_form() {
+    // Same rule through the `+=` arm, which has its own counter-step skip.
+    let analysis = analyze(
+        r#"
+        fn f(x: i64) -> i64 { return 1i64; }
+        fn main() {
+            let mut a: i64 = 0i64;
+            let mut b: i64 = 0i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                b += f(i);
+                a += 1i64;
+                i += 1i64;
+            }
+            println(a);
+            println(b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "two distinct accumulators must decline, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
 fn test_reduction_declined_for_shared_capture_body() {
     // B-2026-07-16-6: the reduction worker runs the loop body on multiple
     // threads, and a plain `shared` handle's refcount ops are NON-atomic —
