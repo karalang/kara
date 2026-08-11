@@ -30144,7 +30144,7 @@ fn main() {
         if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1")
             && !(src.contains(".to_arrow_ipc(") || src.contains("from_arrow_ipc("))
         {
-            return jit_dispatch(&parsed.program, filename);
+            return jit_dispatch(&parsed.program, Some(&ownership), filename);
         }
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -30207,7 +30207,11 @@ fn main() {
     /// only as a test-runner artifact, parallel to how the AOT codegen
     /// suite uses subprocess-execed binaries.
     #[cfg(feature = "llvm")]
-    fn jit_dispatch(program: &karac::ast::Program, filename: Option<&str>) -> Option<CapturedRun> {
+    fn jit_dispatch(
+        program: &karac::ast::Program,
+        ownership: Option<&karac::ownership::OwnershipCheckResult>,
+        filename: Option<&str>,
+    ) -> Option<CapturedRun> {
         use karac::codegen::compile_to_ir_with_options;
         use std::io::Write;
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -30220,7 +30224,23 @@ fn main() {
         // `compile_to_object` failure. `filename` is threaded through
         // so `?`-propagation traces print `<file>:<line>:<col>`
         // consistently with the AOT path.
-        let ir = match compile_to_ir_with_options(program, None, None, filename, None) {
+        //
+        // `ownership` is threaded through for the SAME reason the AOT leg
+        // passes it (see the comment at the `ownershipcheck` call above), and
+        // it is load-bearing for THIS lane specifically. This lane's entire
+        // purpose is run==build parity, so it has to feed codegen the same
+        // inputs `karac build` and `karac run` do — cli.rs's JIT path runs
+        // `pipeline.ownershipcheck()` before `compile_to_ir_with_options`
+        // precisely "so the emitted IR matches `karac build`'s". Passing
+        // `None` here made the lane emit IR that matched NEITHER shipped
+        // path, silently voiding every ownership-derived codegen decision on
+        // it: the RC-fallback boxing surface, and the `UseAfterMove`
+        // defensive copy (B-2026-08-10-21), whose hint channel
+        // (`use_after_move_consume_sites`) rides on this argument. Its two
+        // pins then failed on this lane ALONE, reading as a JIT miscompile
+        // when the JIT was fine and the harness was starving it — the same
+        // shape of blind spot as b027fc15 bug 3, one lane over.
+        let ir = match compile_to_ir_with_options(program, ownership, None, filename, None) {
             Ok(ir) => ir,
             Err(e) => panic!("compile_to_ir failed for JIT dispatch: {}", e),
         };
