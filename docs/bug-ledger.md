@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 92 | 1 |
 | perf | 64 | 0 |
 | false-positive | 60 | 0 |
-| diagnostics | 50 | 1 |
+| diagnostics | 50 | 0 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
 | other | 28 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 819 | 2 |
 | typecheck | 157 | 1 |
 | interp | 138 | 0 |
-| ownership | 46 | 1 |
+| ownership | 46 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
 | cli | 28 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1135 surfaced · 4 open · 1119 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1135 surfaced · 3 open · 1120 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-22 | 2026-08-12 | codegen | high | DOUBLE FREE on both compiled backends: index-assigning a WHOLE struct element read out of the same Vec (`let b = ps[1]; ps[0] = b;`, element = struct with a String field) — the element read is a shallow copy, so the container ends up with two owners of one buffer; the interpreter is correct | none |
-| B-2026-08-12-23 | 2026-08-12 | ownership | medium | `E_CONCURRENT_PLAIN_STRUCT` fires on BUILTIN containers (`Vec` / `Map` / `Set`) and then prescribes a migration the user cannot perform — 'rename `struct Vec` to `par struct Vec`' — while `String`, equally in design.md's cross-task-safe set, is not gated at all | none |
 | B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
 | B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
 
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1135 surfaced
 
 </details>
 
-### Fixed (1119)
+### Fixed (1120)
 
-<details><summary>1119 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1120 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3045,6 +3044,78 @@ Three regression tests in tests/effectchecker.rs: the `mut ref` param route, the
 Recovering into a well-formed tree (rather than only improving the message) is what removes the cascade: parsing resumes at the next arm, the `match` completes, nothing resynchronizes at top level, and the two fictional errors disappear. One error, at the right token, naming the fix.
 
 NO machine-applicable `fix_diff` is attached: the edit is a brace on each side of the body, and the parser holds tokens but not source text, so it cannot build the single (offset, length, replacement) that the `fix_edits` side-channel takes. Wiring that would mean either two edits per diagnostic or source access in the parser; both are larger than this fix and neither is needed for the message to be correct. |
+| B-2026-08-12-23 | ownership | medium | `E_CONCURRENT_PLAIN_STRUCT` fires on BUILTIN containers (`Vec` / `Map` / `Set`) and then prescribes a migration the user cannot perform — 'rename `st… | FIXED by 9d7db97, for the half of this row that was a defect. The row filed two
+things; one was real and is fixed, the other's PREMISE IS REFUTED and the
+evidence is recorded below rather than acted on.
+
+(1) THE HELP TEXT -- REAL, AND WORSE THAN THE ROW SAYS. A builtin now gets
+advice its author can act on. The old text was not merely imprecise: measuring
+what an author would actually try next, the two obvious escapes are ALSO
+unavailable, so the diagnostic was a dead end rather than a badly-worded
+signpost.
+
+    rename `struct Vec` to `par struct Vec`   -- no such declaration exists
+    wrap it in `Arc[Vec[i64]]`                -- `undefined type 'Arc'`
+    clone per branch: `f(v.clone())`          -- STILL REJECTED
+
+The `Arc` finding matters for anyone extending this: `Arc` sits in this pass's
+own cross-task-safe exemption list (`classify_binding_type`), so it reads like
+the sanctioned answer, but the surface language does not resolve the type yet.
+Offering it would have swapped one impossible instruction for another. The
+in-branch clone is the subtler trap -- reading `v` in order to clone it IS the
+second-branch use the error is about -- and the new text warns about it by name.
+
+The three routes the new text names were chosen by MEASUREMENT and are pinned
+by a test that compiles each one (`test_concurrent_plain_struct_builtin_
+suggested_routes_compile`), so the advice cannot rot into a claim again:
+hoisting per-branch copies before the `par` block, building disjoint values up
+front, or sharing through `Mutex[T]`.
+
+Gated on whether the type has a declaration in THIS program -- the same
+condition that already makes `fix_diff` empty for a builtin, which is why the
+machine-applicable fix was never wrong here, only the prose that advertised it.
+A user struct's diagnostic is byte-identical to before.
+
+(2) THE "INCONSISTENT GATE" -- PREMISE REFUTED, no change made. The row reads
+the Vec/Map/Set-vs-String split as "an artifact of what the baked stdlib
+happens to register in `struct_info` rather than a decision". It is a decision,
+and design.md states it in the same paragraph the row cites for the rule
+itself (line 9599):
+
+    "Primitives and other non-struct cross-task-safe values are freely read
+     across branches; only non-`par` struct/enum-typed bindings are gated."
+
+The split is exactly struct-typed vs not, verified in the baked source rather
+than inferred from behaviour:
+
+    runtime/stdlib/vec.kara:21   struct Vec[=T] { }
+    runtime/stdlib/map.kara:10   struct Map[=K, =V] { }
+    runtime/stdlib/set.kara:7    struct Set[=T] { }
+    String                       no struct declaration anywhere in runtime/stdlib/
+
+So `Vec`/`Map`/`Set` ARE struct-typed bindings and `String` is not, and the
+observed behaviour is what the spec prescribes. Changing it would be the
+borrow-mode-aware refinement design.md explicitly defers ("remains the target
+model but is not v1"), not a bug fix -- and the row itself opens by saying it is
+not a request to relax the rule.
+
+THE ROW'S SAFETY WORRY IS ALSO ALREADY HANDLED, which is worth recording since
+it was the stated reason a fix looked hard. It warns that exempting the
+collections "would ALSO accept concurrent MUTATION of them across branches,
+which is a real race". Measured: it would not. Concurrent mutation is rejected
+by the EFFECT checker, not by this ownership gate, for both populations --
+
+    Vec mutated from two branches      error[effect] "cannot be written from inside par"
+    String mutated from two branches   error[effect] "cannot be written from inside par"
+
+-- which is exactly why `String` has never needed the ownership gate to be safe.
+
+ONE HYPOTHESIS OF MINE WAS ALSO WRONG and is recorded so it is not re-chased: an
+owned `String` passed into two par branches is accepted, which looked like a
+use-after-move the gate was silently missing. It is not par-specific -- the same
+double move in straight-line code reports the identical ownership WARNING and
+`karac check` passes. Use-after-move is a warning language-wide; nothing about
+`par` changes it. |
 
 </details>
 
