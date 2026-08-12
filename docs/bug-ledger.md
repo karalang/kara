@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 239 | 0 |
-| leak | 169 | 0 |
-| double-free | 121 | 1 |
+| leak | 170 | 1 |
+| double-free | 122 | 1 |
 | codegen-gap | 105 | 1 |
 | run-vs-build | 103 | 0 |
 | missing-feature | 92 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 819 | 2 |
+| codegen | 821 | 3 |
 | typecheck | 157 | 1 |
 | interp | 138 | 0 |
 | ownership | 46 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1135 surfaced · 3 open · 1120 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1137 surfaced · 4 open · 1121 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-22 | 2026-08-12 | codegen | high | DOUBLE FREE on both compiled backends: index-assigning a WHOLE struct element read out of the same Vec (`let b = ps[1]; ps[0] = b;`, element = struct with a String field) — the element read is a shallow copy, so the container ends up with two owners of one buffer; the interpreter is correct | none |
 | B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
 | B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
+| B-2026-08-12-26 | 2026-08-12 | codegen | medium | ELEMENT-TO-ELEMENT index assign LEAKS one buffer per assignment: `ps[0] = ps[1]` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 400 B in 40 allocations, one per assign. Output is correct on all three backends -- this is a pure leak, not a miscompile. | `src/codegen/stmts.rs`, the `ExprKind::Index` assignment arm -- `emit_displaced_index_elem_drop` + `compile_index_store` with an INDEX rhs |
+| B-2026-08-12-27 | 2026-08-12 | codegen | high | DOUBLE FREE building a struct LITERAL whose field is read out of a Vec element's heap field: `let q = Pair { word: ps[0].word, n: 9 };` over `struct Pair { word: String, n: i64 }` aborts with `free(): double free detected in tcache 2` on both compiled backends. NO index-assign involved -- a plain `let` is enough. The interpreter is correct. | struct-literal field initialization from a place expression -- `Pair { word: ps[0].word, .. }`; the field read is not cloned the way `clone_owned_vec_index_element` clones a whole-element read |
 
 ### Wontfix (2)
 
@@ -145,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1135 surfaced
 
 </details>
 
-### Fixed (1120)
+### Fixed (1121)
 
-<details><summary>1120 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1121 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3044,6 +3045,77 @@ Three regression tests in tests/effectchecker.rs: the `mut ref` param route, the
 Recovering into a well-formed tree (rather than only improving the message) is what removes the cascade: parsing resumes at the next arm, the `match` completes, nothing resynchronizes at top level, and the two fictional errors disappear. One error, at the right token, naming the fix.
 
 NO machine-applicable `fix_diff` is attached: the edit is a brace on each side of the body, and the parser holds tokens but not source text, so it cannot build the single (offset, length, replacement) that the `fix_edits` side-channel takes. Wiring that would mean either two edits per diagnostic or source access in the parser; both are larger than this fix and neither is needed for the message to be correct. |
+| B-2026-08-12-22 | codegen | high | DOUBLE FREE on both compiled backends: index-assigning a WHOLE struct element read out of the same Vec (`let b = ps[1]; ps[0] = b;`, element = struct… | FIXED by af43027. The index-assign store now disarms a NAMED struct
+source, the AoS peer of the SoA arm that already sat directly below it. The
+filed repro, the swap, and every source form now agree with the interpreter on
+all three backends.
+
+THE BOUNDARY TABLE WAS WRONG IN THREE ROWS, and the cause is worth recording
+because it is a trap any probe of this class can fall into: STRING LITERALS
+HAVE `cap` 0. The second free is therefore a guarded no-op, so a shape that
+double-frees looks clean whenever the heap field was initialised from a
+literal. Re-measured with f-strings, one variant at a time:
+
+  named binding from an element read   `let b = ps[1]; ps[0] = b;`   ABORTS (as filed)
+  named binding from a struct LITERAL  `let p = Pair{f"..."}; ps[0] = p;`  ABORTS  (filed: OK)
+  named binding from a CALL result     `let c = mk(k); ps[0] = c;`   ABORTS  (not in the filing)
+  field-ROOTED container               `h.xs[0] = b;`                ABORTS  (not in the filing)
+  heap field is a `Vec`, not a String   `Bag { xs: Vec[i64] }`        ABORTS  (filed as OK for a scalar struct -- true, but a Vec field is not scalar; an EMPTY Vec also reads cap 0 and hides it)
+  field-wise rebuild                   `ps[0] = Pair{ word: ps[1].word, .. }`  ABORTS  (filed: OK)
+  element-to-element                   `ps[0] = ps[1];`              no double free (filed: not covered)
+  `Vec[String]` element copy           `let b = xs[1]; xs[0] = b;`   no double free (as filed)
+
+So the trigger is NOT "the RHS is a whole-element copy read out of the same
+Vec". It is: the container's element type is a struct with a LIVE heap field,
+and the RHS is a NAMED binding -- whatever that binding was initialised from.
+The provenance never mattered; the filing's read-vs-literal distinction was an
+artifact of which probes happened to use literals.
+
+MECHANISM, confirmed rather than inferred. The element READ is already
+deep-cloned (`clone_owned_vec_index_element`) -- verified directly: after
+`let b = ps[1]`, mutating `b.word` leaves `ps[1].word` untouched, identically
+on both backends. So `b` owns its own buffer, and the bug is entirely at the
+STORE: `compile_index_store` moves `b`'s field pointers into the element slot
+while `b`'s `StructDrop` stays armed, and the container's element drain and `b`
+then free the same buffer.
+
+WHY THE EXISTING GATE MISSED IT: `target_owns_heap_vec_elem` asks whether the
+ELEMENT is a `{ptr,len,cap}`. A struct whose FIELD is one is not, which is
+exactly why `Vec[String]` was safe and `Vec[<struct with a String>]` was not --
+the one boundary row the filing got right, and the row that localises the gate.
+
+FIX. The AoS peer of the SoA `zero_struct_move_caps` arm immediately below the
+same store: resolve the element struct through `vec_index_elem_type_expr`
+(which handles the bare-identifier and field-rooted container spellings alike)
+and zero the named source's heap-field caps. Skipped for a `ref` param, for
+shared structs, and for slice/map targets, which do not own their elements.
+No-op for an all-scalar element struct, and idempotent against the SoA arm for
+a struct both reach.
+
+PINNED by two tests. `asan_index_assign_named_struct_source_freed_once` carries
+the source matrix -- element read, literal, call result, field-rooted
+container, `Vec`-typed heap field, and the swap -- and is non-vacuous: against
+the pre-fix compiler ASAN reports `attempting double-free`, not merely a leak.
+`e2e_index_assign_named_struct_source_swap` is the observable half, checked
+against the interpreter oracle. EVERY string in both is an f-string, for the
+`cap`-0 reason above; a literal-valued fixture would pass without the fix.
+
+THE SWAP IS SPELLED WITH TWO TEMPS in the fixture, and that is a deferral
+rather than a simplification. The terser one-temp swap contains
+`qs[0] = qs[1]`, which is clean of the double free but LEAKS one buffer per
+assignment -- pre-existing, measured identically on both sides of this fix
+(400 B / 40 allocations either way), and filed as B-2026-08-12-26 with a
+written, `#[ignore]`d fixture. The two-temp spelling double-freed before this
+fix too, so it still gates the shape that matters.
+
+ONE RESIDUAL, SPLIT OUT AS B-2026-08-12-27: a struct LITERAL whose field is
+read out of an element's heap field (`let q = Pair { word: ps[0].word, n: 9 };`)
+still double-frees, with NO index-assign anywhere in the program. A whole-
+element read is cloned; a FIELD read of that element is not. Distinct site,
+high severity, filed with the isolating repro.
+
+Suite green at 116 targets, 0 failures; the -O0 leg green with an empty
+quarantine list; clippy and fmt clean. |
 | B-2026-08-12-23 | ownership | medium | `E_CONCURRENT_PLAIN_STRUCT` fires on BUILTIN containers (`Vec` / `Map` / `Set`) and then prescribes a migration the user cannot perform — 'rename `st… | FIXED by 9d7db97, for the half of this row that was a defect. The row filed two
 things; one was real and is fixed, the other's PREMISE IS REFUTED and the
 evidence is recorded below rather than acted on.
