@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 238 | 0 |
-| leak | 168 | 1 |
+| leak | 169 | 1 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 0 |
 | run-vs-build | 103 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 816 | 1 |
+| codegen | 817 | 1 |
 | typecheck | 156 | 0 |
 | interp | 138 | 0 |
 | ownership | 45 | 0 |
@@ -124,13 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1128 surfaced · 1 open · 1115 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1129 surfaced · 1 open · 1116 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-18 | 2026-08-12 | codegen | low | The INTERIOR of a boxed `Option` field envelope owned by the fresh-temp argument spill has no owner: `cls(Result.Ok(S { o: Option.Some(Option.Some(f"v{n}")) }))` over `struct S { o: Option[Option[String]] }` leaks the String, 4 B per call. Surfaced by B-2026-08-12-15, which freed the envelope that had been leaking around it. | — |
+| B-2026-08-12-19 | 2026-08-12 | codegen | low | The CALLEE's ENTRY COPY of a `Result[S, i64]` whose struct payload has a boxed `Option` field leaks WHOLE -- box and interior both -- when the callee's arm binds nothing: `fn cls(r: Result[S, i64]) { match r { Result.Ok(_) => 1, .. } }` over `struct S { o: Option[Option[String]] }`. 1,391 B in 80 allocations over 40 calls, both malloc'd in the callee. | `src/codegen/functions.rs`, the param-entry registration loop -- the `struct_payload_boxed_field_variants` population is deliberately NOT registered callee-side, and its comment's justification holds only when an arm binds |
 
 ### Wontfix (2)
 
@@ -143,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1128 surfaced
 
 </details>
 
-### Fixed (1115)
+### Fixed (1116)
 
-<details><summary>1115 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1116 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2902,6 +2902,79 @@ an empty quarantine list.
 NOT COVERED: the String INTERIOR of a temp-argument envelope, which is
 B-2026-08-12-18 and unaffected by this -- the probe carrying it still reports
 its 160 B, unchanged. |
+| B-2026-08-12-18 | codegen | low | The INTERIOR of a boxed `Option` field envelope owned by the fresh-temp argument spill has no owner: `cls(Result.Ok(S { o: Option.Some(Option.Some(f"… | FIXED by 1e3aef1. `NestedBoxedEnumDrop` gained an optional interior
+free, wired for the STRUCT-FIELD population only. Verified across a
+six-position matrix: 640 B in 160 allocations before, 0 after, at BOTH opt
+levels.
+
+THE ROW'S SCOPE WAS TOO NARROW, and that is the substantive correction. It
+placed the leak at the fresh-temp argument, reasoning that "the argument is a
+fresh TEMP, so there is no arm and no binding anywhere in the caller". The
+mechanism is right; the extent is not. Measured per position at the default
+-O2, against the pre-fix compiler:
+
+  let-bound, NEVER MATCHED (no call in the program) -- LEAKED
+  let-bound, `Result.Ok(_)` wildcard arm            -- LEAKED
+  let-bound, passed BY VALUE to a callee            -- LEAKED
+  fresh temp argument (the filed shape)             -- LEAKED
+  let-bound, arm binds the STRUCT (`Ok(s) => 1`)    -- clean
+  let-bound, arm binds the String out               -- clean
+
+So the rule is not "a temp has no arm" but "nothing bound anything". A
+let-bound value with a wildcard arm, and one never matched at all, are the same
+hole reached without a call. The row is also filed as an -O0/valgrind finding;
+it reproduces at -O2, because the interior IS heap and does not fold the way
+the all-scalar envelopes of the parent row do.
+
+THE INTERIOR IS ALLOCATED EXACTLY ONCE in every position -- all six spellings
+report 48 allocations for 40 iterations -- so nothing deep-copies it and
+exactly one owner is correct. That measurement is what ruled out the
+alternative fix of giving the callee one.
+
+FIX. `CleanupAction::NestedBoxedEnumDrop` takes an `inner_payload_free`
+descriptor, `Some` only when the box holds an `Option` whose payload is a
+direct `{ptr,len,cap}` heap value and the envelope chain is EMPTY (so this box
+is the innermost). The emit reuses `emit_free_inline_payload_overlay` verbatim
+with the BOX as the slot -- the box holds a flattened `{tag, ptr, len, cap}`,
+i.e. exactly `Option`'s own LLVM shape -- so the `cap > 0` guard and the
+recursive element walk come along unchanged.
+
+NO RETRACTION WAS NEEDED, which is what makes this contained. The row proposed
+mirroring `retract_boxed_tuple_inner_drop_for_arm`'s conditional downgrade. It
+turns out the existing handoff already does it: an arm that binds the struct
+out hands the box over by ZEROING the box word in the scrutinee's slot
+(`suppress_struct_field_boxed_payload_arm_bind`), so this action's null guard
+skips the whole free -- interior included -- and `__karac_drop_struct_S` does
+all of it. The two clean positions above are in the fixture as the DOUBLE-FREE
+guard for exactly that, and stay green.
+
+RESTRICTED TO THE STRUCT-FIELD POPULATION, and the restriction is load-bearing
+rather than caution. The sibling population -- where the inline payload IS the
+`Option`/`Result`, `Result[Option[Option[String]], i64]` -- passes `None`,
+because there an arm CAN name the interior directly (`Ok(Some(Some(t)))`) and
+owns it. `stmts.rs` records that an interior drop was implemented for that
+population and measured WRONG: a glibc double free at both opt levels. The
+struct-field case is not subject to it because reaching that interior from a
+pattern means binding the struct, which triggers the handoff above.
+
+PINNED by `asan_struct_field_boxed_interior_owned_without_arm`, all six
+positions in one 40-iteration program, non-vacuous at both levels (640 B / 160
+allocations pre-fix, 0 post-fix, identical at -O0 and -O2). It carries a
+`String` interior deliberately: an all-scalar envelope folds away at -O2 and a
+clean run over an allocation that never happened proves nothing, which is the
+trap the parent row's fixture documents hitting twice.
+
+ONE POSITION REMAINS AND IS SPLIT OUT AS B-2026-08-12-19, not folded in: a
+fresh-temp argument whose CALLEE's arm binds nothing leaks the callee's ENTRY
+COPY -- box and interior both malloc'd in the callee. Caller-side is clean, so
+it only shows at -O0. Bracketed by measurement rather than asserted: pre-fix
+-O0 is 1,551 B / 120 allocations, post-fix 1,391 B / 80, and the 160 B / 40
+difference is exactly the caller-side Strings this row closed. Its fixture is
+separate so the -O0 quarantine does not blanket the six positions that are
+fixed.
+
+Suite green at 116 targets, 0 failures; the -O0 leg matches the quarantine list
+exactly; clippy and fmt clean. |
 
 </details>
 
