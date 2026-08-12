@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 238 | 0 |
-| leak | 169 | 1 |
+| leak | 169 | 0 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 0 |
 | run-vs-build | 103 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 817 | 1 |
+| codegen | 817 | 0 |
 | typecheck | 156 | 0 |
 | interp | 138 | 0 |
 | ownership | 45 | 0 |
@@ -124,13 +124,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1129 surfaced · 1 open · 1116 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1129 surfaced · 0 open · 1117 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-12-19 | 2026-08-12 | codegen | low | The CALLEE's ENTRY COPY of a `Result[S, i64]` whose struct payload has a boxed `Option` field leaks WHOLE -- box and interior both -- when the callee's arm binds nothing: `fn cls(r: Result[S, i64]) { match r { Result.Ok(_) => 1, .. } }` over `struct S { o: Option[Option[String]] }`. 1,391 B in 80 allocations over 40 calls, both malloc'd in the callee. | `src/codegen/functions.rs`, the param-entry registration loop -- the `struct_payload_boxed_field_variants` population is deliberately NOT registered callee-side, and its comment's justification holds only when an arm binds |
+_None — the ledger is fully drained._
 
 ### Wontfix (2)
 
@@ -143,9 +141,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1129 surfaced
 
 </details>
 
-### Fixed (1116)
+### Fixed (1117)
 
-<details><summary>1116 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1117 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2975,6 +2973,61 @@ fixed.
 
 Suite green at 116 targets, 0 failures; the -O0 leg matches the quarantine list
 exactly; clippy and fmt clean. |
+| B-2026-08-12-19 | codegen | low | The CALLEE's ENTRY COPY of a `Result[S, i64]` whose struct payload has a boxed `Option` field leaks WHOLE -- box and interior both -- when the callee… | FIXED by 44eaf8e. The struct-FIELD boxed population is now registered
+CALLEE-side, and the `-O0` quarantine list this row was added to is empty
+again — the ratchet's "a listed fixture that starts PASSING fails the leg too"
+direction is what flagged the line, on the same day it went on.
+
+THE OWNERSHIP AXIS IS THE CALLEE'S BODY, not the argument form the parent row
+was filed against. Measured per callee at -O0, 40 calls each, before the fix:
+
+  `Result.Ok(_)`, binds nothing              -- LEAKED 1,391 B / 80 allocations
+  never matches the param at all             -- LEAKED 1,391 B / 80 allocations
+  `Result.Ok(s) => 2`, binds the struct      -- clean
+  binds the struct and reads the String      -- clean
+
+So `functions.rs`'s stated reason for declining this population -- "that box
+already HAS a callee-side owner: the arm that binds `W` out runs
+`__karac_drop_struct_W`" -- is true of an arm that BINDS and false of every
+other body.
+
+THE COUNT IS WHAT MAKES THE FIX SAFE, and it is the measurement the row asked
+for. The same program reports 168 allocations for 40 iterations -- FOUR per
+call, two boxes and two Strings. The entry copy deep-copies through the box, so
+the callee's copy is a genuinely separate allocation from the caller's value:
+freeing it here cannot reach the caller's, and the caller-owns contract the
+argument site enforces (the `struct_field_boxed_payload_vars` exception to
+`suppress_nested_boxed_drop_for_var`) is untouched.
+
+FIX. The param registers the same `struct_payload_boxed_field_variants`
+population the let site does, gated on `optres_param_entry_copied_te` -- the
+predicate the entry copy itself is emitted under. Without a copy the slot holds
+the CALLER's box and freeing it would be a double free, so the gate asks
+whether the copy happened rather than inferring it from the shape.
+
+THE DOUBLE FREE THE OLD COMMENT RECORDS IS REAL, and is handled rather than
+risked. Registering here was tried before and aborted with a glibc `double free
+detected in tcache 2` on the temp-argument, bound-argument and
+matched-after-call forms. The missing piece was one line: the param must JOIN
+`struct_field_boxed_payload_vars`. That set is what
+`suppress_struct_field_boxed_payload_arm_bind` keys on, so joining it lets the
+EXISTING arm-bind handoff zero the box word and disarm this registration for
+exactly the bodies whose arm already owns the copy. Same disarm the let site
+has always relied on, and the same "no new retraction needed" shape as
+B-2026-08-12-18 -- both rows turned out to need a registration, not a
+retraction.
+
+PINNED by `asan_struct_field_boxed_interior_nonbinding_callee`, rewritten from
+the single quarantined shape into a four-callee matrix. The two BINDING callees
+are in it as the double-free guard, not as filler: they are the shapes the
+earlier attempt aborted on. Non-vacuous, measured at -O0 against the pre-fix
+compiler: 2,782 B in 160 allocations, which is the two leaking legs at two
+allocations each over 40 iterations. It PASSES at -O2 pre-fix, so the
+`scripts/asan-o0-leg.sh` run is the gate and the fixture's doc says so --
+at -O2 the copy is dead and LLVM deletes it.
+
+Suite green at 116 targets, 0 failures; the -O0 leg green with an EMPTY
+quarantine list; clippy and fmt clean. |
 
 </details>
 
