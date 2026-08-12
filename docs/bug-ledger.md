@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 238 | 0 |
-| leak | 164 | 1 |
+| leak | 165 | 1 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 0 |
 | run-vs-build | 103 | 1 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 812 | 3 |
+| codegen | 813 | 3 |
 | typecheck | 156 | 3 |
 | interp | 138 | 0 |
-| ownership | 45 | 1 |
+| ownership | 45 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
 | cli | 28 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1124 surfaced · 5 open · 1107 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1125 surfaced · 5 open · 1108 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -133,8 +133,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1124 surfaced
 | B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
 | B-2026-08-12-9 | 2026-08-12 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at typecheck, so the codegen paths two E2E tests cover can never run in a shipped binary. Either the emitter is dead code to retire or the rule is stricter than intended -- open design call, not a defect report. | Vec[f64].sorted / Iterator.max / Iterator.min vs the F64 total-order rule |
 | B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
-| B-2026-08-12-13 | 2026-08-12 | codegen+ownership | low | Assigning TWICE from the same already-moved-out place (`cur = box[0].s;` … `cur = box[0].s;`) leaks that buffer: the first assignment cap-zeroes the source into `cur`, so on the second both source and target carry cap 0 and neither frees it. `karac check` accepts the program -- the second read of a moved-out place is not flagged as a use-after-move. | repeated assignment from the same already-moved place |
 | B-2026-08-12-14 | 2026-08-12 | codegen | medium | Reading a field off a `Json.parse` error is a RUN-VS-BUILD split: `karac run --interp` prints `e.line` / `e.column` / `e.message` correctly, while `karac build` REFUSES with `codegen: cannot resolve field 'line' on this receiver (its type was not recorded for codegen); this is a compiler gap`. So the error type `Json.parse` is documented to return cannot be inspected at all from a compiled binary -- only matched on and discarded. | `JsonError` has no `struct_types` registration -- `runtime/stdlib/json.kara` is not in `compiled_stdlib_programs`, and `src/codegen/json.rs` hand-rolls the Err value (`Build Result.Err(JsonError { line, column, message })`) |
+| B-2026-08-12-15 | 2026-08-12 | codegen | high | `c24343b3` (the B-2026-08-12-1 by-value Option/Result param entry-copy) LEAKS the copied payload: `asan_struct_field_boxed_heapless_option_envelope_owned` is red on the -O0 ASAN leg with 2560 bytes in 80 allocations, and GREEN at the default opt level -- so the ordinary `cargo test --features llvm` run does not see it and only `scripts/asan-o0-leg.sh` does. | regression from c24343b3 (B-2026-08-12-1); asan_struct_field_boxed_heapless_option_envelope_owned |
 
 ### Wontfix (2)
 
@@ -147,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1124 surfaced
 
 </details>
 
-### Fixed (1107)
+### Fixed (1108)
 
-<details><summary>1107 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1108 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2539,6 +2539,52 @@ MEASURED: the corpus audit goes from 16 firing tests over 6 names to 4 over 3,
 and the 4 that remain are the two documented placeholders plus the split-out
 gap. Full suite green at 13467 passed / 0 failed across 116 targets; clippy and
 fmt clean. |
+| B-2026-08-12-13 | codegen+ownership | low | Assigning TWICE from the same already-moved-out place (`cur = box[0].s;` … `cur = box[0].s;`) leaks that buffer: the first assignment cap-zeroes the… | FIXED by eef6e980.
+
+Suppressing the free was necessary but not sufficient. B-2026-08-12-4's alias
+guard stopped the displaced-value free from reclaiming the buffer about to be
+stored back -- without it the second read returns garbage -- but it neutralized
+the slot header and then let the store put the SOURCE's header over it, and the
+source had been cap-zeroed by the first assignment. So both source and target
+ended up carrying `cap == 0` and neither freed the buffer at scope exit: the read
+was correct and the ownership was gone.
+
+`keep_aliased_slot_ownership` (src/codegen/runtime.rs) now does both halves --
+neutralize the slot so every free below no-ops, AND carry the target's own `cap`
+across into the value being stored, so the target stays the single owner it was
+before the aliasing assignment. One `icmp` and three `select`s, on a path that
+already loads the header. A non-struct incoming value (no `{ptr,len,cap}` to
+compare) is returned untouched.
+
+MEASURED on the row's own program, same tree, under valgrind: `definitely lost:
+8 bytes in 1 blocks` before, clean after, with the printed content correct in
+both. Ten shapes re-checked clean and correct afterwards, including 100 repeated
+reads of one element, a `Vec[i64]` field re-read three times, and an interleaved
+distinct/repeated sequence through one target.
+
+THE PIN READS TWO ELEMENTS' WORTH, NOT ONE ELEMENT TWICE, and that distinction is
+the whole reason this row existed separately. The leak is one buffer per element
+that gets RE-READ, so re-reading a single element 100 times still leaks exactly
+one block -- and one leaked block can sit in a stale stack slot and read to LSan
+as still-reachable, which is precisely how B-2026-08-12-4 stayed invisible under
+ASAN while valgrind reported it every run.
+`asan_repeated_place_field_move_assign_keeps_one_owner` reads 150 elements twice
+each: 2192 bytes in 137 allocations pre-fix, clean post-fix.
+
+`test_e2e_repeated_place_field_move_assign_reads_correctly` gained two legs: a
+`Vec[i64]` field re-read three times, where a wrong restored capacity would show
+up in the ELEMENTS rather than the header, and an interleaved
+distinct/repeated sequence, where a missed free leaks and an unguarded free reads
+back garbage -- the two failure modes on either side of this guard.
+
+WHAT THIS DOES NOT DO, deliberately: `karac check` still accepts the program.
+Reading a place that has been moved out of is a use-after-move, and the ownership
+checker is silent on it -- the row named that as the second of two plausible
+fixes and it is the one still open. This commit took the codegen half because
+`UseAfterMove` is advisory by design (non-fatal, `.clone()`-suggesting, compiles),
+so the backend has to produce something sound for the shape either way; a
+diagnostic would warn but would not stop the leak. The diagnostic remains worth
+adding on its own merits. |
 
 </details>
 
