@@ -843,7 +843,57 @@ impl<'ctx> super::Codegen<'ctx> {
                                 && !self.pattern_binding_scrutinee_is_shared_enum
                                 && self.struct_types.contains_key(tn)
                                 && !self.shared_types.contains_key(tn)
-                                && self.aggregate_param_copy_supported_struct(tn, &mut Vec::new())
+                                // B-2026-08-12-2 — a payload struct whose only
+                                // non-duplicable heap is a `Map`/`Set` HANDLE is
+                                // admitted too. It is not copy-supported (the
+                                // entry copy cannot duplicate a side-table
+                                // handle) but the synthesized struct drop frees
+                                // it — which is exactly why the same struct
+                                // let-bound directly is already leak-clean.
+                                //
+                                // The arm needs the FREE, not the copy, and it
+                                // is the only owner left: the consuming-arm
+                                // suppressor zeroes the scrutinee's payload
+                                // words unconditionally — measured in the
+                                // emitted IR as `respl.suppress.w1..w3` for this
+                                // very shape — so the Result's own payload drop
+                                // finds a null handle and frees nothing. Nobody
+                                // owned the map and it leaked whole: 72 B direct
+                                // plus its contents, per call.
+                                //
+                                // A FRESH OWNING TEMP scrutinee
+                                // (`match mk() { .. }`) is excluded as well: the
+                                // temp keeps its own payload cleanup, so that
+                                // shape was already clean and a drop here is the
+                                // second owner. Only a NAMED source — whose
+                                // payload words the consuming arm zeroes — is
+                                // left with nobody.
+                                //
+                                // Restricted to an arm that only BORROWS its
+                                // binding. An arm that MOVES it on
+                                // (`Ok(s) => take(s)`) hands ownership to the
+                                // move machinery, and for a Map/Set field that
+                                // machinery's source-zeroing clears Vec/String
+                                // CAPS, not a side-table handle — so a drop
+                                // registered here would not be retracted and the
+                                // handle would be freed twice. That is
+                                // B-2026-08-11-29's SEGV, whose pin caught this
+                                // exact over-fire.
+                                //
+                                // Restricted to a scrutinee that is NOT an owned
+                                // param, which is the case the surrounding
+                                // comment's use-after-free warning is about: a
+                                // non-copy-supported payload leaves an owned
+                                // param on caller-retains, so freeing the
+                                // binding there would turn a status-quo leak
+                                // into a UAF on `sink(e); use(e)`. A local or
+                                // temp scrutinee has no such second owner.
+                                && (self
+                                    .aggregate_param_copy_supported_struct(tn, &mut Vec::new())
+                                    || (!self.pattern_binding_scrutinee_is_owned_param
+                                        && !self.pattern_binding_scrutinee_is_fresh_owning_temp
+                                        && self.pattern_binding_arm_only_borrows
+                                        && self.struct_heap_copyable_or_handle(tn)))
                                 && self.struct_types.get(tn).is_some_and(|st| {
                                     Self::llvm_type_word_count((*st).into())
                                         <= self.pattern_binding_scrutinee_optres_area

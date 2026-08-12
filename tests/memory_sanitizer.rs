@@ -46403,8 +46403,11 @@ fn main() {
     /// boundary is involved, and the identical shape with a `Vec` field is
     /// clean — which is why this is its own row rather than a polarity of the
     /// param bug above.
+    ///
+    /// FIXED: the arm's struct-payload binding is now admitted when the struct's
+    /// only non-duplicable heap is a `Map`/`Set` handle — it needs the FREE, not
+    /// the entry copy the old gate required.
     #[test]
-    #[ignore = "B-2026-08-12-2: let-bound Result[struct-with-Map] leaks on match"]
     fn asan_let_bound_result_map_field_leaks_on_match() {
         assert_clean_asan_run(
             r#"

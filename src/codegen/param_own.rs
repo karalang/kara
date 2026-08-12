@@ -495,6 +495,50 @@ impl<'ctx> super::Codegen<'ctx> {
         ok
     }
 
+    /// B-2026-08-12-2 — is every field of `struct_name` either outer-buffer
+    /// COPY-supported or a direct `Map`/`Set` HANDLE?
+    ///
+    /// The two properties come apart, and the gap is the bug. A `Map`/`Set`
+    /// field is not copy-supported — `field_copy_supported` bails on it because
+    /// the entry-copy cannot duplicate a side-table handle — but the synthesized
+    /// struct drop DOES free it, which is why a plain `let s = mk();` over a
+    /// `Map`-bearing struct is already leak-clean. So a payload bound out of a
+    /// `match` arm can be given its `track_struct_var` even though it could
+    /// never have been entry-copied: the arm needs the FREE, not the copy.
+    ///
+    /// Deliberately one level deep on the handle arm. A nested struct field
+    /// still has to be fully copy-supported, so this widens the admitted set by
+    /// exactly the direct-handle case that was measured, and a `Vec[Map[..]]` or
+    /// a `Map`-bearing nested struct keeps today's behaviour rather than riding
+    /// in on an unmeasured generalisation.
+    pub(super) fn struct_heap_copyable_or_handle(&self, struct_name: &str) -> bool {
+        if self.shared_types.contains_key(struct_name) {
+            return false;
+        }
+        let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
+            return false;
+        };
+        ftes.iter().all(|fte| {
+            if self.field_copy_supported(fte, &mut Vec::new()) {
+                return true;
+            }
+            let TypeKind::Path(p) = &fte.kind else {
+                return false;
+            };
+            matches!(
+                p.segments.first().map(String::as_str),
+                Some("Map")
+                    | Some("HashMap")
+                    | Some("SortedMap")
+                    | Some("BTreeMap")
+                    | Some("Set")
+                    | Some("HashSet")
+                    | Some("SortedSet")
+                    | Some("BTreeSet")
+            )
+        })
+    }
+
     /// B-2026-08-12-1 — is a by-value `Option`/`Result` PARAM of this declared
     /// type entry-COPIED by the callee, rather than owned by transfer? Both
     /// frames consult this ONE predicate (`callee_optres_param_entry_copied`,

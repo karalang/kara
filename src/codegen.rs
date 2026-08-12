@@ -2713,6 +2713,11 @@ pub(super) struct Codegen<'ctx> {
     /// pattern-binding registration goes MEMORY-ONLY (`track_struct_var`)
     /// instead of the body+memory wrapper — firing here too doubled the
     /// body on both backends (`match w { E2.B(r2) => … }` with `w: E2`).
+    /// B-2026-08-12-2 — does the arm currently being bound only BORROW its
+    /// payload bindings (no move-out to a call, a return, or another binding)?
+    /// Per-ARM, unlike the scrutinee flags around it, because it is a property
+    /// of the arm body rather than of the value being matched.
+    pub(crate) pattern_binding_arm_only_borrows: bool,
     pub(crate) pattern_binding_scrutinee_is_owned_param: bool,
     /// B-2026-08-02-25 (match-arm leg) — the `(slot, walker)` of the armed
     /// `__karac_dropelems_opt_*` / `__karac_dropelems_res_*` payload-bodies
@@ -8105,6 +8110,7 @@ impl<'ctx> Codegen<'ctx> {
             copy_support_for_loop_shared_mode: false,
             pattern_binding_scrutinee_is_option_result: false,
             pattern_binding_scrutinee_is_fresh_owning_temp: false,
+            pattern_binding_arm_only_borrows: false,
             pattern_binding_scrutinee_is_owned_param: false,
             pattern_binding_scrutinee_payload_bodies_src: None,
             pattern_binding_scrutinee_optres_slot: None,

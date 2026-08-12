@@ -506,14 +506,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     Self::collect_variant_payload_binding_names(&arm.pattern, false, &mut vp_names);
                     self.current_variant_payload_bindings.extend(vp_names);
                 }
+                // B-2026-08-12-2 — per-ARM, and saved/restored because a nested
+                // `match` inside this body binds through the same field.
+                let saved_arm_borrows = self.pattern_binding_arm_only_borrows;
+                self.pattern_binding_arm_only_borrows = self
+                    .arm_only_borrows_inline_result_payload(
+                        &arm.pattern,
+                        &arm.body,
+                        arm.guard.as_ref(),
+                    );
                 let handled_via_ptr = if let Some((scrut_ptr, pointee_ty)) = scrut_ref_ptr {
                     self.bind_pattern_values_via_ptr(&arm.pattern, scrut_ptr, pointee_ty)?
                         .is_some()
                 } else {
                     false
                 };
+                if handled_via_ptr {
+                    self.pattern_binding_arm_only_borrows = saved_arm_borrows;
+                }
                 if !handled_via_ptr {
                     self.bind_pattern_values(&arm.pattern, scrut)?;
+                    self.pattern_binding_arm_only_borrows = saved_arm_borrows;
                     self.current_variant_payload_bindings.clear();
                     // Slice 3s (B-2026-07-01-12): a borrow-mode `Some(x)` bind
                     // over a `Map.get` scrutinee whose arm (guard or body)
