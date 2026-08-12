@@ -38254,6 +38254,117 @@ fn main() {
         );
     }
 
+    /// B-2026-08-12-18 — the INTERIOR of the envelope the fixture above owns.
+    /// `struct S { o: Option[Option[String]] }` inside a `Result[S, i64]`: the
+    /// box is freed, and the `String` inside it was freed by nobody.
+    ///
+    /// THE ROW SCOPED THIS TO THE FRESH-TEMP ARGUMENT and that is too narrow,
+    /// which is why this fixture is a matrix. Measured per position against
+    /// the pre-fix compiler, at the DEFAULT `-O2`:
+    ///
+    ///   * `nomatch` — let-bound, never matched, no call in the program: LEAKED
+    ///   * `wild`    — let-bound, `Ok(_)`: LEAKED
+    ///   * `bound`   — let-bound, passed BY VALUE to a callee: LEAKED
+    ///   * `temp`    — the row's own shape, `cls(Result.Ok(S { … }))`: LEAKED
+    ///   * `sbind`   — let-bound, arm binds the STRUCT (`Ok(s) => 1`): clean
+    ///   * `deep`    — let-bound, arm binds the String out: clean
+    ///
+    /// The two clean ones are the reason this cannot be an unconditional free,
+    /// and they are in the fixture as the DOUBLE-FREE guard: an arm that binds
+    /// the struct out runs `__karac_drop_struct_S`, which frees the box and the
+    /// interior, so a second owner here aborts rather than leaks. They stay
+    /// green because the handoff disarms this action wholesale — the arm-bind
+    /// suppressor zeroes the box word and the null guard skips everything,
+    /// interior included — so no separate retraction was needed.
+    ///
+    /// THE INTERIOR IS ALLOCATED EXACTLY ONCE in every position: all six
+    /// spellings report 48 allocations for 40 iterations, so nothing anywhere
+    /// deep-copies it and exactly one owner is correct. That measurement is
+    /// what rules out "give the callee one too" as the fix.
+    ///
+    /// A `String` payload makes this non-vacuous at `-O2` for the reason the
+    /// sibling fixture's `sbox` leg documents: an all-scalar envelope folds
+    /// away entirely, and a clean run over an allocation that never happened
+    /// proves nothing. Here the interior IS the heap, so both levels are real
+    /// — unlike the sibling, this fixture pins at `-O2` as well as `-O0`.
+    #[test]
+    fn asan_struct_field_boxed_interior_owned_without_arm() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct S { o: Option[Option[String]] }
+fn cls(r: Result[S, i64]) -> i64 {
+    match r { Result.Ok(s) => match s.o { Option.Some(Option.Some(t)) => t.len() as i64, _ => -1 }, Result.Err(e) => e }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let nomatch: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"a{n + i}")) });
+        let wild: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"b{n + i}")) });
+        acc = acc + match wild { Result.Ok(_) => 1, Result.Err(e) => e };
+        let sbind: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"c{n + i}")) });
+        acc = acc + match sbind { Result.Ok(s) => 2, Result.Err(e) => e };
+        let deep: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"d{n + i}")) });
+        acc = acc + match deep {
+            Result.Ok(s) => match s.o { Option.Some(Option.Some(t)) => t.len() as i64, _ => -1 },
+            Result.Err(e) => e,
+        };
+        let bound: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"e{n + i}")) });
+        acc = acc + cls(bound);
+        acc = acc + cls(Result.Ok(S { o: Option.Some(Option.Some(f"f{n + i}")) }));
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            // Per iteration: 1 (wild) + 2 (sbind) + len(deep) + len(bound) + len(temp).
+            // The three measured strings are "d1".."d40" etc — 2 chars for the
+            // first nine, 3 thereafter — so 3 + 3*(9*2 + 31*3) = 3*111 + 3 = 336
+            // over the whole loop, plus 3*40 = 120 for the two constants.
+            &["453"],
+            "struct_field_boxed_interior_owned_without_arm",
+            40,
+        );
+    }
+
+    /// B-2026-08-12-19 — the one position the row above does NOT cover, split
+    /// out so its `-O0` quarantine does not blanket the six that are fixed.
+    ///
+    /// A fresh-temp `Result[S, i64]` argument whose callee's arm binds NOTHING
+    /// (`Result.Ok(_)`). The caller is clean, which is why this passes at
+    /// `-O2`; what leaks is the CALLEE's entry copy, and only `-O0` shows it
+    /// because the copy folds away under the optimizer. Both leaked
+    /// allocations are attributed to `cls` in the LSan trace — 40 boxes at
+    /// 32 B plus their 40 interior Strings.
+    ///
+    /// Distinct from B-2026-08-12-18 and untouched by its fix, measured on
+    /// both sides: pre-fix `-O0` reports 1551 B in 120 allocations, post-fix
+    /// 1391 B in 80 — the difference is exactly the 40 caller-side Strings
+    /// that row closed, and the remainder was there before and is unchanged.
+    #[test]
+    fn asan_struct_field_boxed_interior_nonbinding_callee() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct S { o: Option[Option[String]] }
+fn cls(r: Result[S, i64]) -> i64 { match r { Result.Ok(_) => 1, Result.Err(e) => e } }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        acc = acc + cls(Result.Ok(S { o: Option.Some(Option.Some(f"g{n + i}")) }));
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["40"],
+            "struct_field_boxed_interior_nonbinding_callee",
+            40,
+        );
+    }
+
     #[test]
     fn asan_struct_field_boxed_heapless_option_envelope_owned() {
         assert_clean_asan_run_min_allocs(

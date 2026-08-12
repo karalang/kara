@@ -31,9 +31,14 @@ use inkwell::AddressSpace;
 /// One boxed-envelope coordinate from
 /// [`super::CodeGen::struct_payload_boxed_field_variants`]:
 /// `(outer_enum, outer_variant, inner_tag_field, inner_enum, inner_variant,
-/// deeper_tags)` — exactly the arguments
+/// deeper_tags, box_contents)` — exactly the arguments
 /// `track_nested_boxed_enum_var_at_field` takes after the name and slot.
 /// B-2026-08-12-15.
+///
+/// `box_contents` (B-2026-08-12-18) is the TYPE THE BOX HOLDS, carried as a
+/// `TypeExpr` rather than a resolved LLVM descriptor so the decision about
+/// whether it yields an interior free lives in ONE place — the tracking fn —
+/// instead of being split between the enumeration and the registration.
 pub(super) type StructPayloadBoxedField = (
     &'static str,
     &'static str,
@@ -41,6 +46,7 @@ pub(super) type StructPayloadBoxedField = (
     &'static str,
     &'static str,
     Vec<u64>,
+    Option<TypeExpr>,
 );
 
 use super::helpers::{
@@ -3652,7 +3658,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // and it is what keeps a `Option[Option[Option[i64]]]`
                     // field from leaking every level below the first.
                     let payload_idx = usize::from(inner_variant == "Err");
-                    let deeper = Self::path_generic_arg(fte, payload_idx)
+                    let boxed = Self::path_generic_arg(fte, payload_idx);
+                    let deeper = boxed
                         .map(|inner| self.nested_box_deeper_tag_chain(inner))
                         .unwrap_or_default();
                     out.push((
@@ -3663,6 +3670,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         inner_enum,
                         inner_variant,
                         deeper,
+                        boxed.cloned(),
                     ));
                 }
                 offset += words;

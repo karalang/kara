@@ -1702,6 +1702,12 @@ impl<'ctx> super::Codegen<'ctx> {
             inner_enum,
             inner_variant,
             deeper_tags,
+            // No interior free for this population. Its members are the
+            // param-entry and inline-payload registrations, whose interiors
+            // are owned by other frames; only the struct-FIELD population
+            // (B-2026-08-12-18) has a shape with no owner. Passing `None`
+            // keeps every existing caller box-only, byte for byte.
+            None,
         );
     }
 
@@ -1722,12 +1728,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `suppress_nested_boxed_payload_move` zeroes the same computed word off
     /// the queued action. So this widens the enumeration only — no cleanup or
     /// suppression path needed a change to follow it.
+    /// `box_contents` (B-2026-08-12-18) is the type the box HOLDS. When it is
+    /// an `Option` whose payload is a `{ptr,len,cap}` heap value, this action
+    /// also frees that interior — see `CleanupAction::NestedBoxedEnumDrop`'s
+    /// `inner_payload_free` for why that is the converse of the box-only rule
+    /// rather than a breach of it, and why no retraction is needed. `None`, or
+    /// any other contents shape, keeps the historical box-only free.
     #[allow(
         clippy::too_many_arguments,
         reason = "each parameter is a distinct layout coordinate of the two-tag \
                   walk (outer/inner enum and variant, the inner tag's field \
-                  index, plus the deeper tag chain); bundling them into a \
-                  struct would move the arity, not remove it"
+                  index, the deeper tag chain, and the boxed contents type); \
+                  bundling them into a struct would move the arity, not remove it"
     )]
     pub(super) fn track_nested_boxed_enum_var_at_field(
         &mut self,
@@ -1739,6 +1751,7 @@ impl<'ctx> super::Codegen<'ctx> {
         inner_enum: &str,
         inner_variant: &str,
         deeper_tags: Vec<u64>,
+        box_contents: Option<TypeExpr>,
     ) {
         let Some(outer) = self.enum_layouts.get(outer_enum) else {
             return;
@@ -1754,6 +1767,31 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        // B-2026-08-12-18 — does the box hold a heap interior nobody else can
+        // own? Only one contents shape qualifies, and every clause is a
+        // restriction to what was measured:
+        //
+        //   * an `Option` (not a `Result`): the box holds ONE flattened
+        //     `{tag, ptr, len, cap}` value, so the payload overlay is at a
+        //     fixed field index. A `Result` overlays two variants on the same
+        //     words and would need the live tag before it could name the one
+        //     to free — the same asymmetry `owned_boxed_option_param_struct`
+        //     documents;
+        //   * whose payload is a direct `{ptr,len,cap}` heap value
+        //     (`option_inline_payload_elem`, i.e. `String` / `Vec[U]`), the
+        //     one interior the overlay helper below can free;
+        //   * with an EMPTY envelope chain, so this box IS the innermost one
+        //     and the interior sits directly in it.
+        //
+        // Anything else keeps the box-only default rather than guessing.
+        let inner_payload_free = box_contents.as_ref().and_then(|te| {
+            if !deeper_tags.is_empty() {
+                return None;
+            }
+            let elem = self.option_inline_payload_elem(te)?;
+            let layout = self.enum_layouts.get("Option")?;
+            Some((layout.llvm_type, layout.tags.get("Some").copied()?, elem))
+        });
         // The outer payload area starts at field 1 and the inner enum is laid
         // there from its own field 0, so the inner TAG is outer field 1 —
         // shifted by any FIELDS AHEAD OF IT when the payload is a struct — and
@@ -1769,6 +1807,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 inner_tag,
                 inner_tag_field,
                 deeper_tags,
+                inner_payload_free,
             });
         }
         // Armed for the passthrough rule only — deliberately NOT
@@ -9350,6 +9389,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 inner_tag,
                 inner_tag_field,
                 deeper_tags,
+                inner_payload_free,
             } => {
                 // Two tag guards, outer then inner. Both are load-bearing: the
                 // outer one keeps an `Err(3)` from having its Ok-side words
@@ -9418,15 +9458,70 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(is_null, join_bb, free_bb)
                     .unwrap();
                 self.builder.position_at_end(free_bb);
-                // BOX-ONLY: no inner drop. The interior already has an owner
-                // (a match arm that binds it out), and running its drop here
-                // double-frees — measured. See `track_nested_boxed_enum_var`.
+                // BOX-ONLY BY DEFAULT: no inner drop. The interior usually
+                // already has an owner (a match arm that binds it out), and
+                // running its drop here double-frees — measured. See
+                // `track_nested_boxed_enum_var`.
                 //
                 // `deeper_tags` is the ENVELOPE chain below this box, and
                 // walking it is not a widening of the box-only rule but an
                 // application of it: every level is a `coerce_to_payload_words`
                 // envelope the source program cannot name, so no arm can own
                 // one. The interior stays untouched at every depth.
+                //
+                // B-2026-08-12-18 — the exception, and it is the CONVERSE of
+                // the rule rather than a breach of it. "The interior has an
+                // owner" holds only when an arm binds one out; when nothing
+                // does — the value is never matched, the arm is `Ok(_)`, or
+                // the value is a fresh temp argument with no binding anywhere
+                // — nobody owns it and the interior leaks. `inner_payload_free`
+                // is `Some` exactly for the one contents shape whose interior
+                // this action can name (see its doc), and the arm case disarms
+                // it for free: `suppress_struct_field_boxed_payload_arm_bind`
+                // zeroes the box word, so the null guard above skips this
+                // block entirely and the arm's `__karac_drop_struct_<T>` does
+                // all of it.
+                if let Some((box_enum_ty, some_tag, elem_ty)) = inner_payload_free {
+                    let itag = self
+                        .builder
+                        .build_load(i64_t, box_ptr, &format!("{name}_nbox_inner_payload_tag"))
+                        .unwrap()
+                        .into_int_value();
+                    let is_some = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::EQ,
+                            itag,
+                            i64_t.const_int(*some_tag, false),
+                            &format!("{name}_nbox_inner_is_some"),
+                        )
+                        .unwrap();
+                    let ip_bb = self.context.append_basic_block(fn_val, "nboxdrop_interior");
+                    let ip_done = self
+                        .context
+                        .append_basic_block(fn_val, "nboxdrop_interior_done");
+                    self.builder
+                        .build_conditional_branch(is_some, ip_bb, ip_done)
+                        .unwrap();
+                    self.builder.position_at_end(ip_bb);
+                    // The box holds the flattened `{tag, ptr, len, cap}`, i.e.
+                    // exactly `Option`'s own LLVM shape, so the shared overlay
+                    // helper applies verbatim with the BOX as the slot. It
+                    // carries the `cap > 0` guard, so a moved-out or SSO
+                    // interior is a no-op here just as it is at a let site.
+                    self.emit_free_inline_payload_overlay(
+                        box_ptr,
+                        *box_enum_ty,
+                        Some(*elem_ty),
+                        fn_val,
+                        vec_ty,
+                        ptr_ty,
+                        i64_t,
+                        "nbox.interior",
+                    );
+                    self.builder.build_unconditional_branch(ip_done).unwrap();
+                    self.builder.position_at_end(ip_done);
+                }
                 self.emit_nested_box_chain_free(fn_val, box_ptr, deeper_tags, name);
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(join_bb);

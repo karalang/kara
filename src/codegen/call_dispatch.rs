@@ -2720,8 +2720,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // No double free against the callee's arm: the param is entry-copied
         // (this fn only runs when it is), so the arm's `__karac_drop_struct_<T>`
         // frees the COPY's box and this frees the original's.
-        for (outer_enum, outer_variant, inner_tag_field, inner_enum, inner_variant, deeper) in
-            self.struct_payload_boxed_field_variants(param_te)
+        // B-2026-08-12-18 — `box_contents` rides along so the interior gets an
+        // owner here too. This is the position the row was filed against and
+        // the one where the absence is starkest: a fresh temp has no binding
+        // in the caller AND the callee declines this population, so before
+        // this neither the envelope (fixed by B-2026-08-12-15) nor the heap
+        // inside it had an owner in any frame.
+        for (
+            outer_enum,
+            outer_variant,
+            inner_tag_field,
+            inner_enum,
+            inner_variant,
+            deeper,
+            box_contents,
+        ) in self.struct_payload_boxed_field_variants(param_te)
         {
             self.track_nested_boxed_enum_var_at_field(
                 "__optres_arg_tmp",
@@ -2732,6 +2745,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 inner_enum,
                 inner_variant,
                 deeper,
+                box_contents,
             );
         }
     }

@@ -1030,6 +1030,27 @@ pub(crate) enum CleanupAction<'ctx> {
         /// `nested_box_deeper_tag_chain` for why walking envelopes is safe
         /// where walking the interior is not.
         deeper_tags: Vec<u64>,
+        /// B-2026-08-12-18 — the ONE interior shape this action frees:
+        /// `(box_enum_ty, variant_tag, payload_elem_ty)` when the box holds an
+        /// `Option` whose payload is a `{ptr,len,cap}` heap value
+        /// (`Option[Option[String]]`, `Option[Option[Vec[T]]]`). `None`
+        /// otherwise, which keeps the box-only default for every other shape.
+        ///
+        /// "Walking the interior is not safe" — the rule the `deeper_tags` doc
+        /// above states — is about an interior a MATCH ARM can bind out. That
+        /// is a rule about ownership, not about depth, and it has a converse
+        /// this field covers: when no arm binds anything, nobody owns the
+        /// interior and it leaks. The arm case disarms this automatically and
+        /// needs no separate retraction, because
+        /// `suppress_struct_field_boxed_payload_arm_bind` hands the box over by
+        /// ZEROING the box word in the scrutinee's slot — this action's null
+        /// guard then skips the whole free, interior included, and the arm's
+        /// `__karac_drop_struct_<T>` does all of it instead.
+        ///
+        /// Restricted to an EMPTY `deeper_tags`, i.e. the box that is also the
+        /// innermost envelope. A chain would put the interior below the last
+        /// box rather than this one, and that shape was not measured.
+        inner_payload_free: Option<(StructType<'ctx>, u64, BasicTypeEnum<'ctx>)>,
     },
     /// User-source `defer { ... }` block to compile at scope exit.
     /// Pushed in program order at the `defer` statement's site; drained

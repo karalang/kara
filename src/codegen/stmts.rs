@@ -5056,7 +5056,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             let mut nested: Vec<_> = self
                                 .nested_boxed_enum_payload_variants(te)
                                 .into_iter()
-                                .map(|(oe, ov, ie, iv, d)| (oe, ov, 1u32, ie, iv, d))
+                                // `None` for the box contents, deliberately —
+                                // this half NEVER takes an interior free. The
+                                // inline payload IS the `Option`/`Result`, so
+                                // an arm can bind the interior out directly
+                                // (`Ok(Some(Some(t)))`) and owns it; adding one
+                                // here is the double free the comment below
+                                // records as measured. Only the struct-field
+                                // half, whose arm binds the STRUCT and hands
+                                // the whole box over by zeroing its word, has a
+                                // shape with no owner (B-2026-08-12-18).
+                                .map(|(oe, ov, ie, iv, d)| (oe, ov, 1u32, ie, iv, d, None))
                                 .chain(struct_field_boxes)
                                 .collect();
                             // The RHS hands one of its arguments straight back
@@ -5084,21 +5094,33 @@ impl<'ctx> super::Codegen<'ctx> {
                                     inner_enum,
                                     inner_variant,
                                     deeper,
+                                    box_contents,
                                 ) in &nested
                                 {
-                                    // BOX-ONLY, for the reason
-                                    // `user_enum_boxed_payload_variants` gives
-                                    // its own box-only free: the ENVELOPE is
-                                    // what has no owner here, and the interior
-                                    // already has one. Running the payload's
-                                    // drop as well was implemented and measured
-                                    // WRONG — a `Result[Option[Option[String]],
-                                    // i64]` whose arm binds the String out
-                                    // aborts with a glibc double free at BOTH
-                                    // opt levels, because the arm's binding
-                                    // frees that String too. What was measured
-                                    // missing is 32 bytes per construction, the
+                                    // BOX-ONLY for the DIRECT half, for the
+                                    // reason `user_enum_boxed_payload_variants`
+                                    // gives its own box-only free: the ENVELOPE
+                                    // is what has no owner there, and the
+                                    // interior already has one. Running the
+                                    // payload's drop as well was implemented and
+                                    // measured WRONG — a
+                                    // `Result[Option[Option[String]], i64]`
+                                    // whose arm binds the String out aborts with
+                                    // a glibc double free at BOTH opt levels,
+                                    // because the arm's binding frees that
+                                    // String too. What was measured missing
+                                    // there is 32 bytes per construction, the
                                     // box itself, and that is all this frees.
+                                    //
+                                    // The STRUCT-FIELD half carries a `Some`
+                                    // box-contents type and does take an
+                                    // interior free (B-2026-08-12-18). It is not
+                                    // subject to the measurement above: no arm
+                                    // can name that interior — reaching it means
+                                    // binding the struct out, and that hands the
+                                    // whole box over by zeroing its word, so
+                                    // this action skips entirely rather than
+                                    // racing the binding.
                                     self.track_nested_boxed_enum_var_at_field(
                                         var_name,
                                         slot.ptr,
@@ -5108,6 +5130,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         inner_enum,
                                         inner_variant,
                                         deeper.clone(),
+                                        box_contents.clone(),
                                     );
                                 }
                                 // Recorded only once the registration actually

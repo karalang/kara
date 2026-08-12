@@ -130,3 +130,30 @@
 # needed no new cleanup action: `NestedBoxedEnumDrop` was already parameterized
 # on the inner tag's field index, and a struct payload only shifts that index by
 # the words of the fields ahead of the box.
+
+# B-2026-08-12-19 — the CALLEE's entry copy of a `Result[S, i64]` whose struct
+# payload has a boxed `Option` field, when the callee's arm binds NOTHING.
+# `fn cls(r: Result[S, i64]) { match r { Result.Ok(_) => 1, … } }` over
+# `struct S { o: Option[Option[String]] }`: the copy's box and the String
+# inside it are both malloc'd in `cls` and freed by nobody — 1,391 B in 80
+# allocations over 40 iterations, attributed to `cls` in the LSan trace.
+#
+# CALLER-SIDE IS CLEAN, which is why this passes at -O2 and only shows here:
+# the copy is dead and LLVM deletes it. B-2026-08-12-18 fixed the caller's
+# interior in every position including this one, and the measurement brackets
+# it — pre-fix -O0 reports 1,551 B / 120 allocations, post-fix 1,391 B / 80.
+# The 160 B / 40 difference is exactly the caller-side Strings that row closed;
+# the remainder predates it and is untouched.
+#
+# WHY IT IS ITS OWN FIXTURE rather than a leg of the -18 matrix: quarantine is
+# per-test, so folding this shape in would blanket the six positions that ARE
+# fixed and are green at both levels.
+#
+# THE FIX IS NOT "register the struct-field population callee-side". That is
+# what `functions.rs` deliberately declines, and its comment records the
+# measurement: for a copy-supported payload the callee's arm already runs
+# `__karac_drop_struct_<T>`, so registering makes two owners and aborts with a
+# glibc double free on the temp-argument, bound-argument and matched-after-call
+# forms. The gap is narrower — an arm that binds nothing leaves the copy with
+# no owner — so any fix has to be conditional on that, not on the population.
+memory_sanitizer_tests::asan_struct_field_boxed_interior_nonbinding_callee
