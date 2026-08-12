@@ -596,6 +596,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.free_fresh_owned_str_arg(left, lhs);
                         self.free_fresh_owned_str_arg(right, rhs);
                     }
+                    // B-2026-08-11-33 — the STRUCT sibling of the String free
+                    // directly above. A fresh temp `#[derive(Eq)]` struct
+                    // operand (`mk(hay) == other`) owns its heap FIELDS, which
+                    // `compile_struct_eq` reads without taking ownership and
+                    // which no binding exists to free. Give it an owner rather
+                    // than freeing a buffer: the leaked memory is inside the
+                    // operand, so the String path's `free` is the wrong
+                    // operation. Runs after the comparison, and the drop it
+                    // registers fires at scope exit, so both reads dominate it.
+                    if matches!(op, BinOp::Eq | BinOp::NotEq)
+                        && lhs.is_struct_value()
+                        && rhs.is_struct_value()
+                        && !self.llvm_ty_is_vec_struct(lhs.get_type())
+                    {
+                        self.track_fresh_struct_temp_operand(left, lhs.into_struct_value());
+                        self.track_fresh_struct_temp_operand(right, rhs.into_struct_value());
+                    }
                     Ok(result)
                 }
             },

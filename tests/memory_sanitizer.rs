@@ -33836,9 +33836,163 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "B-2026-08-11-33 — derived-struct `==` leaks a fresh temp's heap FIELD;                 sibling of B-2026-08-11-24, different lowering (compile_struct_eq)"]
+    fn asan_derive_eq_struct_temp_tracking_controls() {
+        // B-2026-08-11-33 over-fire matrix. The fix gives a fresh temp struct
+        // operand an OWNER, so the failure mode it risks is the opposite of
+        // the bug: freeing something that is owned elsewhere. Every shape here
+        // must stay clean — a double free or use-after-free shows up as an
+        // ASAN abort, not a leak, so these are the rows that actually license
+        // the change.
+        for (shape, src, expect) in [
+            // A struct LOCAL on the fresh side: an identifier is a place
+            // expression, already owned by its binding, and must NOT be
+            // tracked — tracking it would drop the same fields twice.
+            (
+                "local_vs_ref_param",
+                r#"
+#[derive(Eq)]
+struct P { name: String }
+fn f(other: ref P) -> bool { let p = P { name: "abcd" }; p == other }
+fn main() { let q = P { name: "abcd" }; println(f"{f(q)}"); }
+"#,
+                "true",
+            ),
+            // A FIELD ACCESS operand — also a place, owned by its parent.
+            (
+                "field_access_vs_ref_param",
+                r#"
+#[derive(Eq)]
+struct P { name: String }
+struct Holder { inner: P }
+fn f(h: ref Holder, other: ref P) -> bool { h.inner == other }
+fn main() {
+    let h = Holder { inner: P { name: "abcd" } };
+    let q = P { name: "abcd" };
+    println(f"{f(h, q)}");
+}
+"#,
+                "true",
+            ),
+            // BOTH operands fresh temps: both get tracked, and each must own
+            // exactly its own fields.
+            (
+                "temp_vs_temp",
+                r#"
+#[derive(Eq)]
+struct P { name: String }
+fn mk(s: ref String) -> P { P { name: s.substring(0, 4) } }
+fn f(a: ref String, b: ref String) -> bool { mk(a) == mk(b) }
+fn main() { let x = "abcdefgh"; let y = "abcdzzzz"; println(f"{f(x, y)}"); }
+"#,
+                "true",
+            ),
+            // The `!=` form, and the borrowed operand READ AFTER the
+            // comparison — if the fix dropped the wrong side, or dropped too
+            // early, this reads freed memory.
+            (
+                "ne_then_read_borrowed_operand",
+                r#"
+#[derive(Eq)]
+struct P { name: String }
+fn mk(s: ref String) -> P { P { name: s.substring(0, 4) } }
+fn f(hay: ref String, other: ref P) -> i64 {
+    let differs = mk(hay) != other;
+    let n = other.name.len();
+    if differs { n } else { n + 100 }
+}
+fn main() {
+    let h = "zzzzefgh";
+    let p = P { name: "abcd" };
+    println(f"{f(h, p)}");
+}
+"#,
+                "4",
+            ),
+            // A `Vec[String]` field — the registered drop must drain the
+            // ELEMENTS, not just the vector's buffer, and must not
+            // double-drop them.
+            //
+            // The comparison's RESULT is deliberately discarded and not
+            // asserted: `#[derive(Eq)]` over a `Vec[String]` field is itself
+            // wrong in codegen (interp says the two are equal, both compiled
+            // backends say they are not — B-2026-08-12-5, found while
+            // building this control and unrelated to the leak). Asserting it
+            // here would either encode a wrong answer as expected or make this
+            // memory test fail for a reason that has nothing to do with
+            // memory. The temp is still built, compared, tracked and dropped,
+            // which is all this row is here to exercise.
+            (
+                "vec_field_temp",
+                r#"
+#[derive(Eq)]
+struct B { items: Vec[String] }
+fn mk(s: ref String) -> B {
+    let mut v: Vec[String] = Vec.new();
+    v.push(s.substring(0, 4));
+    v.push(s.substring(4, 8));
+    B { items: v }
+}
+fn f(a: ref String, other: ref B) -> i64 {
+    let _ = mk(a) == other;
+    other.items.len()
+}
+fn main() {
+    let x = "abcdefgh";
+    let mut w: Vec[String] = Vec.new();
+    w.push("abcd");
+    w.push("efgh");
+    let o = B { items: w };
+    println(f"{f(x, o)}");
+}
+"#,
+                "2",
+            ),
+            // A comparison in a LOOP — the per-evaluation drop must fire per
+            // evaluation, without accumulating or re-freeing.
+            (
+                "temp_eq_in_loop",
+                r#"
+#[derive(Eq)]
+struct P { name: String }
+fn mk(s: ref String, i: i64) -> P { P { name: s.substring(i, i + 4) } }
+fn f(hay: ref String, other: ref P) -> i64 {
+    let mut hits = 0;
+    let mut i = 0;
+    while i + 4 <= hay.len() {
+        if mk(hay, i) == other { hits = hits + 1; }
+        i = i + 1;
+    }
+    hits
+}
+fn main() {
+    let h = "abcdabcdabcd";
+    let p = P { name: "abcd" };
+    println(f"{f(h, p)}");
+}
+"#,
+                "3",
+            ),
+            // Scalar-only struct: nothing to free, so the gate must skip it
+            // entirely rather than emit a spurious drop.
+            (
+                "scalar_struct_temp",
+                r#"
+#[derive(Eq)]
+struct Pt { x: i64, y: i64 }
+fn mk(a: i64) -> Pt { Pt { x: a, y: a + 1 } }
+fn f(other: ref Pt) -> bool { mk(1) == other }
+fn main() { let q = Pt { x: 1, y: 2 }; println(f"{f(q)}"); }
+"#,
+                "true",
+            ),
+        ] {
+            assert_clean_asan_run(src, &[expect], &format!("derive_eq_ctl_{shape}"));
+        }
+    }
+
+    #[test]
     fn asan_derive_eq_struct_heap_field_vs_ref_param() {
-        // B-2026-08-11-33, split out of B-2026-08-11-24 and NOT fixed by it.
+        // B-2026-08-11-33, split out of B-2026-08-11-24 and fixed separately.
         //
         // Same operand pairing as that row — an unbound temp against a `ref`
         // param — but a `#[derive(Eq)]` STRUCT whose String field is heap
@@ -33852,12 +34006,15 @@ fn main() {
         // the payload was not. Swapping the literal for a `substring` makes it
         // reproduce every time.
         //
-        // Not fixed with -24 because it is a different lowering:
-        // `compile_struct_eq`, not the surface-`Binary` String path, and the
-        // fix is to materialize the fresh temp into a slot and register its
-        // struct drop (the `track_freshtemp_field_access_object` pattern from
-        // B-2026-07-22-2) rather than to free a buffer. That carries
-        // double-free risk and deserves its own matrix.
+        // Fixed separately from -24 because it is a different lowering:
+        // `compile_struct_eq`, not the surface-`Binary` String path. The leak
+        // is a heap FIELD inside the operand rather than the operand's own
+        // buffer, so the fix gives the temp an OWNER — materialize into a slot
+        // and register its struct drop, the
+        // `track_freshtemp_field_access_object` pattern from B-2026-07-22-2 —
+        // instead of freeing a buffer. Ordering is what makes that safe: the
+        // comparison has already read both operands when the tracking runs,
+        // and the registered drop fires at scope exit.
         assert_clean_asan_run(
             r#"
 #[derive(Eq)]

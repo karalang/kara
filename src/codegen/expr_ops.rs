@@ -846,6 +846,71 @@ impl<'ctx> super::Codegen<'ctx> {
     /// borrow-returning accessor, and a non-shared user struct.
     /// `track_struct_var` self-filters heapless structs (its drop synthesis
     /// returns None), so a scalar-only temp costs one dead alloca at most.
+    /// B-2026-08-11-33 — give a FRESH TEMP struct operand of a `==`/`!=`
+    /// comparison an owner, so its heap fields are freed at scope exit.
+    ///
+    /// `mk(hay) == other`, where `mk` returns a `#[derive(Eq)]` struct with a
+    /// String field and `other: ref P`, leaked that field on every
+    /// evaluation. `compile_struct_eq` field-walks both operands and takes no
+    /// ownership, and a call-result temp has no binding to free it — so the
+    /// buffer was simply never reclaimed. This is the struct sibling of
+    /// B-2026-08-11-24 (the String-equality form): same operand pairing, but
+    /// the leak is a heap FIELD inside the operand rather than the operand's
+    /// own buffer, so freeing a String buffer is the wrong operation and that
+    /// fix does not reach it.
+    ///
+    /// Materialize-and-track rather than free, reusing the pattern
+    /// `track_freshtemp_field_access_object` (B-2026-07-22-2) already uses for
+    /// a fresh call-result struct read in expression position: store the temp
+    /// into a slot and register its struct drop, which drains heap fields
+    /// recursively and knows about shared/generic-monomorph shapes.
+    ///
+    /// Ordering is what makes it safe: the comparison has already read both
+    /// operands by the time this runs, and the registered drop fires at SCOPE
+    /// EXIT, so there is no window where the compare reads freed memory.
+    ///
+    /// The gates matter more than the body — each one is a shape that would
+    /// otherwise become a double free:
+    ///   * `expr_yields_fresh_owned_temp` admits only Call/MethodCall results,
+    ///     so an identifier, field access, or any other place expression —
+    ///     owned by someone else — is never tracked;
+    ///   * `scrutinee_is_borrow_call` excludes a call that RETURNS a borrow,
+    ///     whose referent the caller still owns;
+    ///   * shared types are excluded (RC machinery, not buffer ownership);
+    ///   * `aggregate_has_heap_field` skips structs with nothing to free, so
+    ///     the common scalar-struct comparison pays no alloca or drop.
+    pub(super) fn track_fresh_struct_temp_operand(
+        &mut self,
+        expr: &Expr,
+        sv: inkwell::values::StructValue<'ctx>,
+    ) {
+        if !self.aggregate_has_heap_field(sv.get_type()) {
+            return;
+        }
+        if !self.expr_yields_fresh_owned_temp(expr) || self.scrutinee_is_borrow_call(expr) {
+            return;
+        }
+        let Some(name) = self.type_name_of_expr(expr) else {
+            return;
+        };
+        if !self.struct_types.contains_key(name.as_str())
+            || self.shared_types.contains_key(name.as_str())
+        {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let slot = self.create_entry_alloca(fn_val, "__eqtemp_struct", sv.get_type().into());
+        let _ = self.builder.build_store(slot, sv);
+        // Thread the concrete instantiation when there is one, so a generic
+        // struct gets its per-monomorph drop rather than the name-shared one
+        // that resolves a `Vec[T]` field from bare `T` and leaks the elements
+        // (the B-2026-07-11-35 hazard).
+        let inst = self.enum_inst_type_of_expr(expr);
+        self.track_struct_var_inst(&name, slot, inst);
+    }
+
     fn track_freshtemp_field_access_object(
         &mut self,
         object: &Expr,
