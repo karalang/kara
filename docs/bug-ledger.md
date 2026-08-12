@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 238 | 1 |
+| miscompile | 238 | 0 |
 | leak | 164 | 2 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 811 | 5 |
+| codegen | 811 | 4 |
 | typecheck | 156 | 3 |
 | interp | 138 | 0 |
 | ownership | 45 | 1 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1123 surfaced · 7 open · 1104 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1123 surfaced · 6 open · 1105 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-2 | 2026-08-12 | codegen | medium | A `Map` field of an `Ok` payload leaks ~72 B per call when the `Result` is LET-BOUND before the match; matching the producing call INLINE is clean, and the identical shape with a `Vec` field is clean. Split out of B-2026-08-11-30 leg A -- no by-value parameter boundary is involved, so the param-ownership defect that row describes does not cover it. | Split from B-2026-08-11-30, which is now solely about by-value Option/Result params. Same code area as B-2026-08-11-29 (SEGV, struct with a Map/Set field). |
-| B-2026-08-12-5 | 2026-08-12 | codegen | high | SILENT WRONG ANSWER (run-vs-build): `#[derive(Eq)]` equality over a struct with a `Vec[String]` field reports NOT EQUAL in both compiled backends for two vectors whose CONTENTS are equal, while the interpreter correctly reports equal. Measured on one program: `S { v: a } == S { v: b }` with both vectors holding \"abcd\" gives interp `true`, JIT `false`, AOT `false`. It is a FALSE NEGATIVE only -- differing contents correctly give `false` on all three -- so the failure mode is a comparison that silently never matches. NARROW AND MEASURED: a `Vec[i64]` field is CORRECT on all three (`true`), and a plain `String` field is CORRECT on all three, so it is specific to a Vec of HEAP elements. Reproduces with two struct LOCALS, no temporaries and no `ref` params, so it is independent of B-2026-08-11-24 / -33 (which are leaks in the same lowering's neighbourhood and cannot change a boolean). | `compile_struct_eq` in src/codegen/expr_ops.rs — the per-field recursion compares a `Vec` field by its `{ptr,len,cap}` words instead of element-wise; the interpreter's `value_compare` Array arm does compare contents |
 | B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
 | B-2026-08-12-9 | 2026-08-12 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at typecheck, so the codegen paths two E2E tests cover can never run in a shipped binary. Either the emitter is dead code to retire or the rule is stricter than intended -- open design call, not a defect report. | Vec[f64].sorted / Iterator.max / Iterator.min vs the F64 total-order rule |
 | B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
@@ -149,9 +148,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1123 surfaced
 
 </details>
 
-### Fixed (1104)
+### Fixed (1105)
 
-<details><summary>1104 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1105 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2366,6 +2365,7 @@ source and target end up cap-zeroed and neither frees it. That is unchanged from
 before this fix (it leaked the same 8 bytes then), and strictly better than the
 pre-B-25 double free -- but it is a live defect, and `karac check` accepts the
 program. |
+| B-2026-08-12-5 | codegen | high | SILENT WRONG ANSWER (run-vs-build): `#[derive(Eq)]` equality over a struct with a `Vec[String]` field reports NOT EQUAL in both compiled backends for… | a827a7f (route the `==` operator for a Vec-carrying struct to the existing TYPE-directed `emit_eq_fn_for_struct` via a new `try_compile_struct_eq_typed` in src/codegen/expr_ops.rs, gated by `struct_has_vec_field_deep`; the shape-directed field walk stays for every other struct) |
 | B-2026-08-12-6 | other | medium | 103 of the 109 codegen-invoking test harnesses in `tests/` resolved the RAW parse tree, skipping some or all of the three AST rewrites `karac build`… | FIXED by b3a1061. `karac::prepare_for_resolve` owns the parse->resolve rewrite sequence; `cli.rs` and all 109 codegen-invoking test harnesses call it, so no driver can run a subset. Pinned by `desugar_dependent_constructs_reach_codegen_through_the_harness` (multi-assign, trait default method, `impl Trait` param), verified by negative control. |
 | B-2026-08-12-1 | codegen | high | Passing a by-value `Option`/`Result` argument TWICE makes every call after the first read the WRONG VARIANT -- `Err`/`None` for a value that is still… | FIXED by c24343b.
 
