@@ -40744,7 +40744,7 @@ fn main() {
 
     #[test]
     fn asan_vec_element_field_move_by_assignment_no_double_free() {
-        // B-2026-08-11-33 — `out = stats[0].region` moves a heap field out of a
+        // B-2026-08-11-25 — `out = stats[0].region` moves a heap field out of a
         // struct held as a Vec ELEMENT into an EXISTING binding. Nothing
         // cap-zeroed the field in its owner, so the owner's drop freed the
         // buffer the target now owned: `free(): double free detected in tcache
@@ -40762,6 +40762,15 @@ fn main() {
         // the double free into a per-iteration leak, which the value pins in
         // tests/codegen.rs cannot see. The loop is here to make such a leak
         // accumulate rather than hide.
+        //
+        // THAT LAST SENTENCE OVERSTATED WHAT THIS LOOP DOES, and B-2026-08-12-4
+        // was the leak it let through. `best_region` is overwritten only when
+        // the running max improves — twice over these 40 elements — so exactly
+        // ONE buffer is displaced, and one leaked pointer left in a stale stack
+        // slot reads to LeakSanitizer as still-reachable. This fixture was green
+        // under ASAN on a tree where valgrind reported that leak on every run.
+        // `asan_place_field_move_assign_overwrite_no_leak` is the one that
+        // actually accumulates (200 unconditional overwrites); keep both.
         assert_clean_asan_run(
             r#"
 struct S { region: String, revenue: i64 }
@@ -40802,6 +40811,55 @@ fn main() {
 "#,
             &["10 6 north 1"],
             "vec_element_field_move_by_assignment_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_place_field_move_assign_overwrite_no_leak() {
+        // B-2026-08-12-4 — the DISPLACED value of the assignment target.
+        // `cur = stats[j].region` cap-zeroes the source so the element's owner
+        // stops freeing it (B-2026-08-11-25), which leaves whatever `cur` held
+        // BEFORE with no owner at all: `trigger_eager_free` classified every
+        // other transferring RHS (moved alias, fresh ref, `mk().s` staging,
+        // bare `v[i]`) but not a field moved out of a deeper place, so the old
+        // buffer was orphaned once per execution.
+        //
+        // THE SIBLING FIXTURE ABOVE CANNOT CATCH THIS, which is why this one
+        // exists rather than an extra line there. Its loop leaks exactly ONE
+        // block, and LeakSanitizer did not report it: a single leaked pointer
+        // left in a stale stack slot reads as still-reachable, so that fixture
+        // was green under ASAN on a tree where valgrind reported `8 bytes in 1
+        // blocks definitely lost` every run. The overwrite here runs 200 times
+        // so ~199 blocks are orphaned at once — past any reachability
+        // accident, and LSan reports it.
+        //
+        // The payload is built at run time and CONCATENATED so it is a real
+        // heap buffer: a `String` literal field is static, and a missed free
+        // on a static pointer is invisible.
+        assert_clean_asan_run(
+            r#"
+struct S { region: String }
+fn main() {
+    let mut stats: Vec[S] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 200 {
+        let mut nm = String.new();
+        nm.push_str("region-");
+        nm.push_str("payload");
+        stats.push(S { region: nm });
+        i = i + 1;
+    }
+    let mut cur = String.new();
+    let mut j: i64 = 0;
+    while j < stats.len() {
+        cur = stats[j].region;
+        j = j + 1;
+    }
+    println(f"{cur.len()}");
+}
+"#,
+            &["14"],
+            "place_field_move_assign_overwrite_no_leak",
         );
     }
 

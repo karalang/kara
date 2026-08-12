@@ -7355,6 +7355,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // exact shape; only the Let arm had ever called it.
                 let target_is_heap_local = matches!(&target.kind, ExprKind::Identifier(n)
                     if self.vec_elem_types.contains_key(n.as_str()));
+                // B-2026-08-12-4 — set when the suppression above ran on a
+                // DEEPER place (`stats[j].region`, i.e. anything but a plain
+                // `obj.field` / `self.field`). It arms the displaced-value free
+                // below: the suppression hands the target sole ownership of the
+                // source's buffer, so whatever the target held BEFORE now has no
+                // owner at all. Nothing in `trigger_eager_free` classified this
+                // RHS — a `FieldAccess` is not a moved alias, not a fresh ref,
+                // not the `mk().s` fresh-temp staging, and not a bare `v[i]` —
+                // so the old buffer was simply orphaned, once per execution of
+                // the assignment. It went unseen because the pre-fix behaviour
+                // of this exact shape was a DOUBLE FREE: the owner's drop
+                // reclaimed the buffer the target had taken, which incidentally
+                // also reclaimed the displaced one. Removing the extra free
+                // exposed the missing one.
+                let mut rhs_is_place_field_move = false;
                 if target_is_heap_local {
                     if let ExprKind::FieldAccess { object, .. } = &value.kind {
                         let obj_name = match &object.kind {
@@ -7368,6 +7383,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.disarm_struct_field_move_bodies(value);
                             }
                         }
+                        // Only the deeper-place branch. The shallow `obj.field`
+                        // forms above are already covered — their source struct
+                        // is itself a local whose scope-exit drop reclaims the
+                        // displaced buffer — and arming this for them would free
+                        // a buffer that still has an owner.
+                        rhs_is_place_field_move = obj_name.is_none();
                         self.suppress_place_field_struct_move_source(value);
                     }
                 }
@@ -7750,9 +7771,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             || rhs_is_moved_alias
                             || rhs_is_fresh
                             || rhs_is_staged_freshtemp_field
-                            || rhs_is_heap_vec_index);
+                            || rhs_is_heap_vec_index
+                            || rhs_is_place_field_move);
                     if trigger_eager_free {
                         if let Some(slot) = self.variables.get(name).copied() {
+                            // B-2026-08-12-4 — the place-field-move arm is the
+                            // one arm whose RHS can alias the slot it is about
+                            // to overwrite (`cur = stats[0].region` run twice
+                            // reads a source already cap-zeroed INTO `cur`), so
+                            // neutralize the header in that case and let every
+                            // free below no-op on it. The other arms are
+                            // structurally distinct buffers and skip this.
+                            if rhs_is_place_field_move {
+                                self.zero_vec_slot_header_if_aliases(slot.ptr, val);
+                            }
                             // B-2026-08-03-2 (class 1) — the DISPLACED old
                             // container's element Drop BODIES. Everything below
                             // is memory: the per-element release, then the

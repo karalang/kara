@@ -4751,6 +4751,78 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Zero a `{ptr,len,cap}` slot's `len`/`cap` when its buffer pointer is
+    /// the SAME as the incoming value's, so a following eager free — which is
+    /// cap-gated ([`Self::emit_free_vec_buffer_if_owned`]) and whose element
+    /// walks are len-gated — becomes a no-op.
+    ///
+    /// B-2026-08-12-4. The displaced-value free assumes the old value and the
+    /// incoming one are distinct buffers, which every other arm arranges
+    /// structurally. The place-field-move arm cannot: `cur = stats[0].region`
+    /// hands `cur` the element's buffer and cap-zeroes the source, so running
+    /// the SAME assignment twice reads a source that now aliases `cur` itself
+    /// — and freeing "the old value" would free the buffer about to be stored
+    /// back. Measured: `cur` printed its content correctly the first time and
+    /// garbage the second, with valgrind reporting two invalid reads. A
+    /// pointer compare is the exact discriminator, and it costs one `icmp` plus
+    /// two `select`s on a path that already loads the header.
+    ///
+    /// Emitted AFTER the incoming value is computed, so `val`'s pointer is
+    /// final. A non-struct incoming value (no `{ptr,len,cap}` header to
+    /// compare) leaves the slot untouched.
+    pub(super) fn zero_vec_slot_header_if_aliases(
+        &mut self,
+        vec_alloca: PointerValue<'ctx>,
+        incoming: BasicValueEnum<'ctx>,
+    ) {
+        if !incoming.is_struct_value() {
+            return;
+        }
+        let inc = incoming.into_struct_value();
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let Ok(new_data) = self.builder.build_extract_value(inc, 0, "ali.new.data") else {
+            return;
+        };
+        if !new_data.is_pointer_value() {
+            return;
+        }
+        let (Ok(data_pp), Ok(len_pp), Ok(cap_pp)) = (
+            self.builder
+                .build_struct_gep(vec_ty, vec_alloca, 0, "ali.data.pp"),
+            self.builder
+                .build_struct_gep(vec_ty, vec_alloca, 1, "ali.len.pp"),
+            self.builder
+                .build_struct_gep(vec_ty, vec_alloca, 2, "ali.cap.pp"),
+        ) else {
+            return;
+        };
+        let old_data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "ali.old.data")
+            .unwrap()
+            .into_pointer_value();
+        let same = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                old_data,
+                new_data.into_pointer_value(),
+                "ali.same",
+            )
+            .unwrap();
+        let zero = i64_t.const_zero();
+        for (pp, nm) in [(len_pp, "ali.len"), (cap_pp, "ali.cap")] {
+            let old = self.builder.build_load(i64_t, pp, nm).unwrap();
+            let masked = self
+                .builder
+                .build_select(same, zero, old.into_int_value(), "ali.masked")
+                .unwrap();
+            self.builder.build_store(pp, masked).unwrap();
+        }
+    }
+
     pub(super) fn emit_free_vec_buffer_if_owned(
         &mut self,
         vec_alloca: PointerValue<'ctx>,

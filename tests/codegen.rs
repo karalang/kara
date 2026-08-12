@@ -22694,6 +22694,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_repeated_place_field_move_assign_reads_correctly() {
+        // B-2026-08-12-4's alias guard. Freeing the assignment target's
+        // displaced buffer is only safe when it is a DIFFERENT buffer from the
+        // incoming one, which every other arm of `trigger_eager_free` arranges
+        // structurally. The place-field-move arm cannot: the first
+        // `cur = box[0].s` hands `cur` the element's buffer AND cap-zeroes the
+        // source, so running the same assignment again reads a place that now
+        // aliases `cur` itself — and the free would reclaim the buffer about to
+        // be stored back.
+        //
+        // A CONTENT read, not `.len()`: the length is carried in the header, so
+        // a `.len()`-only pin reads correctly off a dangling pointer and sees
+        // nothing. Without the guard this printed `region` then garbage, with
+        // valgrind reporting two invalid reads — the fix for the leak, applied
+        // unguarded, would have traded it for a use-after-free.
+        assert_eq!(
+            run_program(
+                "struct S { s: String }\n\
+                 fn main() {\n\
+                     let mut box_: Vec[S] = Vec.new();\n\
+                     let mut nm = String.new();\n\
+                     nm.push_str(\"region\");\n\
+                     box_.push(S { s: nm });\n\
+                     let mut cur = String.new();\n\
+                     cur = box_[0].s;\n\
+                     println(cur);\n\
+                     cur = box_[0].s;\n\
+                     println(cur);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("region\nregion\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_scalar_to_string_survives_being_chained() {
         // B-2026-08-11-22 — chaining onto a SCALAR's `.to_string()`. Both gates
         // that route this call read `dispatch_key`, which is span-keyed, and
