@@ -73,6 +73,7 @@ mod tcp_listener_tests {
         if !parsed.errors.is_empty() {
             return Err(format!("parse errors: {:?}", parsed.errors));
         }
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         if !resolved.errors.is_empty() {
             return Err(format!("resolve errors: {:?}", resolved.errors));

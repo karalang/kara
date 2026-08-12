@@ -108,6 +108,7 @@ mod parallax_lite_tests {
             "parse errors on workload: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -134,6 +135,7 @@ mod parallax_lite_tests {
             "full program (resources+workload+main) should parse; got {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         assert!(
             resolved.errors.is_empty(),
@@ -197,6 +199,7 @@ mod parallax_lite_tests {
             "workload should parse without errors; got {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         assert!(
             resolved.errors.is_empty(),
@@ -445,6 +448,7 @@ mod parallax_lite_tests {
         if !parsed.errors.is_empty() {
             panic!("benchmark source failed to parse: {:?}", parsed.errors);
         }
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);

@@ -214,6 +214,49 @@ pub fn resolve(program: &Program) -> ResolveResult {
     resolver.resolve()
 }
 
+/// Everything `karac build` does to the AST between [`parse`] and [`resolve`],
+/// in the order it does it. Call this — not the three passes individually —
+/// from any driver that hands a parse tree to a later phase.
+///
+/// The passes, and what skipping them costs:
+///
+///   1. [`prelude::expand_gated_stdlib_imports`] splices gated stdlib modules
+///      (`import std.secret.{Secret};`, `std.web`, …) into real declarations;
+///      without it the import binds to nothing and the first use errors.
+///   2. [`target::filter_inactive_items`] strips items whose `#[target(...)]`
+///      excludes the active target — their bodies may reference names that do
+///      not exist here. The returned tombstones feed the resolver's
+///      "not available on target X" diagnostic at reference sites.
+///   3. [`desugar_program`] synthesizes `#[derive(Default)]` impls and trait
+///      DEFAULT METHOD bodies into impls, elides argument-position
+///      `impl Trait`, rewrites multi-assignment, expands `#[multiversion]`
+///      and `#[proto_schema]`.
+///
+/// Pass 3 is the one that bites hardest, because the constructs it rewrites are
+/// ordinary Kāra that later phases are built to never see. A driver that skips
+/// it turns `a, b = b, a` into a resolver `unreachable!()` panic
+/// (`StmtKind::MultiAssign is removed by the desugar pass before reaching this
+/// phase`), and turns a trait default method or an `impl Trait` parameter into
+/// `codegen: no handler for method '<m>' on variable '<v>' … this is a codegen
+/// bug` — all three on source `karac build` compiles and runs correctly. That
+/// is why this exists as one function: the sequence is a unit, and 103 of the
+/// 109 codegen-invoking test harnesses had drifted off some part of it
+/// (B-2026-08-11-34).
+///
+/// Returns the `#[target(...)]` tombstones and any `#[proto_schema]`
+/// diagnostics. The CLI renders both; in-process callers ignore them.
+pub fn prepare_for_resolve(
+    program: &mut Program,
+) -> (
+    std::collections::HashMap<String, String>,
+    Vec<crate::comptime::ComptimeError>,
+) {
+    crate::prelude::expand_gated_stdlib_imports(program);
+    let tombstones = crate::target::filter_inactive_items(program, crate::target::active_target());
+    let schema_diags = desugar_program(program);
+    (tombstones, schema_diags)
+}
+
 /// Run every pre-resolve AST-rewriting pass over `program` in place.
 /// Today this elides argument-position `impl Trait` into anonymous generic
 /// parameters (slice 2 of the `impl Trait` epic). Drivers in `lib.rs` and

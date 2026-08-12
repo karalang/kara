@@ -193,24 +193,15 @@ mod memory_sanitizer_tests {
             eprintln!("[{label}] parse errors: {:?}", parsed.errors);
             return None;
         }
-        // Mirror the real CLI pipeline (lib.rs / cli.rs) and the codegen
-        // harness (`tests/codegen.rs::run_program_capturing_inner`): desugar
-        // runs between parse and resolve. It synthesizes `#[derive(...)]`
-        // bodies (e.g. `#[derive(Default)]` → the inherent `Type.default`
-        // impl) and expands comptime — without it a derive-dependent program
-        // (std.mem `take[T: Default]`'s `T.default()` dispatch) miscompiles to
-        // the const-0 fallback and double-frees, an ASAN-harness-only artifact
-        // absent from shipped binaries.
-        karac::desugar_program(&mut parsed.program);
-        // Splice gated stdlib modules (`import std.autograd.{…}` etc.) into the
-        // program before resolve — mirroring the CLI pipeline (lib.rs) and the
-        // codegen harness. Without it the ownership pass never sees a gated fn's
-        // signature, so a `ref`-param stdlib fn (`TensorVar.leaf(tape, w)`) is
-        // conservatively treated as MOVING its argument — a false `UseAfterMove`
-        // when the arg is reused (e.g. a training loop's carried weights), even
-        // though `karac check` (which expands) accepts the program. A no-op for
-        // programs with no gated import.
-        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+        // The `karac build` front end between parse and resolve — see
+        // `lib.rs` `prepare_for_resolve`. Load-bearing here: it synthesizes
+        // `#[derive(Default)]`'s inherent `Type.default` impl, without which a
+        // derive-dependent program (std.mem `take[T: Default]`'s `T.default()`
+        // dispatch) miscompiles to the const-0 fallback and double-frees — an
+        // ASAN-harness-only artifact absent from shipped binaries — and it
+        // splices gated stdlib imports, without which the ownership pass never
+        // sees a gated fn's body and mis-scores a reused owned arg.
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -411,15 +402,15 @@ mod memory_sanitizer_tests {
             eprintln!("[{label}] parse errors: {:?}", parsed.errors);
             return None;
         }
-        // Mirror the real CLI pipeline (lib.rs / cli.rs) and the codegen
-        // harness (`tests/codegen.rs::run_program_capturing_inner`): desugar
-        // runs between parse and resolve. It synthesizes `#[derive(...)]`
-        // bodies (e.g. `#[derive(Default)]` → the inherent `Type.default`
-        // impl) and expands comptime — without it a derive-dependent program
-        // (std.mem `take[T: Default]`'s `T.default()` dispatch) miscompiles to
-        // the const-0 fallback and double-frees, an ASAN-harness-only artifact
-        // absent from shipped binaries.
-        karac::desugar_program(&mut parsed.program);
+        // The `karac build` front end between parse and resolve — see
+        // `lib.rs` `prepare_for_resolve`. Load-bearing here: it synthesizes
+        // `#[derive(Default)]`'s inherent `Type.default` impl, without which a
+        // derive-dependent program (std.mem `take[T: Default]`'s `T.default()`
+        // dispatch) miscompiles to the const-0 fallback and double-frees — an
+        // ASAN-harness-only artifact absent from shipped binaries — and it
+        // splices gated stdlib imports, without which the ownership pass never
+        // sees a gated fn's body and mis-scores a reused owned arg.
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -14833,15 +14824,15 @@ fn main() {
             eprintln!("[{label}] parse errors: {:?}", parsed.errors);
             return None;
         }
-        // Mirror the real CLI pipeline (lib.rs / cli.rs) and the codegen
-        // harness (`tests/codegen.rs::run_program_capturing_inner`): desugar
-        // runs between parse and resolve. It synthesizes `#[derive(...)]`
-        // bodies (e.g. `#[derive(Default)]` → the inherent `Type.default`
-        // impl) and expands comptime — without it a derive-dependent program
-        // (std.mem `take[T: Default]`'s `T.default()` dispatch) miscompiles to
-        // the const-0 fallback and double-frees, an ASAN-harness-only artifact
-        // absent from shipped binaries.
-        karac::desugar_program(&mut parsed.program);
+        // The `karac build` front end between parse and resolve — see
+        // `lib.rs` `prepare_for_resolve`. Load-bearing here: it synthesizes
+        // `#[derive(Default)]`'s inherent `Type.default` impl, without which a
+        // derive-dependent program (std.mem `take[T: Default]`'s `T.default()`
+        // dispatch) miscompiles to the const-0 fallback and double-frees — an
+        // ASAN-harness-only artifact absent from shipped binaries — and it
+        // splices gated stdlib imports, without which the ownership pass never
+        // sees a gated fn's body and mis-scores a reused owned arg.
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -16551,15 +16542,15 @@ fn main() {
             eprintln!("[{label}] parse errors: {:?}", parsed.errors);
             return None;
         }
-        // Mirror the real CLI pipeline (lib.rs / cli.rs) and the codegen
-        // harness (`tests/codegen.rs::run_program_capturing_inner`): desugar
-        // runs between parse and resolve. It synthesizes `#[derive(...)]`
-        // bodies (e.g. `#[derive(Default)]` → the inherent `Type.default`
-        // impl) and expands comptime — without it a derive-dependent program
-        // (std.mem `take[T: Default]`'s `T.default()` dispatch) miscompiles to
-        // the const-0 fallback and double-frees, an ASAN-harness-only artifact
-        // absent from shipped binaries.
-        karac::desugar_program(&mut parsed.program);
+        // The `karac build` front end between parse and resolve — see
+        // `lib.rs` `prepare_for_resolve`. Load-bearing here: it synthesizes
+        // `#[derive(Default)]`'s inherent `Type.default` impl, without which a
+        // derive-dependent program (std.mem `take[T: Default]`'s `T.default()`
+        // dispatch) miscompiles to the const-0 fallback and double-frees — an
+        // ASAN-harness-only artifact absent from shipped binaries — and it
+        // splices gated stdlib imports, without which the ownership pass never
+        // sees a gated fn's body and mis-scores a reused owned arg.
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         // B-2026-08-08-18 — the auto-par helper owed the same discrimination

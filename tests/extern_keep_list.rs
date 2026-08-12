@@ -97,6 +97,7 @@ fn declared_symbols() -> BTreeSet<String> {
     let parsed = karac::parse(src);
     assert!(parsed.errors.is_empty(), "probe parse: {:?}", parsed.errors);
     let mut program = parsed.program;
+    karac::prepare_for_resolve(&mut program);
     let res = karac::resolve(&program);
     assert!(res.errors.is_empty(), "probe resolve: {:?}", res.errors);
     let tc = karac::typecheck(&program, &res);

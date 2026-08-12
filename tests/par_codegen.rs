@@ -46,12 +46,13 @@ mod par_codegen_tests {
     }
 
     fn ir_for(src: &str) -> String {
-        let parsed = karac::parse(src);
+        let mut parsed = karac::parse(src);
         assert!(
             parsed.errors.is_empty(),
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         compile_to_ir(&parsed.program, None, None).expect("codegen failed")
     }
 
@@ -66,6 +67,7 @@ mod par_codegen_tests {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -117,6 +119,7 @@ mod par_codegen_tests {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -1192,6 +1195,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -1236,6 +1240,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -1272,6 +1277,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -1400,6 +1406,7 @@ fn main() {
             }
             panic!("{}", msg);
         }
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -2019,6 +2026,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "source must parse");
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -3890,6 +3898,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -4298,6 +4307,7 @@ fn main() {
         use karac::codegen::compile_to_ir_with_options;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -4405,6 +4415,7 @@ fn main() {
 
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -4472,6 +4483,7 @@ fn main() {
         use karac::codegen::compile_to_ir_with_options;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -4532,6 +4544,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -4589,6 +4602,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -4626,6 +4640,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -4786,6 +4801,7 @@ fn main() {
         // uses different helpers, so this assertion targets the sink loop alone.)
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -4841,6 +4857,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -4886,6 +4903,7 @@ fn main() {
         let build = |src: &str| -> String {
             let mut parsed = karac::parse(src);
             assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+            karac::prepare_for_resolve(&mut parsed.program);
             let resolved = karac::resolve(&parsed.program);
             let typed = karac::typecheck(&parsed.program, &resolved);
             karac::lower(&mut parsed.program, &typed);
@@ -4954,6 +4972,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5019,6 +5038,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5193,6 +5213,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5280,6 +5301,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5339,6 +5361,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5415,6 +5438,7 @@ fn main() {
         let build_ir = |src: &str| -> String {
             let mut parsed = karac::parse(src);
             assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+            karac::prepare_for_resolve(&mut parsed.program);
             let resolved = karac::resolve(&parsed.program);
             let typed = karac::typecheck(&parsed.program, &resolved);
             karac::lower(&mut parsed.program, &typed);
@@ -5523,6 +5547,7 @@ fn main() {
         // reduction may still lower; this assertion targets the `*` helper.)
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5594,6 +5619,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5651,6 +5677,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5727,6 +5754,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5786,6 +5814,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5853,6 +5882,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -5935,6 +5965,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -6077,6 +6108,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -6142,6 +6174,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -6249,6 +6282,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -6363,6 +6397,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -6420,6 +6455,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -6757,6 +6793,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -6807,6 +6844,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -6897,6 +6935,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -6943,6 +6982,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -7023,6 +7063,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -7076,6 +7117,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -7125,6 +7167,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -7234,6 +7277,7 @@ fn main() {
         let src = MEMORY_BOUND_NESTED_LOOP_SRC;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -7275,6 +7319,7 @@ fn main() {
         let src = FLAT_SUBSTANTIAL_MEMORY_BOUND_SRC;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -7351,6 +7396,7 @@ fn main() {
         let src = FLOAT_ACC_NESTED_LOOP_SRC;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -7457,6 +7503,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -11413,7 +11460,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        karac::desugar_program(&mut parsed.program);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);

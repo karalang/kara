@@ -1024,31 +1024,22 @@ impl Pipeline {
         if self.has_parse_errors() {
             return;
         }
-        // Phase-10 (`std.web`): single-file mode has no ProgramTree for
-        // gated stdlib imports to resolve against — expand them into the
-        // real baked items in place (replacing the import binding), so
-        // the resolver, effect checker, interpreter, and codegen all see
-        // ordinary declarations.
-        crate::prelude::expand_gated_stdlib_imports(&mut self.parsed.program);
-        // Phase-10 `#[target(...)]`: items gated to a non-current target
-        // are absent from this compilation — strip them before any pass
-        // sees the program (their bodies may reference target-specific
-        // names). Tombstones feed the resolver's "not available on
-        // target X" diagnostic at reference sites.
-        let target_tombstones = crate::target::filter_inactive_items(
-            &mut self.parsed.program,
-            crate::target::active_target(),
-        );
+        // The three pre-resolve AST rewrites — gated-stdlib splice,
+        // `#[target(...)]` stripping, desugar (which also runs the
+        // `#[proto_schema]` expansion) — live in one library function so no
+        // other driver can run a subset of them. See `lib.rs`
+        // `prepare_for_resolve` for what each does and what skipping it costs;
+        // the test harnesses go through the same call (B-2026-08-11-34).
+        let (target_tombstones, schema_diags) =
+            crate::prepare_for_resolve(&mut self.parsed.program);
         // Keep a copy for the check reporter (B-2026-08-05-29). The resolver
         // consumes the map for reference-site diagnostics, which only fire
         // when something CALLS a stripped item; nothing otherwise records
         // that a body went unexamined.
         self.target_skipped = target_tombstones.clone();
-        // `desugar_program` also runs the pre-resolve `#[proto_schema]`
-        // expansion (protobuf slice 3); its diagnostics (malformed `.proto`,
-        // unsupported field types) join the comptime-error channel so they
-        // render and gate exactly like the post-resolve fold pass's.
-        let schema_diags = crate::desugar_program(&mut self.parsed.program);
+        // The `#[proto_schema]` diagnostics (malformed `.proto`, unsupported
+        // field types) join the comptime-error channel so they render and gate
+        // exactly like the post-resolve fold pass's.
         if !schema_diags.is_empty() {
             self.comptime_errors
                 .get_or_insert_with(Vec::new)

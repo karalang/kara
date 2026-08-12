@@ -211,12 +211,13 @@ const MUTATIONS: &[(&str, Mutation)] = &[
 // ── Static invariant ─────────────────────────────────────────────
 
 fn assert_static_accept(source: &str, label: &str) {
-    let parsed = parse(source);
+    let mut parsed = parse(source);
     assert!(
         parsed.errors.is_empty(),
         "[{label}] parse errors: {:?}\n--- source ---\n{source}",
         parsed.errors
     );
+    karac::prepare_for_resolve(&mut parsed.program);
     let resolved = resolve(&parsed.program);
     assert!(
         resolved.errors.is_empty(),

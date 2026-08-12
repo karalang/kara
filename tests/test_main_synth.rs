@@ -55,6 +55,7 @@ fn build_and_run_test_fn_with_fixtures(
     // → lower → codegen sequence runs per test.
     append_test_main(&mut parsed.program, test_fn_name, fixtures);
 
+    karac::prepare_for_resolve(&mut parsed.program);
     let resolved = karac::resolve(&parsed.program);
     let typed = karac::typecheck(&parsed.program, &resolved);
     karac::lower(&mut parsed.program, &typed);

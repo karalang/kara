@@ -51,6 +51,7 @@ fn jit_run_program_capturing(src: &str) -> Option<(String, i32)> {
         }
         panic!("{}", msg);
     }
+    karac::prepare_for_resolve(&mut parsed.program);
     let resolved = karac::resolve(&parsed.program);
     let typed = karac::typecheck(&parsed.program, &resolved);
     karac::lower(&mut parsed.program, &typed);

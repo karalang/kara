@@ -542,6 +542,7 @@ fn backend_main_kara_codegens_to_executable() {
     let src = fs::read_to_string(scratch.root().join("src/main.kara")).unwrap();
     let mut parsed = karac::parse(&src);
     assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    karac::prepare_for_resolve(&mut parsed.program);
     let resolved = karac::resolve(&parsed.program);
     assert!(resolved.errors.is_empty(), "resolve: {:?}", resolved.errors);
     let typed = karac::typecheck(&parsed.program, &resolved);

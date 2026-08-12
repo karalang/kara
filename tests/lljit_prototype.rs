@@ -160,6 +160,7 @@ use karac::codegen::{compile_to_ir, LLJITEngine};
 fn ir(src: &str) -> String {
     let mut parsed = karac::parse(src);
     assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    karac::prepare_for_resolve(&mut parsed.program);
     let resolved = karac::resolve(&parsed.program);
     let typed = karac::typecheck(&parsed.program, &resolved);
     karac::lower(&mut parsed.program, &typed);

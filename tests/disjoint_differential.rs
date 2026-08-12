@@ -346,12 +346,13 @@ fn heavy(v: i64, work: i64) -> i64 {
              compiler:\n{src}\nerrors: {:?}",
             parsed.errors
         );
-        // Mirror the real CLI pipeline: desugar runs between parse and resolve.
+        // The `karac build` front end between parse and resolve, shared with
+        // `cli.rs` — see `lib.rs` `prepare_for_resolve`.
         // It matters here because the query leg of the query/binary agreement
         // check goes through the actual `karac` binary, and a pipeline that
         // skips a stage the CLI runs would make the two disagree for reasons
         // that have nothing to do with fan-out.
-        karac::desugar_program(&mut parsed.program);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         assert!(

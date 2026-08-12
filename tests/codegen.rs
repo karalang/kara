@@ -496,10 +496,65 @@ mod codegen_tests {
         }
     }
 
+    /// B-2026-08-11-34 — the three constructs `prepare_for_resolve` exists
+    /// for, pinned through this file's own IR harness.
+    ///
+    /// Each is ordinary Kāra that `karac build` compiles and runs correctly,
+    /// and each used to fail in any harness that resolved the raw parse tree:
+    /// multi-assignment tripped the resolver's `unreachable!()` outright, and
+    /// a trait default method / an `impl Trait` parameter reached codegen as
+    /// an unresolvable method call whose diagnostic says "this is a codegen
+    /// bug" — sending the reader into the backend over a missing front-end
+    /// pass. 103 of the 109 codegen-invoking harnesses in `tests/` had drifted
+    /// off some part of the sequence; this pins the three that bite.
+    #[test]
+    fn desugar_dependent_constructs_reach_codegen_through_the_harness() {
+        // Multi-assignment. Without the pass this is a PANIC, not an Err —
+        // `StmtKind::MultiAssign is removed by the desugar pass before
+        // reaching this phase` — so a plain `is_ok()` is the whole assertion.
+        assert!(
+            ir_result(
+                "fn main() { let mut a: i64 = 1; let mut b: i64 = 2; a, b = b, a; println(a); }"
+            )
+            .is_ok(),
+            "multi-assignment must survive the harness"
+        );
+
+        // A trait DEFAULT METHOD the impl does not override.
+        let ir = ir_result(
+            "trait Greet {\n\
+                 fn name(self) -> String;\n\
+                 fn greet(self) -> String { return \"hi \" + self.name(); }\n\
+             }\n\
+             struct P { n: String }\n\
+             impl Greet for P { fn name(self) -> String { return self.n; } }\n\
+             fn main() { let p: P = P { n: \"bob\" }; println(p.greet()); }\n",
+        )
+        .expect("a trait default method must survive the harness");
+        assert!(
+            ir.contains("greet"),
+            "the synthesized body should be emitted"
+        );
+
+        // An argument-position `impl Trait`.
+        assert!(
+            ir_result(
+                "trait Shape { fn area(self) -> i64; }\n\
+                 struct Sq { s: i64 }\n\
+                 impl Shape for Sq { fn area(self) -> i64 { return self.s * self.s; } }\n\
+                 fn show(x: impl Shape) { println(x.area()); }\n\
+                 fn main() { show(Sq { s: 4 }); }\n",
+            )
+            .is_ok(),
+            "an `impl Trait` parameter must survive the harness"
+        );
+    }
+
     /// Codegen result (Ok IR / Err diagnostic) without the `ir_for` panic.
     fn ir_result(src: &str) -> Result<String, String> {
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -3146,8 +3201,7 @@ mod codegen_tests {
             "parse errors: {:?}",
             parsed.errors
         );
-        karac::desugar_program(&mut parsed.program);
-        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -3179,6 +3233,7 @@ mod codegen_tests {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -3246,8 +3301,7 @@ mod codegen_tests {
                 "parse errors: {:?}",
                 parsed.errors
             );
-            karac::desugar_program(&mut parsed.program);
-            karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+            karac::prepare_for_resolve(&mut parsed.program);
             let resolved = karac::resolve(&parsed.program);
             let typed = karac::typecheck(&parsed.program, &resolved);
             karac::lower(&mut parsed.program, &typed);
@@ -3838,7 +3892,7 @@ fn main() { println(build2().v); }
             "parse errors: {:?}",
             parsed.errors
         );
-        karac::desugar_program(&mut parsed.program);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -3856,8 +3910,7 @@ fn main() { println(build2().v); }
             "parse errors: {:?}",
             parsed.errors
         );
-        karac::desugar_program(&mut parsed.program);
-        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -6217,6 +6270,7 @@ fn main() {
 "#;
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty());
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -13170,6 +13224,7 @@ fn main() { barrier(); }
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -14510,6 +14565,7 @@ fn main() {
         let compile_err = |src: &str, tag: &str| -> Option<String> {
             let mut parsed = karac::parse(src);
             assert!(parsed.errors.is_empty(), "{tag}: source must parse");
+            karac::prepare_for_resolve(&mut parsed.program);
             let resolved = karac::resolve(&parsed.program);
             let typed = karac::typecheck(&parsed.program, &resolved);
             assert!(
@@ -14581,6 +14637,7 @@ fn main() {
         let compile_err = |src: &str, tag: &str| -> Option<String> {
             let mut parsed = karac::parse(src);
             assert!(parsed.errors.is_empty(), "{tag}: source must parse");
+            karac::prepare_for_resolve(&mut parsed.program);
             let resolved = karac::resolve(&parsed.program);
             let typed = karac::typecheck(&parsed.program, &resolved);
             assert!(
@@ -21309,6 +21366,7 @@ fn main() {
             parsed.errors.is_empty(),
             "size-regression source must parse"
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -25834,6 +25892,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -30296,12 +30355,12 @@ fn main() {
             }
             panic!("{}", msg);
         }
-        // Mirror the real CLI pipeline: desugar (impl-Trait args,
-        // parallel assignment, …) runs between parse and resolve, then gated
-        // stdlib imports (`import std.secret.{Secret};` etc.) are spliced in
-        // before resolve. A no-op for programs with no gated import.
-        karac::desugar_program(&mut parsed.program);
-        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+        // The `karac build` front end between parse and resolve, as one call
+        // shared with `cli.rs` — see `lib.rs` `prepare_for_resolve` for the
+        // three passes and what skipping any of them costs. This harness used
+        // to spell two of them out by hand, in the opposite order from the
+        // CLI and without the `#[target(...)]` strip (B-2026-08-11-34).
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         // Resolve/typecheck gate — `karac build` refuses to reach codegen
@@ -40554,6 +40613,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -40588,6 +40648,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         assert!(
@@ -40627,6 +40688,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         assert!(
@@ -40665,6 +40727,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         assert!(
@@ -45689,6 +45752,7 @@ fn main() { let y = helper(5); println(y); }
         // release AOT binaries keep the Phase 1-3 size floor. Guards the gate.
         let mut parsed = karac::parse(r#"fn main() { println(1); }"#);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -46310,6 +46374,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -51873,6 +51938,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -55412,12 +55478,12 @@ fn main() {
             }
             panic!("{}", msg);
         }
-        // Mirror the real CLI pipeline: desugar (impl-Trait args,
-        // parallel assignment, …) runs between parse and resolve, then gated
-        // stdlib imports (`import std.secret.{Secret};` etc.) are spliced in
-        // before resolve. A no-op for programs with no gated import.
-        karac::desugar_program(&mut parsed.program);
-        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+        // The `karac build` front end between parse and resolve, as one call
+        // shared with `cli.rs` — see `lib.rs` `prepare_for_resolve` for the
+        // three passes and what skipping any of them costs. This harness used
+        // to spell two of them out by hand, in the opposite order from the
+        // CLI and without the `#[target(...)]` strip (B-2026-08-11-34).
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -59096,6 +59162,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -59397,6 +59464,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -59450,6 +59518,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -59540,6 +59609,7 @@ fn main() {{
         if !parsed.errors.is_empty() {
             panic!("parse errors: {:?}", parsed.errors);
         }
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -59758,6 +59828,7 @@ fn main() {
             "parse errors: {:?}",
             parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -61071,6 +61142,7 @@ fn main() {
         for _ in 0..20 {
             let mut parsed = karac::parse(SRC);
             assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+            karac::prepare_for_resolve(&mut parsed.program);
             let resolved = karac::resolve(&parsed.program);
             let typed = karac::typecheck(&parsed.program, &resolved);
             karac::lower(&mut parsed.program, &typed);

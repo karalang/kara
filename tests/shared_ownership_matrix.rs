@@ -136,7 +136,7 @@ mod shared_ownership_matrix_tests {
             eprintln!("[{label}] parse errors: {:?}", parsed.errors);
             return None;
         }
-        karac::desugar_program(&mut parsed.program);
+        karac::prepare_for_resolve(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
