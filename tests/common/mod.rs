@@ -389,13 +389,6 @@ pub const CHECK_GATE_GRANDFATHERED: &[&str] = &[
     // terminals return a Vec, and the chain then re-`collect`s it)
     "e2e_map_values_keys_collect_to_vec",
     //
-    // ── UNREACHABLE EMITTER: the float total-order gate (B-2026-08-11-7 /
-    //    -15) makes `Vec[f64].sorted()` a type error, so this pins the
-    //    behaviour of a `sorted` emitter production can never run. Kept
-    //    rather than deleted because retiring the emitter vs. relaxing the
-    //    rule is an open design call — B-2026-08-12-9.
-    "test_e2e_vec_sorted_immutable_returns_new_vec",
-    //
     // ── DELIBERATE NEGATIVE TEST (tests/par_codegen.rs): asserts the
     //    CODEGEN-layer rejection of an atomic op with an implicit ordering.
     //    The typechecker rejects it first, so production never reaches the

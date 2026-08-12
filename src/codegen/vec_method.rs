@@ -6924,6 +6924,49 @@ impl<'ctx> super::Codegen<'ctx> {
     /// caller keeps its explicit error. Cached by mangled name via
     /// `module.get_function` with the declare-before-body discipline the
     /// clone/drop families use.
+    /// Collapse any NaN to the one canonical quiet NaN of its width, so a
+    /// float sort's order does not depend on a NaN's sign or payload
+    /// (B-2026-08-12-9, the sort-comparator sibling of B-2026-08-11-13's
+    /// wrapper canonicalization and B-2026-08-11-17's interpreter one).
+    ///
+    /// Without it the total-order key is still a valid total order, but a
+    /// NEGATIVE NaN sorts before `-Infinity` while a POSITIVE one sorts after
+    /// `+Infinity` — and nothing at the source level chooses which you get
+    /// (x86 runtime division yields one, LLVM's constant folder the other), so
+    /// the same program would sort differently by optimization level and
+    /// disagree with the interpreter.
+    fn canonicalize_sort_float_nan(
+        &mut self,
+        v: inkwell::values::FloatValue<'ctx>,
+        int_ty: inkwell::types::IntType<'ctx>,
+        top: u64,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        // Positive quiet NaN for this width: exponent all ones, mantissa MSB
+        // set. Derived from `top` so f32 (31) and f64 (63) share one path.
+        let canon_bits: u64 = if top == 31 {
+            0x7FC0_0000
+        } else {
+            0x7FF8_0000_0000_0000
+        };
+        let canon = self
+            .builder
+            .build_bit_cast(
+                int_ty.const_int(canon_bits, false),
+                v.get_type(),
+                "srt.qnan",
+            )
+            .unwrap()
+            .into_float_value();
+        let is_nan = self
+            .builder
+            .build_float_compare(inkwell::FloatPredicate::UNO, v, v, "srt.isnan")
+            .unwrap();
+        self.builder
+            .build_select(is_nan, canon, v, "srt.canon")
+            .unwrap()
+            .into_float_value()
+    }
+
     pub(super) fn emit_cmp_fn_for_type_expr(
         &mut self,
         te: &TypeExpr,
@@ -7078,6 +7121,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_return(Some(&r)).unwrap();
             }
             Body::FloatScalar => {
+                // B-2026-08-12-9 — TOTAL order, the same key `TotalFloatScalar`
+                // below and `karac_float_cmp` use, with NaN canonicalized
+                // first (B-2026-08-11-13 / -17).
+                //
+                // This used to be `OLT`/`OGT`, the ORDERED IEEE predicates:
+                // with a NaN both are false, so every comparison involving one
+                // returned 0 — "equal". That is not a misplaced NaN, it is an
+                // INTRANSITIVE comparator, and the merge sort built on it
+                // returns the sequence essentially untouched.
+                //
+                // A bare `f64` element is not supposed to reach a `sort()` at
+                // all — design.md § Float semantics makes `f64` non-`Ord` and
+                // B-2026-08-11-7 gates `Vec[f64].sort()` / `.sorted()` at
+                // typecheck. But the gate sees the element type at the CALL
+                // SITE, so a generic (`fn gsorted[T](v: ref Vec[T]) -> Vec[T]
+                // { v.sorted() }` at `T = f64`) passes it and monomorphizes
+                // straight to this emitter. Measured before this change:
+                // `[3.5, NaN, 1.25, 2.0]` came back `3.5 NaN 1.25 2` compiled
+                // while the interpreter returned it correctly sorted with NaN
+                // last — a silent wrong answer AND a run-vs-build split, the
+                // latter newly created when B-2026-08-11-17 made the
+                // interpreter's float ordering total.
+                //
+                // So the front-end gate states the language rule and this
+                // states what the machine does when the rule is bypassed:
+                // the same defined total order the interpreter, the `F64`
+                // wrapper, and `sort_by_key`'s sanctioned float-key path all
+                // already use. Defense in depth, not a relaxation of the rule.
                 let elem_llvm = self.llvm_type_for_type_expr(te);
                 let a = self
                     .builder
@@ -7089,13 +7160,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(elem_llvm, b_ptr, "b")
                     .unwrap()
                     .into_float_value();
+                // Width-generic: f32 keeps its own 32-bit key rather than
+                // widening, which preserves the order exactly and avoids a
+                // conversion in the inner loop.
+                let (int_ty, top) = if elem_llvm.into_float_type() == self.context.f32_type() {
+                    (self.context.i32_type(), 31u64)
+                } else {
+                    (self.context.i64_type(), 63u64)
+                };
+                let a = self.canonicalize_sort_float_nan(a, int_ty, top);
+                let b = self.canonicalize_sort_float_nan(b, int_ty, top);
+                let a_bits = self
+                    .builder
+                    .build_bit_cast(a, int_ty, "a.b")
+                    .unwrap()
+                    .into_int_value();
+                let b_bits = self
+                    .builder
+                    .build_bit_cast(b, int_ty, "b.b")
+                    .unwrap()
+                    .into_int_value();
+                let a_key = self.total_order_key(a_bits, top);
+                let b_key = self.total_order_key(b_bits, top);
                 let lt = self
                     .builder
-                    .build_float_compare(inkwell::FloatPredicate::OLT, a, b, "lt")
+                    .build_int_compare(inkwell::IntPredicate::SLT, a_key, b_key, "lt")
                     .unwrap();
                 let gt = self
                     .builder
-                    .build_float_compare(inkwell::FloatPredicate::OGT, a, b, "gt")
+                    .build_int_compare(inkwell::IntPredicate::SGT, a_key, b_key, "gt")
                     .unwrap();
                 let gt_sel = self
                     .builder

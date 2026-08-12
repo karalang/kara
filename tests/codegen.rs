@@ -75372,8 +75372,19 @@ fn main() {
         // `sort` supports applies: signed int, unsigned int (unsigned order —
         // high-bit value sorts last, not first), String (byte-lexicographic),
         // and float. Byte-identical to the interpreter.
+        //
+        // B-2026-08-12-9: the FLOAT leg now goes through a generic. The direct
+        // `Vec[f64].sorted()` is a type error (B-2026-08-11-7's total-order
+        // gate), which had this whole test grandfathered past the check gate
+        // as pinning "an emitter production can never run". That premise was
+        // wrong: the gate reads the element type at the CALL SITE, so a
+        // generic instantiated at `T = f64` passes it and monomorphizes
+        // straight to the float comparator. Written this way the program
+        // passes `karac check`, the test comes off the grandfather list, and
+        // it pins a path a user can actually reach.
         let out = run_program(
             r#"
+fn gsorted[T](v: ref Vec[T]) -> Vec[T] { v.sorted() }
 fn main() {
     let v: Vec[i64] = [3, 1, 2, 5, 4];
     let s: Vec[i64] = v.sorted();
@@ -75388,15 +75399,23 @@ fn main() {
     println(ws.get(0));
     println(w.get(0));
     let f: Vec[f64] = [2.5, 1.1, 3.3];
-    let fs: Vec[f64] = f.sorted();
+    let fs: Vec[f64] = gsorted(f);
     println(fs.get(0));
+    // NaN must sort LAST and must not derange the rest — the comparator was
+    // `OLT`/`OGT`, which answers "equal" for every NaN comparison and so is
+    // intransitive; `[2.0, NaN, 1.0]` came back untouched under codegen while
+    // the interpreter sorted it correctly.
+    let n: Vec[f64] = [2.0, 0.0 / 0.0, 1.0];
+    let ns: Vec[f64] = gsorted(n);
+    println(f"{ns[0]} {ns[1]} {ns[2]}");
 }
 "#,
         );
         if let Some(out) = out {
             assert_eq!(
                 out,
-                "Some(1)\nSome(5)\nSome(3)\n5\nSome(apple)\nSome(banana)\nSome(1.1)\n"
+                "Some(1)\nSome(5)\nSome(3)\n5\nSome(apple)\nSome(banana)\nSome(1.1)\n\
+                 1 2 NaN\n"
             );
         }
     }
