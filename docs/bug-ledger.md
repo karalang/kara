@@ -93,10 +93,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 238 | 0 |
-| leak | 165 | 1 |
+| leak | 166 | 2 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 0 |
-| run-vs-build | 103 | 1 |
+| run-vs-build | 103 | 0 |
 | missing-feature | 91 | 1 |
 | perf | 64 | 0 |
 | false-positive | 60 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 813 | 2 |
+| codegen | 814 | 2 |
 | typecheck | 156 | 2 |
 | interp | 138 | 0 |
 | ownership | 45 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1125 surfaced · 4 open · 1109 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced · 4 open · 1110 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -132,8 +132,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1125 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
 | B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
-| B-2026-08-12-14 | 2026-08-12 | codegen | medium | Reading a field off a `Json.parse` error is a RUN-VS-BUILD split: `karac run --interp` prints `e.line` / `e.column` / `e.message` correctly, while `karac build` REFUSES with `codegen: cannot resolve field 'line' on this receiver (its type was not recorded for codegen); this is a compiler gap`. So the error type `Json.parse` is documented to return cannot be inspected at all from a compiled binary -- only matched on and discarded. | `JsonError` has no `struct_types` registration -- `runtime/stdlib/json.kara` is not in `compiled_stdlib_programs`, and `src/codegen/json.rs` hand-rolls the Err value (`Build Result.Err(JsonError { line, column, message })`) |
 | B-2026-08-12-15 | 2026-08-12 | codegen | high | `c24343b3` (the B-2026-08-12-1 by-value Option/Result param entry-copy) LEAKS the copied payload: `asan_struct_field_boxed_heapless_option_envelope_owned` is red on the -O0 ASAN leg with 2560 bytes in 80 allocations, and GREEN at the default opt level -- so the ordinary `cargo test --features llvm` run does not see it and only `scripts/asan-o0-leg.sh` does. | regression from c24343b3 (B-2026-08-12-1); asan_struct_field_boxed_heapless_option_envelope_owned |
+| B-2026-08-12-16 | 2026-08-12 | codegen | low | `Json.parse`'s error message LEAKS: codegen copies the runtime's diagnostic into a Kara String but pins that String's `cap` to 0, so the scope-exit free is a permanent no-op. MEASURED under LeakSanitizer: 39 bytes in 1 allocation on a one-line parse-error program. Bounded (one allocation per failed parse) but unbounded in a loop that parses attacker-supplied JSON. | `src/codegen/json.rs`, the `Build Result.Err(JsonError { line, column, message })` packing -- field 5 (`message`'s `cap`) is pinned to `i64_ty.const_zero()` |
 
 ### Wontfix (2)
 
@@ -146,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1125 surfaced
 
 </details>
 
-### Fixed (1109)
+### Fixed (1110)
 
-<details><summary>1109 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1110 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2585,6 +2585,44 @@ fixes and it is the one still open. This commit took the codegen half because
 so the backend has to produce something sound for the shape either way; a
 diagnostic would warn but would not stop the leak. The diagnostic remains worth
 adding on its own merits. |
+| B-2026-08-12-14 | codegen | medium | Reading a field off a `Json.parse` error is a RUN-VS-BUILD split: `karac run --interp` prints `e.line` / `e.column` / `e.message` correctly, while `k… | FIXED by 8268903. `seed_builtin_struct_types` now seeds `JsonError`'s layout,
+field names and field type names -- exactly the way `Response` and `HttpError`,
+the two other baked stdlib structs whose values codegen hand-rolls, are already
+seeded. With a layout to GEP, the Err binding's fields resolve and the compiled
+binary matches the interpreter.
+
+THE INTEGER FIELDS ARE SEEDED `i64`, NOT THE DECLARED `u32`, and that is
+load-bearing rather than sloppy: `json.rs`'s `Build Result.Err(JsonError { line,
+column, message })` packs `line` / `column` into the widened Result's `w0` /
+`w1` as FULL WORDS (`zext` from the runtime's u32). The seeded layout has to
+describe what is actually built, not what the source declares -- seeding `i32`
+would put the field GEPs half a word out of step with the packing. The same
+as-built-not-as-declared rule the `Response` seed already follows for its hidden
+`headers` field.
+
+VERIFIED against the `--interp` oracle across the three positions that resolve a
+field differently, all byte-identical: a bare read (`println(e.line)`), an
+f-string interpolation (`f"col={e.column}"`), and the whole struct passed BY
+VALUE to a fn that reads two fields (`describe(e)`). The Ok arm and a second
+successful parse in the same program are unaffected.
+
+PINNED by `e2e_json_parse_error_fields_are_readable`, which covers all three
+positions plus the `message` String -- exercised by LENGTH rather than content,
+so the pin does not encode serde_json's wording and will not churn on a crate
+bump. Verified non-vacuous: disabling the seed alone makes it fail with the
+original `cannot resolve field 'line' ... this is a compiler gap`.
+
+THE MESSAGE LEAK IS SPLIT OUT, NOT FIXED, and is now measured rather than
+assumed: `json.rs` pins the message String's `cap` to 0 so the scope-exit free
+is a no-op, and LeakSanitizer reports 39 bytes in 1 allocation on a parse-error
+program. This commit is the PRECONDITION for fixing it -- a synthesized drop now
+exists to fire, which is why the cap could not have been wired before -- but the
+Err payload is passed by value, destructured and `?`-propagated, and each is a
+place a real cap could turn one owner into two. That needs its own ASAN matrix.
+Filed as B-2026-08-12-16. It is also why this commit adds no ASAN fixture for
+the shape: one would be RED on the Linux `memory-sanitizer` job today.
+
+Suite green at 13471 passed / 0 failed across 116 targets; clippy and fmt clean. |
 
 </details>
 
