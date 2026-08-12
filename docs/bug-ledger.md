@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 91 | 1 |
 | perf | 64 | 0 |
 | false-positive | 60 | 0 |
-| diagnostics | 48 | 1 |
+| diagnostics | 48 | 0 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
 | other | 28 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 814 | 2 |
-| typecheck | 156 | 2 |
+| typecheck | 156 | 1 |
 | interp | 138 | 0 |
 | ownership | 45 | 0 |
 | other | 41 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced · 4 open · 1110 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced · 3 open · 1111 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
-| B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
 | B-2026-08-12-15 | 2026-08-12 | codegen | high | `c24343b3` (the B-2026-08-12-1 by-value Option/Result param entry-copy) LEAKS the copied payload: `asan_struct_field_boxed_heapless_option_envelope_owned` is red on the -O0 ASAN leg with 2560 bytes in 80 allocations, and GREEN at the default opt level -- so the ordinary `cargo test --features llvm` run does not see it and only `scripts/asan-o0-leg.sh` does. | regression from c24343b3 (B-2026-08-12-1); asan_struct_field_boxed_heapless_option_envelope_owned |
 | B-2026-08-12-16 | 2026-08-12 | codegen | low | `Json.parse`'s error message LEAKS: codegen copies the runtime's diagnostic into a Kara String but pins that String's `cap` to 0, so the scope-exit free is a permanent no-op. MEASURED under LeakSanitizer: 39 bytes in 1 allocation on a one-line parse-error program. Bounded (one allocation per failed parse) but unbounded in a loop that parses attacker-supplied JSON. | `src/codegen/json.rs`, the `Build Result.Err(JsonError { line, column, message })` packing -- field 5 (`message`'s `cap`) is pinned to `i64_ty.const_zero()` |
 
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced
 
 </details>
 
-### Fixed (1110)
+### Fixed (1111)
 
-<details><summary>1110 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1111 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2486,6 +2485,69 @@ caller to know whether the ctor's payload move already retracted `x`'s own
 cleanup, which is a separate question from this row's. |
 | B-2026-08-12-7 | typecheck | medium | A union or `#[derive(Copy)]` struct with a RAW POINTER field is rejected as not-`Copy` by the one rule whose own suggestion is "hold it behind a raw… | FIXED by 9410488b -- added a `Type::Pointer { .. } => true` arm to `is_type_copy` (src/typechecker/derives.rs). Pinned by `test_e2e_union_and_struct_raw_pointer_fields_are_copy` in tests/codegen.rs, which covers both pointer spellings in a union AND a `#[derive(Copy, Clone)]` struct holding a `*mut u8`; verified to fail pre-fix with the E_UNION_FIELD_NOT_COPY pair and pass post-fix. |
 | B-2026-08-12-9 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at… | 2768ad1 (premise refuted, not a design call: `Body::FloatScalar` in emit_cmp_fn_for_type_expr goes from the ORDERED IEEE predicates to the total-order key, with NaN canonicalized first; the grandfathered test's float leg is rewritten through a generic and removed from CHECK_GATE_GRANDFATHERED) |
+| B-2026-08-12-10 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something… | FIXED by 4ecd716.
+
+Both halves, and the float half turned out to be three missing pieces rather
+than one.
+
+PROBLEM 1 -- float narrowing. `eval_const_expr_with_chain` (typechecker/items.rs)
+had arms for `Integer`, `Bool`, `CharLit` and `ByteLit` but none for `Float`, so
+a float literal fell to `NonConstShape` and lost an elision that was always
+decidable. Adding the arm alone was not enough:
+
+  * `apply_comparison` (typechecker/const_eval.rs) had no `F32`/`F64` pair, so
+    the folded value could not be compared against the predicate's literal. Uses
+    `partial_cmp` and reports a NaN operand as INCOMPARABLE rather than silently
+    answering `false`, which keeps a NaN-bearing predicate on the runtime path
+    instead of admitting or rejecting it on a made-up answer.
+  * `apply_unary`'s `Neg` arm covered only integers, so a NEGATIVE float literal
+    still did not fold. That was the row's sharpest symptom once found: `-3`
+    against the `i64` twin already reported the accurate
+    E_REFINEMENT_PREDICATE_VIOLATION while `-2.5` against the `f64` one reported
+    "not a compile-time constant".
+  * `infer_operand_target_ty` named a type only for SUFFIXED integer literals,
+    so `0.5f32 < 1.0` folded `F32` against `F64` and read as incomparable. It
+    now does the same for suffixed float literals, and reaches through a unary
+    minus -- which the integer arm never needed, because a negative integer
+    literal arrives already folded.
+
+`f16`/`bf16` are deliberately left out: `ConstValue` has no half-precision
+variant, and widening to `f32` would fold predicates at a precision the runtime
+does not use. They keep today's behaviour.
+
+The whole float addition is ADDITIVE: the evaluator never produced `F32`/`F64`
+before, so no existing reduction changes -- it only stops failing on a shape it
+could always have folded.
+
+PROBLEM 2 -- the false message. The rejection used one fixed sentence, "the
+value is not a compile-time constant", which is simply untrue of a string
+literal. The reason is now chosen from what was actually established, so the
+diagnostic never asserts something the user can see is false:
+
+    value reduced, predicate did not     -> "the value is a compile-time constant
+                                             but its `where` predicate could not
+                                             be evaluated at build time"
+    written as a LITERAL, did not reduce -> "the value is a literal, but the
+                                             build-time predicate evaluator does
+                                             not yet support `String` constants"
+    anything else                        -> the original wording, which is
+                                             accurate for a genuine runtime value
+
+REMAINDER, not fixed and recorded rather than implied: STRING literals still do
+not const-elide. That needs a `ConstValue::Str` variant plus const evaluation of
+`self.len()`, and `ConstValue` is shared with const generics, the interpreter and
+codegen -- a materially larger change than this row's papercut, and one whose
+blast radius is the const-generic parameter surface. The existing boundary test
+`refinement_elision_string_literal_needs_explicit_construction` still pins the
+rejection; what changed there is only that the message is now true.
+
+PINS: `refinement_elision_float_literal_is_const_elided` (both directions --
+admitted values elide, violating ones report PREDICATE_VIOLATION rather than the
+narrowing rejection, which is what shows the value was folded rather than waved
+through; covers `f64`, suffixed `f32`, and the negated literal) and
+`refinement_elision_rejection_message_is_not_false` (asserts the string case no
+longer claims a literal is not a constant, and that a genuine runtime value
+still gets the original accurate wording). |
 | B-2026-08-12-11 | codegen | medium | Codegen's TWO type-lowering entry points kept two hand-maintained lists of built-in handle types and DISAGREED: `llvm_type_for_type_expr` answered `p… | FIXED by 9b2f5ad. `builtin_opaque_ptr_handle` is the single table both entry points consult, so the same type cannot lower to `ptr` through one and `i64` through the other. `KARAC_STRICT_TYPE_LOWERING=1` reports any remaining unknown name at the point of the decision, filtering generic parameters (user program + baked stdlib) so it is quiet on `hello world` and fires on 16 of 2906 E2E programs. |
 | B-2026-08-12-12 | codegen | low | SIX type names still lower to the silent `i64` default with no LLVM layout of their own, across 16 of the 2906 `tests/codegen.rs` programs: `Unit` (6… | FIXED by 75fbfc0. Three of the six resolved, three measured and left alone.
 
