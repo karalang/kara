@@ -7540,6 +7540,88 @@ fn test_par_block_captured_local_let_mut_write_rejected() {
 }
 
 #[test]
+fn test_par_block_captured_local_write_via_mut_arg_rejected() {
+    // The same captured-local write as the test above, routed through a
+    // `mut ref T` PARAMETER instead of an inline assignment. The check
+    // originally collected assignment targets only, so `par { bump(mut v); … }`
+    // recorded no root and passed — after which codegen copied the capture by
+    // value into the branch env and dropped the write, while the interpreter
+    // applied it: a silent run-vs-build divergence on a program `karac check`
+    // called clean. The call-site `mut` marker is the exact signal (design.md
+    // Feature 4 Part 1½ requires it on a fresh owned binding, which is what a
+    // `let mut` local is).
+    let errors = effectcheck_errors(
+        "fn bump(n: mut ref i64) { n = n + 1; }\n\
+         fn run() {\n\
+             let mut a = 0;\n\
+             let mut b = 0;\n\
+             par { bump(mut a); bump(mut b); }\n\
+         }",
+    );
+    assert!(
+        has_par_conflict_for(&errors, "a"),
+        "expected par-write rejection for 'a' written through a mut ref param; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        has_par_conflict_for(&errors, "b"),
+        "expected par-write rejection for 'b' written through a mut ref param; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_block_captured_local_write_via_mutating_method_rejected() {
+    // The third write route to the same binding: a mutating built-in
+    // collection method on the receiver. `par { xs.push(1); … }` is the most
+    // natural spelling of the bug and diverged the same way — the interpreter
+    // reported `len == 1`, the native binary `len == 0`. Reuses the curated
+    // `is_mutating_collection_method` set, so read-only methods stay unflagged
+    // (guarded by the test below).
+    let errors = effectcheck_errors(
+        "fn run() {\n\
+             let mut xs: Vec[i64] = Vec.new();\n\
+             let mut ys: Vec[i64] = Vec.new();\n\
+             par { xs.push(1); ys.push(2); }\n\
+         }",
+    );
+    assert!(
+        has_par_conflict_for(&errors, "xs"),
+        "expected par-write rejection for 'xs' mutated via push; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        has_par_conflict_for(&errors, "ys"),
+        "expected par-write rejection for 'ys' mutated via push; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_block_captured_local_read_only_method_not_rejected() {
+    // Guard for the two tests above: widening the check to method receivers
+    // and `mut`-marked arguments must not start flagging READS. `len()` is
+    // absent from `is_mutating_collection_method` and an unmarked argument is
+    // not a write, so a captured local only read across branches raises no
+    // par-write conflict. (A plain-struct binding read from two branches is
+    // still governed by the separate `E_CONCURRENT_PLAIN_STRUCT` ownership
+    // rule — a different phase, unaffected here.)
+    let result = effectcheck_all(
+        "fn peek(n: i64) -> i64 { n + 1 }\n\
+         fn run() {\n\
+             let mut xs: Vec[i64] = Vec.new();\n\
+             let mut n = 0;\n\
+             par { let a = xs.len(); let b = peek(n); }\n\
+         }",
+    );
+    assert!(
+        !has_par_conflict_for(&result.errors, "xs") && !has_par_conflict_for(&result.errors, "n"),
+        "read-only captures must NOT be flagged; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_par_block_atomic_local_method_not_rejected() {
     // The sanctioned escape (B-2026-07-18-28): a captured `Atomic` local
     // mutated via `.fetch_add` in par branches is NOT an assignment (it is a

@@ -611,8 +611,16 @@ impl<'a> super::EffectChecker<'a> {
             // across the body's par blocks and any nested-par re-report).
             let mut reported: HashSet<String> = HashSet::new();
             for (par_block, par_span) in collect_par_blocks_in_block(body) {
+                // Three write routes to the same binding, all equally dropped
+                // by the by-value branch env: a direct assignment, a mutating
+                // built-in collection method on the receiver, and a `mut`-marked
+                // argument to a `mut ref T` parameter. Collecting only the first
+                // is what let `par { xs.push(v); … }` and `par { bump(mut v); … }`
+                // through (see `collect_mut_arg_roots_block`).
                 let mut roots: HashSet<String> = HashSet::new();
                 collect_assigned_roots_block(&par_block, &mut roots);
+                collect_mut_method_receiver_roots_block(&par_block, &mut roots);
+                collect_mut_arg_roots_block(&par_block, &mut roots);
                 let mut ordered: Vec<&String> =
                     roots.iter().filter(|r| flagged.contains(*r)).collect();
                 ordered.sort(); // deterministic diagnostic order
@@ -728,6 +736,238 @@ impl<'a> super::EffectChecker<'a> {
 }
 
 use std::collections::HashSet;
+
+/// Collect the root binding of every CALL-SITE MUTATION MARKER (`f(mut x)`,
+/// `f(mut x.field)`, `f(mut x[i])` → `x`) reachable in `block`.
+///
+/// The third leg of the captured-local-par-write check, beside
+/// [`collect_assigned_roots_block`] (`=` / `[i] =` targets) and
+/// [`collect_mut_method_receiver_roots_block`] (`acc.push(v)` receivers).
+/// Without it, a write routed through a `mut ref T` parameter —
+/// `par { bump(mut v); … }` — recorded NO root, so the check passed and both
+/// backends then dropped the write silently: codegen copies each capture by
+/// value into the branch env struct (`codegen/par_blocks.rs`, whose by-value
+/// design explicitly assumes "plain `let mut` captures are rejected upstream by
+/// the concurrency checker"), while the interpreter harvests only the branch's
+/// own innermost scope at the join. That produced a run-vs-build divergence
+/// (interpreter applies the write, native drops it) on a program `karac check`
+/// called clean.
+///
+/// The `mut` marker is an exact signal for the flagged set and needs no type
+/// information: design.md Feature 4 Part 1½ REQUIRES the marker on precisely
+/// the arguments whose place root is a fresh owned binding — which is what a
+/// `let mut` local is — while an argument already rooted at an in-scope
+/// `mut ref` binding forwards unmarked (and is never a `let mut` local, so it
+/// is not in the flagged set to begin with). The auto-par analyzer already
+/// keys on the same marker (`concurrency.rs`'s `arg.mut_marker ||
+/// param_is_mut_ref` test); this brings explicit `par {}` to parity.
+fn collect_mut_arg_roots_block(block: &Block, out: &mut HashSet<String>) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                collect_mut_arg_roots_expr(target, out);
+                collect_mut_arg_roots_expr(value, out);
+            }
+            StmtKind::Let { value, .. } => collect_mut_arg_roots_expr(value, out),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                collect_mut_arg_roots_expr(value, out);
+                collect_mut_arg_roots_block(else_block, out);
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_mut_arg_roots_block(body, out)
+            }
+            StmtKind::Expr(e) => collect_mut_arg_roots_expr(e, out),
+            StmtKind::LetUninit { .. } | StmtKind::MultiAssign { .. } => {}
+        }
+    }
+    if let Some(final_expr) = &block.final_expr {
+        collect_mut_arg_roots_expr(final_expr, out);
+    }
+}
+
+/// Expression sibling of [`collect_mut_arg_roots_block`].
+fn collect_mut_arg_roots_expr(expr: &Expr, out: &mut HashSet<String>) {
+    // Every argument list in the language is reached through one of the three
+    // arms below; record the marked ones, then recurse uniformly.
+    match &expr.kind {
+        ExprKind::Call { callee, args } => {
+            collect_mut_arg_roots_expr(callee, out);
+            for arg in args {
+                if arg.mut_marker {
+                    if let Some(root) = assign_target_root(&arg.value) {
+                        out.insert(root);
+                    }
+                }
+                collect_mut_arg_roots_expr(&arg.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_mut_arg_roots_expr(object, out);
+            for arg in args {
+                if arg.mut_marker {
+                    if let Some(root) = assign_target_root(&arg.value) {
+                        out.insert(root);
+                    }
+                }
+                collect_mut_arg_roots_expr(&arg.value, out);
+            }
+        }
+        ExprKind::OptionalChain { object, args, .. } => {
+            collect_mut_arg_roots_expr(object, out);
+            if let Some(args) = args {
+                for arg in args {
+                    if arg.mut_marker {
+                        if let Some(root) = assign_target_root(&arg.value) {
+                            out.insert(root);
+                        }
+                    }
+                    collect_mut_arg_roots_expr(&arg.value, out);
+                }
+            }
+        }
+        ExprKind::InterpolatedStringLit(parts) => {
+            for part in parts {
+                if let ParsedInterpolationPart::Expr(e, _) = part {
+                    collect_mut_arg_roots_expr(e, out);
+                }
+            }
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::NilCoalesce { left, right }
+        | ExprKind::Pipe { left, right } => {
+            collect_mut_arg_roots_expr(left, out);
+            collect_mut_arg_roots_expr(right, out);
+        }
+        ExprKind::Unary { operand, .. } => collect_mut_arg_roots_expr(operand, out),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            collect_mut_arg_roots_expr(object, out);
+        }
+        ExprKind::Index { object, index } => {
+            collect_mut_arg_roots_expr(object, out);
+            collect_mut_arg_roots_expr(index, out);
+        }
+        ExprKind::Block(b)
+        | ExprKind::Comptime(b)
+        | ExprKind::Par(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Providers { body: b, .. } => collect_mut_arg_roots_block(b, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_mut_arg_roots_expr(condition, out);
+            collect_mut_arg_roots_block(then_block, out);
+            if let Some(eb) = else_branch {
+                collect_mut_arg_roots_expr(eb, out);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            collect_mut_arg_roots_expr(value, out);
+            collect_mut_arg_roots_block(then_block, out);
+            if let Some(eb) = else_branch {
+                collect_mut_arg_roots_expr(eb, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_mut_arg_roots_expr(condition, out);
+            collect_mut_arg_roots_block(body, out);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            collect_mut_arg_roots_expr(value, out);
+            collect_mut_arg_roots_block(body, out);
+        }
+        ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+            collect_mut_arg_roots_block(body, out)
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collect_mut_arg_roots_expr(iterable, out);
+            collect_mut_arg_roots_block(body, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_mut_arg_roots_expr(scrutinee, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_mut_arg_roots_expr(g, out);
+                }
+                collect_mut_arg_roots_expr(&arm.body, out);
+            }
+        }
+        ExprKind::Closure { body, .. } => collect_mut_arg_roots_expr(body, out),
+        ExprKind::Lock { mutex, body, .. } => {
+            collect_mut_arg_roots_expr(mutex, out);
+            collect_mut_arg_roots_block(body, out);
+        }
+        ExprKind::Tuple(items)
+        | ExprKind::ArrayLiteral(items)
+        | ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for it in items {
+                collect_mut_arg_roots_expr(it, out);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            collect_mut_arg_roots_expr(value, out);
+            collect_mut_arg_roots_expr(count, out);
+        }
+        ExprKind::MapLiteral(entries) => {
+            for (k, v) in entries {
+                collect_mut_arg_roots_expr(k, out);
+                collect_mut_arg_roots_expr(v, out);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                collect_mut_arg_roots_expr(&f.value, out);
+            }
+            if let Some(s) = spread {
+                collect_mut_arg_roots_expr(s, out);
+            }
+        }
+        ExprKind::Return(opt) | ExprKind::Break { value: opt, .. } => {
+            if let Some(e) = opt {
+                collect_mut_arg_roots_expr(e, out);
+            }
+        }
+        ExprKind::Question(inner) | ExprKind::Cast { expr: inner, .. } => {
+            collect_mut_arg_roots_expr(inner, out);
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                collect_mut_arg_roots_expr(s, out);
+            }
+            if let Some(e) = end {
+                collect_mut_arg_roots_expr(e, out);
+            }
+        }
+        ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::Bool(_)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::Continue { .. }
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Error => {}
+    }
+}
 
 /// Recursively walk a block and collect every `par { }` expression
 /// reachable from it, paired with the span of the par-block
