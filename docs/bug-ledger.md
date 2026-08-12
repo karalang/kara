@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 0 |
 | run-vs-build | 103 | 0 |
-| missing-feature | 91 | 1 |
+| missing-feature | 91 | 0 |
 | perf | 64 | 0 |
 | false-positive | 60 | 0 |
 | diagnostics | 48 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 814 | 2 |
-| typecheck | 156 | 1 |
+| typecheck | 156 | 0 |
 | interp | 138 | 0 |
 | ownership | 45 | 0 |
 | other | 41 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced · 3 open · 1111 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced · 2 open · 1112 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
 | B-2026-08-12-15 | 2026-08-12 | codegen | high | `c24343b3` (the B-2026-08-12-1 by-value Option/Result param entry-copy) LEAKS the copied payload: `asan_struct_field_boxed_heapless_option_envelope_owned` is red on the -O0 ASAN leg with 2560 bytes in 80 allocations, and GREEN at the default opt level -- so the ordinary `cargo test --features llvm` run does not see it and only `scripts/asan-o0-leg.sh` does. | regression from c24343b3 (B-2026-08-12-1); asan_struct_field_boxed_heapless_option_envelope_owned |
 | B-2026-08-12-16 | 2026-08-12 | codegen | low | `Json.parse`'s error message LEAKS: codegen copies the runtime's diagnostic into a Kara String but pins that String's `cap` to 0, so the scope-exit free is a permanent no-op. MEASURED under LeakSanitizer: 39 bytes in 1 allocation on a one-line parse-error program. Bounded (one allocation per failed parse) but unbounded in a loop that parses attacker-supplied JSON. | `src/codegen/json.rs`, the `Build Result.Err(JsonError { line, column, message })` packing -- field 5 (`message`'s `cap`) is pinned to `i64_ty.const_zero()` |
 
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced
 
 </details>
 
-### Fixed (1111)
+### Fixed (1112)
 
-<details><summary>1111 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1112 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2484,6 +2483,7 @@ self-host double free, and a leak is the safe direction; closing it needs the
 caller to know whether the ctor's payload move already retracted `x`'s own
 cleanup, which is a separate question from this row's. |
 | B-2026-08-12-7 | typecheck | medium | A union or `#[derive(Copy)]` struct with a RAW POINTER field is rejected as not-`Copy` by the one rule whose own suggestion is "hold it behind a raw… | FIXED by 9410488b -- added a `Type::Pointer { .. } => true` arm to `is_type_copy` (src/typechecker/derives.rs). Pinned by `test_e2e_union_and_struct_raw_pointer_fields_are_copy` in tests/codegen.rs, which covers both pointer spellings in a union AND a `#[derive(Copy, Clone)]` struct holding a `*mut u8`; verified to fail pre-fix with the E_UNION_FIELD_NOT_COPY pair and pass post-fix. |
+| B-2026-08-12-8 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and r… | 9f4fc14 (three registrations — Set.clear in stdlib_map.rs plus a MISSING interpreter arm in method_call_set.rs, range at both reduce dispatch sites in expr_method_call.rs, iter_mut in expr_method_call.rs yielding `mut ref T` — and one test correction, since `.collect()` on a bare Vec is a deliberate rejection rather than a gap; all four removed from CHECK_GATE_GRANDFATHERED) |
 | B-2026-08-12-9 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at… | 2768ad1 (premise refuted, not a design call: `Body::FloatScalar` in emit_cmp_fn_for_type_expr goes from the ORDERED IEEE predicates to the total-order key, with NaN canonicalized first; the grandfathered test's float leg is rewritten through a generic and removed from CHECK_GATE_GRANDFATHERED) |
 | B-2026-08-12-10 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something… | FIXED by 4ecd716.
 
