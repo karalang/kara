@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 236 | 1 |
-| leak | 163 | 3 |
+| miscompile | 237 | 2 |
+| leak | 163 | 2 |
 | double-free | 120 | 0 |
 | codegen-gap | 103 | 0 |
 | run-vs-build | 101 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 806 | 4 |
+| codegen | 807 | 4 |
 | typecheck | 152 | 0 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
@@ -124,17 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1114 surfaced · 5 open · 1097 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1115 surfaced · 5 open · 1098 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-33 | 2026-08-11 | codegen | medium | A `#[derive(Eq)]` STRUCT temporary carrying a HEAP field, compared against a `ref` param, leaks that field every evaluation: `mk(hay) == other` with `fn mk(s: ref String) -> P { P { name: s.substring(0, 4) } }` and `other: ref P` leaks 4 B / 1 alloc under LSan. Sibling of B-2026-08-11-24 (the String-equality form, fixed) with the same operand pairing -- unbound temp vs `ref` param -- but a DIFFERENT lowering, so that fix does not reach it. NOTE THE FILING CORRECTION: B-2026-08-11-24 measured this shape as CLEAN and concluded its scope was narrow to String equality. That control built the struct's String field from a LITERAL, which allocates nothing and therefore cannot leak; the operand pairing was right and the payload was not. With a `substring`-built field it reproduces every time. A pinned `#[ignore]`d fixture (asan_derive_eq_struct_heap_field_vs_ref_param) reproduces it under `cargo test --features llvm --test memory_sanitizer -- --ignored`. | `compile_struct_eq` in src/codegen/expr_ops.rs — the derived-struct `==`/`!=` path; the fresh temp operand is never materialized or dropped. The String sibling was fixed in exprs.rs (B-2026-08-11-24) and does NOT cover this. |
 | B-2026-08-11-34 | 2026-08-11 | other | medium | `tests/codegen.rs`'s `run_program` harness FAILS MODULE VERIFICATION on a program that `karac build` and `karac run --interp` both compile and run correctly: "Function return type does not match operand type of return inst! ret { ptr } %field / i64" and a matching call-parameter mismatch, on a multi-struct program where a fn returns a struct with a `Map` field. So the E2E harness can REJECT source the shipped compiler accepts -- the opposite of the failure mode its own comments are written against, and it means an E2E pin cannot always be written for a shape the CLI handles. | tests/codegen.rs run_program_capturing_inner pass list vs karac build |
 | B-2026-08-12-1 | 2026-08-12 | codegen | high | Passing a by-value `Option`/`Result` argument TWICE makes every call after the first read the WRONG VARIANT -- `Err`/`None` for a value that is still `Ok`/`Some`. The caller's pass-as-arg move cap-zeros a binding it still owns, on a destination-takes-ownership assumption that holds for `v.push(r)` but not for a plain call. AOT and JIT both wrong, interpreter correct; a user enum in the same shape is correct everywhere. | Same root cause as B-2026-08-11-30 (caller retracts, callee bails) surfacing as a wrong answer rather than a leak. The fix design in that row -- callee-owned entry deep-copy plus dropping the caller-side retraction for a plain-call argument -- fixes both; neither half is safe alone. |
 | B-2026-08-12-2 | 2026-08-12 | codegen | medium | A `Map` field of an `Ok` payload leaks ~72 B per call when the `Result` is LET-BOUND before the match; matching the producing call INLINE is clean, and the identical shape with a `Vec` field is clean. Split out of B-2026-08-11-30 leg A -- no by-value parameter boundary is involved, so the param-ownership defect that row describes does not cover it. | Split from B-2026-08-11-30, which is now solely about by-value Option/Result params. Same code area as B-2026-08-11-29 (SEGV, struct with a Map/Set field). |
 | B-2026-08-12-4 | 2026-08-12 | codegen | high | `asan_vec_element_field_move_by_assignment_no_double_free` is red on main with a LeakSanitizer leak, and NONDETERMINISTICALLY so: green in the full parallel suite run, red standalone, on one unchanged tree. It is the un-ignored regression pin from 970dadf (B-2026-08-11-25) and fails in exactly the over-broad-repair mode its own comment predicts, so the assignment-path cap-zeroing looks to have traded the double free for a per-iteration leak. | Regression pin from 970dadf (B-2026-08-11-25). NOT caused by 19d0e9a (B-2026-08-11-30) -- verified by stash-and-rebuild. |
+| B-2026-08-12-5 | 2026-08-12 | codegen | high | SILENT WRONG ANSWER (run-vs-build): `#[derive(Eq)]` equality over a struct with a `Vec[String]` field reports NOT EQUAL in both compiled backends for two vectors whose CONTENTS are equal, while the interpreter correctly reports equal. Measured on one program: `S { v: a } == S { v: b }` with both vectors holding \"abcd\" gives interp `true`, JIT `false`, AOT `false`. It is a FALSE NEGATIVE only -- differing contents correctly give `false` on all three -- so the failure mode is a comparison that silently never matches. NARROW AND MEASURED: a `Vec[i64]` field is CORRECT on all three (`true`), and a plain `String` field is CORRECT on all three, so it is specific to a Vec of HEAP elements. Reproduces with two struct LOCALS, no temporaries and no `ref` params, so it is independent of B-2026-08-11-24 / -33 (which are leaks in the same lowering's neighbourhood and cannot change a boolean). | `compile_struct_eq` in src/codegen/expr_ops.rs — the per-field recursion compares a `Vec` field by its `{ptr,len,cap}` words instead of element-wise; the interpreter's `value_compare` Array arm does compare contents |
 
 ### Wontfix (2)
 
@@ -147,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1114 surfaced
 
 </details>
 
-### Fixed (1097)
+### Fixed (1098)
 
-<details><summary>1097 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1098 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2207,6 +2207,7 @@ on that second pass. It is the caller-side half of the same split and is
 unchanged here. |
 | B-2026-08-11-31 | other | medium | `tests/par_codegen.rs` -- the ONLY lane that threads `ConcurrencyAnalysis` into codegen -- had no JIT leg at all, so the DEFAULT `karac build` config… | FIXED by 43face1. `jit_dispatch_par` in `tests/par_codegen.rs` compiles each test program to IR with both analyses threaded and executes it through the sibling `karac_jit_runner`, gated on `KARAC_TEST_JIT=1`; two CI steps schedule it on x86 and arm64. Verified by negative control (a corrupted expectation fails the JIT leg), and hardened to panic rather than soft-skip so it cannot silently become vacuous. |
 | B-2026-08-11-32 | codegen | high | a widening cast on an unsigned `Vec` element read through a struct FIELD sign-extends instead of zero-extending -- `h.px[0] as f64` on a `Vec[u16]` h… | 023bc9a |
+| B-2026-08-11-33 | codegen | medium | A `#[derive(Eq)]` STRUCT temporary carrying a HEAP field, compared against a `ref` param, leaks that field every evaluation: `mk(hay) == other` with… | 23e5d66 (new `track_fresh_struct_temp_operand` in src/codegen/expr_ops.rs, called from the `Eq`/`NotEq` arm in exprs.rs beside the B-2026-08-11-24 String free: materialize the fresh temp into a slot and register its struct drop, threading the generic instantiation) |
 | B-2026-08-12-3 | other | medium | `tests/codegen.rs`'s E2E harness ran `resolve` and `typecheck` only to feed `lower` and DISCARDED their errors, so the suite stayed green on 40 progr… | FIXED by e0c6bab. `common::assert_check_clean` panics when an E2E test program has a resolve or typecheck error, with the 40 measured offenders grandfathered by name and diagnostic in `CHECK_GATE_GRANDFATHERED`. Verified by negative control; suite green at 2905/0. |
 
 </details>
