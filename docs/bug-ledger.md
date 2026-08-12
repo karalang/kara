@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 92 | 1 |
 | perf | 64 | 0 |
 | false-positive | 60 | 0 |
-| diagnostics | 50 | 0 |
+| diagnostics | 52 | 0 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
 | other | 29 | 1 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 821 | 3 |
-| typecheck | 157 | 1 |
+| codegen | 822 | 3 |
+| typecheck | 158 | 1 |
 | interp | 138 | 0 |
 | ownership | 46 | 0 |
 | other | 41 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1138 surfaced · 5 open · 1121 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1140 surfaced · 5 open · 1123 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -147,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1138 surfaced
 
 </details>
 
-### Fixed (1121)
+### Fixed (1123)
 
-<details><summary>1121 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1123 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3189,6 +3189,8 @@ use-after-move the gate was silently missing. It is not par-specific -- the same
 double move in straight-line code reports the identical ownership WARNING and
 `karac check` passes. Use-after-move is a warning language-wide; nothing about
 `par` changes it. |
+| B-2026-08-12-28 | codegen | low | A chained indexed field READ (`a[i][j].field`) failed `karac build` with the generic self-accusing 'cannot resolve field .. | 63b0bd19 |
+| B-2026-08-12-29 | typecheck | low | The `s[i]`-on-String rejection prescribes `s.char_at(i)` as the substitute, but `char_at` returns `Option[char]` — so the suggested replacement does… | a092d138 |
 
 </details>
 
