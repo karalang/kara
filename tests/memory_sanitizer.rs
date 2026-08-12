@@ -20867,6 +20867,110 @@ fn main() {
         );
     }
 
+    /// B-2026-08-12-27 — a heap FIELD read out of a Vec element
+    /// (`ps[0].word`) is a shallow alias of the container's buffer. Consumed
+    /// into any owning destination, the destination and the container both
+    /// free it: `free(): double free detected in tcache 2`. The interpreter
+    /// copies, and `karac check` accepts every program here — so the language
+    /// semantics is a COPY and the compiled backends alias.
+    ///
+    /// THE WHOLE-ELEMENT READ IS ALREADY CLONED and this is its missing
+    /// sibling. Verified directly: after `let b = ps[0]`, mutating `b.word`
+    /// leaves `ps[0].word` untouched on both backends
+    /// (`clone_owned_vec_index_element`). The FIELD read gets no such clone.
+    ///
+    /// EIGHT DESTINATIONS MEASURED BROKEN, which is the finding that decides
+    /// the fix shape — the filing named only the struct literal:
+    ///
+    ///   struct-literal field   `Pair { word: ps[0].word, .. }`   ABORTS
+    ///   `Vec.push`             `ws.push(ps[0].word)`             ABORTS
+    ///   field assign           `o.word = ps[0].word`             ABORTS
+    ///   index assign           `ws[0] = ps[0].word`              ABORTS
+    ///   map insert             `m.insert(ps[0].word, 5)`         ABORTS
+    ///   return                 `return ps[0].word`               ABORTS
+    ///   tuple construction     `(ps[0].word, 1)`                 ABORTS
+    ///   enum payload           `Wrap.Has(ps[0].word)`            ABORTS
+    ///
+    /// TWO SHAPES ARE CLEAN, and each for its own reason rather than because
+    /// the read is sound: a by-value fn argument (`take(ps[0].word)`) is
+    /// caller-retains, so the callee never frees; and a plain `let w =
+    /// ps[0].word` cap-zeroes the SOURCE — which is a move, and the checker
+    /// says this is a copy. That divergence has its own symptom, pinned by
+    /// `e2e_vec_elem_field_read_is_a_copy` in tests/codegen.rs: mutate `w` and
+    /// the element's own field reads back as garbage.
+    ///
+    /// WHY THIS IS NOT A PER-DESTINATION PATCH, recorded so the next attempt
+    /// does not start there. Mirroring the let site's suppression at the other
+    /// destinations would silence all eight aborts, and it would be spreading
+    /// a move model the checker contradicts — trading eight double frees for
+    /// eight silent use-after-frees. The correct fix is to CLONE the field
+    /// read, as the whole-element read already does, and to stop suppressing
+    /// at the let site.
+    ///
+    /// WHY THE CLONE IS NOT A ONE-LINER EITHER: cloning at the read leaks in
+    /// every NON-consuming position, and those are common and currently clean
+    /// — `ps[0].word.len()` and `ps[0].word + "!"` both work today. The read
+    /// site cannot see whether its parent consumes, so the clone has to go
+    /// through the fresh-owned-temp channel
+    /// (`expr_yields_fresh_owned_temp`, the route
+    /// `compile_inline_temp_vec_index` already uses for `make()[i]`), which is
+    /// a change to what every consumer frees. That is the work this row wants.
+    #[test]
+    #[ignore = "B-2026-08-12-27: a heap field read off a Vec element aliases the container; eight owning destinations double-free. Fix is clone-at-read via the fresh-temp channel, not per-destination suppression — see the doc above."]
+    fn asan_vec_elem_heap_field_read_freed_once() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { word: String, n: i64 }
+struct Box3 { word: String }
+enum Wrap { Has(String), Non }
+fn ret(ps: Vec[Pair]) -> String { return ps[0].word; }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 20 {
+        let mut ps: Vec[Pair] = Vec.new();
+        ps.push(Pair { word: f"src{k + i}", n: 1 });
+        // 1. struct-literal field
+        let lit = Pair { word: ps[0].word, n: 9 };
+        acc = acc + lit.word.len();
+        // 2. Vec.push
+        let mut ws: Vec[String] = Vec.new();
+        ws.push(ps[0].word);
+        acc = acc + ws[0].len();
+        // 3. field assign
+        let mut o = Box3 { word: f"old{k + i}" };
+        o.word = ps[0].word;
+        acc = acc + o.word.len();
+        // 4. index assign
+        let mut zs: Vec[String] = Vec.new();
+        zs.push(f"pad{k + i}");
+        zs[0] = ps[0].word;
+        acc = acc + zs[0].len();
+        // 5. map insert
+        let mut m: Map[String, i64] = Map.new();
+        m.insert(ps[0].word, 5);
+        acc = acc + 1;
+        // 6. return out of a callee
+        acc = acc + ret(ps).len();
+        // 7. tuple construction
+        let t = (ps[0].word, 1);
+        acc = acc + t.0.len();
+        // 8. enum payload
+        let w = Wrap.Has(ps[0].word);
+        acc = acc + match w { Wrap.Has(s) => s.len(), Wrap.Non => 0 };
+        // The container's own field must still read correctly afterwards.
+        acc = acc + ps[0].word.len();
+        i = i + 1;
+    }
+    println(acc > 0);
+}
+"#,
+            &["true"],
+            "vec_elem_heap_field_read_freed_once",
+        );
+    }
+
     /// B-2026-08-01-31 — `let x = o.h.r`: a struct field moved out of a
     /// struct reached through a DEEPER field chain never cap-zeroed the
     /// source, so BOTH x's cleanup and o's StructDrop freed the same name

@@ -11221,6 +11221,44 @@ fn main() {
         assert_eq!(out, "beta1 alpha1\ngamma1 alpha1\n");
     }
 
+    /// B-2026-08-12-27 — the SILENT half, and the reason that row is not
+    /// simply "eight destinations abort". A heap field read out of a Vec
+    /// element (`let w = ps[0].word`) cap-zeroes the SOURCE, i.e. treats the
+    /// read as a MOVE. `karac check` accepts reading `ps[0].word` afterwards
+    /// and the interpreter still has the value, so the language semantics is a
+    /// COPY — the compiled backends alias, and the element is left pointing at
+    /// a buffer it no longer owns.
+    ///
+    /// Mutating the binding is what makes it visible: the reassignment frees
+    /// the buffer the element still references, and the element's own field
+    /// then reads back garbage. Measured on this program — interpreter prints
+    /// `a1`, `karac build` prints `~`. No abort, no sanitizer trip in a plain
+    /// run: WRONG OUTPUT.
+    ///
+    /// The whole-element read is already a copy — `let b = ps[0]` then
+    /// `b.word = ..` leaves `ps[0].word` intact on both backends — so this pins
+    /// the field read to the same rule its sibling already follows.
+    #[test]
+    #[ignore = "B-2026-08-12-27: a heap field read off a Vec element is compiled as a move (source cap-zeroed) though the checker and interpreter treat it as a copy; mutating the binding dangles the element's field"]
+    fn e2e_vec_elem_field_read_is_a_copy() {
+        let Some(out) = run_program(
+            "struct Pair { word: String, n: i64 }\n\
+             fn main() {\n\
+             \x20   let k = 1;\n\
+             \x20   let mut ps: Vec[Pair] = Vec.new();\n\
+             \x20   ps.push(Pair { word: f\"a{k}\", n: 1 });\n\
+             \x20   let mut w = ps[0].word;\n\
+             \x20   w = w + \"X\";\n\
+             \x20   println(w);\n\
+             \x20   println(ps[0].word);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        // `karac run --interp` on the identical source.
+        assert_eq!(out, "a1X\na1\n");
+    }
+
     /// B-2026-08-01-20 — a FIELD-assign displaces the old field value,
     /// whose Drop bodies now fire before the store (both backends were
     /// silent; the memory side always freed). Struct fields with Drop
