@@ -92,15 +92,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 238 | 0 |
+| miscompile | 239 | 0 |
 | leak | 169 | 0 |
-| double-free | 120 | 0 |
-| codegen-gap | 104 | 0 |
+| double-free | 121 | 1 |
+| codegen-gap | 105 | 1 |
 | run-vs-build | 103 | 0 |
-| missing-feature | 91 | 0 |
+| missing-feature | 92 | 1 |
 | perf | 64 | 0 |
 | false-positive | 60 | 0 |
-| diagnostics | 48 | 0 |
+| diagnostics | 50 | 1 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
 | other | 28 | 0 |
@@ -110,25 +110,30 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 817 | 0 |
-| typecheck | 156 | 0 |
+| codegen | 819 | 2 |
+| typecheck | 157 | 1 |
 | interp | 138 | 0 |
-| ownership | 45 | 0 |
+| ownership | 46 | 1 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
-| parser | 13 | 0 |
+| parser | 14 | 0 |
+| effect | 5 | 0 |
 | lexer | 4 | 0 |
-| effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1129 surfaced · 0 open · 1117 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1135 surfaced · 4 open · 1119 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (4)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-12-22 | 2026-08-12 | codegen | high | DOUBLE FREE on both compiled backends: index-assigning a WHOLE struct element read out of the same Vec (`let b = ps[1]; ps[0] = b;`, element = struct with a String field) — the element read is a shallow copy, so the container ends up with two owners of one buffer; the interpreter is correct | none |
+| B-2026-08-12-23 | 2026-08-12 | ownership | medium | `E_CONCURRENT_PLAIN_STRUCT` fires on BUILTIN containers (`Vec` / `Map` / `Set`) and then prescribes a migration the user cannot perform — 'rename `struct Vec` to `par struct Vec`' — while `String`, equally in design.md's cross-task-safe set, is not gated at all | none |
+| B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
+| B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
 
 ### Wontfix (2)
 
@@ -141,9 +146,9 @@ _None — the ledger is fully drained._
 
 </details>
 
-### Fixed (1117)
+### Fixed (1119)
 
-<details><summary>1117 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1119 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3028,6 +3033,18 @@ at -O2 the copy is dead and LLVM deletes it.
 
 Suite green at 116 targets, 0 failures; the -O0 leg green with an EMPTY
 quarantine list; clippy and fmt clean. |
+| B-2026-08-12-20 | effect | high | A write to a captured local from inside `par { }` is silently DROPPED when it is routed through a `mut ref` parameter (`par { bump(mut v); … }`) or a… | FIXED by d37c097. `check_captured_local_par_writes` now unions THREE collectors over the par block instead of one: `collect_assigned_roots_block` (unchanged), the existing `collect_mut_method_receiver_roots_block` (the curated `is_mutating_collection_method` set, already used by closure capture-mode inference), and a new par-local `collect_mut_arg_roots_block` that records the place root of every CALL-SITE `mut` MARKER. All three feed the existing diagnostic unchanged — the message was already exactly right, it just never fired.
+
+The `mut` marker is an exact signal here and needs no type information: design.md Feature 4 Part 1½ REQUIRES the marker on precisely the arguments whose place root is a fresh owned binding, which is what a `let mut` local is, while an argument already rooted at an in-scope `mut ref` binding forwards unmarked — and such a binding is not a `let mut` local, so it was never in the flagged set. The new collector is deliberately par-local rather than a widening of `collect_assigned_roots_*`, which `index_disjoint.rs` and the closure-capture analysis also consume.
+
+FALSE-POSITIVE EVIDENCE, the load-bearing part of this fix, since the check now rejects strictly more: the sanctioned escapes still pass (`Atomic` local via `fetch_add`, `par struct` field), branch-LOCAL mutation still passes, read-only capture still passes, and mutation OUTSIDE the par of a binding merely read inside it still passes. Swept the whole corpus for new rejections: 0 of the repo's examples and 0 of the 744 `.kara` files in kara-katas newly rejected.
+
+Three regression tests in tests/effectchecker.rs: the `mut ref` param route, the mutating-method route, and a read-only guard (`len()` + an unmarked argument) pinning that the widening did not start flagging reads. |
+| B-2026-08-12-21 | parser | medium | An assignment written as a bare `match` arm body (`Some(q) => total = total + q,`) produced THREE errors, two of them fictional — including a bogus '… | FIXED by 9abcf48. `parse_match_expr` now checks for an assignment operator (`=` or any compound form) after a non-block arm body and, when it finds one, calls the new `recover_assignment_arm_body`: it reports 'assignment is a statement, not an expression, so it cannot be a bare `match` arm body — wrap it in braces: `pattern => { place = value }`' anchored at the operator, then CONSUMES the assignment and builds the arm body the author meant — a unit-typed block holding the assignment statement, i.e. the braced form. A trailing `;` is eaten if present.
+
+Recovering into a well-formed tree (rather than only improving the message) is what removes the cascade: parsing resumes at the next arm, the `match` completes, nothing resynchronizes at top level, and the two fictional errors disappear. One error, at the right token, naming the fix.
+
+NO machine-applicable `fix_diff` is attached: the edit is a brace on each side of the body, and the parser holds tokens but not source text, so it cannot build the single (offset, length, replacement) that the `fix_edits` side-channel takes. Wiring that would mean either two edits per diagnostic or source access in the parser; both are larger than this fix and neither is needed for the message to be correct. |
 
 </details>
 
