@@ -1368,7 +1368,8 @@ impl super::Parser {
                     kind: ExprKind::Block(block),
                 }
             } else {
-                self.parse_expression()?
+                let expr = self.parse_expression()?;
+                self.recover_assignment_arm_body(expr)
             };
 
             arms.push(MatchArm {
@@ -2326,6 +2327,83 @@ impl super::Parser {
             (Some(name), Some(span))
         } else {
             (None, None)
+        }
+    }
+
+    /// Recover a `match` arm whose body is an ASSIGNMENT written without
+    /// braces — `Some(q) => total = total + q,`.
+    ///
+    /// Assignment is a statement in Kāra, not an expression, so the arm body
+    /// (parsed with `parse_expression`) stops at `total` and the `=` is a hard
+    /// parse error. Left to the generic path that error read `Expected
+    /// RightBrace, found Equal`, which names neither the rule nor the fix, and
+    /// — worse — aborted the whole `match`, so the enclosing function's
+    /// remaining statements resynchronized at TOP LEVEL and drew a bogus third
+    /// diagnostic claiming the file "contains both top-level statements and an
+    /// explicit `fn main()`". Three errors, two of them fictional, for one
+    /// missing pair of braces.
+    ///
+    /// So consume the assignment here instead: report exactly what is wrong
+    /// with the fix inline, then build the arm body the author meant — a block
+    /// holding the assignment statement, unit-typed like the braced form they
+    /// should have written. Parsing continues at the next arm, the cascade
+    /// disappears, and downstream phases see a well-formed tree.
+    ///
+    /// Returns the recovered block when an assignment was consumed, and the
+    /// untouched body otherwise (the overwhelmingly common case) — so the
+    /// caller can use the result unconditionally.
+    fn recover_assignment_arm_body(&mut self, expr: Expr) -> Expr {
+        let target_span = expr.span.clone();
+        let (op_span, compound) = if self.check(&Token::Equal) {
+            let span = self.current_span();
+            self.advance();
+            (span, None)
+        } else {
+            let span = self.current_span();
+            match self.try_compound_op() {
+                Some(op) => (span, Some(op)),
+                None => return expr,
+            }
+        };
+
+        self.error_at(
+            "assignment is a statement, not an expression, so it cannot be a bare \
+             `match` arm body — wrap it in braces: `pattern => { place = value }`",
+            op_span,
+        );
+
+        let Some(value) = self.parse_expression() else {
+            return Expr {
+                span: target_span,
+                kind: ExprKind::Error,
+            };
+        };
+        // Optional `;` — accepted so the braced form's muscle memory
+        // (`=> total = total + q;,`) does not produce a second error.
+        self.eat(&Token::Semicolon);
+
+        let span = self.span_from(&target_span);
+        let kind = match compound {
+            None => StmtKind::Assign {
+                target: expr,
+                value,
+            },
+            Some(op) => StmtKind::CompoundAssign {
+                target: expr,
+                op,
+                value,
+            },
+        };
+        Expr {
+            span: span.clone(),
+            kind: ExprKind::Block(Block {
+                stmts: vec![Stmt {
+                    span: span.clone(),
+                    kind,
+                }],
+                final_expr: None,
+                span,
+            }),
         }
     }
 

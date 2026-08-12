@@ -5513,6 +5513,94 @@ fn test_error_unexpected_token() {
 }
 
 #[test]
+fn test_assignment_as_bare_match_arm_body_reports_braces_without_cascading() {
+    // Assignment is a statement, not an expression, so it cannot be a bare
+    // match arm body. Before the recovery path, the arm-body failure aborted
+    // the whole `match`, the enclosing function's remaining statements
+    // resynchronized at TOP LEVEL, and the file drew THREE errors — the second
+    // and third fictional, the third asserting the file "contains both
+    // top-level statements and an explicit `fn main()`" about a file that has
+    // no top-level statements at all. Pin both halves: the message names the
+    // fix, and exactly one error is reported per offending arm.
+    let (_, errors) = parse_with_errors(
+        "fn main() {\n\
+             let mut total = 0;\n\
+             let x: Option[i64] = Some(3);\n\
+             match x {\n\
+                 Some(q) => total = total + q,\n\
+                 None => total = 0,\n\
+             }\n\
+             println(total.to_string());\n\
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        2,
+        "expected exactly one error per offending arm and no resync cascade; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    for e in &errors {
+        assert!(
+            e.message.contains("wrap it in braces"),
+            "expected the braces fix-it; got: {}",
+            e.message
+        );
+    }
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("top-level statements")),
+        "the script-mode ambiguity error is a resync artifact here and must not appear; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_compound_assignment_as_bare_match_arm_body_reports_braces() {
+    // Sibling of the test above for the compound forms (`+=` and friends),
+    // which take the other branch of the recovery's operator check.
+    let (_, errors) = parse_with_errors(
+        "fn main() {\n\
+             let mut total = 0;\n\
+             match Some(3) {\n\
+                 Some(q) => total += q,\n\
+                 None => {}\n\
+             }\n\
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected exactly one error; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        errors[0].message.contains("wrap it in braces"),
+        "expected the braces fix-it; got: {}",
+        errors[0].message
+    );
+}
+
+#[test]
+fn test_braced_assignment_match_arm_still_parses_clean() {
+    // Guard: the form the diagnostic prescribes must itself be accepted, and
+    // the recovery must not fire for an ordinary expression-bodied arm.
+    parse_ok(
+        "fn main() {\n\
+             let mut total = 0;\n\
+             match Some(3) {\n\
+                 Some(q) => { total = total + q; }\n\
+                 None => { total = 0; }\n\
+             }\n\
+             let n = match Some(1) {\n\
+                 Some(q) => q + 1,\n\
+                 None => 0,\n\
+             };\n\
+         }",
+    );
+}
+
+#[test]
 fn test_error_span_points_to_bad_token() {
     let (_, errors) = parse_with_errors("fn foo() {\n    let x = ;\n}");
     assert!(!errors.is_empty());
