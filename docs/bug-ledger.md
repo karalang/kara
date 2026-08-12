@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 238 | 2 |
+| miscompile | 238 | 1 |
 | leak | 164 | 2 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 811 | 6 |
+| codegen | 811 | 5 |
 | typecheck | 156 | 3 |
 | interp | 138 | 0 |
 | ownership | 45 | 1 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1123 surfaced · 8 open · 1103 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1123 surfaced · 7 open · 1104 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-2 | 2026-08-12 | codegen | medium | A `Map` field of an `Ok` payload leaks ~72 B per call when the `Result` is LET-BOUND before the match; matching the producing call INLINE is clean, and the identical shape with a `Vec` field is clean. Split out of B-2026-08-11-30 leg A -- no by-value parameter boundary is involved, so the param-ownership defect that row describes does not cover it. | Split from B-2026-08-11-30, which is now solely about by-value Option/Result params. Same code area as B-2026-08-11-29 (SEGV, struct with a Map/Set field). |
 | B-2026-08-12-5 | 2026-08-12 | codegen | high | SILENT WRONG ANSWER (run-vs-build): `#[derive(Eq)]` equality over a struct with a `Vec[String]` field reports NOT EQUAL in both compiled backends for two vectors whose CONTENTS are equal, while the interpreter correctly reports equal. Measured on one program: `S { v: a } == S { v: b }` with both vectors holding \"abcd\" gives interp `true`, JIT `false`, AOT `false`. It is a FALSE NEGATIVE only -- differing contents correctly give `false` on all three -- so the failure mode is a comparison that silently never matches. NARROW AND MEASURED: a `Vec[i64]` field is CORRECT on all three (`true`), and a plain `String` field is CORRECT on all three, so it is specific to a Vec of HEAP elements. Reproduces with two struct LOCALS, no temporaries and no `ref` params, so it is independent of B-2026-08-11-24 / -33 (which are leaks in the same lowering's neighbourhood and cannot change a boolean). | `compile_struct_eq` in src/codegen/expr_ops.rs — the per-field recursion compares a `Vec` field by its `{ptr,len,cap}` words instead of element-wise; the interpreter's `value_compare` Array arm does compare contents |
-| B-2026-08-12-1 | 2026-08-12 | codegen | high | Passing a by-value `Option`/`Result` argument TWICE makes every call after the first read the WRONG VARIANT -- `Err`/`None` for a value that is still `Ok`/`Some`. The caller's pass-as-arg move cap-zeros a binding it still owns, on a destination-takes-ownership assumption that holds for `v.push(r)` but not for a plain call. AOT and JIT both wrong, interpreter correct; a user enum in the same shape is correct everywhere. | Same root cause as B-2026-08-11-30 (caller retracts, callee bails) surfacing as a wrong answer rather than a leak. The fix design in that row -- callee-owned entry deep-copy plus dropping the caller-side retraction for a plain-call argument -- fixes both; neither half is safe alone. |
 | B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
 | B-2026-08-12-9 | 2026-08-12 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at typecheck, so the codegen paths two E2E tests cover can never run in a shipped binary. Either the emitter is dead code to retire or the rule is stricter than intended -- open design call, not a defect report. | Vec[f64].sorted / Iterator.max / Iterator.min vs the F64 total-order rule |
 | B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1123 surfaced
 
 </details>
 
-### Fixed (1103)
+### Fixed (1104)
 
-<details><summary>1103 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1104 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2368,6 +2367,76 @@ before this fix (it leaked the same 8 bytes then), and strictly better than the
 pre-B-25 double free -- but it is a live defect, and `karac check` accepts the
 program. |
 | B-2026-08-12-6 | other | medium | 103 of the 109 codegen-invoking test harnesses in `tests/` resolved the RAW parse tree, skipping some or all of the three AST rewrites `karac build`… | FIXED by b3a1061. `karac::prepare_for_resolve` owns the parse->resolve rewrite sequence; `cli.rs` and all 109 codegen-invoking test harnesses call it, so no driver can run a subset. Pinned by `desugar_dependent_constructs_reach_codegen_through_the_harness` (multi-assign, trait default method, `impl Trait` param), verified by negative control. |
+| B-2026-08-12-1 | codegen | high | Passing a by-value `Option`/`Result` argument TWICE makes every call after the first read the WRONG VARIANT -- `Err`/`None` for a value that is still… | FIXED by c24343b.
+
+The callee now ENTRY-COPIES a by-value `Option`/`Result` param, so the caller
+keeps its own value and nothing is zeroed: every pass reads the true variant.
+Four parts, all consulting one predicate so the frames cannot drift.
+
+  * `optres_param_entry_copied_te` (param_own.rs) -- the single predicate. It
+    delegates to `field_copy_supported`'s `Option`/`Result` arms (which already
+    vet BOTH halves of a `Result`; the drop frees whichever is live, so a copy
+    that skipped the `Err` half would double-free every error path while every
+    `Ok`-only test passed), and then EXCLUDES shared and boxed payloads. As a
+    struct FIELD those two are legitimately copyable -- an rc-INC, a fresh
+    envelope -- but at a param boundary they already have owners (the rc
+    machinery; `boxed_enum_payload_vars` / `boxed_struct_payload_vars`) with
+    their own caller-side retraction rules, and an entry copy is a second,
+    unsynchronised answer to the same question. Measured: admitting them fails
+    20 memory_sanitizer fixtures across the shared-Option, boxed-Option and
+    boxed-enum-chain families.
+  * `deep_copy_optres_param_in_place` (param_own.rs) -- dispatches exactly as
+    `deep_copy_one_aggregate_field` does. No new copy emitters were needed.
+  * Caller side (call_dispatch.rs AND method_call.rs) -- both sites that emit
+    the arg-site whole-slot zero now skip it on the same predicate, and both
+    register a cleanup for a FRESH-TEMP argument via `track_optres_arg_temp`.
+    Gating only the free-fn site left a method's caller zeroing a slot the
+    callee no longer took over.
+  * REGISTER BEFORE COPY (functions.rs) -- the ordering is load-bearing, and
+    finding out why is what unblocked this row after the first attempt failed.
+
+THE ORDERING BUG, which is the whole story of the failed first attempt. Both
+inline-payload trackers zero-init the slot in the entry block when they believe
+they are registering from a NESTED scope, so a `let` whose store may never
+execute (loop body skipped, branch not taken) cannot leave the cleanup arm
+reading `undef` as a tag. Their test for "nested" is `insert block != entry
+block`. Emitting the entry copy FIRST splits the entry block and leaves the
+builder in the copy's merge block, so the trackers concluded they were nested
+and planted a whole-slot `zeroinitializer` before entry's terminator -- ahead of
+both the copy's own payload reads and the body's first read of the param. Every
+matching callee then returned the `Err`/`None` arm on the FIRST call.
+
+A param slot is never the shape that defensive zero is for: it is initialised
+unconditionally by the incoming argument store. Registering while the builder is
+still at entry says exactly that, and needs no new flag or gate.
+
+THE FRESH-TEMP HALF. Once the callee copies, a temp argument has no owner at
+all -- the callee frees its copy and the original leaks, which is
+B-2026-08-11-30's leak reappearing through the other door. `track_optres_arg_temp`
+spills the value to an entry alloca and registers the same inline-payload
+cleanups a `let` of it would get, so the free carries the drop machinery's own
+`cap > 0` / tag guards and an `Err`/`None` temp is a no-op rather than a wild
+free. Identifier arguments are excluded: their let-site registration already
+owns the value and now fires, so owning one here would be the double free the
+zero used to prevent.
+
+VERIFIED. Values correct on AOT -O0, AOT -O2, JIT and interpreter for `Result`
+and `Option`, with a scalar half and with a user-enum half. The full
+B-2026-08-11-30 -O0 valgrind matrix stays clean in both directions: all seven
+previously-leaking shapes at zero, and all fourteen controls (arg-match,
+let-match, discard, inline-match, bare-struct, bare-Vec, user-enum, let-unused,
+double-pass and double-pass-with-match) clean. B-2026-08-11-30's own repros stay
+green, so the leak fix is preserved rather than traded away.
+
+The row's `#[ignore]` is lifted: `e2e_repeated_by_value_optres_arg_reads_wrong_variant`
+(tests/codegen.rs) is now a passing regression pin.
+
+REMAINING SCOPE, recorded rather than papered over. `take(Some(x))` where `x` is
+a live local is excluded from the temp registration by the freshness gate above,
+so that spelling keeps B-2026-08-11-30's leak. Excluding it is what stops the
+self-host double free, and a leak is the safe direction; closing it needs the
+caller to know whether the ctor's payload move already retracted `x`'s own
+cleanup, which is a separate question from this row's. |
 | B-2026-08-12-7 | typecheck | medium | A union or `#[derive(Copy)]` struct with a RAW POINTER field is rejected as not-`Copy` by the one rule whose own suggestion is "hold it behind a raw… | FIXED by 9410488b -- added a `Type::Pointer { .. } => true` arm to `is_type_copy` (src/typechecker/derives.rs). Pinned by `test_e2e_union_and_struct_raw_pointer_fields_are_copy` in tests/codegen.rs, which covers both pointer spellings in a union AND a `#[derive(Copy, Clone)]` struct holding a `*mut u8`; verified to fail pre-fix with the E_UNION_FIELD_NOT_COPY pair and pass post-fix. |
 | B-2026-08-12-11 | codegen | medium | Codegen's TWO type-lowering entry points kept two hand-maintained lists of built-in handle types and DISAGREED: `llvm_type_for_type_expr` answered `p… | FIXED by 9b2f5ad. `builtin_opaque_ptr_handle` is the single table both entry points consult, so the same type cannot lower to `ptr` through one and `i64` through the other. `KARAC_STRICT_TYPE_LOWERING=1` reports any remaining unknown name at the point of the decision, filtering generic parameters (user program + baked stdlib) so it is quiet on `hello world` and fires on 16 of 2906 E2E programs. |
 
