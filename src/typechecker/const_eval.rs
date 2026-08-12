@@ -14,7 +14,7 @@
 
 use crate::ast::{BinOp, Expr, ExprKind, UnaryOp};
 use crate::prelude::ConstValue;
-use crate::token::{IntSuffix, Span};
+use crate::token::{FloatSuffix, IntSuffix, Span};
 use std::collections::HashMap;
 
 use super::types::{ConstArg, FloatSize, IntSize, SubstValue, Type, UIntSize};
@@ -294,6 +294,22 @@ pub(super) fn infer_operand_target_ty(left: &Expr, right: &Expr) -> Option<Type>
             ExprKind::Bool(_) => Some(Type::Bool),
             ExprKind::CharLit(_) => Some(Type::Char),
             ExprKind::ByteLit(_) => Some(Type::UInt(UIntSize::U8)),
+            // B-2026-08-12-10 — FLOAT literals, so a comparison between a
+            // suffixed operand and an unsuffixed one folds at ONE width. Only a
+            // SUFFIXED float names a type here, exactly as for integers: an
+            // unsuffixed `1.0` is width-agnostic and must take the other
+            // operand's, or `0.5f32 < 1.0` would evaluate `F32` against `F64`
+            // and report the two as incomparable.
+            //
+            // Reaches through a unary MINUS as well (`-2.5f32`), which the
+            // integer arm never needed because a negative integer literal
+            // arrives already folded.
+            ExprKind::Float(_, Some(FloatSuffix::F32)) => Some(Type::Float(FloatSize::F32)),
+            ExprKind::Float(_, Some(FloatSuffix::F64)) => Some(Type::Float(FloatSize::F64)),
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => from_literal(operand),
             _ => None,
         }
     }
@@ -403,6 +419,15 @@ pub(super) fn apply_unary(
                     operand: I128(v),
                     span: span.clone(),
                 }),
+            // B-2026-08-12-10 — float negation, so a NEGATIVE float literal
+            // folds like its integer twin. Without it `-2.5` against a
+            // `f64 where self > 0.0` refinement reported "not a compile-time
+            // constant" where `-3` against the `i64` twin already reported the
+            // accurate E_REFINEMENT_PREDICATE_VIOLATION. IEEE negation is total
+            // (it flips the sign of NaN and of either infinity), so there is no
+            // overflow case to guard.
+            F32(v) => Ok(F32(-v)),
+            F64(v) => Ok(F64(-v)),
             // Unsigned negation isn't meaningful; reject as ArithOnNonInt
             // would be misleading — these are integers, just not negatable.
             // Use UnaryOverflow with a clear span pointing at the operand.
@@ -524,6 +549,20 @@ fn apply_comparison(
         (Usize(a), Usize(b)) => cmp(a.cmp(b)),
         (Bool(a), Bool(b)) => cmp(a.cmp(b)),
         (Char(a), Char(b)) => cmp(a.cmp(b)),
+        // B-2026-08-12-10 — float comparison, needed for a `f64 where self >
+        // 0.0` refinement to fold. `partial_cmp` rather than `cmp`: a NaN
+        // operand has no ordering, and reporting it as INCOMPARABLE (rather
+        // than silently answering `false`) keeps `NaN`-bearing predicates on
+        // the runtime path instead of admitting or rejecting them at build
+        // time on a made-up answer.
+        (F32(a), F32(b)) => match a.partial_cmp(b) {
+            Some(o) => cmp(o),
+            None => return Err(incomparable(&lhs, &rhs)),
+        },
+        (F64(a), F64(b)) => match a.partial_cmp(b) {
+            Some(o) => cmp(o),
+            None => return Err(incomparable(&lhs, &rhs)),
+        },
         (
             EnumVariant {
                 enum_name: e1,

@@ -28058,6 +28058,89 @@ fn refinement_elision_string_literal_needs_explicit_construction() {
 }
 
 #[test]
+fn refinement_elision_float_literal_is_const_elided() {
+    // B-2026-08-12-10. A FLOAT literal is as much a compile-time constant as
+    // an integer one, but the const evaluator had no `Float` arm, so
+    // `let b: PositivePrice = 2.5;` was rejected while the `i64` twin was
+    // accepted. Both directions are pinned: an admitted value elides, and a
+    // violating one reports the PREDICATE VIOLATION rather than the
+    // implicit-narrowing rejection — the latter is what tells us the value was
+    // actually folded rather than waved through.
+    typecheck_ok(
+        "type PositivePrice = f64 where self > 0.0;
+         fn price() -> f64 { let b: PositivePrice = 2.5; b }",
+    );
+    typecheck_ok(
+        "type Small = f32 where self < 1.0;
+         fn s() -> f32 { let b: Small = 0.5f32; b }",
+    );
+    refinement_error_code(
+        "type PositivePrice = f64 where self > 0.0;
+         fn price() -> f64 { let b: PositivePrice = 0.0; b }",
+        "E_REFINEMENT_PREDICATE_VIOLATION",
+    );
+    // A NEGATED float literal folds too — `-3` against the integer twin
+    // already did, and the asymmetry was the row's clearest symptom.
+    refinement_error_code(
+        "type PositivePrice = f64 where self > 0.0;
+         fn price() -> f64 { let b: PositivePrice = -2.5; b }",
+        "E_REFINEMENT_PREDICATE_VIOLATION",
+    );
+}
+
+#[test]
+fn refinement_elision_rejection_message_is_not_false() {
+    // B-2026-08-12-10, the diagnostic half. The rejection used one fixed
+    // sentence — "the value is not a compile-time constant" — which is simply
+    // untrue of a string LITERAL. The reason is now chosen from what was
+    // actually established, so the message never asserts something the user can
+    // see is false.
+    let lit = karac::parse(
+        "type NonEmpty = String where self.len() > 0;
+         fn name() -> String { let s: NonEmpty = \"hi\"; s }",
+    );
+    let resolved = karac::resolve(&lit.program);
+    let typed = karac::typecheck(&lit.program, &resolved);
+    let msg = typed
+        .errors
+        .iter()
+        .map(|e| e.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        msg.contains("E_REFINEMENT_IMPLICIT_NARROWING"),
+        "expected the narrowing rejection, got:\n{msg}"
+    );
+    assert!(
+        !msg.contains("the value is not a compile-time constant"),
+        "the message still claims a string LITERAL is not a compile-time \
+         constant, which is the false statement this row is about:\n{msg}"
+    );
+    assert!(
+        msg.contains("does not yet support"),
+        "expected the message to name the evaluator's coverage gap, got:\n{msg}"
+    );
+
+    // A genuine runtime value keeps the original, accurate wording.
+    let rt = karac::parse(
+        "type Even = i64 where self % 2 == 0;
+         fn bind(n: i64) -> i64 { let x: Even = n; x }",
+    );
+    let rresolved = karac::resolve(&rt.program);
+    let rtyped = karac::typecheck(&rt.program, &rresolved);
+    let rmsg = rtyped
+        .errors
+        .iter()
+        .map(|e| e.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rmsg.contains("the value is not a compile-time constant"),
+        "a runtime value should still say exactly that, got:\n{rmsg}"
+    );
+}
+
+#[test]
 fn refinement_elision_wrong_base_keeps_generic_mismatch() {
     // A genuinely wrong base type (`i32` into an `i64`-based refinement)
     // is a base mismatch, not a narrowing — the procedure falls through to

@@ -103,7 +103,8 @@ impl TypeChecker<'_> {
         // Rule 1 — const-evaluable narrowing. Reduce the initializer
         // against the base type; a successful reduction means the value
         // fits the base and we can check the predicate at compile time.
-        if let Ok(value) = self.eval_const_expr(expr, base) {
+        let const_value = self.eval_const_expr(expr, base).ok();
+        if let Some(value) = &const_value {
             match self.eval_refinement_predicate_const(name, expr) {
                 Some(true) => {
                     // Admitted at build time — no runtime check is emitted.
@@ -111,7 +112,7 @@ impl TypeChecker<'_> {
                     return Some(expected.clone());
                 }
                 Some(false) => {
-                    self.emit_refinement_predicate_violation(name, &value, expr);
+                    self.emit_refinement_predicate_violation(name, value, expr);
                     return Some(Type::Error);
                 }
                 // Predicate not const-evaluable against this value (e.g. a
@@ -123,7 +124,7 @@ impl TypeChecker<'_> {
         }
 
         // Rule 4 — reject implicit runtime-value narrowing.
-        self.emit_implicit_narrowing_rejection(name, actual, expr);
+        self.emit_implicit_narrowing_rejection(name, actual, expr, const_value.is_some());
         Some(Type::Error)
     }
 
@@ -181,12 +182,44 @@ impl TypeChecker<'_> {
 
     /// Rule 4 rejection: a runtime (non-const) base value cannot narrow
     /// implicitly into a refined slot.
-    fn emit_implicit_narrowing_rejection(&mut self, name: &str, actual: &Type, expr: &Expr) {
+    /// B-2026-08-12-10 — the REASON is chosen from what was actually
+    /// established, because the single fixed wording asserted something the
+    /// user could see was untrue: `let c: BoundedText = "widget";` was rejected
+    /// with "the value is not a compile-time constant", of a string literal.
+    ///
+    /// Three distinguishable situations, three honest sentences:
+    ///   * the value reduced but its predicate did not (a `self.len()`
+    ///     predicate whose operations the evaluator does not implement);
+    ///   * the value is written as a LITERAL yet the evaluator cannot reduce
+    ///     it, which is a gap in the evaluator's base-type coverage and not a
+    ///     property of the user's value;
+    ///   * anything else really is a runtime value — the original wording.
+    fn emit_implicit_narrowing_rejection(
+        &mut self,
+        name: &str,
+        actual: &Type,
+        expr: &Expr,
+        value_is_const: bool,
+    ) {
+        let reason = if value_is_const {
+            "the value is a compile-time constant but its `where` predicate could not be \
+             evaluated at build time"
+                .to_string()
+        } else if expr_is_literal(expr) {
+            format!(
+                "the value is a literal, but the build-time predicate evaluator does not yet \
+                 support `{}` constants, so its predicate cannot be checked at build time",
+                type_display(actual),
+            )
+        } else {
+            "the value is not a compile-time constant, so its predicate cannot be checked at \
+             build time"
+                .to_string()
+        };
         self.type_error(
             format!(
                 "error[E_REFINEMENT_IMPLICIT_NARROWING]: cannot narrow `{}` to refinement `{name}` \
-                 implicitly — the value is not a compile-time constant, so its predicate cannot be \
-                 checked at build time. Use `{name}.try_from(x)?` (recoverable) or `x as {name}` \
+                 implicitly — {reason}. Use `{name}.try_from(x)?` (recoverable) or `x as {name}` \
                  (asserting) to narrow explicitly. Note: flow-sensitive narrowing is not supported, \
                  so a surrounding `if` guard does not refine the value's type",
                 type_display(actual),
@@ -217,6 +250,23 @@ impl TypeChecker<'_> {
             TypeErrorKind::TypeMismatch,
         );
     }
+}
+
+/// B-2026-08-12-10 — is `e` written as a literal constant? Used only to tell an
+/// evaluator-coverage gap apart from a genuine runtime value in the narrowing
+/// diagnostic, so it is deliberately syntactic: a literal the const evaluator
+/// cannot reduce is exactly the case the old wording mis-described.
+fn expr_is_literal(e: &Expr) -> bool {
+    matches!(
+        &e.kind,
+        ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(..)
+            | ExprKind::ByteLit(..)
+            | ExprKind::StringLit(..)
+            | ExprKind::MultiStringLit(..)
+            | ExprKind::Bool(..)
+    )
 }
 
 /// Replace every `self` (`ExprKind::SelfValue`) reference in a refinement

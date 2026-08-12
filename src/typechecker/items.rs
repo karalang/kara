@@ -1213,6 +1213,33 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 integer_to_const_value(*n, &ty, &expr.span)
             }
+            // B-2026-08-12-10 — FLOAT literals. Previously unhandled, so
+            // `let b: PositivePrice = 2.5;` over `f64 where self > 0.0` fell to
+            // `NonConstShape` and was rejected as "not a compile-time constant"
+            // while the integer twin was accepted. Purely ADDITIVE: the
+            // evaluator never produced `F32`/`F64` before, so no existing
+            // reduction changes — it only stops failing on a shape it could
+            // always have folded.
+            //
+            // `f16`/`bf16` are deliberately left out: `ConstValue` has no
+            // half-precision variant, and inventing one by widening to `f32`
+            // would fold predicates at a precision the runtime does not use.
+            // They keep today's behaviour.
+            ExprKind::Float(f, sfx) => match sfx {
+                Some(crate::token::FloatSuffix::F32) => Ok(ConstValue::F32(*f as f32)),
+                Some(crate::token::FloatSuffix::F64) => Ok(ConstValue::F64(*f)),
+                Some(_) => Err(ConstEvalError::NonConstShape(expr.span.clone())),
+                None => match target_ty {
+                    Type::Float(crate::typechecker::types::FloatSize::F32) => {
+                        Ok(ConstValue::F32(*f as f32))
+                    }
+                    Type::Float(crate::typechecker::types::FloatSize::F16)
+                    | Type::Float(crate::typechecker::types::FloatSize::BF16) => {
+                        Err(ConstEvalError::NonConstShape(expr.span.clone()))
+                    }
+                    _ => Ok(ConstValue::F64(*f)),
+                },
+            },
             ExprKind::Bool(b) => Ok(ConstValue::Bool(*b)),
             ExprKind::CharLit(c) => Ok(ConstValue::Char(*c)),
             ExprKind::ByteLit(b) => Ok(ConstValue::U8(*b)),
