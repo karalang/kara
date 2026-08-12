@@ -444,42 +444,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 if name == "Slice" {
                     return self.slice_struct_type().into();
                 }
-                if name == "Tensor" {
-                    // `Tensor[T, Shape]` is a single pointer to one
-                    // malloc'd `[rank][dims][data]` block — see
-                    // `src/codegen/tensor.rs`. Without this branch the
-                    // baked `struct Tensor[T, ...S] { handle_id: i64 }`
-                    // shape would lower as a 1-field struct and every
-                    // tensor-typed slot would mis-size.
-                    return self.context.ptr_type(AddressSpace::default()).into();
-                }
-                if name == "Column" {
-                    // `Column[T]` is a single pointer to one malloc'd
-                    // control block `{ ptr data, ptr null_bitmap, i64
-                    // len, i64 capacity }` — see `src/codegen/column.rs`.
-                    // Like Tensor, the baked `struct Column[=T] {
-                    // handle_id: i64 }` shape would otherwise mis-size.
-                    return self.context.ptr_type(AddressSpace::default()).into();
-                }
-                if name == "DataFrame" {
-                    // `DataFrame` is a single pointer to one malloc'd
-                    // control block `{ ptr entries, i64 len, i64 capacity }`
-                    // — see `src/codegen/dataframe.rs`. The baked
-                    // `struct DataFrame { handle_id: i64 }` shape would
-                    // otherwise mis-size.
-                    return self.context.ptr_type(AddressSpace::default()).into();
-                }
-                if name == "Interner" {
-                    // `Interner` is the opaque `*mut KaracInterner` handle
-                    // (`src/codegen/interner.rs`). The baked `struct Interner
-                    // { handle_id: i64 }` shape would otherwise lower via the
-                    // unknown-name `i64` fall-through and mis-type the slot a
-                    // `ptr` handle is stored into.
-                    return self.context.ptr_type(AddressSpace::default()).into();
-                }
-                if name == "Arena" {
-                    // `Arena[T]` is the opaque `*mut KaracArena` handle
-                    // (`src/codegen/arena.rs`) — same posture as `Interner`.
+                // Opaque-handle built-ins: one bare `ptr`, whatever the generic
+                // args. ONE table, also consulted by `llvm_type_for_name`'s
+                // unknown-name path, so the two entry points cannot answer
+                // differently for the same type — see `builtin_opaque_ptr_handle`
+                // for the per-type rationale and the divergence that motivated
+                // collapsing these (B-2026-08-11-34).
+                if builtin_opaque_ptr_handle(name) {
                     return self.context.ptr_type(AddressSpace::default()).into();
                 }
                 if name == "ArenaRef" || name == "ArenaCheckpoint" {
@@ -548,41 +519,6 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .into();
                         }
                     }
-                }
-                // Map[K,V] and Set[T] are opaque heap pointers managed by the
-                // karac_map_* runtime functions.
-                if name == "Map" || name == "Set" || name == "SortedSet" || name == "SortedMap" {
-                    return self.context.ptr_type(AddressSpace::default()).into();
-                }
-                // HTTP handler ABI trampoline (2026-05-09, F2): `Request` is
-                // an opaque heap pointer wrapping the runtime's
-                // `*const KaracHttpRequest`. The shim emitted at the
-                // `Server.serve(handler)` dispatch site packs the FFI request
-                // pointer into this slot before invoking the user handler;
-                // `Request.path()` / `.method()` extract the pointer and
-                // round-trip through the runtime externs.
-                if name == "Request" {
-                    return self.context.ptr_type(AddressSpace::default()).into();
-                }
-                // Phase 8 `File` handle slice F3: opaque heap pointer
-                // wrapping the runtime's `*mut KaracFile`. Constructed by
-                // `karac_runtime_file_open` / `_create` / `_append`; freed
-                // at scope exit via `karac_runtime_file_close` through the
-                // `FreeFileHandle` cleanup action (F4).
-                if name == "File" {
-                    return self.context.ptr_type(AddressSpace::default()).into();
-                }
-                // Channel ends (`Sender[T]` / `Receiver[T]`) are opaque heap
-                // pointers to the runtime's refcounted `KaracChannel`
-                // (`runtime/src/channel.rs`). Both ends carry the same
-                // pointer; the element type erases into the queue's byte
-                // blobs, so the LLVM type is just `ptr` regardless of `T`.
-                // `Channel` itself is only ever used as `Channel.new()` (an
-                // associated call), never as a value type — but lower it the
-                // same way for uniformity. Drop at scope exit via
-                // `CleanupAction::DropChannelEnd` (refcount decrement).
-                if name == "Sender" || name == "Receiver" || name == "Channel" {
-                    return self.context.ptr_type(AddressSpace::default()).into();
                 }
                 // Generic OWNED struct at a concrete instantiation (`Box[f64]`):
                 // lay its fields out per the concrete element type rather than
@@ -2260,6 +2196,50 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Collect every generic PARAMETER name the program declares — free fns,
+    /// methods, structs, enums, traits, impl blocks. Feeds
+    /// `declared_generic_param_names`, which exists solely so the
+    /// `KARAC_STRICT_TYPE_LOWERING` lever can stay quiet about a type
+    /// parameter with no active substitution and loud about a real type with
+    /// no LLVM layout.
+    pub(super) fn collect_declared_generic_param_names(&mut self, program: &Program) {
+        fn add(
+            gp: &Option<crate::ast::GenericParams>,
+            out: &mut std::collections::HashSet<String>,
+        ) {
+            if let Some(g) = gp {
+                for p in &g.params {
+                    out.insert(p.name.clone());
+                }
+            }
+        }
+        let out = &mut self.declared_generic_param_names;
+        for item in &program.items {
+            match item {
+                Item::Function(f) => add(&f.generic_params, out),
+                Item::StructDef(s) => add(&s.generic_params, out),
+                Item::EnumDef(e) => add(&e.generic_params, out),
+                Item::TraitDef(t) => {
+                    add(&t.generic_params, out);
+                    for it in &t.items {
+                        if let crate::ast::TraitItem::Method(m) = it {
+                            add(&m.generic_params, out);
+                        }
+                    }
+                }
+                Item::ImplBlock(b) => {
+                    add(&b.generic_params, out);
+                    for it in &b.items {
+                        if let ImplItem::Method(m) = it {
+                            add(&m.generic_params, out);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub(super) fn llvm_type_for_name(&self, name: &str) -> BasicTypeEnum<'ctx> {
         // Active monomorphization substitution takes priority.
         if let Some(&ty) = self.type_subst.get(name) {
@@ -2432,7 +2412,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else if let Some(layout) = self.enum_layouts.get(name) {
                     // Enum types are represented as tagged-union structs.
                     layout.llvm_type.into()
+                } else if builtin_opaque_ptr_handle(name) {
+                    // Same table the `TypeExpr` path consults. Reached when a
+                    // handle type is named WITHOUT its generic args — a
+                    // `var_type_names` entry, a struct-field type name, a
+                    // bare annotation. Before this, `Map` answered `ptr`
+                    // through one entry point and `i64` through the other.
+                    self.context.ptr_type(AddressSpace::default()).into()
                 } else {
+                    report_unknown_type_name(name, &self.declared_generic_param_names);
                     self.context.i64_type().into()
                 }
             }
@@ -3651,4 +3639,98 @@ pub(super) fn is_atomic_bool_type_expr(te: &TypeExpr) -> bool {
         _ => None,
     });
     matches!(inner, Some(t) if is_bool_type_expr(t))
+}
+
+/// Built-in types whose LLVM shape is a bare opaque `ptr`, whatever their
+/// generic arguments. Consulted by BOTH type-lowering entry points
+/// (`llvm_type_for_type_expr` and `llvm_type_for_name`) so they cannot answer
+/// differently for the same type.
+///
+/// They need a table because codegen never loads the baked stdlib declarations
+/// into `struct_types` — the value-site lowerings hand-roll each handle — so
+/// the declared `struct Column[=T] { handle_id: i64 }` shape is not what a
+/// value of that type actually is. Per type:
+///
+///   * `Map` / `Set` / `SortedMap` / `SortedSet` — heap tables owned by the
+///     `karac_map_*` / `karac_set_*` runtime entry points.
+///   * `Tensor` — one malloc'd `[rank][dims][data]` block (`tensor.rs`).
+///   * `Column` — one control block `{ptr data, ptr nulls, i64 len, i64 cap}`
+///     (`column.rs`). `DataFrame` — `{ptr entries, i64 len, i64 cap}`
+///     (`dataframe.rs`).
+///   * `Interner` — `*mut KaracInterner`. `Arena` — `*mut KaracArena`.
+///     (`ArenaRef` / `ArenaCheckpoint` are NOT here: both erase to a bare
+///     `i64` index/mark.)
+///   * `Request` — the HTTP handler trampoline's `*const KaracHttpRequest`.
+///   * `File` — `*mut KaracFile`, closed at scope exit via `FreeFileHandle`.
+///   * `Sender` / `Receiver` / `Channel` — refcounted channel ends.
+///
+/// WHY ONE TABLE. Every entry here was, at some point, a bug of the same
+/// shape: the name reached `llvm_type_for_name`'s unknown-name path, answered
+/// `i64`, and mis-sized a slot the real `ptr` was stored into — see the
+/// `VecDeque` comment above (a 24-byte aggregate written into an 8-byte slot,
+/// corrupting the neighbouring alloca) and B-2026-06-07-2. Two lowering
+/// entry points with two hand-maintained lists is what let a type be `ptr` on
+/// one and `i64` on the other; the divergence was measured across the whole
+/// E2E corpus while investigating B-2026-08-11-34.
+///
+/// A USER type shadowing one of these names is unaffected: the name path
+/// consults `shared_types` / `struct_types` / `union_types` / `enum_layouts`
+/// first, and the `TypeExpr` path is guarded by `user_shadowed_prelude_types`
+/// (B-2026-08-08-10).
+pub(super) fn builtin_opaque_ptr_handle(name: &str) -> bool {
+    matches!(
+        name,
+        "Map"
+            | "Set"
+            | "SortedMap"
+            | "SortedSet"
+            | "Tensor"
+            | "Column"
+            | "DataFrame"
+            | "Interner"
+            | "Arena"
+            | "Request"
+            | "File"
+            | "Sender"
+            | "Receiver"
+            | "Channel"
+    )
+}
+
+/// `KARAC_STRICT_TYPE_LOWERING=1` — panic instead of silently lowering an
+/// unrecognized type name to `i64`.
+///
+/// The silent default is load-bearing (a generic parameter with no active
+/// substitution legitimately reaches it), so it stays the default. But it is
+/// also the single mechanism behind a recurring class of bug: the name answers
+/// `i64`, a function is DECLARED with that signature, its body then emits the
+/// type's real shape, and the failure surfaces hundreds of lines downstream as
+/// `Module verification failed: Function return type does not match operand
+/// type of return inst!` — with nothing pointing at the type, let alone the
+/// source line. B-2026-08-08-10 and B-2026-08-11-34 both read that way.
+///
+/// Under the lever the name reports itself at the point of the decision. Over
+/// the whole `tests/codegen.rs` corpus (2906 programs) only 18 distinct names
+/// reach here, so a run under it is readable rather than a firehose.
+fn report_unknown_type_name(name: &str, generic_params: &std::collections::HashSet<String>) {
+    if std::env::var("KARAC_STRICT_TYPE_LOWERING").as_deref() != Ok("1") {
+        return;
+    }
+    // A generic PARAMETER legitimately reaches here whenever no
+    // substitution is active (an uninstantiated generic body, a
+    // side-table lookup outside a monomorph). Reporting those would fire
+    // on every program that touches a stdlib generic — `T` alone trips on
+    // `hello world` — and drown the signal the lever exists for: a name
+    // that is a REAL type with no layout.
+    if generic_params.contains(name) {
+        return;
+    }
+    panic!(
+        "KARAC_STRICT_TYPE_LOWERING: type name `{name}` has no known LLVM \
+         layout — no struct/union/enum/shared registration, no built-in arm, \
+         no active generic substitution — so it would silently lower to `i64`. \
+         If `{name}` is a real type, it needs a registration or a \
+         `builtin_opaque_ptr_handle` entry; if it is a generic parameter, the \
+         substitution is missing at this site."
+    );
 }

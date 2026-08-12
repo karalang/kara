@@ -1520,6 +1520,12 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) stderr_global: inkwell::values::GlobalValue<'ctx>,
     /// LLVM struct types for Kāra structs (struct name → LLVM type).
     pub(crate) struct_types: HashMap<String, StructType<'ctx>>,
+    /// Every generic PARAMETER name the program declares, anywhere. Read only
+    /// by the `KARAC_STRICT_TYPE_LOWERING` lever, to tell "a type with no LLVM
+    /// layout" (what the lever hunts) from "a type parameter with no active
+    /// substitution" (which legitimately reaches the `i64` default all the
+    /// time — `T` alone fires on `hello world` without this).
+    pub(crate) declared_generic_param_names: std::collections::HashSet<String>,
     /// Associated-type bindings from CONCRETE (non-generic) impl blocks,
     /// keyed by `(target_type_name, assoc_type_name)` → the bound `TypeExpr`.
     /// Populated once in `compile_program` from every `impl <Trait> for T {
@@ -7962,6 +7968,7 @@ impl<'ctx> Codegen<'ctx> {
             stdout_global,
             stderr_global,
             struct_types: HashMap::new(),
+            declared_generic_param_names: std::collections::HashSet::new(),
             assoc_type_bindings: HashMap::new(),
             state_struct_types: HashMap::new(),
             state_machine_poll_fns: HashMap::new(),
@@ -9271,6 +9278,16 @@ impl<'ctx> Codegen<'ctx> {
         // not-yet-built struct LLVM types; (3) build struct LLVM types, now
         // that `enum_layouts` is populated. See
         // `declarations.rs::register_struct_metadata` for the cycle rationale.
+        // `KARAC_STRICT_TYPE_LOWERING` support only — see the field doc.
+        // Cheap one-pass scan; the set is never consulted unless the lever
+        // is on. The BAKED STDLIB programs are scanned too: most of the
+        // generic params a real compilation lowers without a substitution
+        // come from there (`T` fires on `hello world` otherwise), and they
+        // are as legitimate as the user program's own.
+        self.collect_declared_generic_param_names(program);
+        for tp in compiled_stdlib_programs(program) {
+            self.collect_declared_generic_param_names(tp);
+        }
         self.register_struct_metadata(program);
         self.register_ord_orderable_types(program);
         self.declare_enums(program);
