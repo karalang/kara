@@ -7493,11 +7493,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // once the fresh clone replaces it.
                 let rhs_is_heap_vec_index =
                     !rhs_is_owned_param && self.expr_is_heap_vec_index(value);
+                let pre_clone_val = val;
                 let mut val = if rhs_is_owned_param {
                     self.maybe_defensive_copy_param_arg(value, val)
                 } else {
                     self.clone_owned_vec_index_element(value, val)?
                 };
+                // B-2026-08-12-26 — did the call above actually DEEP-CLONE the
+                // element? The displaced-element drop for an `Index` target
+                // needs to know, because its "RHS mentions the container"
+                // guard is exactly wrong once the RHS no longer aliases the
+                // container (see `emit_displaced_index_elem_drop`).
+                //
+                // Asked by comparing the value rather than by re-deriving the
+                // clone's five admission conditions, and that is deliberate:
+                // `clone_owned_vec_index_element` returns its ARGUMENT
+                // unchanged on every decline path and a fresh `load` on the
+                // one clone path, so identity IS the answer and there is a
+                // single source of truth. A duplicated predicate would drift
+                // from it the first time either gate is tuned, and the failure
+                // mode of drift here is a double free.
+                let rhs_index_deep_cloned = !rhs_is_owned_param && val != pre_clone_val;
                 // Consume the f-string acc staging slot once compile_expr
                 // returns — even on the rare paths where the Assign arm
                 // doesn't reach the transfer step below, the slot must not
@@ -8600,7 +8616,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // before the store. Simple index shapes only (the element
                     // pointer is computed here AND in the store below, so the
                     // index expression must be re-evaluable without effects).
-                    self.emit_displaced_index_elem_drop(object, index, value);
+                    self.emit_displaced_index_elem_drop(
+                        object,
+                        index,
+                        value,
+                        rhs_index_deep_cloned,
+                    );
                     self.compile_index_store(object, index, val, rhs_is_fresh)?;
                     // B-2026-07-11-32: an f-string RHS stored into a Vec element
                     // slot (`v[i] = f"…"`). `compile_vec_index_store` already
@@ -11020,7 +11041,13 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    fn emit_displaced_index_elem_drop(&mut self, object: &Expr, index: &Expr, rhs: &Expr) {
+    fn emit_displaced_index_elem_drop(
+        &mut self,
+        object: &Expr,
+        index: &Expr,
+        rhs: &Expr,
+        rhs_index_deep_cloned: bool,
+    ) {
         // Field-rooted container (`h.xs[i] = <new>`, B-2026-08-01-22 leg a):
         // resolve the field's storage pointer exactly like the store arm
         // does — mint a synth identifier registered from the field TypeExpr
@@ -11035,7 +11062,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let ExprKind::Identifier(root) = &inner.kind else {
                 return;
             };
-            if crate::deque_head::expr_mentions_name_deep(rhs, root) {
+            if !rhs_index_deep_cloned && crate::deque_head::expr_mentions_name_deep(rhs, root) {
                 return;
             }
             let Ok(Some((field_ptr, field_ll_ty, field_te))) =
@@ -11057,7 +11084,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: ExprKind::Identifier(synth.clone()),
                 span: object.span.clone(),
             };
-            self.emit_displaced_index_elem_drop(&synth_expr, index, rhs);
+            self.emit_displaced_index_elem_drop(&synth_expr, index, rhs, rhs_index_deep_cloned);
             self.variables.remove(&synth);
             self.vec_elem_types.remove(&synth);
             self.slice_elem_types.remove(&synth);
@@ -11078,7 +11105,15 @@ impl<'ctx> super::Codegen<'ctx> {
         if !Self::index_expr_is_pure_scalar(index) {
             return;
         }
-        if crate::deque_head::expr_mentions_name_deep(rhs, container) {
+        // B-2026-08-12-26 — the mention guard exists because dropping the
+        // displaced element before the RHS is read would free a buffer the RHS
+        // still needs (`ps[0] = ps[0]` is the sharp case). Once the RHS has
+        // been DEEP-CLONED that hazard is gone: the value in hand is an
+        // independent copy, and this emitter runs after the clone and before
+        // the store. Declining there is what leaked one element buffer per
+        // `ps[0] = ps[1]` — including the self-assign, which no aliasing
+        // argument can justify keeping.
+        if !rhs_index_deep_cloned && crate::deque_head::expr_mentions_name_deep(rhs, container) {
             return;
         }
         if self.slice_elem_types.contains_key(container.as_str())

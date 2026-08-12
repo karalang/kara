@@ -20832,17 +20832,36 @@ fn main() {
         );
     }
 
-    /// B-2026-08-12-26 — the deferred control for the fixture above.
-    /// `ps[0] = ps[1]` over a struct element with a heap field LEAKS one buffer
-    /// per assignment: 400 B in 40 allocations. Pre-existing and measured on
-    /// both sides of B-2026-08-12-22 — that row's suppression is gated on an
-    /// `Identifier` RHS and this one's is an `Index`, so it neither caused nor
-    /// cured it.
+    /// B-2026-08-12-26 — `ps[0] = ps[1]` over a struct element with a heap
+    /// field leaked one buffer per assignment (400 B in 40 allocations). Filed
+    /// deferred alongside B-2026-08-12-22 and `#[ignore]`d; now live.
     ///
-    /// Kept as a live fixture rather than deleted so the coverage is visibly
-    /// deferred; flip to `#[test]` when the row lands.
+    /// THE LEAK WAS THE DISPLACED OCCUPANT, not anything about the read. Read
+    /// off the emitted IR, the whole statement is one clone and one store:
+    ///
+    ///   vidx.ok:  call @karac_clone_struct_Pair(ps[1] -> %vidx.elem.clone)
+    ///   v.st.ok:  store %vidx.elem.cloned -> ps[0]      ; and no free
+    ///
+    /// Slot 0's old buffer is simply overwritten. `emit_displaced_index_elem_drop`
+    /// exists to free exactly that and declined, because its "RHS mentions the
+    /// container" guard matched `ps[1]`.
+    ///
+    /// THE SELF-ASSIGN LEG IS THE PROOF the guard was the cause rather than the
+    /// aliasing it guards against: `ps[0] = ps[0]` leaked identically, and no
+    /// aliasing argument can justify declining there — the value has already
+    /// been deep-cloned by the time the drop would run. The guard is now
+    /// skipped when the RHS was cloned, which is the one condition under which
+    /// the hazard it protects against cannot exist.
+    ///
+    /// The `qs` legs are why the row mattered more than its shape suggests: the
+    /// one-temp swap `let t = qs[0]; qs[0] = qs[1]; qs[1] = t;` contains this
+    /// statement, so a hand-written sort leaked one element buffer per swap
+    /// while the two-temp spelling was clean — a surprising thing to have to
+    /// know. Both spellings are here, and they must agree.
+    ///
+    /// An f-STRING is required to see any of it: a string literal has `cap` 0,
+    /// so the buffer is static and the leak is invisible.
     #[test]
-    #[ignore = "B-2026-08-12-26: `ps[0] = ps[1]` leaks one element buffer per assignment (400 B / 40 allocations); pre-existing, unrelated to B-2026-08-12-22"]
     fn asan_index_assign_elem_to_elem_no_leak() {
         assert_clean_asan_run(
             r#"
@@ -20857,6 +20876,24 @@ fn main() {
         ps.push(Pair { word: f"beta{k + i}", n: 2 });
         ps[0] = ps[1];
         acc = acc + ps[0].word.len();
+        ps[0] = ps[0];
+        acc = acc + ps[0].word.len();
+        let mut qs: Vec[Pair] = Vec.new();
+        qs.push(Pair { word: f"gamma{k + i}", n: 3 });
+        qs.push(Pair { word: f"delta{k + i}", n: 4 });
+        let t = qs[0]; qs[0] = qs[1]; qs[1] = t;
+        acc = acc + qs[0].word.len() + qs[1].word.len();
+        let mut rs: Vec[Pair] = Vec.new();
+        rs.push(Pair { word: f"gamma{k + i}", n: 3 });
+        rs.push(Pair { word: f"delta{k + i}", n: 4 });
+        let a = rs[0]; let b = rs[1]; rs[0] = b; rs[1] = a;
+        acc = acc + rs[0].word.len() + rs[1].word.len();
+        let j = 1i64;
+        let mut ss: Vec[Pair] = Vec.new();
+        ss.push(Pair { word: f"eps{k + i}", n: 5 });
+        ss.push(Pair { word: f"zeta{k + i}", n: 6 });
+        ss[0] = ss[j];
+        acc = acc + ss[0].word.len();
         i = i + 1;
     }
     println(acc > 0);

@@ -22865,6 +22865,48 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_index_assign_elem_to_elem_swaps_correctly() {
+        // B-2026-08-12-26's VALUE side. The fix frees the displaced element
+        // before the store, which is a free-before-store on a slot the RHS was
+        // just read from — so the thing to prove is not only that the leak is
+        // gone but that the values survive.
+        //
+        // The one-temp swap is the shape that motivated the row (a hand-written
+        // sort leaked one buffer per swap through it), and it is also the
+        // sharpest ordering test: `qs[0] = qs[1]` frees slot 0's old buffer
+        // while `t` still holds it, so a fix that freed the wrong side would
+        // print garbage or abort here rather than merely leak.
+        //
+        // `ps[0] = ps[0]` is the degenerate case the guard used to decline on
+        // aliasing grounds. It must survive intact — freeing the displaced
+        // occupant and storing the clone of that same occupant is only safe
+        // because the clone happens first.
+        assert_eq!(
+            run_program(
+                "struct Pair { word: String, n: i64 }\n\
+                 fn main() {\n\
+                     let k = 1;\n\
+                     let mut qs: Vec[Pair] = Vec.new();\n\
+                     qs.push(Pair { word: f\"a{k}\", n: 1 });\n\
+                     qs.push(Pair { word: f\"b{k}\", n: 2 });\n\
+                     let t = qs[0];\n\
+                     qs[0] = qs[1];\n\
+                     qs[1] = t;\n\
+                     println(qs[0].word + \" \" + qs[1].word);\n\
+                     println(qs[0].n + qs[1].n * 10);\n\
+                     let mut ps: Vec[Pair] = Vec.new();\n\
+                     ps.push(Pair { word: f\"x{k}\", n: 7 });\n\
+                     ps[0] = ps[0];\n\
+                     println(ps[0].word);\n\
+                     println(ps[0].n);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("b1 a1\n12\nx1\n7\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_struct_payload_boxed_field_envelope_reads_correctly() {
         // B-2026-08-12-15's offset arithmetic, as a VALUE assertion rather than
         // a leak one. The envelope free walks a FLATTENED enum payload and finds
