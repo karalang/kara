@@ -11534,6 +11534,36 @@ fn cmd_fix(filename: &str, dry_run: bool) {
         }
         rewritten.replace_range(edit.offset..end, &edit.replacement);
     }
+    // Refuse to write a rewrite that PARSES WORSE than the input.
+    //
+    // Every machine-applicable edit is an (offset, length, replacement)
+    // triple, and nothing downstream checks that the offset still means what
+    // the diagnostic meant. B-2026-08-11-35 is what that costs: an edit whose
+    // span had not been rebased out of an f-string hole landed ~77 bytes early
+    // and deleted everything in between, truncating mid-token — and `fix`
+    // reported `applied 1 fix(es)` and exited 0, over a file with no backup.
+    // The bounds check above did not catch it, because the bogus range was
+    // comfortably inside the file.
+    //
+    // A corrupting edit essentially always breaks the parse, so re-parsing the
+    // result is a cheap, general net across every fix producer rather than a
+    // guard bolted onto the one that misfired — including producers that do not
+    // exist yet. The test is "no WORSE", not "clean": the `has_parse_errors`
+    // branch above deliberately applies recovery edits to a file that does not
+    // parse, and each pass is meant to reduce the count, not necessarily reach
+    // zero in one go.
+    let before = pipeline.parsed.errors.len();
+    let after = crate::parse(&rewritten).errors.len();
+    if after > before {
+        eprintln!(
+            "error: applying {} fix(es) would leave {filename} with MORE parse errors than it \
+             started with ({before} -> {after}) — refusing to write.\n       \
+             This means a fix's edit range did not mean what its diagnostic meant; the file is \
+             unchanged. Re-run with `--dry-run` to see the edits, and please report it.",
+            deduped.len()
+        );
+        process::exit(1);
+    }
     if let Err(e) = std::fs::write(filename, &rewritten) {
         eprintln!("error: failed to write {filename}: {e}");
         process::exit(1);

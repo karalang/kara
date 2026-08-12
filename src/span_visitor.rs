@@ -36,8 +36,21 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         Item::Function(f) => visit_function(f, visit),
         Item::StructDef(s) => {
             visit(&s.span);
+            // The keyword spans the `par struct` migration's machine-applicable
+            // edits are built from (`ownership/concurrent_shared.rs`). Missing
+            // them here left them at file-local offsets under the multi-module
+            // rebase in `module.rs`, so the migration's edits for every module
+            // after the first pointed into the wrong file region — the same
+            // class as B-2026-08-11-35, on a different trigger.
+            visit(&s.struct_keyword_span);
+            if let Some(k) = &s.kind_keyword_span {
+                visit(k);
+            }
             for field in &s.fields {
                 visit(&field.span);
+                if let Some(m) = &field.mut_keyword_span {
+                    visit(m);
+                }
                 visit_type(&field.ty, visit);
             }
             for inv in s.invariants.iter().chain(s.impl_invariants.iter()) {
@@ -77,6 +90,11 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
                 match ti {
                     crate::ast::TraitItem::Method(m) => {
                         visit(&m.span);
+                        // The `self` receiver's own token span — not covered by
+                        // any `Param`, since the receiver is not one.
+                        if let Some(sp) = &m.self_span {
+                            visit(sp);
+                        }
                         for p in &m.params {
                             visit_param(p, visit);
                         }
@@ -102,7 +120,12 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         Item::TraitAlias(a) => visit(&a.span),
         Item::MarkerTrait(m) => visit(&m.span),
         Item::ImplBlock(b) => visit_impl_block(b, visit),
-        Item::EffectResource(r) => visit(&r.span),
+        Item::EffectResource(r) => {
+            visit(&r.span);
+            if let Some(t) = &r.provider_trait_span {
+                visit(t);
+            }
+        }
         Item::EffectGroup(g) => visit(&g.span),
         Item::EffectVerbDecl(v) => visit(&v.span),
         Item::LayoutDef(l) => visit(&l.span),
@@ -497,6 +520,14 @@ fn visit_expr(e: &Expr, visit: &mut impl FnMut(&Span)) {
 
 fn visit_call_arg(a: &CallArg, visit: &mut impl FnMut(&Span)) {
     visit(&a.span);
+    // The `mut` keyword's OWN span, not covered by `a.span` (which starts at
+    // the label in `f(name: mut x)`). B-2026-08-11-35: missing it here meant
+    // the f-string rebase left it at the synthetic wrapper's coordinates
+    // while everything around it moved, and the machine-applicable deletion
+    // built from it then landed ~77 bytes early and ate the file.
+    if let Some(m) = &a.mut_marker_span {
+        visit(m);
+    }
     visit_expr(&a.value, visit);
 }
 
@@ -903,6 +934,10 @@ fn visit_stmt_spans_mut(s: &mut Stmt, visit: &mut impl FnMut(&mut Span)) {
 
 fn visit_call_arg_spans_mut(a: &mut CallArg, visit: &mut impl FnMut(&mut Span)) {
     visit(&mut a.span);
+    // See `visit_call_arg` — this is the arm B-2026-08-11-35 was filed for.
+    if let Some(m) = &mut a.mut_marker_span {
+        visit(m);
+    }
     visit_expr_spans_mut(&mut a.value, visit);
 }
 
@@ -991,8 +1026,17 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
         Item::Function(f) => visit_function_mut(f, visit),
         Item::StructDef(s) => {
             visit(&mut s.span);
+            // See the read-only arm: these three feed the `par struct`
+            // migration's edits and must move with the rest.
+            visit(&mut s.struct_keyword_span);
+            if let Some(k) = &mut s.kind_keyword_span {
+                visit(k);
+            }
             for field in &mut s.fields {
                 visit(&mut field.span);
+                if let Some(m) = &mut field.mut_keyword_span {
+                    visit(m);
+                }
                 visit_type_spans_mut(&mut field.ty, visit);
             }
             for inv in s.invariants.iter_mut().chain(s.impl_invariants.iter_mut()) {
@@ -1032,6 +1076,10 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
                 match ti {
                     crate::ast::TraitItem::Method(m) => {
                         visit(&mut m.span);
+                        // See the read-only arm.
+                        if let Some(sp) = &mut m.self_span {
+                            visit(sp);
+                        }
                         for p in &mut m.params {
                             visit_param_mut(p, visit);
                         }
@@ -1057,7 +1105,12 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
         Item::TraitAlias(a) => visit(&mut a.span),
         Item::MarkerTrait(m) => visit(&mut m.span),
         Item::ImplBlock(b) => visit_impl_block_mut(b, visit),
-        Item::EffectResource(r) => visit(&mut r.span),
+        Item::EffectResource(r) => {
+            visit(&mut r.span);
+            if let Some(t) = &mut r.provider_trait_span {
+                visit(t);
+            }
+        }
         Item::EffectGroup(g) => visit(&mut g.span),
         Item::EffectVerbDecl(v) => visit(&mut v.span),
         Item::LayoutDef(l) => visit(&mut l.span),

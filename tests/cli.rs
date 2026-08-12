@@ -159,6 +159,95 @@ fn strict_type_lowering_is_quiet_on_a_recursive_shared_enum() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-08-11-35 — `karac fix` DESTROYED SOURCE when the machine-applicable
+/// diagnostic sat inside an f-string interpolation.
+///
+/// The hole is re-parsed standalone inside a synthetic wrapper and its spans
+/// are rebased to absolute file coordinates afterwards. `CallArg::mut_marker_span`
+/// — a later addition, and the one the `drop the mut marker` edit is built from
+/// — was not in the span walker, so it alone kept the wrapper's coordinates.
+/// The edit then ran from ~byte 19 to the (correctly rebased) argument offset,
+/// deleting 77 bytes of unrelated source, and `fix` printed `applied 1 fix(es)`
+/// and exited 0 over a file with no backup.
+///
+/// Asserts the WHOLE resulting file, not just the edited line: the failure mode
+/// is collateral deletion elsewhere, which a line-local assertion would miss.
+#[test]
+fn fix_inside_an_fstring_interpolation_edits_only_the_marker() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-fix-fstring-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // Unlabeled argument, and the labeled form the `mut_marker_span` field
+    // exists for (`CallArg::span` starts at the LABEL, so the edit cannot be
+    // derived from it without deleting the label too).
+    for (name, before, after) in [
+        (
+            "plain.kara",
+            "fn f(xs: mut Slice[i64]) -> i64 { return xs.len(); }\n\
+             fn g(xs: mut Slice[i64]) {\n\
+             \x20   println(f\"{f(mut xs)}\");\n\
+             }\n\
+             fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }\n",
+            "fn f(xs: mut Slice[i64]) -> i64 { return xs.len(); }\n\
+             fn g(xs: mut Slice[i64]) {\n\
+             \x20   println(f\"{f(xs)}\");\n\
+             }\n\
+             fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }\n",
+        ),
+        (
+            "labeled.kara",
+            "fn f(xs: mut Slice[i64]) -> i64 { return xs.len(); }\n\
+             fn g(xs: mut Slice[i64]) {\n\
+             \x20   println(f\"{f(xs: mut xs)}\");\n\
+             }\n\
+             fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }\n",
+            "fn f(xs: mut Slice[i64]) -> i64 { return xs.len(); }\n\
+             fn g(xs: mut Slice[i64]) {\n\
+             \x20   println(f\"{f(xs: xs)}\");\n\
+             }\n\
+             fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }\n",
+        ),
+    ] {
+        std::fs::write(tmp.join(name), before).unwrap();
+        let out = karac_bin()
+            .current_dir(&tmp)
+            .arg("fix")
+            .arg(name)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "[{name}] fix failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let got = std::fs::read_to_string(tmp.join(name)).unwrap();
+        assert_eq!(got, after, "[{name}] fix rewrote the wrong bytes");
+
+        // And the result must actually be clean — the deletion is the whole
+        // remedy for the diagnostic that prescribed it.
+        let check = karac_bin()
+            .current_dir(&tmp)
+            .arg("check")
+            .arg(name)
+            .output()
+            .unwrap();
+        assert!(
+            check.status.success(),
+            "[{name}] check after fix: {}{}",
+            String::from_utf8_lossy(&check.stdout),
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ── karac debug (crash-report renderer) ─────────────────────────
 
 const CRASH_FIXTURE: &str = concat!(
