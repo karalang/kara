@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 238 | 0 |
-| leak | 166 | 1 |
+| leak | 168 | 2 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 0 |
 | run-vs-build | 103 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 814 | 1 |
+| codegen | 816 | 2 |
 | typecheck | 156 | 0 |
 | interp | 138 | 0 |
 | ownership | 45 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced · 1 open · 1113 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1128 surfaced · 2 open · 1114 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-15 | 2026-08-12 | codegen | high | `c24343b3` (the B-2026-08-12-1 by-value Option/Result param entry-copy) LEAKS the copied payload: `asan_struct_field_boxed_heapless_option_envelope_owned` is red on the -O0 ASAN leg with 2560 bytes in 80 allocations, and GREEN at the default opt level -- so the ordinary `cargo test --features llvm` run does not see it and only `scripts/asan-o0-leg.sh` does. | regression from c24343b3 (B-2026-08-12-1); asan_struct_field_boxed_heapless_option_envelope_owned |
+| B-2026-08-12-17 | 2026-08-12 | codegen | medium | A boxed `Option` FIELD envelope inside an inline STRUCT enum payload still leaks 32 B per call when the by-value ARGUMENT is not a fresh construction: `cls(Result.Ok(w))` wrapping a live `w`, and `cls(mkw(n))` handing on a callee-manufactured value. B-2026-08-12-15 fixed every form that either binds the value or constructs it at the call site; these two are the remainder it deliberately left. | — |
+| B-2026-08-12-18 | 2026-08-12 | codegen | low | The INTERIOR of a boxed `Option` field envelope owned by the fresh-temp argument spill has no owner: `cls(Result.Ok(S { o: Option.Some(Option.Some(f"v{n}")) }))` over `struct S { o: Option[Option[String]] }` leaks the String, 4 B per call. Surfaced by B-2026-08-12-15, which freed the envelope that had been leaking around it. | — |
 
 ### Wontfix (2)
 
@@ -143,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced
 
 </details>
 
-### Fixed (1113)
+### Fixed (1114)
 
-<details><summary>1113 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1114 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2684,6 +2685,101 @@ Filed as B-2026-08-12-16. It is also why this commit adds no ASAN fixture for
 the shape: one would be RED on the Linux `memory-sanitizer` job today.
 
 Suite green at 13471 passed / 0 failed across 116 targets; clippy and fmt clean. |
+| B-2026-08-12-15 | codegen | high | A boxed `Option` FIELD envelope inside an inline STRUCT enum payload (`Result[W, i64]` over `struct W { o: Option[Option[i64]] }`) has no owner in AN… | FIXED by c0320d7. The quarantine entry added one commit earlier is removed and
+the -O0 known-failures list is EMPTY again; the fixture is clean under valgrind
+at -O0 and returns 20440.
+
+THE ROW'S CAUSE WAS WRONG, and that is why four fixes failed before this one.
+It blamed `c24343b3` and the by-value call, so all four attempts were aimed at
+the argument-passing machinery. One probe refutes both:
+
+    let r: Result[W, i64] = Result.Ok(W { o: Option.Some(Option.Some(n)) });
+
+leaks 32 B per construction with NO CALL ANYWHERE IN THE PROGRAM. Measured at
+-O0 with valgrind, 1,280 B in 40 blocks over 40 iterations -- byte-identical to
+the call form the row named. The entry copy had only removed an ACCIDENTAL
+owner (the callee's arm, which used to free the CALLER's envelope) from one of
+the forms; the gap itself is in the type walk and predates c24343b3.
+
+WHY NEITHER EXISTING PREDICATE COULD NAME THE BOX. `W` is 4 LLVM words and fits
+`Result`'s 5-word area, so nothing boxes at the outer level and
+`boxed_enum_payload_variants` reports nothing. The inline payload is a STRUCT
+rather than an `Option`/`Result`, and `nested_boxed_enum_payload_variants`
+reaches its inner walk only through `boxed_enum_payload_variants(arg)` -- which
+matches on the enum NAME -- so it reports nothing either. No let-site
+registration had ever covered the shape.
+
+THE FIX IS AN ENUMERATION, NOT A MECHANISM. `struct_payload_boxed_field_variants`
+is the third sibling of those two: for an inline user-struct payload it walks
+the struct's fields and returns each boxing `Option`/`Result` field's
+coordinates. It needed no new cleanup action -- `NestedBoxedEnumDrop` was
+already parameterized on `inner_tag_field`, and a struct payload only shifts
+that index by the words of the fields ahead of the box
+(`coerce_to_payload_words` flattens word-by-word in LLVM field order). Three
+guards keep the offset arithmetic honest rather than assumed: a `shared struct`
+payload (a 1-word RC pointer, never flattened), a GENERIC struct (whose declared
+field types measure ERASED), and a per-field word sum that must equal the
+struct's own LLVM width.
+
+THREE OWNING SITES, and a fix at any one alone is wrong at the other two.
+Each was measured into existence by the failure of the previous state:
+
+  1. THE LET SITE (`stmts.rs`) -- covers every form that binds the value.
+     Alone, it turns the leak into a glibc `double free detected in tcache 2`
+     on `let r = ...; match r { Ok(w) => ... }`, because the arm's
+     `__karac_drop_struct_W` already frees the box.
+  2. THE CONSUMING ARM (`suppress_struct_field_boxed_payload_arm_bind`) --
+     hands the box from the scrutinee to the arm by zeroing the box WORD in the
+     scrutinee's slot. Gated on `pattern_consumes_field`, because `Ok(_)`
+     registers no `StructDrop` and zeroing there would orphan the box. Zeroes
+     the word rather than the tag for the reason
+     `suppress_nested_boxed_drop_for_var` gives: `Result`'s `Ok` is tag 0, so a
+     tag-zero leaves the outer guard passing.
+  3. THE FRESH-TEMP ARGUMENT SPILL (`track_optres_arg_temp`) -- the one form
+     with no binding to hang a drop on.
+
+Plus one RETRACTION EXCEPTION: the arg-site `suppress_nested_boxed_drop_for_var`
+must NOT fire for this population, because the callee deliberately registers
+nothing for it (the `functions.rs` loop stays narrow -- widening it there was
+measured as a double free on all three of the temp-argument, bound-argument and
+matched-after-call forms, reconfirming the row's rejected attempt 3). Tracked
+by `struct_field_boxed_payload_vars`, which plays exactly the role
+`boxed_struct_payload_vars` plays for the direct-box family one line up in the
+same loop, and for the same asymmetry: a STRUCT payload has a callee-side
+move-out mirror and a bare enum payload does not.
+
+This is also what makes the row's rejected attempt 1 (gate that retraction on
+`callee_entry_copies`) legible in hindsight: it was a byte-identical no-op
+because the caller had no registration to retract. It is load-bearing only once
+the let site arms one.
+
+THE TEMP SPILL NEEDED ITS OWN FRESHNESS PREDICATE, and this is the subtlest
+part. `optres_arg_is_unowned_temp` guards a `{ptr,len,cap}` PAYLOAD buffer,
+which a ctor can wrap without minting (`Ok(x)` hands us `x`'s buffer) -- hence
+its narrowness, paid for by a self-host double free (the row's rejected attempt
+2). An ENVELOPE is different: it is minted by the construction itself and can
+never be named by the source program, so the only way an argument carries a
+LIVE one is by reading it out of a place that already owns it.
+`optres_arg_mints_field_envelope` therefore asks PER FIELD, and only of the
+fields that actually box, whether the initializer is a construction. An
+expression-kind safe-list is the wrong shape here: the measured argument is
+`cls(Result.Ok(W { o: Option.Some(Option.Some(n + i)) }))`, whose `n` and `i`
+are IDENTIFIERS -- refused by any place-based rule, and unable to carry a box.
+
+MEASURED, per shape, baseline vs fixed, valgrind at -O0 over 40 iterations:
+
+  the fixture                       2,560 B / 80  ->  CLEAN
+  bare let, NO CALL in the program  1,280 B / 40  ->  CLEAN
+  a leading scalar before the box   1,280 B / 40  ->  CLEAN
+  `takw(r); takw(r)` twice over     1,280 B / 40  ->  CLEAN
+  passthrough `takw(idw(b))`        1,280 B / 40  ->  CLEAN
+  String interior sibling           1,440 B       ->    160 B
+  ctor wrapping a LIVE binding      1,280 B / 40  ->  unchanged
+  `takw(mkw(n))`                    1,280 B / 40  ->  unchanged
+
+No shape regressed and none became corruption. The three that did not reach
+zero are live remainders with their own causes and are filed separately rather
+than buried here. |
 | B-2026-08-12-16 | codegen | low | `Json.parse`'s error message LEAKS: codegen copies the runtime's diagnostic into a Kara String but pins that String's `cap` to 0, so the scope-exit f… | FIXED by ec58cb0. The message no longer leaks: LeakSanitizer reports a
 clean run on the four-position matrix that was RED at 400 allocations.
 
