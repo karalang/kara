@@ -4552,6 +4552,56 @@ impl<'ctx> super::Codegen<'ctx> {
             self.struct_field_type_names
                 .insert("HttpError".to_string(), vec![Some("String".to_string())]);
         }
+        if !self.struct_types.contains_key("JsonError") {
+            // `JsonError { line, column, message }` — the error half of
+            // `Json.parse`'s documented `Result[Json, JsonError]`
+            // (`runtime/stdlib/json.kara`). Seeded for the same reason as
+            // `HttpError` above: `json.kara` is not in
+            // `compiled_stdlib_programs`, so the type never reaches
+            // `declare_structs`, and without a layout + field names a
+            // field read off the Err binding had nothing to GEP. It
+            // failed LOUD rather than miscompiling — `codegen: cannot
+            // resolve field 'line' … this is a compiler gap` — so
+            // `karac build` REFUSED a program `karac run --interp`
+            // executes correctly: a run-vs-build split on a shipped
+            // user-facing API (B-2026-08-12-14).
+            //
+            // The two integer fields are seeded `i64`, not the declared
+            // `u32`. That is deliberate and load-bearing: `json.rs`'s
+            // `Build Result.Err(JsonError { … })` packs `line` / `column`
+            // into the widened Result's `w0` / `w1` as FULL WORDS
+            // (`zext` from the runtime's u32), so the seeded layout has to
+            // describe what is actually built, not what the source
+            // declares. Seeding `i32` would put the field GEPs half a word
+            // out of step with the packing.
+            //
+            // `message`'s `cap` is pinned to 0 by that same packing (so the
+            // scope-exit free stays a no-op — see the comment there), and
+            // the drop synthesis this registration enables is guarded on
+            // `cap > 0`, so registering the field changes no free
+            // behaviour; it only makes the field readable.
+            let json_err_ty = self
+                .context
+                .struct_type(&[i64_t.into(), i64_t.into(), str_ty], false);
+            self.struct_types
+                .insert("JsonError".to_string(), json_err_ty);
+            self.struct_field_names.insert(
+                "JsonError".to_string(),
+                vec![
+                    "line".to_string(),
+                    "column".to_string(),
+                    "message".to_string(),
+                ],
+            );
+            self.struct_field_type_names.insert(
+                "JsonError".to_string(),
+                vec![
+                    Some("i64".to_string()),
+                    Some("i64".to_string()),
+                    Some("String".to_string()),
+                ],
+            );
+        }
         // Phase-8 line 156 — baked `std.tracing` value structs (`SpanField`,
         // `Span`, `LogEvent`). Seeded here so a *user* `impl Exporter` whose
         // method takes one of these by value (`fn export_event(ref self,

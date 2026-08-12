@@ -70122,6 +70122,50 @@ fn main() {
     }
 
     #[test]
+    fn e2e_json_parse_error_fields_are_readable() {
+        // B-2026-08-12-14 — reading a field off a `Json.parse` error was a
+        // RUN-VS-BUILD split: `karac run --interp` printed `e.line`, while
+        // `karac build` REFUSED the program with `codegen: cannot resolve
+        // field 'line' on this receiver … this is a compiler gap`. So the
+        // error half of `Json.parse`'s documented `Result[Json, JsonError]`
+        // could not be inspected at all from a compiled binary — only matched
+        // on and discarded.
+        //
+        // `json.kara` is not in `compiled_stdlib_programs`, so `JsonError`
+        // never reached `declare_structs` and had no layout to GEP.
+        // `seed_builtin_struct_types` now seeds it the way `HttpError` and
+        // `Response` are already seeded, with the AS-BUILT word layout
+        // (`line`/`column` are `i64` there, not the declared `u32` —
+        // `json.rs` packs them into the widened Result as full words).
+        //
+        // Covers the three positions that resolve the field differently: a
+        // bare read, an f-string interpolation, and the whole struct passed
+        // BY VALUE to a fn that reads two fields. The `message` String field
+        // is exercised by length rather than content so the pin does not
+        // encode serde_json's wording.
+        let out = run_program(
+            "fn describe(e: JsonError) -> String { return f\"{e.line}:{e.column}\"; }\n\
+             fn main() {\n\
+                 let bad = Json.parse(\"{bad\");\n\
+                 match bad {\n\
+                     Ok(_v) => println(\"ok\"),\n\
+                     Err(e) => {\n\
+                         println(e.line);\n\
+                         println(f\"col={e.column}\");\n\
+                         println(e.message.len() > 0);\n\
+                         println(describe(e));\n\
+                     }\n\
+                 }\n\
+                 let good = Json.parse(\"{\\\"a\\\": 1}\");\n\
+                 match good { Ok(_v) => println(\"parsed\"), Err(e2) => println(e2.message) }\n\
+             }",
+        );
+        // Matches `karac run --interp` on the identical source, verified
+        // before this pin was written.
+        assert_eq!(out.as_deref(), Some("1\ncol=2\ntrue\n1:2\nparsed\n"));
+    }
+
+    #[test]
     fn test_ir_json_parse_emits_lift_helper_once() {
         // Pin the lift walker definition is module-private and emitted
         // exactly once across multiple `Json.parse(...)` call sites,
