@@ -1520,6 +1520,12 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) stderr_global: inkwell::values::GlobalValue<'ctx>,
     /// LLVM struct types for Kāra structs (struct name → LLVM type).
     pub(crate) struct_types: HashMap<String, StructType<'ctx>>,
+    /// Every `shared` / `par` type name the program declares — NAME ONLY, and
+    /// collected before any layout pass runs. Read by `llvm_type_for_name`
+    /// alongside `shared_types`, to cover the window where a shared type's own
+    /// layout is queried while it is being registered. See the comment at that
+    /// read site.
+    pub(crate) shared_type_names: std::collections::HashSet<String>,
     /// Every generic PARAMETER name the program declares, anywhere. Read only
     /// by the `KARAC_STRICT_TYPE_LOWERING` lever, to tell "a type with no LLVM
     /// layout" (what the lever hunts) from "a type parameter with no active
@@ -7968,6 +7974,7 @@ impl<'ctx> Codegen<'ctx> {
             stdout_global,
             stderr_global,
             struct_types: HashMap::new(),
+            shared_type_names: std::collections::HashSet::new(),
             declared_generic_param_names: std::collections::HashSet::new(),
             assoc_type_bindings: HashMap::new(),
             state_struct_types: HashMap::new(),
@@ -9280,14 +9287,22 @@ impl<'ctx> Codegen<'ctx> {
         // `declarations.rs::register_struct_metadata` for the cycle rationale.
         // `KARAC_STRICT_TYPE_LOWERING` support only — see the field doc.
         // Cheap one-pass scan; the set is never consulted unless the lever
-        // is on. The BAKED STDLIB programs are scanned too: most of the
-        // generic params a real compilation lowers without a substitution
-        // come from there (`T` fires on `hello world` otherwise), and they
-        // are as legitimate as the user program's own.
+        // is on. EVERY baked stdlib program is scanned, not just the ones this
+        // compilation pulls in: most of the generic params a real compilation
+        // lowers without a substitution come from there (`T` fires on
+        // `hello world` otherwise), and the usage-gated set misses the
+        // PRELUDE-baked declarations specifically — `Result[T, E]`'s own `E`
+        // reaches the default on any program calling a Result combinator, and
+        // read as a real unknown type until this scanned the full set.
         self.collect_declared_generic_param_names(program);
-        for tp in compiled_stdlib_programs(program) {
+        for (_, tp) in crate::prelude::STDLIB_PROGRAMS.iter() {
             self.collect_declared_generic_param_names(tp);
         }
+        for (_, tp) in crate::prelude::GATED_STDLIB_PROGRAMS.iter() {
+            self.collect_declared_generic_param_names(tp);
+        }
+        // Name-only `shared`/`par` set, before `declare_enums` — see the field doc.
+        self.collect_shared_type_names(program);
         self.register_struct_metadata(program);
         self.register_ord_orderable_types(program);
         self.declare_enums(program);

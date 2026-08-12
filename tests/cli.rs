@@ -96,6 +96,69 @@ fn test_version_output() {
     );
 }
 
+/// B-2026-08-12-12 — `KARAC_STRICT_TYPE_LOWERING=1` must stay QUIET on a
+/// recursive shared enum.
+///
+/// `declare_enums` asks for a shared enum's own LLVM layout while computing
+/// that enum's drop kind (`Expr.Blk(Block)` where `struct Block { tail:
+/// Option[Expr] }` — is the Option payload boxed? — how wide is `Expr`?), and
+/// at that moment the enum is not in `shared_types` yet. It used to answer
+/// from the unknown-name `i64` default, which is correct only by coincidence:
+/// a shared handle and an `i64` are both one word today, so NO behavioural
+/// test can tell the two apart. That is exactly why the guard is this lever
+/// rather than an output assertion.
+///
+/// Run as a SUBPROCESS: the lever is an env var, and `cargo test` runs this
+/// file's tests in one process alongside others, so setting it in-process
+/// would leak into whatever else is compiling concurrently.
+#[test]
+fn strict_type_lowering_is_quiet_on_a_recursive_shared_enum() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-strict-lowering-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::write(
+        tmp.join("rec.kara"),
+        "shared enum Expr { Num(i64), Blk(Block), Error }\n\
+         struct Block { tail: Option[Expr] }\n\
+         fn render_block(b: Block) -> String {\n\
+             let Block { tail } = b;\n\
+             match tail { Some(e) => render_expr(e), None => \"no-tail\".to_string() }\n\
+         }\n\
+         fn render_expr(e: Expr) -> String {\n\
+             match e {\n\
+                 Num(n) => n.to_string(),\n\
+                 Blk(b) => render_block(b),\n\
+                 Error => \"error\".to_string(),\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let blk = Block { tail: Some(Expr.Num(7)) };\n\
+             println(render_expr(Expr.Blk(blk)));\n\
+         }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_STRICT_TYPE_LOWERING", "1")
+        .arg("build")
+        .arg("rec.kara")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("KARAC_STRICT_TYPE_LOWERING"),
+        "a recursive shared enum must not reach the unknown-name `i64` default:\n{stderr}"
+    );
+    assert!(out.status.success(), "build failed:\n{stderr}");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ── karac debug (crash-report renderer) ─────────────────────────
 
 const CRASH_FIXTURE: &str = concat!(

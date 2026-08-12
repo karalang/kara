@@ -2196,6 +2196,24 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Collect every `shared` / `par` type name the program declares. Name
+    /// only — no layout — so it is valid before any declaration pass has run,
+    /// which is the whole point: it answers "is this a heap handle?" during
+    /// the window where the layout tables are still being built.
+    pub(super) fn collect_shared_type_names(&mut self, program: &Program) {
+        for item in &program.items {
+            match item {
+                Item::StructDef(s) if s.is_shared || s.is_par => {
+                    self.shared_type_names.insert(s.name.clone());
+                }
+                Item::EnumDef(e) if e.is_shared || e.is_par => {
+                    self.shared_type_names.insert(e.name.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Collect every generic PARAMETER name the program declares — free fns,
     /// methods, structs, enums, traits, impl blocks. Feeds
     /// `declared_generic_param_names`, which exists solely so the
@@ -2321,6 +2339,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // wise overflowed the field. Mirrors `llvm_type_for_type_expr`
             // line 67-69's identical `TypeKind::Path("Slice")` arm.
             "Slice" => self.slice_struct_type().into(),
+            // `Unit` — the unit type written as a NAME (`-> Unit`,
+            // `Result[Unit, IoError]`, both used throughout the baked stdlib).
+            // It has no declaration anywhere, so it reached the unknown-name
+            // `i64` default below; the value it lowers to is the same one the
+            // `TypeKind::Tuple(&[])` arm produces, so this arm changes no
+            // layout — it stops a KNOWN type from reading as an unknown one,
+            // which is what the strict lever needs to stay honest.
+            "Unit" => self.context.i64_type().into(),
             // Phase 6 line 17 — baked-stdlib single-i64-field network
             // structs. All three (`TcpListener`, `TcpStream`, `WebSocket`)
             // share the same `{ fd: i64 }` layout per their declarations
@@ -2395,7 +2421,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into(),
             name => {
                 // Shared types are heap-allocated pointers.
-                if self.shared_types.contains_key(name) {
+                //
+                // `shared_type_names` is the NAME-ONLY set, collected before any
+                // layout work, and it is what covers the registration window:
+                // `declare_enums` asks for a shared enum's own layout while
+                // computing that enum's drop kind (`Expr.Blk(Block)` where
+                // `struct Block { tail: Option[Expr] }` -> is the Option payload
+                // boxed? -> how wide is `Expr`?), and at that moment `Expr` is
+                // not in `shared_types` yet, so the answer came from the `i64`
+                // default below. Right only by coincidence — a shared handle and
+                // an `i64` are both one word — and wrong the moment either width
+                // stops matching. Being shared is a name-level property, so a
+                // name set built first is sufficient; the same argument
+                // `build_struct_types` makes for its own `shared_struct_names`
+                // pre-pass, which exists for the identical forward-reference
+                // reason. B-2026-08-12-12.
+                if self.shared_types.contains_key(name) || self.shared_type_names.contains(name) {
                     return self.context.ptr_type(AddressSpace::default()).into();
                 }
                 if let Some(st) = self.struct_types.get(name) {
