@@ -22783,6 +22783,72 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_payload_boxed_field_envelope_reads_correctly() {
+        // B-2026-08-12-15's offset arithmetic, as a VALUE assertion rather than
+        // a leak one. The envelope free walks a FLATTENED enum payload and finds
+        // the inner tag at `1 + <words of the fields ahead of the box>`; get
+        // that index wrong and the cleanup reads a scalar field as a tag and the
+        // tag as a pointer. `V` puts a scalar AHEAD of the box (index 2) and `U`
+        // puts one behind it (index 1, the unshifted case the sibling predicate
+        // is hardcoded to) — so a drifted index lands on a live value in one
+        // direction or the other, and reading the scalars and the payload back
+        // proves the walk touched neither.
+        //
+        // ONE scalar each, which is forced rather than chosen: an `Option` is 4
+        // LLVM words against `Result`'s 5-word area, so a second field would push
+        // the payload over and box it WHOLE — a different path
+        // (`boxed_enum_payload_variants`), and the shape this test is about would
+        // not be exercised at all. Measured: the 2-scalar version allocates a
+        // 56-byte payload box and never reaches this code.
+        assert_eq!(
+            run_program(
+                "struct V { a: i64, o: Option[Option[i64]] }\n\
+                 struct U { o: Option[Option[i64]], z: i64 }\n\
+                 fn takev(r: Result[V, i64]) -> i64 {\n\
+                     match r {\n\
+                         Result.Ok(v) => match v.o {\n\
+                             Option.Some(Option.Some(n)) => v.a + n,\n\
+                             _ => -1,\n\
+                         },\n\
+                         Result.Err(e) => e,\n\
+                     }\n\
+                 }\n\
+                 fn takeu(r: Result[U, i64]) -> i64 {\n\
+                     match r {\n\
+                         Result.Ok(u) => match u.o {\n\
+                             Option.Some(Option.Some(n)) => u.z + n,\n\
+                             _ => -1,\n\
+                         },\n\
+                         Result.Err(e) => e,\n\
+                     }\n\
+                 }\n\
+                 fn main() {\n\
+                     let bound: Result[V, i64] = \
+                         Result.Ok(V { a: 1, o: Option.Some(Option.Some(30)) });\n\
+                     println(takev(bound));\n\
+                     println(takev(Result.Ok(V { a: 5, o: Option.Some(Option.Some(70)) })));\n\
+                     println(takeu(Result.Ok(U { o: Option.Some(Option.Some(400)), z: 9 })));\n\
+                     let m: Result[V, i64] = \
+                         Result.Ok(V { a: 100, o: Option.Some(Option.Some(11)) });\n\
+                     println(match m {\n\
+                         Result.Ok(v) => match v.o {\n\
+                             Option.Some(Option.Some(n)) => v.a + n,\n\
+                             _ => -1,\n\
+                         },\n\
+                         Result.Err(e) => e,\n\
+                     });\n\
+                     let absent: Result[V, i64] = Result.Ok(V { a: 7, o: Option.None });\n\
+                     println(match absent { Result.Ok(v) => v.a, Result.Err(e) => e });\n\
+                     let errside: Result[V, i64] = Result.Err(42);\n\
+                     println(match errside { Result.Ok(v) => v.a, Result.Err(e) => e });\n\
+                 }"
+            )
+            .as_deref(),
+            Some("31\n75\n409\n111\n7\n42\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_repeated_place_field_move_assign_reads_correctly() {
         // B-2026-08-12-4's alias guard. Freeing the assignment target's
         // displaced buffer is only safe when it is a DIFFERENT buffer from the

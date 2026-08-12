@@ -28,6 +28,21 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StructType
 use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
 
+/// One boxed-envelope coordinate from
+/// [`super::CodeGen::struct_payload_boxed_field_variants`]:
+/// `(outer_enum, outer_variant, inner_tag_field, inner_enum, inner_variant,
+/// deeper_tags)` — exactly the arguments
+/// `track_nested_boxed_enum_var_at_field` takes after the name and slot.
+/// B-2026-08-12-15.
+pub(super) type StructPayloadBoxedField = (
+    &'static str,
+    &'static str,
+    u32,
+    &'static str,
+    &'static str,
+    Vec<u64>,
+);
+
 use super::helpers::{
     array_inner_type_expr, const_value_as_u32, map_kv_type_exprs, set_inner_type_expr,
     slice_inner_type_expr, vec_inner_type_expr,
@@ -3509,6 +3524,148 @@ impl<'ctx> super::Codegen<'ctx> {
                     .map(|inner| self.nested_box_deeper_tag_chain(inner))
                     .unwrap_or_default();
                 out.push((outer_lit, *variant, inner_enum, inner_variant, deeper));
+            }
+        }
+        out
+    }
+
+    /// THIRD sibling of [`Self::boxed_enum_payload_variants`] (box at this
+    /// level) and [`Self::nested_boxed_enum_payload_variants`] (box one level
+    /// down, inside an inline `Option`/`Result` payload), for the case both
+    /// miss: the box sits inside a FIELD of an inline user-STRUCT payload.
+    /// B-2026-08-12-15.
+    ///
+    /// `Result[W, i64]` over `struct W { o: Option[Option[i64]] }` is the
+    /// canonical shape, and it falls between the two: `W` is 4 words and fits
+    /// Result's 5-word area, so nothing boxes at the outer level and
+    /// `boxed_enum_payload_variants` reports nothing; the inline payload is a
+    /// STRUCT rather than an `Option`/`Result`, so
+    /// `nested_boxed_enum_payload_variants` — which reaches its inner walk only
+    /// through `boxed_enum_payload_variants(arg)`, and that matches on the enum
+    /// NAME — reports nothing either. The 32-byte envelope `W.o` allocates
+    /// therefore had no owner anywhere.
+    ///
+    /// MEASURED AT THE TYPE WALK, not at any call site, and that is what took
+    /// four wrong attempts to establish. `let r: Result[W, i64] = Result.Ok(W {
+    /// o: Option.Some(Option.Some(n)) });` leaks 32 B per construction with NO
+    /// call anywhere in the program — the by-value call the bug was first
+    /// attributed to leaks the same bytes, and a caller that goes on to `match
+    /// r` is clean in both forms because the arm's binding is the accidental
+    /// owner. So the fix belongs here and at the two sites that consume this
+    /// family, not in the argument-passing machinery.
+    ///
+    /// Returns `(outer_enum, outer_variant, inner_tag_field, inner_enum,
+    /// inner_variant, deeper_tags)` — what
+    /// [`Self::track_nested_boxed_enum_var_at_field`] consumes, with the field
+    /// index COMPUTED rather than fixed at 1. `coerce_to_payload_words` flattens
+    /// the payload word by word in LLVM field order, so the inner enum's tag
+    /// sits at outer field `1 + <words of the fields before it>` and its box
+    /// word at the field after that.
+    ///
+    /// ENVELOPES ONLY, exactly as both siblings are: what this registers is a
+    /// box-only free of a `coerce_to_payload_words` envelope, which the source
+    /// program cannot name and no match arm can bind out. The struct field's
+    /// INTERIOR keeps whichever owner it already had — widening to the payload's
+    /// drop is what made attempts 3 and 4 double-free.
+    ///
+    /// Three guards keep the arithmetic honest rather than assumed:
+    ///
+    ///   * a `shared struct` payload lowers to a 1-word RC pointer and is never
+    ///     flattened, so its fields are not at these offsets at all;
+    ///   * a GENERIC struct's declared field types carry bare parameters, and
+    ///     measuring one gives the ERASED width rather than the monomorph's, so
+    ///     the offsets would be computed against the wrong layout;
+    ///   * the per-field word counts must sum to the struct's own LLVM width, or
+    ///     the flattening assumption this offset arithmetic rests on does not
+    ///     hold and the walk declines rather than guessing.
+    ///
+    /// One level deep on purpose. A struct field that is ITSELF a struct hiding
+    /// a box is the same arithmetic one recursion further, but it is a separate
+    /// population with its own owners to check against, so it stays out until
+    /// it is measured — see B-2026-08-12-15's row.
+    pub(super) fn struct_payload_boxed_field_variants(
+        &self,
+        te: &TypeExpr,
+    ) -> Vec<StructPayloadBoxedField> {
+        let TypeKind::Path(p) = &te.kind else {
+            return vec![];
+        };
+        let (outer_lit, area, variants): (&'static str, usize, &[&'static str]) =
+            match p.segments.last().map(|s| s.as_str()) {
+                Some("Option") => ("Option", 3, &["Some"]),
+                Some("Result") => ("Result", 5, &["Ok", "Err"]),
+                _ => return vec![],
+            };
+        let args: Vec<&TypeExpr> = match &p.generic_args {
+            Some(a) => a
+                .iter()
+                .filter_map(|g| match g {
+                    GenericArg::Type(t) => Some(t),
+                    _ => None,
+                })
+                .collect(),
+            None => return vec![],
+        };
+        let mut out = Vec::new();
+        for (i, variant) in variants.iter().enumerate() {
+            let Some(arg) = args.get(i) else {
+                continue;
+            };
+            let arg_ll = self.llvm_type_for_type_expr(arg);
+            // Boxed at THIS level: `boxed_enum_payload_variants` owns it, and
+            // the payload's words are not in the enum area to be offset into.
+            if Self::llvm_type_word_count(arg_ll) > area {
+                continue;
+            }
+            // A user struct, named without generic arguments — see the guards
+            // in this fn's doc for why erasure disqualifies the generic form.
+            let TypeKind::Path(ap) = &arg.kind else {
+                continue;
+            };
+            if ap.generic_args.as_ref().is_some_and(|g| !g.is_empty()) {
+                continue;
+            }
+            let Some(struct_name) = ap.segments.last().map(|s| s.as_str()) else {
+                continue;
+            };
+            if !self.struct_types.contains_key(struct_name)
+                || self.shared_types.contains_key(struct_name)
+            {
+                continue;
+            }
+            let Some(field_tes) = self.struct_field_type_exprs(struct_name) else {
+                continue;
+            };
+            let field_words: Vec<usize> = field_tes
+                .iter()
+                .map(|f| Self::llvm_type_word_count(self.llvm_type_for_type_expr(f)))
+                .collect();
+            if field_words.iter().sum::<usize>() != Self::llvm_type_word_count(arg_ll) {
+                continue;
+            }
+            let mut offset = 0usize;
+            for (fte, words) in field_tes.iter().zip(&field_words) {
+                for (inner_enum, inner_variant, _) in self.boxed_enum_payload_variants(fte) {
+                    // The box holds this field's own payload, so any FURTHER
+                    // envelope chain is measured from there — the same
+                    // derivation `nested_boxed_enum_payload_variants` makes,
+                    // and it is what keeps a `Option[Option[Option[i64]]]`
+                    // field from leaking every level below the first.
+                    let payload_idx = usize::from(inner_variant == "Err");
+                    let deeper = Self::path_generic_arg(fte, payload_idx)
+                        .map(|inner| self.nested_box_deeper_tag_chain(inner))
+                        .unwrap_or_default();
+                    out.push((
+                        outer_lit,
+                        *variant,
+                        // +1 for the outer enum's own tag at field 0.
+                        (offset + 1) as u32,
+                        inner_enum,
+                        inner_variant,
+                        deeper,
+                    ));
+                }
+                offset += words;
             }
         }
         out

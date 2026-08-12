@@ -38047,6 +38047,132 @@ fn main() {
     ///
     /// Expected value is COMPUTED: 1+2+4+8+16+32+64+128+256 = 511 per
     /// iteration, x40 = 20440.
+    /// B-2026-08-12-15 — a boxed `Option` FIELD envelope inside an inline
+    /// STRUCT payload has an owner in every frame that does not consume it.
+    ///
+    /// THE FIRST LEG IS THE POINT OF THE FIXTURE. `let r: Result[W, i64] =
+    /// Result.Ok(W { … });` with the value never read, never passed and never
+    /// matched leaked 32 B per construction — with NO CALL ANYWHERE IN THE
+    /// PROGRAM. The row was filed against the by-value call and against
+    /// c24343b3's entry copy, and four fixes aimed there failed; this leg is
+    /// what refutes both. The entry copy had only removed an ACCIDENTAL owner
+    /// (the callee's arm, which used to free the caller's envelope) from one of
+    /// the forms.
+    ///
+    /// Neither existing predicate could name the box. `W` is 4 words and fits
+    /// `Result`'s 5-word area, so nothing boxes at the outer level and
+    /// `boxed_enum_payload_variants` reports nothing; the inline payload is a
+    /// STRUCT rather than an `Option`/`Result`, so
+    /// `nested_boxed_enum_payload_variants` reports nothing either. Hence the
+    /// third sibling, `struct_payload_boxed_field_variants`.
+    ///
+    /// THE ARMS ARE THE THREE OWNING FRAMES, one leg each, because a fix at any
+    /// one of them alone is wrong at the other two:
+    ///
+    ///   * `nocall` — the LET SITE, and the leg that refutes the row's cause:
+    ///     not one function call appears in it. It also checks the HANDOFF,
+    ///     because its arm binds `v` out and `__karac_drop_struct_V` frees the
+    ///     box too — with the let site armed and no handoff this aborts with a
+    ///     glibc `double free detected in tcache 2`.
+    ///   * `wild` — the arm that does NOT bind (`Ok(_)`) must NOT hand over;
+    ///     the scrutinee stays the owner. The mirror of `nocall`, and the
+    ///     reason the handoff is gated on `pattern_consumes_field` rather than
+    ///     on the arm merely existing.
+    ///   * `cls(Result.Ok(…))` — the FRESH TEMP, the one form with no binding
+    ///     to hang a drop on. Owned at the argument spill.
+    ///   * `cls(bound)` twice and `cls(idr(through))` — a bound argument and a
+    ///     passthrough, both of which must KEEP the caller's registration
+    ///     rather than retract it: the callee declines this population, so
+    ///     retracting hands the box to nobody. Passing the same binding twice
+    ///     is the shape whose pre-c24343b3 spelling double-freed, so it is also
+    ///     the guard against paying for this leak with that crash.
+    ///
+    /// `V` PUTS A FIELD AHEAD OF THE BOX on purpose. The cleanup walks a
+    /// FLATTENED payload, so the inner tag is at `1 + <words of the fields
+    /// before it>` — `V.a` shifts it, and a hardcoded 1 (which is all the
+    /// sibling predicate ever needed) would read `a` as the tag and the tag as
+    /// a pointer. `W`, whose `Option` is first, is the unshifted control. One
+    /// scalar is the most `V` can carry: an `Option` is 4 words against
+    /// `Result`'s 5-word area, so a second field boxes the payload WHOLE and
+    /// leaves this code path unexercised.
+    ///
+    /// THE `sbox` LEG IS WHAT MAKES THIS FIXTURE NON-VACUOUS, and it is worth
+    /// saying why it has to be there. Every other leg is ALL-SCALAR, and an
+    /// all-scalar envelope does not survive `-O2`: the box round-trip is pure
+    /// arithmetic the optimizer folds away, so the allocation never happens and
+    /// a clean ASAN run over it proves nothing. Two versions of this fixture
+    /// tripped the harness's anti-vacuity floor at 8 allocations before that
+    /// was understood — reading the payload back does NOT rescue it, because
+    /// the read folds too. `sbox` carries a `String` through the same envelope,
+    /// which cannot be folded, so the allocations are real at both opt levels.
+    /// The scalar legs still assert at `-O0`, where the same fixture runs under
+    /// `scripts/asan-o0-leg.sh` and where the row was originally caught.
+    ///
+    /// `sbox` is deliberately the LET-AND-MATCH spelling and not the temp
+    /// argument one. The temp-argument String shape still leaks its INTERIOR
+    /// (this family frees envelopes box-only by design) and has its own open
+    /// row; using it here would pin a known leak.
+    ///
+    /// WHERE THIS ACTUALLY PINS: `-O0`, i.e. `scripts/asan-o0-leg.sh`, NOT the
+    /// default `cargo test --features llvm` run. Measured against the
+    /// pre-fix compiler: at `-O0` it fails with `LeakSanitizer: 5056 byte(s)
+    /// leaked in 158 allocation(s)`; at `-O2` it PASSES, because the scalar
+    /// envelopes the fix is about are folded away before they can leak. Stated
+    /// rather than left implicit, because a green default run over this fixture
+    /// is not evidence the row stays fixed — the `-O0` leg is.
+    ///
+    /// NOT COVERED, deliberately, and each is a live leak with its own open row
+    /// rather than something papered over here: an enum ctor wrapping a LIVE
+    /// binding (`cls(Result.Ok(w))` for a bound `w`), a callee-manufactured
+    /// value handed straight on (`cls(mk(n))`), and the String INTERIOR of a
+    /// temp-argument envelope — this family frees envelopes box-only by design,
+    /// so the interior keeps whatever owner it had, which for that one shape is
+    /// nobody.
+    #[test]
+    fn asan_struct_payload_boxed_field_envelope_owned_without_call() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct W { o: Option[Option[i64]] }
+struct V { a: i64, o: Option[Option[i64]] }
+struct S { o: Option[Option[String]] }
+fn cls(r: Result[W, i64]) -> i64 {
+    match r { Result.Ok(w) => match w.o { Option.Some(Option.Some(x)) => x, _ => -1 }, Result.Err(e) => e }
+}
+fn idr(r: Result[W, i64]) -> Result[W, i64] { r }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let sbox: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"s{n + i}")) });
+        acc = acc + match sbox {
+            Result.Ok(s) => match s.o { Option.Some(Option.Some(t)) => t.len() as i64, _ => -1 },
+            Result.Err(e) => e,
+        };
+        let nocall: Result[V, i64] = Result.Ok(V { a: 1, o: Option.Some(Option.Some(n + i)) });
+        acc = acc + match nocall {
+            Result.Ok(v) => match v.o { Option.Some(Option.Some(x)) => v.a + x, _ => -1 },
+            Result.Err(e) => e,
+        };
+        let wild: Result[W, i64] = Result.Ok(W { o: Option.Some(Option.Some(n + i)) });
+        acc = acc + match wild { Result.Ok(_) => 2, Result.Err(e) => e };
+        acc = acc + cls(Result.Ok(W { o: Option.Some(Option.Some(n + i)) }));
+        let bound: Result[W, i64] = Result.Ok(W { o: Option.Some(Option.Some(n + i)) });
+        acc = acc + cls(bound);
+        acc = acc + cls(bound);
+        let through: Result[W, i64] = Result.Ok(W { o: Option.Some(Option.Some(n + i)) });
+        acc = acc + cls(idr(through));
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["4331"],
+            "struct_payload_boxed_field_envelope_owned_without_call",
+            40,
+        );
+    }
+
     #[test]
     fn asan_struct_field_boxed_heapless_option_envelope_owned() {
         assert_clean_asan_run_min_allocs(

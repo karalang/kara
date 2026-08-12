@@ -101,58 +101,32 @@
 # prediction to MEASURE. Twice the arithmetic said otherwise, and both times the
 # leftover was a different bug wearing the same fixture.
 
-# ── 2026-08-12: the list is NON-EMPTY again, for the first time since -08-07. ──
-
-# B-2026-08-12-15 owns this entry. c24343b3 (B-2026-08-12-1's by-value
-# Option/Result param ENTRY COPY) orphans a boxed `Option` FIELD envelope inside
-# a struct payload: 2,560 B in 80 allocations here, 32 B per call.
-memory_sanitizer_tests::asan_struct_field_boxed_heapless_option_envelope_owned
+# ── 2026-08-12: the list went NON-EMPTY and is EMPTY again the same day. ──
 #
-# Quarantined rather than fixed, and the reason is the ratchet itself: the leg
-# has been RED on main since c24343b3 landed, and a red leg cannot tell anyone's
-# NEW -O0 regression from this one. A named entry restores that discrimination
-# while the row stays open. It is not a claim the leak is acceptable — the row
-# is HIGH severity and open.
+# B-2026-08-12-15's entry
+# (asan_struct_field_boxed_heapless_option_envelope_owned) was REMOVED
+# 2026-08-12, one commit after it was added: the boxed `Option` FIELD envelope
+# inside an inline STRUCT payload now has an owner in every frame that does not
+# consume it. THE LIST IS EMPTY, so any -O0 failure from here on is a new one.
 #
-# The mechanism, read off the emitted IR rather than inferred (which is what
-# four wrong attempts cost):
+# Worth recording because the entry was filed with the WRONG CAUSE, which four
+# failed fixes were aimed at. It blamed c24343b3 (B-2026-08-12-1's by-value
+# param entry copy) and the by-value CALL. Both were wrong, and one probe said
+# so: `let r: Result[W, i64] = Result.Ok(W { o: Option.Some(Option.Some(n)) });`
+# leaks 32 B per construction with NO CALL ANYWHERE IN THE PROGRAM. The entry
+# copy only removed an ACCIDENTAL owner (the callee's arm, which used to free
+# the caller's envelope) from one of the forms; the gap was in the type walk and
+# predated it.
 #
-#   main:  %enumbox      = malloc({i64,i64,i64,i64})   ; the caller's envelope
-#   f:     %p14oe.newbox = malloc({i64,i64,i64,i64})   ; the entry copy's
-#   f:     call void @__karac_drop_struct_W(ptr %w)    ; frees the COPY only
-#   main:  <no drop, no free>                          ; the original leaks
+# The three sites that now own it, each measured against a shape the others miss:
+#   * the let site, for every form that binds the value;
+#   * the fresh-temp argument spill, for the one form that does not;
+#   * the consuming arm, which takes it over from the scrutinee — the arm's
+#     `__karac_drop_struct_<T>` already frees the box, so without a handoff the
+#     let-site fix turns the leak into a double free.
 #
-# The envelope is owned by whoever MATCHES it out. Before the entry copy the
-# callee's arm matched — and freed — the CALLER's envelope, which balanced by
-# accident. Now the callee matches its own copy and the caller's has no owner at
-# all: `boxed_enum_payload_variants` matches on the enum NAME, so a box one
-# level in (inside a struct FIELD of the payload) is invisible to it and to
-# `nested_boxed_enum_payload_variants`, and no let-site registration ever
-# covered it.
-#
-# Do NOT simply exclude this shape from the entry copy. Measured with the copy
-# disabled, the double-PASS form (`takw(r); takw(r)`) aborts with `free():
-# double free detected in tcache 2` — that crash is what the copy fixed, so
-# removing it trades a leak for a crash.
-#
-# Four fixes measured and rejected, each with its failure, so they are not
-# retried:
-#   1. Gate `suppress_nested_boxed_drop_for_var` on `callee_entry_copies` (the
-#      ungated fourth spelling of a carve-out c24343b3 applied to three others):
-#      byte-identical leak. Nor is any neighbour — all five arg-loop suppressors
-#      were disabled one at a time and the leak survived each. The caller is not
-#      being disarmed; it never had ownership.
-#   2. Treat a nested identifier as consumed in `optres_arg_is_unowned_temp`:
-#      fixes a DIFFERENT family (ctor/struct-literal wrapping a live binding)
-#      across a 13-program matrix, and aborts the self-host parser with a double
-#      free — the exact failure c24343b3's own comment predicts. Narrowing to
-#      skip `uam_copied_sites` does not help.
-#   3. Register the payload struct's drop on the CALLEE's param slot: turns the
-#      leak into a double free; the callee's arm binding already owns that side.
-#   4. Register it on the CALLER's slot instead: fixes the plain case and
-#      double-frees `f(arg)` followed by `match arg`, and the `W { s: String }`
-#      shape too. The tag-zero a consuming match performs does not disarm it.
-#
-# What is actually needed: enumerate the boxed `Option` envelopes among a struct
-# PAYLOAD's fields (nothing does today) and own them tag-guarded at drain, in
-# whichever frame does not also consume them.
+# The enumeration is `struct_payload_boxed_field_variants`, third sibling of
+# `boxed_enum_payload_variants` and `nested_boxed_enum_payload_variants`. It
+# needed no new cleanup action: `NestedBoxedEnumDrop` was already parameterized
+# on the inner tag's field index, and a struct payload only shifts that index by
+# the words of the fields ahead of the box.

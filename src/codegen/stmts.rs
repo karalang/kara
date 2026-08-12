@@ -5037,7 +5037,28 @@ impl<'ctx> super::Codegen<'ctx> {
                             // or inline at it, never both — so the two
                             // registrations cannot both fire for one arm and
                             // double-free.
-                            let mut nested = self.nested_boxed_enum_payload_variants(te);
+                            // Two populations, one registration loop. The
+                            // second (B-2026-08-12-15) is the box inside a
+                            // FIELD of an inline STRUCT payload, and it differs
+                            // from the first only in the inner tag's field
+                            // index — which the first always has at 1, so
+                            // lifting it into the shared tuple costs nothing
+                            // and keeps both under the same passthrough rule,
+                            // suppression set and eager-free.
+                            //
+                            // Disjoint by construction, so the two cannot both
+                            // fire for one arm and double-free: the first
+                            // requires the inline payload to BE an
+                            // `Option`/`Result`, the second requires it to be a
+                            // user struct.
+                            let struct_field_boxes = self.struct_payload_boxed_field_variants(te);
+                            let has_struct_field_box = !struct_field_boxes.is_empty();
+                            let mut nested: Vec<_> = self
+                                .nested_boxed_enum_payload_variants(te)
+                                .into_iter()
+                                .map(|(oe, ov, ie, iv, d)| (oe, ov, 1u32, ie, iv, d))
+                                .chain(struct_field_boxes)
+                                .collect();
                             // The RHS hands one of its arguments straight back
                             // (`fn id(r) -> r`). Nothing entry-copies the box,
                             // so registering here would make two owners of one
@@ -5059,6 +5080,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 for (
                                     outer_enum,
                                     outer_variant,
+                                    inner_tag_field,
                                     inner_enum,
                                     inner_variant,
                                     deeper,
@@ -5077,15 +5099,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // frees that String too. What was measured
                                     // missing is 32 bytes per construction, the
                                     // box itself, and that is all this frees.
-                                    self.track_nested_boxed_enum_var(
+                                    self.track_nested_boxed_enum_var_at_field(
                                         var_name,
                                         slot.ptr,
                                         outer_enum,
                                         outer_variant,
+                                        *inner_tag_field,
                                         inner_enum,
                                         inner_variant,
                                         deeper.clone(),
                                     );
+                                }
+                                // Recorded only once the registration actually
+                                // happened — a passthrough RHS clears `nested`
+                                // above and leaves the source as sole owner, and
+                                // a binding that owns nothing must not be
+                                // excepted from the arg-site retraction.
+                                if has_struct_field_box {
+                                    self.struct_field_boxed_payload_vars
+                                        .insert(var_name.to_string());
                                 }
                             }
                             let mut boxed = self.boxed_enum_payload_variants(te);

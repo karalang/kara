@@ -2035,8 +2035,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Identifier args are excluded for exactly that reason — owning
                 // one here would be the double free the zero used to prevent.
                 if let Some(param_te) = callee_entry_copies.clone() {
-                    if self.optres_arg_is_unowned_temp(&a.value) {
-                        self.track_optres_arg_temp(val, &param_te);
+                    // Two independent ownership questions about one temp — the
+                    // `{ptr,len,cap}` payload buffer and the boxed field
+                    // envelope — with different freshness rules and so
+                    // different answers. B-2026-08-12-15.
+                    let own_payload = self.optres_arg_is_unowned_temp(&a.value);
+                    let own_envelope = self.optres_arg_mints_field_envelope(&a.value);
+                    if own_payload || own_envelope {
+                        self.track_optres_arg_temp(val, &param_te, own_payload, own_envelope);
                     }
                 }
                 // B-2026-08-07-2 shapes 1+2 — the NESTED-box sibling of the
@@ -2063,8 +2069,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // is `b`'s box, and each was measured as a glibc `double free
                 // detected in tcache 2` at -O0 while the resolver was too
                 // shallow to reach `b`.
+                //
+                // B-2026-08-12-15 excepts the struct-FIELD subset, whose callee
+                // registers nothing (see `struct_field_boxed_payload_vars` and
+                // the `functions.rs` loop it points at). Retracting there is the
+                // move-with-nothing-on-the-other-side this whole block's sibling
+                // gates already guard against: measured as the row's 32 B per
+                // call, unchanged by the retraction being present or absent
+                // while the caller had no registration to retract — which is why
+                // gating it was a byte-identical no-op on the first attempt and
+                // is load-bearing only now that the let site arms one.
                 if let Some(src) = self.nested_boxed_owner_source_of(&a.value) {
-                    self.suppress_nested_boxed_drop_for_var(&src);
+                    if !self.struct_field_boxed_payload_vars.contains(src.as_str()) {
+                        self.suppress_nested_boxed_drop_for_var(&src);
+                    }
                 }
                 // B-2026-07-28-16 — the same move, but from a FIELD rather than
                 // a binding: `consume(nd.hp)` where `nd` is an owned struct with
@@ -2487,6 +2505,85 @@ impl<'ctx> super::Codegen<'ctx> {
     /// inside a fresh ctor — leaking as it did before, which is the safe
     /// direction and is recorded as the row's remaining scope rather than
     /// papered over.
+    /// B-2026-08-12-15 — ENVELOPE sibling of
+    /// [`Self::optres_arg_is_unowned_temp`]: does this argument expression MINT
+    /// the boxed field envelope it carries, rather than copy a pointer to one
+    /// some other frame still owns?
+    ///
+    /// A separate predicate rather than a widening of that one, because the two
+    /// ask about different allocations and the answers genuinely differ. That
+    /// one guards a `{ptr,len,cap}` PAYLOAD buffer, which a ctor can wrap
+    /// without minting (`Ok(x)` hands us `x`'s buffer) — hence its narrowness,
+    /// paid for by a self-host double free. This one guards a
+    /// `coerce_to_payload_words` ENVELOPE, which is minted by the construction
+    /// itself and is never named by the source program, so the only way an
+    /// argument can carry a LIVE one is by reading it out of a place that
+    /// already owns it.
+    ///
+    /// So the question is asked PER FIELD rather than per expression kind, and
+    /// only of the fields that actually box. Whatever is inside the boxing
+    /// field's own payload is irrelevant to who owns the ENVELOPE — that
+    /// allocation is minted by the `Option.Some(…)` construction itself,
+    /// however its payload was computed. Which is why an expression-kind
+    /// safe-list is the wrong shape here: the measured argument is
+    /// `cls(Result.Ok(W { o: Option.Some(Option.Some(n + i)) }))`, whose `n`
+    /// and `i` are IDENTIFIERS — refused by any place-based rule, and unable to
+    /// carry a box at all.
+    ///
+    /// DEFAULT-FALSE on everything else, `if`/`match`/block expressions
+    /// included: those can evaluate to a live binding's value, and the cost of
+    /// a false negative is the status-quo leak while a false positive is a
+    /// double free.
+    pub(super) fn optres_arg_mints_field_envelope(&self, arg: &Expr) -> bool {
+        match &arg.kind {
+            // Constructions only — a plain call returns a value whose envelope
+            // the callee minted and may still own.
+            ExprKind::Call { args, .. } => {
+                self.enum_name_of_expr(arg).is_some()
+                    && args
+                        .iter()
+                        .all(|a| self.optres_arg_mints_field_envelope(&a.value))
+            }
+            ExprKind::StructLiteral {
+                path,
+                fields,
+                spread,
+            } => {
+                // A spread copies fields wholesale out of another value, box
+                // pointers included, and nothing here can tell which.
+                if spread.is_some() {
+                    return false;
+                }
+                let Some(sname) = path.last() else {
+                    return false;
+                };
+                let Some(field_names) = self.struct_field_names.get(sname.as_str()) else {
+                    return false;
+                };
+                let Some(field_tes) = self.struct_field_type_exprs.get(sname.as_str()) else {
+                    return false;
+                };
+                fields.iter().all(|f| {
+                    let Some(fte) = field_names
+                        .iter()
+                        .position(|n| *n == f.name)
+                        .and_then(|i| field_tes.get(i))
+                    else {
+                        return false;
+                    };
+                    // A field that boxes nothing has no envelope to own, so its
+                    // initializer is unconstrained.
+                    if self.boxed_enum_payload_variants(fte).is_empty() {
+                        return true;
+                    }
+                    self.enum_name_of_expr(&f.value).is_some()
+                        && matches!(&f.value.kind, ExprKind::Call { .. })
+                })
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn optres_arg_is_unowned_temp(&self, arg: &Expr) -> bool {
         match &arg.kind {
             // A live binding or a place rooted at one: something else owns it.
@@ -2538,7 +2635,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// one arm over. It is inert either way: the name is never inserted into
     /// `variables`, so the name-keyed suppressors resolve nothing through it and
     /// cannot retarget one temp's cleanup at another's slot.
-    pub(super) fn track_optres_arg_temp(&mut self, val: BasicValueEnum<'ctx>, param_te: &TypeExpr) {
+    ///
+    /// `own_payload` / `own_envelope` select the two independent halves, each
+    /// gated by its own freshness predicate at the call site — see
+    /// [`Self::optres_arg_mints_field_envelope`] for why one answer cannot
+    /// serve both. They share this one spill so a temp needing both does not
+    /// get two slots holding the same value.
+    pub(super) fn track_optres_arg_temp(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        param_te: &TypeExpr,
+        own_payload: bool,
+        own_envelope: bool,
+    ) {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
         };
@@ -2549,8 +2658,39 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.builder.build_store(slot, val).is_err() {
             return;
         }
-        self.track_inline_option_payload_var("__optres_arg_tmp", slot, param_te);
-        self.track_inline_result_payload_var("__optres_arg_tmp", slot, param_te);
+        if own_payload {
+            self.track_inline_option_payload_var("__optres_arg_tmp", slot, param_te);
+            self.track_inline_result_payload_var("__optres_arg_tmp", slot, param_te);
+        }
+        if !own_envelope {
+            return;
+        }
+        // B-2026-08-12-15 — the same argument one level in: a box inside a
+        // FIELD of the temp's inline STRUCT payload (`cls(Result.Ok(W { o:
+        // Option.Some(Option.Some(n)) }))`). The two inline registrations above
+        // free `{ptr,len,cap}` payload words and cannot see it, and the callee
+        // declines this population by design (see the `functions.rs` loop), so
+        // the spilled temp is the only owner available — 32 B per call without
+        // it, which is the ONLY form of this row's leak that survives the
+        // let-site fix, precisely because it is the only one with no binding.
+        //
+        // No double free against the callee's arm: the param is entry-copied
+        // (this fn only runs when it is), so the arm's `__karac_drop_struct_<T>`
+        // frees the COPY's box and this frees the original's.
+        for (outer_enum, outer_variant, inner_tag_field, inner_enum, inner_variant, deeper) in
+            self.struct_payload_boxed_field_variants(param_te)
+        {
+            self.track_nested_boxed_enum_var_at_field(
+                "__optres_arg_tmp",
+                slot,
+                outer_enum,
+                outer_variant,
+                inner_tag_field,
+                inner_enum,
+                inner_variant,
+                deeper,
+            );
+        }
     }
 
     pub(super) fn callee_optres_param_entry_copied(

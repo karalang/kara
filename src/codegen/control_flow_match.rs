@@ -619,6 +619,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         &arm.pattern,
                         &arm.body,
                     );
+                    // B-2026-08-12-15 — the mirror image of the call above: not
+                    // a struct FIELD scrutinee whose box the struct's drop
+                    // owns, but a whole enum scrutinee whose inline struct
+                    // payload the ARM's drop takes over.
+                    self.suppress_struct_field_boxed_payload_arm_bind(scrutinee, &arm.pattern);
                     // B-2026-06-10-6 companion: the erased-`Option` drop
                     // switch can't classify an inline `String`/`Vec` payload,
                     // so the suppression above no-ops for it. Zero the source
@@ -7541,6 +7546,101 @@ impl<'ctx> super::Codegen<'ctx> {
     /// skips — the bound payload's own cleanup frees it exactly once. A
     /// `Some(_)` / `None` arm binds nothing, so the source free must still
     /// fire and no suppression happens.
+    /// B-2026-08-12-15 — hand the box inside an inline STRUCT payload's field
+    /// over to the arm that binds that struct out, by zeroing the box word in
+    /// the SCRUTINEE's slot so its let-site `NestedBoxedEnumDrop` skips.
+    ///
+    /// `let r: Result[W, i64] = …; match r { Result.Ok(w) => … }` over
+    /// `struct W { o: Option[Option[i64]] }` has two owners the moment the let
+    /// site is armed: this action, and the arm binding's own `StructDrop` —
+    /// `__karac_drop_struct_W` walks the `Option` field and frees the box. Both
+    /// fire, and it aborts with a glibc `free(): double free detected in
+    /// tcache 2` at `-O0`.
+    ///
+    /// The arm wins rather than the scrutinee, which is the direction the rest
+    /// of this family already moves ownership in (`suppress_destructured_enum_
+    /// payload_cleanup`, the inline `Option`/`Result` cap-zeroes above): a
+    /// binding that outlives the arm needs the value, so the source disarms.
+    ///
+    /// GATED ON THE ARM ACTUALLY BINDING, via the same `pattern_consumes_field`
+    /// the inline siblings use. `Result.Ok(_)` registers no `StructDrop`, so
+    /// zeroing there would orphan the box — measured clean today precisely
+    /// because the scrutinee's action stays armed for it.
+    ///
+    /// Zeroes the WORD, not the tag, for the reason
+    /// `suppress_nested_boxed_drop_for_var` gives about this action's two-tag
+    /// guard: `Result`'s `Ok` is tag 0, so a tag-zero leaves the outer guard
+    /// passing. The word index comes off the queued action
+    /// (`inner_tag_field + 1`) so it cannot drift from
+    /// `struct_payload_boxed_field_variants`' offset arithmetic.
+    pub(super) fn suppress_struct_field_boxed_payload_arm_bind(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        if self.pattern_binding_is_borrow {
+            return;
+        }
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        if !self.struct_field_boxed_payload_vars.contains(name.as_str()) {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        let Some(variant) = path.last() else {
+            return;
+        };
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return;
+        };
+        // The registration is per-VARIANT (a `Result` can arm both `Ok` and
+        // `Err`), and this store lands in the arm's own block — so it must
+        // disarm only the action whose variant this arm is, or an `Err` arm
+        // would strand the `Ok` box.
+        let arm_tag = ["Option", "Result"]
+            .iter()
+            .filter(|e| path.len() < 2 || path[path.len() - 2] == **e)
+            .find_map(|e| {
+                self.enum_layouts
+                    .get(*e)?
+                    .tags
+                    .get(variant.as_str())
+                    .copied()
+            });
+        let Some(arm_tag) = arm_tag else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        for action in self.scope_cleanup_actions.iter().flatten() {
+            if let crate::codegen::state::CleanupAction::NestedBoxedEnumDrop {
+                enum_slot,
+                enum_ty,
+                outer_tag,
+                inner_tag_field,
+                ..
+            } = action
+            {
+                if *enum_slot != slot.ptr || *outer_tag != arm_tag {
+                    continue;
+                }
+                if let Ok(w0) = self.builder.build_struct_gep(
+                    *enum_ty,
+                    slot.ptr,
+                    inner_tag_field + 1,
+                    "nbox.armbind.w0",
+                ) {
+                    let _ = self.builder.build_store(w0, i64_t.const_zero());
+                }
+            }
+        }
+    }
+
     pub(super) fn suppress_inline_option_payload_cleanup(
         &self,
         scrutinee: &Expr,

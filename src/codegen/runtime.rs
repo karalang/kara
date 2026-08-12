@@ -1693,6 +1693,53 @@ impl<'ctx> super::Codegen<'ctx> {
         inner_variant: &str,
         deeper_tags: Vec<u64>,
     ) {
+        self.track_nested_boxed_enum_var_at_field(
+            name,
+            enum_slot,
+            outer_enum,
+            outer_variant,
+            1,
+            inner_enum,
+            inner_variant,
+            deeper_tags,
+        );
+    }
+
+    /// Peer of [`Self::track_nested_boxed_enum_var`] that takes the inner
+    /// enum's field index explicitly instead of assuming 1. B-2026-08-12-15.
+    ///
+    /// 1 is right whenever the inline payload IS the inner enum, which is the
+    /// only shape `nested_boxed_enum_payload_variants` can report. It is wrong
+    /// when the box is inside a FIELD of an inline struct payload
+    /// (`Result[W, i64]` over `struct W { n: i64, o: Option[Option[i64]] }`),
+    /// where the flattened payload puts the inner tag after that field's
+    /// predecessors — see [`Self::struct_payload_boxed_field_variants`], which
+    /// computes the index this takes.
+    ///
+    /// Everything downstream is already index-driven rather than hardcoded:
+    /// the `NestedBoxedEnumDrop` walk reads the tag at `inner_tag_field` and
+    /// the box word at `inner_tag_field + 1`, and
+    /// `suppress_nested_boxed_payload_move` zeroes the same computed word off
+    /// the queued action. So this widens the enumeration only — no cleanup or
+    /// suppression path needed a change to follow it.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each parameter is a distinct layout coordinate of the two-tag \
+                  walk (outer/inner enum and variant, the inner tag's field \
+                  index, plus the deeper tag chain); bundling them into a \
+                  struct would move the arity, not remove it"
+    )]
+    pub(super) fn track_nested_boxed_enum_var_at_field(
+        &mut self,
+        name: &str,
+        enum_slot: PointerValue<'ctx>,
+        outer_enum: &str,
+        outer_variant: &str,
+        inner_tag_field: u32,
+        inner_enum: &str,
+        inner_variant: &str,
+        deeper_tags: Vec<u64>,
+    ) {
         let Some(outer) = self.enum_layouts.get(outer_enum) else {
             return;
         };
@@ -1708,8 +1755,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         // The outer payload area starts at field 1 and the inner enum is laid
-        // there from its own field 0, so the inner TAG is outer field 1 and the
-        // inner box word is the field after it. `coerce_to_payload_words`
+        // there from its own field 0, so the inner TAG is outer field 1 —
+        // shifted by any FIELDS AHEAD OF IT when the payload is a struct — and
+        // the inner box word is the field after it. `coerce_to_payload_words`
         // FLATTENS the payload, which is what makes this plain index arithmetic
         // rather than a nested GEP.
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
@@ -1719,7 +1767,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 enum_ty,
                 outer_tag,
                 inner_tag,
-                inner_tag_field: 1,
+                inner_tag_field,
                 deeper_tags,
             });
         }

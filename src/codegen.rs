@@ -1267,6 +1267,26 @@ pub(super) struct Codegen<'ctx> {
     /// there is. This set exists purely so the passthrough rule below can ask
     /// "is this source armed?" without granting membership in the move rules.
     pub(crate) nested_boxed_payload_vars: std::collections::HashSet<String>,
+    /// B-2026-08-12-15 — the SUBSET of `nested_boxed_payload_vars` above whose
+    /// box lives inside a FIELD of an inline user-STRUCT payload
+    /// (`Result[W, i64]` over `struct W { o: Option[Option[i64]] }`) rather
+    /// than inside an inline `Option`/`Result` payload.
+    ///
+    /// Exists for one question, at one site: whether a by-value call should
+    /// RETRACT the caller's registration. For the parent population it must —
+    /// the callee's owned non-escaping param registers its own
+    /// `NestedBoxedEnumDrop`, so leaving the caller armed makes two owners.
+    /// For this subset it must not: the callee deliberately registers nothing
+    /// (see the `functions.rs` loop's note — the arm that binds the struct out
+    /// runs `__karac_drop_struct_<T>` and is already the callee-side owner), so
+    /// retracting hands the caller's box to nobody and it leaks, which is the
+    /// bug this row is.
+    ///
+    /// Exactly the role `boxed_struct_payload_vars` plays for the DIRECT-box
+    /// family one line up in that same arg loop, and for the same underlying
+    /// asymmetry: a STRUCT payload has a callee-side move-out mirror and a bare
+    /// enum payload does not.
+    pub(crate) struct_field_boxed_payload_vars: std::collections::HashSet<String>,
     /// B-2026-08-06-32 — result binding of a passthrough call → the binding
     /// that actually owns its nested box (`let back = id(b)` ⇒ `back → b`).
     ///
@@ -7951,6 +7971,7 @@ impl<'ctx> Codegen<'ctx> {
             boxed_moved_in_vars: std::collections::HashSet::new(),
             boxed_struct_payload_vars: std::collections::HashSet::new(),
             nested_boxed_payload_vars: std::collections::HashSet::new(),
+            struct_field_boxed_payload_vars: std::collections::HashSet::new(),
             nested_boxed_passthrough_owner_alias: std::collections::HashMap::new(),
             refinement_bases: HashMap::new(),
             refinement_generic_params: HashMap::new(),

@@ -2158,6 +2158,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // is returned or forwarded keeps no registration, so the
                     // terminal consumer stays the only owner (B-2026-08-05-7's
                     // argument, reused).
+                    //
+                    // DELIBERATELY NOT widened to B-2026-08-12-15's
+                    // struct-field population (`Result[W, i64]` over
+                    // `struct W { o: Option[Option[i64]] }`), though the
+                    // let-site peer of this loop is. That box already HAS a
+                    // callee-side owner — the arm that binds `W` out runs
+                    // `__karac_drop_struct_W`, which frees it — so registering
+                    // here makes two, measured as a glibc `double free
+                    // detected in tcache 2` on all three of the temp-argument,
+                    // bound-argument and matched-after-call forms. It is the
+                    // same asymmetry the `inner_struct.is_none()` gate above
+                    // encodes: a STRUCT payload has a move-out mirror and a
+                    // bare enum payload does not.
                     for (outer_enum, outer_variant, inner_enum, inner_variant, deeper) in
                         self.nested_boxed_enum_payload_variants(&mono_ty)
                     {

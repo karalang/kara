@@ -5728,8 +5728,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.suppress_inline_option_result_binding_move(&a.value);
                     }
                     if let Some(param_te) = entry_copied {
-                        if self.optres_arg_is_unowned_temp(&a.value) {
-                            self.track_optres_arg_temp(val, &param_te);
+                        // Both halves, for the reason the free-fn site gives:
+                        // the payload buffer and the boxed field envelope are
+                        // separate allocations with separate freshness rules.
+                        // B-2026-08-12-15.
+                        let own_payload = self.optres_arg_is_unowned_temp(&a.value);
+                        let own_envelope = self.optres_arg_mints_field_envelope(&a.value);
+                        if own_payload || own_envelope {
+                            self.track_optres_arg_temp(val, &param_te, own_payload, own_envelope);
                         }
                     }
                     compiled_args.push(val.into());
