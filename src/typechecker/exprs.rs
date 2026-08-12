@@ -3954,7 +3954,8 @@ impl<'a> super::TypeChecker<'a> {
                          s[i] would hide an O(n) scan — Strings are UTF-8 encoded \
                          and characters\n  \
                          are variable-width.\n  \
-                         help: use s.char_at(i) for the i-th character (O(n)),\n        \
+                         help: use s.char_at(i) for the i-th character (O(n)) \
+                         — it returns Option[char], so match it or unwrap it,\n        \
                          or s.bytes()[i] for raw byte access (O(1))"
                             .to_string(),
                         expr.span.clone(),
