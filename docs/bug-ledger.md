@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 52 | 0 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
-| other | 29 | 1 |
+| other | 30 | 1 |
 | use-after-free | 18 | 0 |
 
 ### By surface
@@ -116,25 +116,25 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 46 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
-| cli | 29 | 1 |
+| cli | 29 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
-| parser | 14 | 0 |
+| parser | 15 | 1 |
 | effect | 5 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1140 surfaced · 5 open · 1123 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1141 surfaced · 5 open · 1124 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-35 | 2026-08-11 | cli | high | `karac fix` DESTROYS SOURCE, silently and while reporting success, when the machine-applicable diagnostic sits INSIDE AN F-STRING INTERPOLATION. The replacement span is applied at the wrong file offset -- it lands near the top of the file instead of at the diagnostic site -- truncating mid-token and deleting everything between. It prints `applied 1 fix(es)` and exits 0; there is no backup and no dry-run, so the original is gone. MINIMAL REPRO (5 lines): `fn f(xs: mut Slice[i64]) -> i64 { return xs.len(); }` / `fn g(xs: mut Slice[i64]) {` / `    println(f"{f(mut xs)}");` / `}` / `fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }`. The diagnostic is the correct one -- `3:18: this argument is already a mut-ref; drop the mut marker` -- and the fix is a 4-character deletion. After `karac fix` the file is 3 lines and begins `fn f(xs: mut Slice[i` + `xs)}");`: the edit was applied at roughly byte 19 rather than at byte ~96 where line 3 col 18 actually is. NOT a multibyte/UTF-8 offset bug: probed with an ASCII-only file, a file with em-dashes near the site, and a file with 30 em-dash comment lines before the site -- all three fix CORRECTLY. The same `drop the mut marker` fix applied to `return f(mut xs)` OUTSIDE an f-string also fixes correctly in the same file shape. The single distinguishing factor is that the argument sits in an f-string hole. SEVERITY HIGH because of the blast radius rather than the shape: CLAUDE.md directs `karac fix` as the PRIMARY fix path for machine-applicable diagnostics in the Mend loop, so this is reachable by the documented workflow on any file that formats a mut-ref call into a string -- which is the ordinary way these katas print results. FIX DIRECTION: the fix's replacement range is presumably computed against the interpolation's sub-expression source rather than the enclosing file, so it needs the hole's absolute file offset added back before the edit is applied. Worth auditing every machine-applicable fix for the same relative-span assumption, not just this one, and worth refusing to write when a computed span does not re-lex to the token the diagnostic named. | karac fix — machine-applicable edit span for a diagnostic inside an f-string interpolation |
 | B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
 | B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
 | B-2026-08-12-26 | 2026-08-12 | codegen | medium | ELEMENT-TO-ELEMENT index assign LEAKS one buffer per assignment: `ps[0] = ps[1]` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 400 B in 40 allocations, one per assign. Output is correct on all three backends -- this is a pure leak, not a miscompile. | `src/codegen/stmts.rs`, the `ExprKind::Index` assignment arm -- `emit_displaced_index_elem_drop` + `compile_index_store` with an INDEX rhs |
 | B-2026-08-12-27 | 2026-08-12 | codegen | high | A heap FIELD read out of a Vec element (`ps[0].word`) is a SHALLOW ALIAS of the container's buffer on both compiled backends. Consumed into any owning destination it double-frees -- EIGHT measured: struct-literal field, `Vec.push`, field assign, index assign, `Map.insert`, `return`, tuple construction, enum payload. A plain `let w = ps[0].word` instead cap-zeroes the SOURCE, so mutating `w` dangles the element and it reads back GARBAGE with no abort. The interpreter copies and `karac check` accepts every one of these programs. | the FieldAccess read of a Vec element; `clone_owned_vec_index_element` clones a WHOLE-element read and has no field-read sibling, while `suppress_place_field_struct_move_source` (called only from the three `let` sites in stmts.rs) cap-zeroes the source for the `let` shape |
+| B-2026-08-12-30 | 2026-08-12 | parser | medium | GENERIC PARAMETERS, TRAIT BOUNDS and WHERE-CLAUSES are absent from the span walker ENTIRELY -- not a missing field but a missing subtree. `GenericParams::span`, `GenericParam::span`, `GenericParam::variance_span`, `TraitBound::span` and `WhereClause::span` are never visited by `visit_item_spans` or `visit_item_spans_mut`, so under `module.rs`'s multi-module rebase they keep their FILE-LOCAL offsets while every span around them shifts -- the exact condition `module.rs`'s own comment warns about ('a span this walk MISSES stays at its file-local offset and can still collide'). | `src/span_visitor.rs` -- zero references to `generic_params`, `bounds`, `where_clause` or `supertraits` in either the read-only or the `_spans_mut` half |
 
 ### Wontfix (2)
 
@@ -147,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1140 surfaced
 
 </details>
 
-### Fixed (1123)
+### Fixed (1124)
 
-<details><summary>1123 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1124 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2292,6 +2292,72 @@ two lanes, diff the exact bytes fed to each before believing the lanes differ.
 Saving a normalised copy for one side and the original for the other is enough to
 invent a divergence out of nothing -- and it survived a `git stash`-based
 with/without check, because both halves of that check ran on the same wrong file. |
+| B-2026-08-11-35 | cli | high | `karac fix` DESTROYS SOURCE, silently and while reporting success, when the machine-applicable diagnostic sits INSIDE AN F-STRING INTERPOLATION | FIXED by 35d7fec, on both the reported trigger and the class under it.
+
+ROOT CAUSE, exactly as the row's FIX DIRECTION guessed. An interpolation hole
+is re-parsed standalone inside a synthetic `fn __interp__() { ... }` wrapper,
+and `span_visitor::shift_expr_spans` rebases its spans to absolute file
+coordinates afterwards. `CallArg::mut_marker_span` -- added later
+(B-2026-08-10-2) and the field the `drop the mut marker` edit is built from --
+was NOT in the walker, so it alone kept the wrapper's coordinates while
+`arg.span` and `arg.value.span` moved. `emit_marker_deletion` then computed
+`end = arg.value.span.offset` (absolute, ~96) minus a marker offset of ~19
+(wrapper-relative), producing a 77-byte deletion starting at byte 19. That is
+why the diagnostic and its caret were both correct while the edit was not, and
+why the row's ASCII / em-dash probes all came back clean: it was never a byte
+arithmetic problem.
+
+THE AUDIT THE ROW ASKED FOR ("worth auditing every machine-applicable fix for
+the same relative-span assumption") was run mechanically rather than by
+inspection: for every `pub <field>: Span | Option<Span>` in `src/ast/*.rs`,
+check the field name appears in BOTH halves of `span_visitor.rs`. It found
+SEVEN unvisited fields, all auxiliary token spans added after the walker was
+written: `CallArg::mut_marker_span`, `StructDef::struct_keyword_span`,
+`StructDef::kind_keyword_span`, `StructField::mut_keyword_span`,
+`TraitMethod::self_span`, `EffectResourceDecl::provider_trait_span`,
+`GenericParam::variance_span`.
+
+Six live inside structs the walker already descends into and are one line each;
+all six are fixed here. That matters beyond f-strings: `module.rs` rebases every
+span through the SAME walker to give multi-module projects unique offsets, and
+its own comment already warns that "a span this walk MISSES stays at its
+file-local offset and can still collide". Three of the six --
+`struct_keyword_span`, `kind_keyword_span`, `mut_keyword_span` -- are precisely
+what `ownership/concurrent_shared.rs` builds the `par struct` migration's
+multi-edit `fix_diff` from, so the same corruption was reachable in project mode
+with no f-string in sight.
+
+The seventh is not a missing line. Generic parameters, trait bounds and
+where-clauses are absent from the walker in their entirety (zero references to
+`generic_params`, `bounds`, `where_clause`, `supertraits`; `TraitBound` and
+`WhereClause` are never named). That is a subtree needing a new traversal in
+both halves, so it is split out as B-2026-08-12-30 rather than ridden in here.
+
+AND A NET UNDER THE WHOLE CLASS, which is the part that generalises. Every
+machine-applicable edit is an (offset, length, replacement) triple and nothing
+checked that the offset still meant what the diagnostic meant -- the existing
+out-of-bounds check passed here, because the bogus range sat comfortably inside
+the file. `cmd_fix` now re-parses the rewrite and REFUSES TO WRITE when it has
+more parse errors than the input. "No worse" rather than "clean", deliberately:
+the `has_parse_errors` branch applies recovery edits to a file that does not
+parse, and each pass is meant to reduce the count, not reach zero in one go.
+This is the row's "refusing to write when a computed span does not re-lex to the
+token the diagnostic named", implemented as a whole-file property instead of a
+per-token one -- it covers fix producers that do not exist yet.
+
+VERIFIED, both layers independently. With the span fix in place the repro
+rewrites to `f(xs)` and `karac check` passes. With ONLY the span fix reverted,
+the guard alone blocks the edit, exits 1, and leaves the file byte-identical to
+the original -- so neither layer is load-bearing alone.
+
+PINNED by `fix_inside_an_fstring_interpolation_edits_only_the_marker` on BOTH
+the unlabeled form and the labeled one (`f(xs: mut xs)` is the shape
+`mut_marker_span` exists for at all, since `CallArg::span` starts at the label).
+It asserts the WHOLE resulting file rather than the edited line, because the
+failure mode is collateral deletion elsewhere, and then re-runs `karac check` to
+confirm the deletion actually resolves the diagnostic that prescribed it.
+
+Suite green at 13491 passed / 0 failed across 116 targets; clippy and fmt clean. |
 | B-2026-08-12-2 | codegen | medium | A `Map` field of an `Ok` payload leaks ~72 B per call when the `Result` is LET-BOUND before the match; matching the producing call INLINE is clean, a… | FIXED by c081b16.
 
 The match arm's struct-payload binding is now admitted when the struct's only
