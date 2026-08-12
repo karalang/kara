@@ -22804,6 +22804,58 @@ fn main() {
             .as_deref(),
             Some("region\nregion\n"),
         );
+
+        // B-2026-08-12-13 restores the target's `cap` through the same guard so
+        // it stays the buffer's sole owner. A `Vec[i64]` field re-read three
+        // times must still read its ELEMENTS back, which is what would break if
+        // the restore handed back a wrong capacity.
+        assert_eq!(
+            run_program(
+                "struct S { xs: Vec[i64] }\n\
+                 fn main() {\n\
+                     let mut box_: Vec[S] = Vec.new();\n\
+                     let mut inner: Vec[i64] = Vec.new();\n\
+                     inner.push(4); inner.push(5); inner.push(6);\n\
+                     box_.push(S { xs: inner });\n\
+                     let mut got: Vec[i64] = Vec.new();\n\
+                     got = box_[0].xs;\n\
+                     got = box_[0].xs;\n\
+                     got = box_[0].xs;\n\
+                     println(f\"{got.len()} {got[0]} {got[2]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("3 4 6\n"),
+        );
+
+        // Interleaved DISTINCT and REPEATED sources through one target. The
+        // distinct steps must still free the displaced buffer (the
+        // B-2026-08-12-4 arm) while the repeated step must not (the guard), so
+        // this is the case where getting either half wrong shows up: a missed
+        // free leaks, an unguarded free reads back garbage.
+        assert_eq!(
+            run_program(
+                "struct S { s: String }\n\
+                 fn main() {\n\
+                     let mut box_: Vec[S] = Vec.new();\n\
+                     let mut i: i64 = 0;\n\
+                     while i < 3 {\n\
+                         let mut nm = String.new();\n\
+                         nm.push_str(\"elem\");\n\
+                         box_.push(S { s: nm });\n\
+                         i = i + 1;\n\
+                     }\n\
+                     let mut cur = String.new();\n\
+                     cur = box_[0].s;\n\
+                     cur = box_[1].s;\n\
+                     cur = box_[1].s;\n\
+                     cur = box_[2].s;\n\
+                     println(cur);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("elem\n"),
+        );
     }
 
     #[test]

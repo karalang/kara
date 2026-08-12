@@ -4751,42 +4751,56 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Zero a `{ptr,len,cap}` slot's `len`/`cap` when its buffer pointer is
-    /// the SAME as the incoming value's, so a following eager free — which is
-    /// cap-gated ([`Self::emit_free_vec_buffer_if_owned`]) and whose element
-    /// walks are len-gated — becomes a no-op.
+    /// Keep the target's OWNERSHIP of its buffer when the incoming value
+    /// aliases it: neutralize the slot header so a following eager free — which
+    /// is cap-gated ([`Self::emit_free_vec_buffer_if_owned`]) and whose element
+    /// walks are len-gated — no-ops, and return the incoming value with the
+    /// target's original `cap` restored so the store hands ownership back.
+    /// Returns `incoming` unchanged when the two do not alias.
     ///
     /// B-2026-08-12-4. The displaced-value free assumes the old value and the
-    /// incoming one are distinct buffers, which every other arm arranges
-    /// structurally. The place-field-move arm cannot: `cur = stats[0].region`
-    /// hands `cur` the element's buffer and cap-zeroes the source, so running
-    /// the SAME assignment twice reads a source that now aliases `cur` itself
-    /// — and freeing "the old value" would free the buffer about to be stored
-    /// back. Measured: `cur` printed its content correctly the first time and
-    /// garbage the second, with valgrind reporting two invalid reads. A
-    /// pointer compare is the exact discriminator, and it costs one `icmp` plus
-    /// two `select`s on a path that already loads the header.
+    /// incoming one are distinct buffers, which every other arm of
+    /// `trigger_eager_free` arranges structurally. The place-field-move arm
+    /// cannot: `cur = stats[0].region` hands `cur` the element's buffer and
+    /// cap-zeroes the source, so running the SAME assignment twice reads a
+    /// source that now aliases `cur` itself — and freeing "the old value" would
+    /// free the buffer about to be stored back. Measured: `cur` printed its
+    /// content correctly the first time and garbage the second, with valgrind
+    /// reporting two invalid reads.
     ///
-    /// Emitted AFTER the incoming value is computed, so `val`'s pointer is
-    /// final. A non-struct incoming value (no `{ptr,len,cap}` header to
-    /// compare) leaves the slot untouched.
-    pub(super) fn zero_vec_slot_header_if_aliases(
+    /// B-2026-08-12-13 is why the `cap` is restored rather than left at the
+    /// source's zero. Suppressing the free alone made the read correct but left
+    /// the buffer with NO owner — source and target both carried `cap == 0`, so
+    /// neither freed it at scope exit and it leaked, one buffer per repeated
+    /// re-read. Carrying the target's own `cap` across keeps the target the
+    /// single owner, which is what it was before the aliasing assignment.
+    ///
+    /// A pointer compare is the exact discriminator, and the whole guard costs
+    /// one `icmp` and three `select`s on a path that already loads the header.
+    ///
+    /// Emitted AFTER the incoming value is computed, so its pointer is final. A
+    /// non-struct incoming value (no `{ptr,len,cap}` header to compare) is
+    /// returned untouched.
+    pub(super) fn keep_aliased_slot_ownership(
         &mut self,
         vec_alloca: PointerValue<'ctx>,
         incoming: BasicValueEnum<'ctx>,
-    ) {
+    ) -> BasicValueEnum<'ctx> {
         if !incoming.is_struct_value() {
-            return;
+            return incoming;
         }
         let inc = incoming.into_struct_value();
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
         let Ok(new_data) = self.builder.build_extract_value(inc, 0, "ali.new.data") else {
-            return;
+            return incoming;
         };
-        if !new_data.is_pointer_value() {
-            return;
+        let Ok(new_cap) = self.builder.build_extract_value(inc, 2, "ali.new.cap") else {
+            return incoming;
+        };
+        if !new_data.is_pointer_value() || !new_cap.is_int_value() {
+            return incoming;
         }
         let (Ok(data_pp), Ok(len_pp), Ok(cap_pp)) = (
             self.builder
@@ -4796,13 +4810,23 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder
                 .build_struct_gep(vec_ty, vec_alloca, 2, "ali.cap.pp"),
         ) else {
-            return;
+            return incoming;
         };
         let old_data = self
             .builder
             .build_load(ptr_ty, data_pp, "ali.old.data")
             .unwrap()
             .into_pointer_value();
+        let old_cap = self
+            .builder
+            .build_load(i64_t, cap_pp, "ali.old.cap")
+            .unwrap()
+            .into_int_value();
+        let old_len = self
+            .builder
+            .build_load(i64_t, len_pp, "ali.old.len")
+            .unwrap()
+            .into_int_value();
         let same = self
             .builder
             .build_int_compare(
@@ -4812,14 +4836,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 "ali.same",
             )
             .unwrap();
+        // Neutralize the slot so every free below reads an empty, unowned
+        // header. Loads above already captured what the restore needs.
         let zero = i64_t.const_zero();
-        for (pp, nm) in [(len_pp, "ali.len"), (cap_pp, "ali.cap")] {
-            let old = self.builder.build_load(i64_t, pp, nm).unwrap();
+        for (pp, old) in [(len_pp, old_len), (cap_pp, old_cap)] {
             let masked = self
                 .builder
-                .build_select(same, zero, old.into_int_value(), "ali.masked")
+                .build_select(same, zero, old, "ali.masked")
                 .unwrap();
             self.builder.build_store(pp, masked).unwrap();
+        }
+        // Hand ownership back through the value that is about to be stored.
+        let kept_cap = self
+            .builder
+            .build_select(same, old_cap, new_cap.into_int_value(), "ali.kept.cap")
+            .unwrap();
+        match self.builder.build_insert_value(inc, kept_cap, 2, "ali.val") {
+            Ok(v) => v.into_struct_value().into(),
+            Err(_) => incoming,
         }
     }
 

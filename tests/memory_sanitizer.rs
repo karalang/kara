@@ -40864,6 +40864,55 @@ fn main() {
     }
 
     #[test]
+    fn asan_repeated_place_field_move_assign_keeps_one_owner() {
+        // B-2026-08-12-13 — the ALIASING half of the arm above. Reading the
+        // same already-moved place twice used to leave the buffer with NO
+        // owner: the first `cur = box[j].s` cap-zeroes the source and hands
+        // `cur` the buffer, and the second reads a place that now aliases
+        // `cur`, so the alias guard's neutralized header was stored back over
+        // it and source and target both carried `cap == 0`. Neither freed it.
+        // The guard now carries the target's own `cap` across, so `cur` stays
+        // the single owner.
+        //
+        // TWO reads PER ELEMENT, not many reads of one: the leak is one buffer
+        // per element that gets re-read, and re-reading a single element 100
+        // times still leaks exactly one block — which LSan can miss as
+        // still-reachable, the trap B-2026-08-12-4 fell into. 150 elements
+        // read twice each leaks 150 blocks (2400 bytes measured pre-fix).
+        //
+        // The companion value pin is
+        // `test_e2e_repeated_place_field_move_assign_reads_correctly`: this
+        // fixture's `.len()` would read correctly off a dangling pointer, so
+        // the content check lives there.
+        assert_clean_asan_run(
+            r#"
+struct S { s: String }
+fn main() {
+    let mut box_: Vec[S] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 150 {
+        let mut nm = String.new();
+        nm.push_str("region-");
+        nm.push_str("payload");
+        box_.push(S { s: nm });
+        i = i + 1;
+    }
+    let mut cur = String.new();
+    let mut j: i64 = 0;
+    while j < box_.len() {
+        cur = box_[j].s;
+        cur = box_[j].s;
+        j = j + 1;
+    }
+    println(f"{cur.len()}");
+}
+"#,
+            &["14"],
+            "repeated_place_field_move_assign_keeps_one_owner",
+        );
+    }
+
+    #[test]
     fn asan_chained_scalar_to_string_no_leak_no_double_free() {
         // B-2026-08-11-22 — the fix reroutes which calls reach the String-copy
         // path, and that path both mallocs a fresh buffer AND frees the

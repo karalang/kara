@@ -7438,7 +7438,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // once the fresh clone replaces it.
                 let rhs_is_heap_vec_index =
                     !rhs_is_owned_param && self.expr_is_heap_vec_index(value);
-                let val = if rhs_is_owned_param {
+                let mut val = if rhs_is_owned_param {
                     self.maybe_defensive_copy_param_arg(value, val)
                 } else {
                     self.clone_owned_vec_index_element(value, val)?
@@ -7783,7 +7783,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // free below no-op on it. The other arms are
                             // structurally distinct buffers and skip this.
                             if rhs_is_place_field_move {
-                                self.zero_vec_slot_header_if_aliases(slot.ptr, val);
+                                val = self.keep_aliased_slot_ownership(slot.ptr, val);
                             }
                             // B-2026-08-03-2 (class 1) — the DISPLACED old
                             // container's element Drop BODIES. Everything below
