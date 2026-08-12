@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 239 | 0 |
-| leak | 170 | 1 |
+| leak | 171 | 1 |
 | double-free | 122 | 1 |
 | codegen-gap | 105 | 1 |
 | run-vs-build | 103 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 822 | 3 |
+| codegen | 823 | 3 |
 | typecheck | 158 | 1 |
 | interp | 138 | 0 |
 | ownership | 46 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1141 surfaced · 5 open · 1124 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1142 surfaced · 5 open · 1125 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1141 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
 | B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
-| B-2026-08-12-26 | 2026-08-12 | codegen | medium | ELEMENT-TO-ELEMENT index assign LEAKS one buffer per assignment: `ps[0] = ps[1]` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 400 B in 40 allocations, one per assign. Output is correct on all three backends -- this is a pure leak, not a miscompile. | `src/codegen/stmts.rs`, the `ExprKind::Index` assignment arm -- `emit_displaced_index_elem_drop` + `compile_index_store` with an INDEX rhs |
 | B-2026-08-12-27 | 2026-08-12 | codegen | high | A heap FIELD read out of a Vec element (`ps[0].word`) is a SHALLOW ALIAS of the container's buffer on both compiled backends. Consumed into any owning destination it double-frees -- EIGHT measured: struct-literal field, `Vec.push`, field assign, index assign, `Map.insert`, `return`, tuple construction, enum payload. A plain `let w = ps[0].word` instead cap-zeroes the SOURCE, so mutating `w` dangles the element and it reads back GARBAGE with no abort. The interpreter copies and `karac check` accepts every one of these programs. | the FieldAccess read of a Vec element; `clone_owned_vec_index_element` clones a WHOLE-element read and has no field-read sibling, while `suppress_place_field_struct_move_source` (called only from the three `let` sites in stmts.rs) cap-zeroes the source for the `let` shape |
 | B-2026-08-12-30 | 2026-08-12 | parser | medium | GENERIC PARAMETERS, TRAIT BOUNDS and WHERE-CLAUSES are absent from the span walker ENTIRELY -- not a missing field but a missing subtree. `GenericParams::span`, `GenericParam::span`, `GenericParam::variance_span`, `TraitBound::span` and `WhereClause::span` are never visited by `visit_item_spans` or `visit_item_spans_mut`, so under `module.rs`'s multi-module rebase they keep their FILE-LOCAL offsets while every span around them shifts -- the exact condition `module.rs`'s own comment warns about ('a span this walk MISSES stays at its file-local offset and can still collide'). | `src/span_visitor.rs` -- zero references to `generic_params`, `bounds`, `where_clause` or `supertraits` in either the read-only or the `_spans_mut` half |
+| B-2026-08-12-31 | 2026-08-12 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS mentions the container through a CALL: `ps[0] = mk(ps[0].n + k)` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 400 B in 40 allocations, one per assign. B-2026-08-12-26 fixed the index-read RHS; this is the same displaced occupant with a different RHS shape. | — |
 
 ### Wontfix (2)
 
@@ -147,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1141 surfaced
 
 </details>
 
-### Fixed (1124)
+### Fixed (1125)
 
-<details><summary>1124 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1125 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3255,6 +3255,73 @@ use-after-move the gate was silently missing. It is not par-specific -- the same
 double move in straight-line code reports the identical ownership WARNING and
 `karac check` passes. Use-after-move is a warning language-wide; nothing about
 `par` changes it. |
+| B-2026-08-12-26 | codegen | medium | ELEMENT-TO-ELEMENT index assign LEAKS one buffer per assignment: `ps[0] = ps[1]` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 4… | FIXED by af532fb. `asan_index_assign_elem_to_elem_no_leak` is flipped from
+`#[ignore]` to live and extended; it pins at 1355 B in 160 allocations against
+the pre-fix compiler, on the DEFAULT leg (a `Vec` keeps the allocation alive, so
+unlike the boxed-envelope family this is not an -O0-only shape).
+
+THE ROW'S SUGGESTED MECHANISM WAS WRONG, and its own advice is what found that
+out -- "worth reading the emitted IR for the count of clone calls at this site
+before assuming". There is exactly ONE clone, so neither "the clone TEMP created
+for the read, freed by nobody" nor "a second clone made and discarded" is the
+leak. The whole statement is one clone and one store:
+
+    vidx.ok:  call @karac_clone_struct_Pair(ps[1] -> %vidx.elem.clone)
+    v.st.ok:  store %vidx.elem.cloned -> ps[0]        ; and no free
+    cleanup.adrop.body: drop each live element        ; scope exit only
+
+Slot 0's old buffer is overwritten and never freed. THE LEAK IS THE DISPLACED
+OCCUPANT -- the LHS's previous contents, not anything about the read. Confirmed
+by size: `ps[0] = ps[1]` loses 10 B per assign (slot 0 held `alpha..`) and
+`ps[1] = ps[0]` loses 8 B (slot 1 held `beta..`), i.e. it tracks the LHS.
+
+`emit_displaced_index_elem_drop` exists to free exactly that and DECLINED. Its
+"an RHS mentioning the container declines (uncertain => silent)" guard matched
+`ps[1]`. The guard is right in general -- dropping the displaced element before
+the RHS is read would free a buffer the RHS still needs -- but it is wrong at
+this site, because the emitter runs after `clone_owned_vec_index_element` has
+already deep-copied the RHS, and the value in hand no longer aliases anything.
+
+THE SELF-ASSIGN IS THE PROOF. `ps[0] = ps[0]` leaked identically, 400 B / 40.
+That is the case the aliasing guard exists for, and it is precisely the case
+where the clone makes the drop safe -- so the guard was declining on a hazard
+that had already been eliminated. Any account of this bug that does not explain
+the self-assign is incomplete, which is what ruled out the clone-temp theory
+before the IR did.
+
+The guard is now skipped exactly when the RHS was deep-cloned. Whether it was is
+asked by COMPARING THE VALUE rather than by re-deriving the clone's five
+admission conditions: `clone_owned_vec_index_element` returns its argument
+unchanged on every decline path and a fresh `load` on the one clone path, so
+identity IS the answer and there is a single source of truth. A duplicated
+predicate would drift the first time either gate is tuned, and the failure mode
+of drift here is a double free, not a leak.
+
+MEASURED at -O0 with valgrind, 40 iterations, baseline -> fixed:
+
+    ps[0] = ps[1]                      400 B / 40  ->  CLEAN
+    ps[0] = ps[0]   (self-assign)      400 B / 40  ->  CLEAN
+    one-temp swap  t / qs[0] / qs[1]   400 B / 40  ->  CLEAN
+    h.xs[0] = h.xs[1]  (field-rooted)  400 B / 40  ->  CLEAN
+    ps[0] = ps[j]  (variable index)    400 B / 40  ->  CLEAN
+    two-temp swap                         CLEAN    ->  CLEAN   (control)
+    Vec[Vec[i64]]  vv[0] = vv[1]          CLEAN    ->  CLEAN   (control)
+
+The one-temp swap is the row's own motivation and is now clean; both swap
+spellings agree on their output (502), and the E2E test pins the VALUES because
+this fix is a free-before-store on a slot the RHS was just read from -- a fix
+that freed the wrong side would print garbage rather than merely leak.
+
+VERIFIED BEYOND THE LOCAL MATRIX, since this touches the drop machinery: full
+suite 13,492 passed / 0 failed, -O0 leg green with an empty quarantine list, and
+drop-fuzz 0 memory-safety findings / 0 invariant violations over 200 generated
+programs (558 valid executions, 2,271 scheduled drops).
+
+NOT COVERED, filed separately: an RHS that mentions the container through a CALL
+(`ps[0] = mk(ps[0].n + k)`) still declines and still leaks 400 B / 40, unchanged
+by this fix. It needs a different argument -- the call's result is fresh, but
+nothing here proves the call did not stash an alias -- so the mention guard
+keeps declining and the leak stays the safe direction. |
 | B-2026-08-12-28 | codegen | low | A chained indexed field READ (`a[i][j].field`) failed `karac build` with the generic self-accusing 'cannot resolve field .. | 63b0bd19 |
 | B-2026-08-12-29 | typecheck | low | The `s[i]`-on-String rejection prescribes `s.char_at(i)` as the substitute, but `char_at` returns `Option[char]` — so the suggested replacement does… | a092d138 |
 
