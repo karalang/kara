@@ -64,6 +64,35 @@ impl<'a> super::Interpreter<'a> {
                     }
                     return Some(Value::Unit);
                 }
+                // B-2026-08-12-8 — the SET arms were missing entirely, so
+                // `Set.clear()` died with "no interpreter dispatch arm" even
+                // though codegen implements it. Registering the method in the
+                // typechecker (which is what that row is about) would
+                // otherwise have turned a check-time rejection into a
+                // run-vs-build split: compiled fine, `karac run --interp`
+                // dead at runtime.
+                //
+                // Same element-drop discipline as the Map arms above
+                // (B-2026-08-03-2): every element is destroyed here, so a
+                // Drop-bearing element type must run its body. Snapshot, empty
+                // the receiver, then fire the bodies, so no borrow of the
+                // receiver is live while user code runs.
+                //
+                // `SortedSet.clear()` is NOT added: the typechecker does not
+                // register it either, and codegen's SortedSet dispatch was
+                // not confirmed to implement it, so adding an interpreter arm
+                // alone would be unreachable code and registering it in the
+                // typechecker without checking codegen would trade this gap
+                // for a checks-clean-then-fails-at-build one. Noted as an
+                // adjacent gap on B-2026-08-12-8 instead.
+                if let Value::Set(ref elems) = obj {
+                    let removed: Vec<Value> = elems.clone();
+                    self.write_back_receiver(object, Value::Set(Vec::new()));
+                    for v in removed {
+                        self.run_discarded_value_user_drops(v);
+                    }
+                    return Some(Value::Unit);
+                }
             }
             "min" => {
                 if let Value::SortedSet(ref set) = obj {

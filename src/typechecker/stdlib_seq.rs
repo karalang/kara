@@ -1525,7 +1525,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Emit a `WrongNumberOfArgs` diagnostic if `args` is non-empty, for a
     /// method that takes none. Shared by the no-arg arms of `infer_vec_method`.
-    fn expect_no_args(&mut self, what: &str, args: &[CallArg], span: &Span) {
+    pub(super) fn expect_no_args(&mut self, what: &str, args: &[CallArg], span: &Span) {
         if !args.is_empty() {
             self.type_error(
                 format!("{}() takes no arguments", what),

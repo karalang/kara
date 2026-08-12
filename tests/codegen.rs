@@ -4611,6 +4611,18 @@ fn main() { println(build2().v); }
         // Vec fell through to the dispatch-fail error. `values`/`keys`/`entries`
         // already materialize an owned Vec, so `collect()` on them is identity.
         // Surfaced by leetcode/group_anagrams (`groups.values().collect()`).
+        //
+        // B-2026-08-12-8: the receiver is now `.values().iter()`, not
+        // `.values()` directly. `.collect()` applied straight to a Vec is a
+        // deliberate REJECTION, not a gap — the diagnostic spells the rule out
+        // ("iterator adaptors/terminals require an explicit `.iter()`") — so
+        // the old program was one no user could compile, and it only passed
+        // because the harness discarded typecheck errors (B-2026-08-11-34).
+        // `.iter()` keeps the receiver a MethodCall CHAIN, which is what the
+        // original codegen dispatch failure was about, so the regression value
+        // survives. (`let vs: Vec[i64] = m.values();` is the simpler thing a
+        // user should actually write — `collect` on an already-materialized
+        // Vec is identity either way.)
         // Assert order-independently (Map iteration order is unspecified per
         // design.md — sum the collected elements rather than compare positions).
         if let Some(out) = run_program(
@@ -4619,8 +4631,8 @@ fn main() { println(build2().v); }
                  let _ = m.insert(1, 10);\n\
                  let _ = m.insert(2, 20);\n\
                  let _ = m.insert(3, 30);\n\
-                 let vs: Vec[i64] = m.values().collect();\n\
-                 let ks: Vec[i64] = m.keys().collect();\n\
+                 let vs: Vec[i64] = m.values().iter().collect();\n\
+                 let ks: Vec[i64] = m.keys().iter().collect();\n\
                  let mut vsum = 0;\n\
                  for v in vs.iter() { vsum = vsum + v; }\n\
                  let mut ksum = 0;\n\

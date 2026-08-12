@@ -369,26 +369,20 @@ pub fn assert_ownership_clean(ownership: &karac::ownership::OwnershipCheckResult
 ///     program; the codegen coverage is unaffected.
 ///   * **REAL FRONT-END GAP** — codegen implements something the
 ///     typechecker rejects, so the pinned shape cannot be compiled by any
-///     user at all (`Set.clear`, `Vec.iter_mut`, `Column.range`,
-///     `Vec.collect`, the `Unit` type, `CStr.from_ptr` pointer mutability).
+///     user at all (the `Unit` type, `CStr.from_ptr` pointer mutability).
 ///     Fix is in the compiler, and each is worth a ledger row.
+///
+/// B-2026-08-12-8 emptied the front-end-gap population that this list was
+/// created to track: `Set.clear`, `Vec.iter_mut` and `Column`/`Tensor`
+/// `range` are now registered in the typechecker (all three were already
+/// implemented in both backends), and `Vec.collect` turned out to be a
+/// DELIBERATE rejection whose test program was simply illegal — fixed in
+/// the program, not the compiler. What remains here is the deliberate
+/// codegen-layer negative test.
 ///
 /// Measured 2026-08-12 over the whole `tests/codegen.rs` suite (2905
 /// tests): 40 programs reached codegen that `karac check` rejects.
 pub const CHECK_GATE_GRANDFATHERED: &[&str] = &[
-    // ── REAL FRONT-END GAPS: codegen pins a shape `karac check` rejects,
-    //    so no user can compile the program under test. Fix the compiler.
-    //    B-2026-08-12-8.
-    // `no method 'clear' on type 'Set'`
-    "test_e2e_set_clear",
-    // `no method 'iter_mut' on type 'Vec'`
-    "test_e2e_for_iter_mut_scalar",
-    // `no method 'range' on type 'Column'`
-    "test_e2e_builtin_column_tensor_range",
-    // `no method 'collect' on type 'Vec'` (the `.values()` / `.keys()`
-    // terminals return a Vec, and the chain then re-`collect`s it)
-    "e2e_map_values_keys_collect_to_vec",
-    //
     // ── DELIBERATE NEGATIVE TEST (tests/par_codegen.rs): asserts the
     //    CODEGEN-layer rejection of an atomic op with an implicit ordering.
     //    The typechecker rejects it first, so production never reaches the
@@ -405,9 +399,11 @@ pub const CHECK_GATE_GRANDFATHERED: &[&str] = &[
 /// ORs `has_resolve_errors` and `has_type_errors` in), while the E2E
 /// harnesses ran them only to feed `lower` and threw the errors away. So
 /// the suite could — and did — stay green on programs no user can
-/// compile: `test_e2e_set_clear` pins `Set.clear` codegen while
-/// `karac check` answers `no method 'clear' on type 'Set'` and
-/// `karac build` exits 1 on the identical source.
+/// compile: `test_e2e_set_clear` pinned `Set.clear` codegen while
+/// `karac check` answered `no method 'clear' on type 'Set'` and
+/// `karac build` exited 1 on the identical source. (That specific case is
+/// fixed — B-2026-08-12-8 — but it is the example worth keeping, because
+/// it is exactly what this gate exists to catch.)
 ///
 /// It also makes the failure LEGIBLE in the other direction. A test
 /// program with a resolve error still reaches codegen today, where the

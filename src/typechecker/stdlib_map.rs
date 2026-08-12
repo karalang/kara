@@ -997,10 +997,20 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 set_elem
             }
+            // B-2026-08-12-8 — codegen has implemented `Set.clear()` all along
+            // (collections.rs) and an E2E test covered it, but the typechecker
+            // never listed it, so `karac check` rejected every program that
+            // used it and the test only passed because the harness discarded
+            // typecheck errors (B-2026-08-11-34).
+            "clear" => {
+                self.expect_no_args("Set.clear", args, span);
+                Type::Unit
+            }
             _ => self.require_known_method(
                 "Set",
                 method,
                 &[
+                    "clear",
                     "contains",
                     "difference",
                     "insert",

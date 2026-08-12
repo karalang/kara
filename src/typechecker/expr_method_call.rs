@@ -2584,7 +2584,14 @@ impl<'a> super::TypeChecker<'a> {
         // `src/typechecker/expr_method_tensor.rs`.
         if matches!(
             method,
-            "sum" | "mean" | "prod" | "min" | "max" | "sum_axis" | "mean_axis"
+            // B-2026-08-12-8: `range` (the baked `Reduce[T]::range` default,
+            // `max - min`) is implemented at BOTH reduce dispatch sites —
+            // codegen `column.rs`/tensor and the interpreter — but was never
+            // listed here, so `karac check` rejected every program using it
+            // and its E2E test only passed because the harness discarded
+            // typecheck errors (B-2026-08-11-34). Same element-typed result as
+            // `min`/`max`, which is what the two emitters subtract.
+            "sum" | "mean" | "prod" | "min" | "max" | "range" | "sum_axis" | "mean_axis"
         ) {
             let tensor_args = match &obj_ty {
                 Type::Named { name, args } if name == "Tensor" => Some(args),
@@ -2610,7 +2617,7 @@ impl<'a> super::TypeChecker<'a> {
                 // full reductions codegen wires (`sum`/`mean`/`prod`/`min`/`max`)
                 // are recorded; `sum_axis`/`mean_axis` (tensor result) stay on
                 // the by-name path.
-                if matches!(method, "sum" | "mean" | "prod" | "min" | "max")
+                if matches!(method, "sum" | "mean" | "prod" | "min" | "max" | "range")
                     && !tensor_args.is_empty()
                 {
                     let elem_te = Self::type_to_type_expr(&tensor_args[0]);
@@ -3562,7 +3569,18 @@ impl<'a> super::TypeChecker<'a> {
         // so the whole surface is typed here from the receiver's element.
         if matches!(
             method,
-            "sum" | "mean" | "min" | "max" | "var" | "std" | "median" | "quantile" | "corr"
+            // B-2026-08-12-8 — `range` alongside the other Column reductions;
+            // see the Tensor site above for why it was missing.
+            "sum"
+                | "mean"
+                | "min"
+                | "max"
+                | "range"
+                | "var"
+                | "std"
+                | "median"
+                | "quantile"
+                | "corr"
         ) {
             let column_elem = match &obj_ty {
                 Type::Named { name, args } if name == "Column" && args.len() == 1 => {
@@ -3640,7 +3658,7 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
                 return match method {
-                    "sum" | "min" | "max" => elem,
+                    "sum" | "min" | "max" | "range" => elem,
                     // mean / var / std / median / quantile
                     _ => Type::Float(FloatSize::F64),
                 };
@@ -3749,6 +3767,39 @@ impl<'a> super::TypeChecker<'a> {
         // `iter()` and `into_iter()` is a typechecker concern in design.md
         // but immaterial at this layer — both return the same Iterator type.
         // See `wip-list2.md` § Iterator trait — full adaptor surface.
+        // B-2026-08-12-8 — `iter_mut()` yields `mut ref T` so `for x in
+        // xs.iter_mut() { *x = ... }` writes back in place. Both backends
+        // already implement it (codegen `control_flow_for.rs`, interpreter
+        // `eval_expr.rs`, each special-casing the for-loop position) and the
+        // lowering pass already documents this as "the explicit `.iter_mut()`
+        // path (`for x in xs.iter_mut()` → `mut ref T`)" — only the
+        // typechecker never listed the method, so `karac check` rejected every
+        // program using it and its E2E test passed solely because the harness
+        // discarded typecheck errors (B-2026-08-11-34).
+        //
+        // Typed for every element type, matching the INTERPRETER's support.
+        // Codegen handles scalar elements and bails LOUD with an `--interp`
+        // pointer for heap elements / destructuring patterns, which is the
+        // codebase's normal posture for a partially-lowered construct — unlike
+        // the silent nothing this used to be.
+        if method == "iter_mut" {
+            if let Some(item_ty) = iterator_item_type_for(&obj_ty) {
+                if !args.is_empty() {
+                    self.type_error(
+                        "'iter_mut' takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                return Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![Type::MutRef(Box::new(item_ty))],
+                };
+            }
+        }
         if method == "iter" || method == "into_iter" {
             if let Some(item_ty) = iterator_item_type_for(&obj_ty) {
                 if !args.is_empty() {
