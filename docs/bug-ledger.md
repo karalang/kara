@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 237 | 2 |
+| miscompile | 238 | 2 |
 | leak | 163 | 2 |
 | double-free | 120 | 0 |
-| codegen-gap | 103 | 0 |
+| codegen-gap | 104 | 1 |
 | run-vs-build | 102 | 0 |
 | missing-feature | 91 | 1 |
 | perf | 64 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 808 | 5 |
+| codegen | 810 | 6 |
 | typecheck | 156 | 3 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1120 surfaced · 7 open · 1101 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1122 surfaced · 8 open · 1102 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1120 surfaced
 | B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
 | B-2026-08-12-9 | 2026-08-12 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at typecheck, so the codegen paths two E2E tests cover can never run in a shipped binary. Either the emitter is dead code to retire or the rule is stricter than intended -- open design call, not a defect report. | Vec[f64].sorted / Iterator.max / Iterator.min vs the F64 total-order rule |
 | B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
+| B-2026-08-12-12 | 2026-08-12 | codegen | low | SIX type names still lower to the silent `i64` default with no LLVM layout of their own, across 16 of the 2906 `tests/codegen.rs` programs: `Unit` (6 tests), `Expr` (3), `ParBlockInfo` (2), `E` (2), `TaskInfo` (1), `JsonError` (1). Each is a REAL type name, not a generic parameter -- the audit filters those -- so each is a slot potentially sized `i64` while the value stored into it is some other shape. | run `KARAC_STRICT_TYPE_LOWERING=1 cargo test --features llvm --test codegen` to reproduce the list; the fall-through is `llvm_type_for_name`'s final `else` in `src/codegen/types_lowering.rs` |
 
 ### Wontfix (2)
 
@@ -149,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1120 surfaced
 
 </details>
 
-### Fixed (1101)
+### Fixed (1102)
 
-<details><summary>1101 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1102 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2297,6 +2298,7 @@ with/without check, because both halves of that check ran on the same wrong file
 | B-2026-08-12-3 | other | medium | `tests/codegen.rs`'s E2E harness ran `resolve` and `typecheck` only to feed `lower` and DISCARDED their errors, so the suite stayed green on 40 progr… | FIXED by e0c6bab. `common::assert_check_clean` panics when an E2E test program has a resolve or typecheck error, with the 40 measured offenders grandfathered by name and diagnostic in `CHECK_GATE_GRANDFATHERED`. Verified by negative control; suite green at 2905/0. |
 | B-2026-08-12-6 | other | medium | 103 of the 109 codegen-invoking test harnesses in `tests/` resolved the RAW parse tree, skipping some or all of the three AST rewrites `karac build`… | FIXED by b3a1061. `karac::prepare_for_resolve` owns the parse->resolve rewrite sequence; `cli.rs` and all 109 codegen-invoking test harnesses call it, so no driver can run a subset. Pinned by `desugar_dependent_constructs_reach_codegen_through_the_harness` (multi-assign, trait default method, `impl Trait` param), verified by negative control. |
 | B-2026-08-12-7 | typecheck | medium | A union or `#[derive(Copy)]` struct with a RAW POINTER field is rejected as not-`Copy` by the one rule whose own suggestion is "hold it behind a raw… | FIXED by 9410488b -- added a `Type::Pointer { .. } => true` arm to `is_type_copy` (src/typechecker/derives.rs). Pinned by `test_e2e_union_and_struct_raw_pointer_fields_are_copy` in tests/codegen.rs, which covers both pointer spellings in a union AND a `#[derive(Copy, Clone)]` struct holding a `*mut u8`; verified to fail pre-fix with the E_UNION_FIELD_NOT_COPY pair and pass post-fix. |
+| B-2026-08-12-11 | codegen | medium | Codegen's TWO type-lowering entry points kept two hand-maintained lists of built-in handle types and DISAGREED: `llvm_type_for_type_expr` answered `p… | FIXED by 9b2f5ad. `builtin_opaque_ptr_handle` is the single table both entry points consult, so the same type cannot lower to `ptr` through one and `i64` through the other. `KARAC_STRICT_TYPE_LOWERING=1` reports any remaining unknown name at the point of the decision, filtering generic parameters (user program + baked stdlib) so it is quiet on `hello world` and fires on 16 of 2906 E2E programs. |
 
 </details>
 
