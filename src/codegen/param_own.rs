@@ -495,6 +495,86 @@ impl<'ctx> super::Codegen<'ctx> {
         ok
     }
 
+    /// B-2026-08-12-1 — is a by-value `Option`/`Result` PARAM of this declared
+    /// type entry-COPIED by the callee, rather than owned by transfer? Both
+    /// frames consult this ONE predicate (`callee_optres_param_entry_copied`,
+    /// call_dispatch.rs, suppresses the arg-site whole-slot zero on the same
+    /// answer), so they cannot drift into a double free.
+    ///
+    /// Delegates to [`Self::field_copy_supported`]'s `Option`/`Result` arms:
+    /// that predicate already decides copy == drop for these two payload
+    /// families as struct FIELDS, and it vets BOTH halves of a `Result` — which
+    /// matters here because the registered payload drop frees whichever half is
+    /// live, so admitting a copy that skipped the `Err` half would double-free
+    /// every program that takes an error path while every `Ok`-only test passed.
+    pub(super) fn optres_param_entry_copied_te(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let head = p.segments.first().map(String::as_str);
+        if !matches!(head, Some("Option") | Some("Result")) {
+            return false;
+        }
+        // SHARED and BOXED payloads are excluded, even though
+        // `field_copy_supported` admits both. As a struct FIELD their "copy" is
+        // an rc-INC of the box / a fresh envelope, and the enclosing struct's
+        // drop is the matching release — copy == drop, one owner. At a PARAM
+        // boundary the same two shapes already have owners of their own: the
+        // rc machinery for a shared handle, and `boxed_enum_payload_vars` /
+        // `boxed_struct_payload_vars` for a box, each with its own caller-side
+        // retraction rules that this entry copy would be a second, unsynchronised
+        // answer to. Measured: admitting them fails 20 memory_sanitizer fixtures
+        // across the shared-Option, boxed-Option and boxed-enum-chain families
+        // — the copy is not what those shapes are missing.
+        let boxing_words = if head == Some("Result") { 5 } else { 3 };
+        let halves = p.generic_args.as_deref().unwrap_or(&[]);
+        for a in halves.iter().take(2) {
+            let GenericArg::Type(half) = a else {
+                return false;
+            };
+            let hhead = match &half.kind {
+                TypeKind::Path(hp) => hp.segments.first().map(String::as_str).unwrap_or(""),
+                _ => "",
+            };
+            if self.shared_types.contains_key(hhead)
+                || self.option_inner_shared_type_for_type_expr(te).is_some()
+            {
+                return false;
+            }
+            if Self::llvm_type_word_count(self.llvm_type_for_type_expr(half)) > boxing_words {
+                return false;
+            }
+        }
+        self.field_copy_supported(te, &mut Vec::new())
+    }
+
+    /// B-2026-08-12-1 — emit the entry copy for a by-value `Option`/`Result`
+    /// param slot admitted by [`Self::optres_param_entry_copied_te`]. Dispatch
+    /// mirrors `deep_copy_one_aggregate_field`'s arms exactly (the two admitted
+    /// `Result` classes are structurally disjoint, so precisely one applies),
+    /// which is what keeps a param's copy depth equal to the same type's field
+    /// copy depth, and therefore equal to the drop that frees it.
+    pub(super) fn deep_copy_optres_param_in_place(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        te: &TypeExpr,
+    ) {
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        match p.segments.first().map(String::as_str) {
+            Some("Option") => self.deep_copy_option_inline_payload_in_place(slot, te),
+            Some("Result") => {
+                if self.result_field_struct_enum_payload_ok(te) {
+                    self.deep_copy_result_struct_enum_payload_in_place(slot, te);
+                } else {
+                    self.deep_copy_result_inline_heap_halves_in_place(slot, te);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn field_copy_supported(&self, fte: &TypeExpr, stack: &mut Vec<String>) -> bool {
         match &fte.kind {
             TypeKind::Tuple(elems) => elems.iter().all(|e| self.field_copy_supported(e, stack)),

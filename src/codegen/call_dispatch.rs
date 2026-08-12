@@ -2016,8 +2016,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     &a.value.kind,
                     ExprKind::Identifier(n) if self.boxed_struct_payload_vars.contains(n.as_str())
                 );
-                if !boxed_struct_binding {
+                // B-2026-08-12-1 — an ENTRY-COPIED param owns its own buffer,
+                // so the caller keeps the original and this whole-slot zero
+                // would be a move with nothing on the other side of it.
+                let callee_entry_copies = self.callee_optres_param_entry_copied(&name, i);
+                if !boxed_struct_binding && callee_entry_copies.is_none() {
                     self.suppress_inline_option_result_binding_move(&a.value);
+                }
+                // B-2026-08-12-1 — a FRESH TEMP handed to an entry-copying param
+                // has no binding to own it. The callee frees its own copy, so
+                // without this the caller's original leaks once per call — which
+                // is precisely the B-2026-08-11-30 leak, reappearing through the
+                // other door the moment the callee stopped taking the buffer.
+                //
+                // A named binding needs nothing: its let-site registration
+                // already owns the value and, now that the whole-slot zero above
+                // is suppressed for this shape, still fires at scope exit.
+                // Identifier args are excluded for exactly that reason — owning
+                // one here would be the double free the zero used to prevent.
+                if let Some(param_te) = callee_entry_copies.clone() {
+                    if self.optres_arg_is_unowned_temp(&a.value) {
+                        self.track_optres_arg_temp(val, &param_te);
+                    }
                 }
                 // B-2026-08-07-2 shapes 1+2 — the NESTED-box sibling of the
                 // suppressor above. The callee's owned non-escaping param now
@@ -2059,7 +2079,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `f(nd.hp)` was not. Same helper, same gates — it bails on
                 // borrowed roots and on payload shapes whose drop it cannot
                 // neutralize.
-                self.suppress_place_optres_field_whole_move_source(&a.value);
+                // B-2026-08-12-1 — same carve-out, the FIELD spelling. An
+                // entry-copied param leaves the owning struct's field payload
+                // with the caller, so zeroing the field here orphans it: 1,280 B
+                // over 40 iterations in the fixture that caught it. Gated on the
+                // one shared predicate, like its binding sibling above.
+                if callee_entry_copies.is_none() {
+                    self.suppress_place_optres_field_whole_move_source(&a.value);
+                }
                 // B-2026-08-06-9 leg A — the argument is a PASSTHROUGH RESULT
                 // binding, which owns nothing: its source does
                 // (B-2026-08-06-21 skips the result's registration). The
@@ -2431,6 +2458,131 @@ impl<'ctx> super::Codegen<'ctx> {
     /// conservative toward skipping). Resolved from the program snapshot's
     /// top-level functions; unknown callees (externs, builtins) → `false`
     /// (register — the status-quo caller-drops convention).
+    /// B-2026-08-12-1 — does parameter `arg_index` of `callee_name` take a
+    /// by-value `Option`/`Result` the CALLEE entry-COPIES? When it does, the
+    /// callee owns an independent buffer and the caller must KEEP its original,
+    /// so the arg-site whole-slot zero must not fire. Methods are resolved with
+    /// the same receiver-index shift `callee_returns_enum_arg_payload` documents.
+    /// B-2026-08-12-1 — is this argument an `Option`/`Result` temp that NO other
+    /// frame owns, and which therefore needs the caller-side cleanup
+    /// [`Self::track_optres_arg_temp`] registers?
+    ///
+    /// Deliberately narrow: a direct call to a real FUNCTION (`take(mk())`),
+    /// which is the shape whose payload is manufactured by the callee and
+    /// referenced by nothing else. Everything else is excluded, and the
+    /// exclusions are the whole point of the predicate:
+    ///
+    ///   * an IDENTIFIER (`take(r)`) — its let-site registration owns it, and
+    ///     since the arg-site zero is now suppressed for this shape, that
+    ///     registration still fires.
+    ///   * an enum-CONSTRUCTOR call (`take(Some(x))`, `take(Ok(x))`) — the
+    ///     temp is fresh but its PAYLOAD need not be: wrapping a live local
+    ///     hands us a buffer that binding still owns, so registering here makes
+    ///     two owners of it. This is not hypothetical — admitting ctor args
+    ///     aborted the self-host parser with `double free detected in tcache 2`
+    ///     while the whole -O0 valgrind matrix and 1044 memory_sanitizer
+    ///     fixtures stayed green. The oracle is what caught it.
+    ///
+    /// Excluding the ctor shape leaves `take(Some(mkv()))` — a fresh payload
+    /// inside a fresh ctor — leaking as it did before, which is the safe
+    /// direction and is recorded as the row's remaining scope rather than
+    /// papered over.
+    pub(super) fn optres_arg_is_unowned_temp(&self, arg: &Expr) -> bool {
+        match &arg.kind {
+            // A live binding or a place rooted at one: something else owns it.
+            ExprKind::Identifier(_)
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::MethodCall { .. } => false,
+            ExprKind::Call { callee, args, .. } => {
+                // An enum CONSTRUCTOR is only as fresh as what it wraps:
+                // `Ok(mkv())` manufactures its payload, `Ok(x)` wraps a buffer
+                // `x` still owns. Recurse rather than accept or reject the whole
+                // ctor shape.
+                if self.enum_name_of_expr(arg).is_some() {
+                    return args
+                        .iter()
+                        .all(|a| self.optres_arg_is_unowned_temp(&a.value));
+                }
+                // A direct call to a real function manufactures its result.
+                matches!(&callee.kind, ExprKind::Identifier(n)
+                    if self.fn_return_type_names.contains_key(n))
+            }
+            // A fresh aggregate is unowned exactly when every initializer is.
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .all(|f| self.optres_arg_is_unowned_temp(&f.value)),
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(..)
+            | ExprKind::ByteLit(..)
+            | ExprKind::StringLit(..)
+            | ExprKind::MultiStringLit(..)
+            | ExprKind::Bool(..) => true,
+            _ => false,
+        }
+    }
+
+    /// B-2026-08-12-1 — own a FRESH-TEMP `Option`/`Result` argument handed to a
+    /// param the callee ENTRY-COPIES. The temp has no binding, and the callee
+    /// now frees only its own copy, so this frame is the only one that can free
+    /// the original.
+    ///
+    /// Spills the value to an entry alloca and registers the same inline-payload
+    /// cleanups a `let` of the same value would get, so the free is the one the
+    /// drop machinery already knows how to emit — including its `cap > 0` /
+    /// tag guards, which is what makes an `Err`/`None` temp a no-op rather than
+    /// a wild free.
+    ///
+    /// The tracker key is a fixed name, matching `__owned_agg_tmp`'s precedent
+    /// one arm over. It is inert either way: the name is never inserted into
+    /// `variables`, so the name-keyed suppressors resolve nothing through it and
+    /// cannot retarget one temp's cleanup at another's slot.
+    pub(super) fn track_optres_arg_temp(&mut self, val: BasicValueEnum<'ctx>, param_te: &TypeExpr) {
+        let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
+            return;
+        };
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__optres_arg_tmp", agg_ty.into());
+        if self.builder.build_store(slot, val).is_err() {
+            return;
+        }
+        self.track_inline_option_payload_var("__optres_arg_tmp", slot, param_te);
+        self.track_inline_result_payload_var("__optres_arg_tmp", slot, param_te);
+    }
+
+    pub(super) fn callee_optres_param_entry_copied(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> Option<TypeExpr> {
+        let program = self.program_snapshot.as_deref()?;
+        let bare = callee_name.rsplit('.').next().unwrap_or(callee_name);
+        let check = |f: &crate::ast::Function, ast_i: usize| -> Option<TypeExpr> {
+            f.params
+                .get(ast_i)
+                .filter(|p| self.optres_param_entry_copied_te(&p.ty))
+                .map(|p| p.ty.clone())
+        };
+        program.items.iter().find_map(|item| match item {
+            crate::ast::Item::Function(f) if f.name == callee_name => check(f, arg_index),
+            crate::ast::Item::ImplBlock(b) => b.items.iter().find_map(|ii| match ii {
+                crate::ast::ImplItem::Method(f) if f.name == bare => {
+                    let ast_i = if f.self_param.is_some() {
+                        arg_index.checked_sub(1)?
+                    } else {
+                        arg_index
+                    };
+                    check(f, ast_i)
+                }
+                _ => None,
+            }),
+            _ => None,
+        })
+    }
+
     pub(super) fn call_arg_flows_into_return(&self, callee_name: &str, arg_index: usize) -> bool {
         let Some(program) = self.program_snapshot.as_deref() else {
             return false;

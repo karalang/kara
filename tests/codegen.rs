@@ -12932,18 +12932,21 @@ fn main() {
     ///
     /// Same root cause as B-2026-08-11-30's leak: caller retracts, callee
     /// bails. Both halves have to move together.
+    ///
+    /// FIXED: the callee now entry-COPIES such a param and the caller keeps its
+    /// original, so nothing is zeroed and every pass reads the true value.
     #[test]
-    #[ignore = "B-2026-08-12-1: 2nd pass of a by-value Option/Result arg reads the wrong variant"]
     fn e2e_repeated_by_value_optres_arg_reads_wrong_variant() {
         assert_eq!(
             run_program(
                 r#"
 enum E { Missing(String) }
 fn mkv() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("x"); v.push("y"); return v; }
+fn mkr() -> Result[Vec[String], E] { return Ok(mkv()); }
 fn takr(r: Result[Vec[String], E]) -> i64 { match r { Ok(v) => v.len(), Err(_e) => -1 } }
 fn tako(o: Option[Vec[String]]) -> i64 { match o { Some(v) => v.len(), None => -1 } }
 fn main() {
-    let r = Ok(mkv());
+    let r = mkr();
     println(takr(r));
     println(takr(r));
     let o = Some(mkv());

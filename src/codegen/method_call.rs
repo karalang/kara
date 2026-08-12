@@ -5716,8 +5716,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         .as_deref()
                         .and_then(|p| super::declarations::find_function_ast(p, &qualified))
                         .is_some_and(|f| crate::ast::fn_returns_param(f, pidx));
-                    if !arg_flows_into_return {
+                    // B-2026-08-12-1 — same carve-out as the free-fn path: an
+                    // ENTRY-COPIED `Option`/`Result` param owns its own buffer,
+                    // so the caller keeps its original and must not zero it.
+                    // Gating only the free-fn site would leave a method's caller
+                    // zeroing a slot the callee no longer takes over, orphaning
+                    // the payload — which is how this shape's fixture failed
+                    // while every free-fn fixture passed.
+                    let entry_copied = self.callee_optres_param_entry_copied(&qualified, pidx);
+                    if !arg_flows_into_return && entry_copied.is_none() {
                         self.suppress_inline_option_result_binding_move(&a.value);
+                    }
+                    if let Some(param_te) = entry_copied {
+                        if self.optres_arg_is_unowned_temp(&a.value) {
+                            self.track_optres_arg_temp(val, &param_te);
+                        }
                     }
                     compiled_args.push(val.into());
                 }

@@ -1901,9 +1901,37 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .contains(&param_name)
                         {
                             let te = param.ty.clone();
+                            // REGISTER FIRST, COPY SECOND — the order is
+                            // load-bearing, not stylistic (B-2026-08-12-1).
+                            //
+                            // Both trackers zero-init the slot in the entry
+                            // block when they believe they are registering from
+                            // a NESTED scope, so a binding whose store may never
+                            // execute (loop body skipped, branch not taken) does
+                            // not leave the cleanup arm reading `undef` as a tag.
+                            // The test for "nested" is `insert block != entry
+                            // block`, which is exactly right for a `let` and
+                            // exactly wrong here: emitting the entry copy first
+                            // SPLITS the entry block and leaves the builder in
+                            // the copy's merge block, so the trackers conclude
+                            // they are nested and plant a whole-slot
+                            // `zeroinitializer` before entry's terminator —
+                            // ahead of both the copy's own payload reads and the
+                            // body's first read of the param. Measured: every
+                            // matching callee returned the `Err`/`None` arm on
+                            // the FIRST call, with the memory matrix still clean.
+                            //
+                            // A param slot is never the shape that defensive
+                            // zero is for: it is initialised unconditionally by
+                            // the incoming argument store a few lines above.
+                            // Registering while the builder is still at entry
+                            // says so, and needs no new flag.
                             self.track_inline_option_payload_var(&param_name, alloca, &te);
                             self.track_inline_result_payload_var(&param_name, alloca, &te);
                             self.track_inline_option_map_payload_var(&param_name, alloca, &te);
+                            if self.optres_param_entry_copied_te(&te) {
+                                self.deep_copy_optres_param_in_place(alloca, &te);
+                            }
                         }
                     }
                 }
