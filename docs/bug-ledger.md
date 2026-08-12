@@ -96,25 +96,25 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 163 | 2 |
 | double-free | 120 | 0 |
 | codegen-gap | 103 | 0 |
-| run-vs-build | 101 | 0 |
-| missing-feature | 90 | 0 |
+| run-vs-build | 102 | 0 |
+| missing-feature | 91 | 1 |
 | perf | 64 | 0 |
-| false-positive | 60 | 1 |
-| diagnostics | 47 | 0 |
+| false-positive | 60 | 0 |
+| diagnostics | 48 | 1 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
-| other | 27 | 0 |
+| other | 28 | 1 |
 | use-after-free | 18 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 807 | 4 |
-| typecheck | 152 | 0 |
+| codegen | 808 | 5 |
+| typecheck | 156 | 3 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
-| other | 41 | 1 |
+| other | 41 | 0 |
 | autopar | 40 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
@@ -124,17 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1116 surfaced · 5 open · 1099 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1120 surfaced · 7 open · 1101 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-34 | 2026-08-11 | other | medium | `tests/codegen.rs`'s `run_program` harness FAILS MODULE VERIFICATION on a program that `karac build` and `karac run --interp` both compile and run correctly: "Function return type does not match operand type of return inst! ret { ptr } %field / i64" and a matching call-parameter mismatch, on a multi-struct program where a fn returns a struct with a `Map` field. So the E2E harness can REJECT source the shipped compiler accepts -- the opposite of the failure mode its own comments are written against, and it means an E2E pin cannot always be written for a shape the CLI handles. | tests/codegen.rs run_program_capturing_inner pass list vs karac build |
 | B-2026-08-12-2 | 2026-08-12 | codegen | medium | A `Map` field of an `Ok` payload leaks ~72 B per call when the `Result` is LET-BOUND before the match; matching the producing call INLINE is clean, and the identical shape with a `Vec` field is clean. Split out of B-2026-08-11-30 leg A -- no by-value parameter boundary is involved, so the param-ownership defect that row describes does not cover it. | Split from B-2026-08-11-30, which is now solely about by-value Option/Result params. Same code area as B-2026-08-11-29 (SEGV, struct with a Map/Set field). |
 | B-2026-08-12-4 | 2026-08-12 | codegen | high | `asan_vec_element_field_move_by_assignment_no_double_free` is red on main with a LeakSanitizer leak, and NONDETERMINISTICALLY so: green in the full parallel suite run, red standalone, on one unchanged tree. It is the un-ignored regression pin from 970dadf (B-2026-08-11-25) and fails in exactly the over-broad-repair mode its own comment predicts, so the assignment-path cap-zeroing looks to have traded the double free for a per-iteration leak. | Regression pin from 970dadf (B-2026-08-11-25). NOT caused by 19d0e9a (B-2026-08-11-30) -- verified by stash-and-rebuild. |
 | B-2026-08-12-5 | 2026-08-12 | codegen | high | SILENT WRONG ANSWER (run-vs-build): `#[derive(Eq)]` equality over a struct with a `Vec[String]` field reports NOT EQUAL in both compiled backends for two vectors whose CONTENTS are equal, while the interpreter correctly reports equal. Measured on one program: `S { v: a } == S { v: b }` with both vectors holding \"abcd\" gives interp `true`, JIT `false`, AOT `false`. It is a FALSE NEGATIVE only -- differing contents correctly give `false` on all three -- so the failure mode is a comparison that silently never matches. NARROW AND MEASURED: a `Vec[i64]` field is CORRECT on all three (`true`), and a plain `String` field is CORRECT on all three, so it is specific to a Vec of HEAP elements. Reproduces with two struct LOCALS, no temporaries and no `ref` params, so it is independent of B-2026-08-11-24 / -33 (which are leaks in the same lowering's neighbourhood and cannot change a boolean). | `compile_struct_eq` in src/codegen/expr_ops.rs — the per-field recursion compares a `Vec` field by its `{ptr,len,cap}` words instead of element-wise; the interpreter's `value_compare` Array arm does compare contents |
 | B-2026-08-12-1 | 2026-08-12 | codegen | high | Passing a by-value `Option`/`Result` argument TWICE makes every call after the first read the WRONG VARIANT -- `Err`/`None` for a value that is still `Ok`/`Some`. The caller's pass-as-arg move cap-zeros a binding it still owns, on a destination-takes-ownership assumption that holds for `v.push(r)` but not for a plain call. AOT and JIT both wrong, interpreter correct; a user enum in the same shape is correct everywhere. | Same root cause as B-2026-08-11-30 (caller retracts, callee bails) surfacing as a wrong answer rather than a leak. The fix design in that row -- callee-owned entry deep-copy plus dropping the caller-side retraction for a plain-call argument -- fixes both; neither half is safe alone. |
+| B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
+| B-2026-08-12-9 | 2026-08-12 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at typecheck, so the codegen paths two E2E tests cover can never run in a shipped binary. Either the emitter is dead code to retire or the rule is stricter than intended -- open design call, not a defect report. | Vec[f64].sorted / Iterator.max / Iterator.min vs the F64 total-order rule |
+| B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
 
 ### Wontfix (2)
 
@@ -147,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1116 surfaced
 
 </details>
 
-### Fixed (1099)
+### Fixed (1101)
 
-<details><summary>1099 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1101 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2208,8 +2210,93 @@ unchanged here. |
 | B-2026-08-11-31 | other | medium | `tests/par_codegen.rs` -- the ONLY lane that threads `ConcurrencyAnalysis` into codegen -- had no JIT leg at all, so the DEFAULT `karac build` config… | FIXED by 43face1. `jit_dispatch_par` in `tests/par_codegen.rs` compiles each test program to IR with both analyses threaded and executes it through the sibling `karac_jit_runner`, gated on `KARAC_TEST_JIT=1`; two CI steps schedule it on x86 and arm64. Verified by negative control (a corrupted expectation fails the JIT leg), and hardened to panic rather than soft-skip so it cannot silently become vacuous. |
 | B-2026-08-11-32 | codegen | high | a widening cast on an unsigned `Vec` element read through a struct FIELD sign-extends instead of zero-extending -- `h.px[0] as f64` on a `Vec[u16]` h… | 023bc9a |
 | B-2026-08-11-33 | codegen | medium | A `#[derive(Eq)]` STRUCT temporary carrying a HEAP field, compared against a `ref` param, leaks that field every evaluation: `mk(hay) == other` with… | 23e5d66 (new `track_fresh_struct_temp_operand` in src/codegen/expr_ops.rs, called from the `Eq`/`NotEq` arm in exprs.rs beside the B-2026-08-11-24 String free: materialize the fresh temp into a slot and register its struct drop, threading the generic instantiation) |
+| B-2026-08-11-34 | other | medium | The E2E harnesses guard `parse` errors and then DISCARD `resolve` and `typecheck` errors, while `karac build` stops on either -- so the suite silentl… | FIXED by 9410488b, on top of the gate e0c6bab landed -- but first, the correction
+this row needed and the earlier pass could not make without the program:
+
+THE ROW'S PREMISE WAS BACKWARDS, and the error was mine, not the harness's.
+
+It claimed the E2E harness REJECTS source `karac build` accepts. It does not. It
+ACCEPTS source `karac build` REJECTS -- the same divergence pointing the other
+way, and the worse direction, because it manufactures false coverage rather than
+false failure. e0c6bab's investigation reached the right fix while noting the
+premise still needed re-measuring "on the same source -- which again needs the
+program". The program was recoverable from the session transcript; here it is,
+with the answer.
+
+HOW THE WRONG PREMISE GOT WRITTEN. The original combined program used struct
+names `SM`/`SS`/`SV`, which trip the Const-class naming rule. I renamed them with
+a pattern-list script (`struct SM ` -> `struct Sm `, `Result[SM, E]` -> ..., seven
+patterns) that did NOT cover the bare return-type position, so `fn mk_bare() -> SM`
+survived while `struct Sm` was declared -- leaving an UNDEFINED TYPE. When I then
+went to compare against the CLI, I saved the FULLY-renamed program to disk and
+built THAT. So "the CLI compiles it, the harness rejects it" compared two
+different programs. The comparison, not the compiler, was the divergence.
+
+THE REAL DEFECT, minimised to four lines:
+
+    struct Sm { a: Map[String, i64] }
+    fn mk_bare() -> SM { let mut m: Map[String, i64] = Map.new(); m.insert("k", 1); return Sm { a: m }; }
+    fn tm(s: Sm) -> i64 { return s.a.len(); }
+    fn main() { println(f"{tm(mk_bare())}"); }
+
+`karac check` / `karac build`: `error[resolve]: undefined type 'SM'`.
+`tests/codegen.rs` `run_program`: byte-identical to this row's reported symptom --
+"Module verification failed: Function return type does not match operand type of
+return inst! ret { ptr } %field / i64 ... %call = call i64 @mk_bare()". Codegen
+defaulted the unresolved `SM` to `i64`, declared `mk_bare` as returning `i64`, and
+emitted a `{ ptr }` return into it. The verifier's complaint is the symptom; the
+undefined type is the cause, and its one-line diagnostic was discarded three
+phases earlier.
+
+WHAT THIS COMMIT ADDS ON TOP OF e0c6bab. That commit gated one harness and
+grandfathered 39 of the 40 programs it found. This one:
+
+  * WIDENS the gate from 1 call site to all 24 that already call
+    `assert_ownership_clean` -- across tests/{codegen,par_codegen,
+    memory_sanitizer,coro_e2e,disjoint_differential,http_server}.rs. That call is
+    already the marker for "this harness feeds codegen production-shaped input",
+    so the two gates belong at the same places. Fallout beyond codegen.rs was one
+    test in par_codegen.rs and none elsewhere.
+  * FIXES 32 of the 39 grandfathered programs rather than parking them: missing
+    `mut` call-site markers (9), single-letter module bindings that are Type-class
+    where module `let` needs Const-class (5), `pub fn` returning a private type
+    (5), implicit narrowing coercions needing an explicit `as` (5), missing
+    `#[derive(Eq)]` (2), refinement narrowing needing the explicit form (2), plus
+    `*mut Unit` (an undefined type), unqualified `Some`/`None` resolving to
+    builtin `Option` instead of the program's own enum, an unbounded `T` used
+    arithmetically, a non-`mut` shared field written through, and a `*mut u8`
+    passed where `*const u8` was required.
+  * Leaves 6 grandfathered, each with a row: B-2026-08-12-8 (four methods codegen
+    implements and typecheck rejects -- those tests were the only thing proving
+    the emitters work), B-2026-08-12-9 (the `f64` `sorted` emitter, unreachable
+    from valid source under the F64 total-order rule), and one deliberate negative
+    test whose whole point is a codegen-layer rejection.
+
+It also turned up a REAL COMPILER BUG: B-2026-08-12-7 -- a union or
+`#[derive(Copy)]` struct with a raw-pointer field rejected as not-`Copy` by the
+rule whose own suggestion is to use a raw pointer. Fixed here with a pin.
+`test_e2e_{size,align}_of_epoll_data_style_union` had been green for months
+purely because their typecheck errors were discarded. B-2026-08-12-10 (refinement
+literals narrowing for integers but not floats or strings, with a diagnostic that
+asserts something false) came from the same sweep and is left open.
+
+THE OTHER HALF OF THIS ROW'S CLASS IS ALSO CLOSED. e0c6bab measured that 46 of
+the 52 codegen-invoking harnesses in tests/codegen.rs never ran `desugar_program`
+and 47 never ran `expand_gated_stdlib_imports`, so they resolved a different
+program than `karac build` does -- this row's divergence on 46 sibling harnesses.
+b3a1061 fixed it by giving cli.rs and every harness one shared
+`prepare_for_resolve`. Between that, the gate, and this commit, the harness-vs-CLI
+gap this row is about is closed on both the pass-list and the error-checking axis.
+
+METHOD NOTE, since this is the second time in two days that a comparison rather
+than a compiler produced the finding: when a program "behaves differently" across
+two lanes, diff the exact bytes fed to each before believing the lanes differ.
+Saving a normalised copy for one side and the original for the other is enough to
+invent a divergence out of nothing -- and it survived a `git stash`-based
+with/without check, because both halves of that check ran on the same wrong file. |
 | B-2026-08-12-3 | other | medium | `tests/codegen.rs`'s E2E harness ran `resolve` and `typecheck` only to feed `lower` and DISCARDED their errors, so the suite stayed green on 40 progr… | FIXED by e0c6bab. `common::assert_check_clean` panics when an E2E test program has a resolve or typecheck error, with the 40 measured offenders grandfathered by name and diagnostic in `CHECK_GATE_GRANDFATHERED`. Verified by negative control; suite green at 2905/0. |
 | B-2026-08-12-6 | other | medium | 103 of the 109 codegen-invoking test harnesses in `tests/` resolved the RAW parse tree, skipping some or all of the three AST rewrites `karac build`… | FIXED by b3a1061. `karac::prepare_for_resolve` owns the parse->resolve rewrite sequence; `cli.rs` and all 109 codegen-invoking test harnesses call it, so no driver can run a subset. Pinned by `desugar_dependent_constructs_reach_codegen_through_the_harness` (multi-assign, trait default method, `impl Trait` param), verified by negative control. |
+| B-2026-08-12-7 | typecheck | medium | A union or `#[derive(Copy)]` struct with a RAW POINTER field is rejected as not-`Copy` by the one rule whose own suggestion is "hold it behind a raw… | FIXED by 9410488b -- added a `Type::Pointer { .. } => true` arm to `is_type_copy` (src/typechecker/derives.rs). Pinned by `test_e2e_union_and_struct_raw_pointer_fields_are_copy` in tests/codegen.rs, which covers both pointer spellings in a union AND a `#[derive(Copy, Clone)]` struct holding a `*mut u8`; verified to fail pre-fix with the E_UNION_FIELD_NOT_COPY pair and pass post-fix. |
 
 </details>
 
