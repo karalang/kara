@@ -46100,43 +46100,65 @@ fn main() with reads(FileSystem) {{
         );
     }
 
-    /// B-2026-08-11-30 LEG B, tightened. A fresh-temp `Result[S, E]` passed BY
-    /// VALUE leaks every `Vec` field of the `Ok` payload struct — one
-    /// allocation per Vec field, the Vec's own buffer, regardless of element
-    /// count. `String` fields of the same struct are freed correctly.
+    /// B-2026-08-11-30. A by-value `Result` parameter that the callee never
+    /// DESTRUCTURES is dropped by nobody, so the whole `Ok` payload leaks. The
+    /// caller retracts its own cleanup on the pass-as-arg move
+    /// (`suppress_inline_result_payload_cleanup_for_moved_arg`,
+    /// `control_flow_match.rs`) while `make_aggregate_param_callee_owned_inst`
+    /// bails on `Option`/`Result` (`param_own.rs`), so neither frame owns it.
     ///
-    /// The callee here IGNORES its parameter entirely, which is the point: the
-    /// row filed this as needing a `match` and a second heap field, and neither
-    /// is required. `#[ignore]`d rather than deleted so the repro is runnable
-    /// (`cargo test --features llvm --test memory_sanitizer -- --ignored`)
-    /// instead of living only in ledger prose.
+    /// The ARGUMENT FORM is irrelevant — the `let`-bound argument here leaks
+    /// exactly as `take(mk())` does — and so is the payload field type. The row
+    /// originally read this as Vec-specific, with `String` fields "freed
+    /// correctly"; that was an `-O2` artifact (LLVM deletes the dead String
+    /// allocation, so "no leak" meant "nothing was allocated"). At
+    /// `KARAC_OPT_LEVEL=0` a `String` payload leaks identically.
+    ///
+    /// Uses a `Vec` payload because that one survives `-O2`, which is what this
+    /// harness builds.
     #[test]
-    #[ignore = "B-2026-08-11-30 leg B: fresh-temp Result[struct-with-Vec] param leaks the Vec buffer"]
-    fn asan_result_temp_param_leaks_vec_field() {
+    #[ignore = "B-2026-08-11-30: by-value Result param the callee never destructures leaks its payload"]
+    fn asan_result_param_never_destructured_leaks_payload() {
         assert_clean_asan_run(
             r#"
 enum E { Missing(String) }
-struct S { b: Vec[String] }
-fn mk() -> Result[S, E] {
-    let mut v: Vec[String] = Vec.new();
-    v.push("x");
-    return Ok(S { b: v });
-}
-fn take(r: Result[S, E]) { println("got"); }
-fn main() { take(mk()); println("end"); }
+fn mkv() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("x"); return v; }
+fn mk() -> Result[Vec[String], E] { return Ok(mkv()); }
+fn take(r: Result[Vec[String], E]) { println("got"); }
+fn main() { let r = mk(); take(r); println("end"); }
 "#,
             &["got", "end"],
-            "result_temp_param_vec_field",
+            "result_param_never_destructured",
         );
     }
 
-    /// B-2026-08-11-30 LEG A. A `Map` field of the same shape leaks when the
-    /// `Result` is LET-BOUND before the match — the opposite polarity from leg
-    /// B, and the reason the row keeps them as two legs. Matching the call
-    /// inline is clean.
+    /// B-2026-08-11-30, `Option` twin. Same bail, same leak — the two built-in
+    /// enums share the `param_own.rs` exclusion. A user enum in this exact
+    /// shape is CLEAN (it takes the callee-owned entry-copy path), which is
+    /// what localises the defect to `Option`/`Result` rather than to enums.
     #[test]
-    #[ignore = "B-2026-08-11-30 leg A: let-bound Result[struct-with-Map] leaks on match"]
-    fn asan_result_let_bound_leaks_map_field() {
+    #[ignore = "B-2026-08-11-30: by-value Option param the callee never destructures leaks its payload"]
+    fn asan_option_param_never_destructured_leaks_payload() {
+        assert_clean_asan_run(
+            r#"
+fn mkv() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("x"); return v; }
+fn take(o: Option[Vec[String]]) { println("got"); }
+fn main() { take(Some(mkv())); println("end"); }
+"#,
+            &["got", "end"],
+            "option_param_never_destructured",
+        );
+    }
+
+    /// B-2026-08-12-2 (split out of B-2026-08-11-30's leg A). A `Map` field of
+    /// an `Ok` payload leaks when the `Result` is LET-BOUND before the match;
+    /// matching the producing call inline is clean. No by-value parameter
+    /// boundary is involved, and the identical shape with a `Vec` field is
+    /// clean — which is why this is its own row rather than a polarity of the
+    /// param bug above.
+    #[test]
+    #[ignore = "B-2026-08-12-2: let-bound Result[struct-with-Map] leaks on match"]
+    fn asan_let_bound_result_map_field_leaks_on_match() {
         assert_clean_asan_run(
             r#"
 enum E { Missing(String) }
@@ -46156,7 +46178,7 @@ fn main() {
 }
 "#,
             &["1", "end"],
-            "result_let_bound_map_field",
+            "let_bound_result_map_field",
         );
     }
 }

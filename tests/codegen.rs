@@ -12859,6 +12859,51 @@ fn main() {
         );
     }
 
+    /// B-2026-08-12-1. Passing a by-value `Option`/`Result` argument twice: the
+    /// SECOND call reads the wrong variant. The caller's pass-as-arg move
+    /// cap-zeros the source binding
+    /// (`suppress_inline_result_payload_cleanup_for_moved_arg`) on the
+    /// assumption that the destination takes ownership — which holds for
+    /// `v.push(r)`, the shape it was written for, but not for a plain call:
+    /// `make_aggregate_param_callee_owned_inst` bails on `Option`/`Result`, so
+    /// the callee never takes it and the zeroing is pure corruption of a
+    /// binding the caller still owns.
+    ///
+    /// Kāra's move-checker deliberately does NOT reject double-consume
+    /// (`param_own.rs` § "Why not move-by-default" — `take(x); take(x)` is
+    /// specified to work), so this is a silent wrong answer in an accepted
+    /// program, not a diagnosable misuse. The interpreter prints the right
+    /// answer on both, which is what makes it a backend divergence rather than
+    /// a language question.
+    ///
+    /// Same root cause as B-2026-08-11-30's leak: caller retracts, callee
+    /// bails. Both halves have to move together.
+    #[test]
+    #[ignore = "B-2026-08-12-1: 2nd pass of a by-value Option/Result arg reads the wrong variant"]
+    fn e2e_repeated_by_value_optres_arg_reads_wrong_variant() {
+        assert_eq!(
+            run_program(
+                r#"
+enum E { Missing(String) }
+fn mkv() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("x"); v.push("y"); return v; }
+fn takr(r: Result[Vec[String], E]) -> i64 { match r { Ok(v) => v.len(), Err(_e) => -1 } }
+fn tako(o: Option[Vec[String]]) -> i64 { match o { Some(v) => v.len(), None => -1 } }
+fn main() {
+    let r = Ok(mkv());
+    println(takr(r));
+    println(takr(r));
+    let o = Some(mkv());
+    println(tako(o));
+    println(tako(o));
+}
+"#
+            ),
+            // Codegen prints 2 / -1 / 2 / -1; the interpreter prints all 2s. A
+            // user ENUM in this exact shape is already correct on both.
+            Some("2\n2\n2\n2\n".to_string())
+        );
+    }
+
     /// B-2026-07-28-8: storing into a PLAIN (value-type) struct's
     /// `Option[shared T]` field must retain the new inner BEFORE releasing the
     /// old one.
