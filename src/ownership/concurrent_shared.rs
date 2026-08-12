@@ -1960,6 +1960,7 @@ fn detect_par_block_conflicts(
                         binding,
                         use_span.clone(),
                         prev_span.clone(),
+                        type_is_user_declared(&binding.type_name, program_items),
                     );
                     let mut edits =
                         build_fix_diff_edits(&binding.type_name, binding.kind, program_items);
@@ -1986,11 +1987,29 @@ fn detect_par_block_conflicts(
     }
 }
 
+/// Does `type_name` have a declaration in THIS program's source, as opposed to
+/// coming from the baked stdlib? B-2026-08-12-23.
+///
+/// Exactly the condition that makes [`build_fix_diff_edits`] return an empty
+/// edit list — that function scans the same `program_items` for a matching
+/// `StructDef`, so a type absent from it has nothing to rewrite. Written as its
+/// own predicate rather than inferred from `edits.is_empty()` because the edit
+/// list is also empty for a user struct whose keyword spans are synthetic, and
+/// the two cases want opposite diagnostics.
+fn type_is_user_declared(type_name: &str, program_items: &[Item]) -> bool {
+    program_items.iter().any(|item| match item {
+        Item::StructDef(s) => s.name == type_name,
+        Item::EnumDef(e) => e.name == type_name,
+        _ => false,
+    })
+}
+
 fn build_concurrent_struct_error(
     binding: &str,
     tracked: &TrackedBinding,
     second_use_span: Span,
     first_use_span: Span,
+    user_declared: bool,
 ) -> OwnershipError {
     let (kind_label, kind_variant) = match tracked.kind {
         BindingKind::Shared => (
@@ -2015,6 +2034,49 @@ fn build_concurrent_struct_error(
         fl = first_use_span.line,
         fc = first_use_span.column,
     );
+    // B-2026-08-12-23 — a BUILT-IN type has no declaration in this program, so
+    // every step of the migration below is unfollowable: there is no
+    // `struct Vec` here to rename and no `par Vec` to rename it to. The
+    // diagnostic still fires (the rule is deliberate — see design.md's v1
+    // implementation status paragraph, which gates struct/enum-typed bindings
+    // and frees non-struct ones; `Vec`/`Map`/`Set` are declared as structs in
+    // the baked stdlib and `String` is not, which is the whole of the apparent
+    // inconsistency), but the ADVICE has to be one the author can act on.
+    //
+    // The three routes named below are the ones that were MEASURED to pass, and
+    // the warning at the end is the trap that was measured to fail. `Arc` is
+    // deliberately not offered: it is in this pass's exemption list but is not
+    // yet a type the surface language resolves (`undefined type 'Arc'`), so
+    // suggesting it would replace impossible advice with different impossible
+    // advice.
+    //
+    // Checked BEFORE the immutable-type shortcut below so it cannot be reached
+    // for a builtin: that shortcut also prescribes a rename.
+    if !user_declared {
+        let suggestion = format!(
+            concat!(
+                "`{ty}` is a built-in type with no declaration in this program, so it cannot be ",
+                "migrated to `par struct` — there is no `struct {ty}` here to rename. Give each ",
+                "branch its own value instead:\n",
+                "  1. hoist a per-branch copy BEFORE the `par` block (`let a = {bn}.clone(); ",
+                "let b = {bn}.clone();`, then use `a` in one branch and `b` in the other)\n",
+                "  2. or build the disjoint values each branch needs up front\n",
+                "  3. or wrap it in `Mutex[{ty}[..]]` and share that\n",
+                "Cloning INSIDE a branch (`f({bn}.clone())`) does NOT help: reading `{bn}` in ",
+                "order to clone it is itself the second-branch use this error is reporting.",
+            ),
+            ty = tracked.type_name,
+            bn = binding,
+        );
+        return OwnershipError {
+            message,
+            span: second_use_span,
+            kind: kind_variant,
+            suggestion: Some(suggestion),
+            replacement: None,
+            consume_span: Some(first_use_span),
+        };
+    }
     // B-2026-08-01-33 — an IMMUTABLE type gets a one-keyword answer, not the
     // full migration. `par struct` with immutable fields shares lock-free
     // across tasks with no annotation at the use site, so telling such an

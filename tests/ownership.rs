@@ -7175,6 +7175,160 @@ fn test_concurrent_plain_struct_fires_on_two_branch_use() {
     );
 }
 
+/// B-2026-08-12-23 — a BUILT-IN container gets advice its author can act on.
+///
+/// The rule itself is deliberate and unchanged: design.md's v1 implementation
+/// status paragraph gates non-`par` struct/enum-typed bindings regardless of
+/// borrow mode, and `Vec`/`Map`/`Set` are declared as structs in the baked
+/// stdlib (`runtime/stdlib/vec.kara`) so they are struct-typed bindings. What
+/// was wrong is only the SUGGESTION, which prescribed a migration no author can
+/// perform: "rename `struct Vec` to `par struct Vec`" names a declaration that
+/// does not exist in their program, and every numbered step after it followed
+/// from that rename.
+///
+/// The replacement names three routes, and this test pins them because they
+/// were chosen by MEASUREMENT rather than plausibility — each is asserted to
+/// compile in `test_concurrent_plain_struct_builtin_suggested_routes_compile`
+/// below. The trap warning is pinned for the same reason: the obvious fix an
+/// author reaches for first, an in-branch `v.clone()`, is still rejected,
+/// because reading `v` to clone it IS the second-branch use.
+///
+/// `Arc` is deliberately absent from the advice. It is in this pass's
+/// cross-task-safe exemption list, but the surface language does not resolve it
+/// yet (`undefined type 'Arc'`), so offering it would swap one impossible
+/// instruction for another.
+#[test]
+fn test_concurrent_plain_struct_builtin_help_is_actionable() {
+    let errors = ownership_errors(
+        "fn ra(v: Vec[i64]) -> i64 { v[0] }\n\
+         fn rb(v: Vec[i64]) -> i64 { v[1] }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             v.push(2);\n\
+             par {\n\
+                 ra(v);\n\
+                 rb(v);\n\
+             }\n\
+         }",
+    );
+    let hit = errors
+        .iter()
+        .find(|e| {
+            matches!(
+                &e.kind,
+                OwnershipErrorKind::ConcurrentPlainStruct { type_name, .. } if type_name == "Vec"
+            )
+        })
+        .expect("expected E_CONCURRENT_PLAIN_STRUCT on the builtin");
+    let suggestion = hit
+        .suggestion
+        .as_ref()
+        .expect("suggestion should be present");
+    assert!(
+        !suggestion.contains("rename `struct Vec`"),
+        "builtin suggestion must not prescribe renaming a declaration the author does not have; got: {suggestion}",
+    );
+    assert!(
+        suggestion.contains("built-in type with no declaration in this program"),
+        "builtin suggestion should say why the migration is unavailable; got: {suggestion}",
+    );
+    assert!(
+        suggestion.contains("hoist a per-branch copy BEFORE the `par` block")
+            && suggestion.contains("disjoint values")
+            && suggestion.contains("Mutex["),
+        "builtin suggestion should name all three working routes; got: {suggestion}",
+    );
+    assert!(
+        suggestion.contains("does NOT help"),
+        "builtin suggestion should warn about the in-branch clone trap; got: {suggestion}",
+    );
+    assert!(
+        !suggestion.contains("`Arc`"),
+        "Arc is not resolvable by the surface language yet, so it must not be advised; got: {suggestion}",
+    );
+}
+
+/// B-2026-08-12-23 — the three routes the builtin diagnostic advertises all
+/// compile. Without this the help text is a claim rather than a fact, and the
+/// original defect was precisely a confidently-worded claim that did not hold.
+#[test]
+fn test_concurrent_plain_struct_builtin_suggested_routes_compile() {
+    let reads = "fn ra(v: Vec[i64]) -> i64 { v[0] }\nfn rb(v: Vec[i64]) -> i64 { v[0] }\n";
+    // Route 1 — per-branch copies hoisted out of the `par` block.
+    let hoisted = format!(
+        "{reads}fn main() {{\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             let a = v.clone();\n\
+             let b = v.clone();\n\
+             par {{ ra(a); rb(b); }}\n\
+         }}"
+    );
+    // Route 2 — disjoint values built up front.
+    let disjoint = format!(
+        "{reads}fn main() {{\n\
+             let mut a: Vec[i64] = Vec.new();\n\
+             a.push(1);\n\
+             let mut b: Vec[i64] = Vec.new();\n\
+             b.push(2);\n\
+             par {{ ra(a); rb(b); }}\n\
+         }}"
+    );
+    // Route 3 — share it through a `Mutex`.
+    let guarded = "fn ra(v: ref Mutex[Vec[i64]]) -> i64 { 1 }\n\
+                   fn rb(v: ref Mutex[Vec[i64]]) -> i64 { 2 }\n\
+                   fn main() {\n\
+                       let mut base: Vec[i64] = Vec.new();\n\
+                       base.push(1);\n\
+                       let v: Mutex[Vec[i64]] = Mutex.new(base);\n\
+                       par { ra(v); rb(v); }\n\
+                   }"
+    .to_string();
+    for (label, src) in [
+        ("hoisted per-branch clones", hoisted),
+        ("disjoint values up front", disjoint),
+        ("Mutex-guarded share", guarded),
+    ] {
+        let result = ownership_ok(&src);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentPlainStruct { .. })),
+            "route `{label}` is advertised by the diagnostic and must compile, but it fired \
+             E_CONCURRENT_PLAIN_STRUCT",
+        );
+    }
+}
+
+/// B-2026-08-12-23 — the trap the builtin advice warns about is real. An
+/// in-branch `v.clone()` still fires, because reading `v` in order to clone it
+/// is itself the conflicting second-branch use. If this ever starts passing,
+/// the warning line in the suggestion is stale and must be removed.
+#[test]
+fn test_concurrent_plain_struct_builtin_in_branch_clone_still_fires() {
+    let errors = ownership_errors(
+        "fn ra(v: Vec[i64]) -> i64 { v[0] }\n\
+         fn rb(v: Vec[i64]) -> i64 { v[0] }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             par {\n\
+                 ra(v.clone());\n\
+                 rb(v.clone());\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentPlainStruct { type_name, .. } if type_name == "Vec"
+        )),
+        "in-branch clone must still fire — the suggestion tells authors it does not help"
+    );
+}
+
 #[test]
 fn test_concurrent_plain_struct_silent_when_only_one_branch_uses() {
     // Sole-branch use — the rule's accept side carries over to plain
