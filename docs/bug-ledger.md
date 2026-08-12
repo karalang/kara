@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 238 | 0 |
-| leak | 164 | 2 |
+| leak | 164 | 1 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 0 |
 | run-vs-build | 103 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 812 | 4 |
+| codegen | 812 | 3 |
 | typecheck | 156 | 3 |
 | interp | 138 | 0 |
 | ownership | 45 | 1 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1124 surfaced · 6 open · 1106 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1124 surfaced · 5 open · 1107 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-2 | 2026-08-12 | codegen | medium | A `Map` field of an `Ok` payload leaks ~72 B per call when the `Result` is LET-BOUND before the match; matching the producing call INLINE is clean, and the identical shape with a `Vec` field is clean. Split out of B-2026-08-11-30 leg A -- no by-value parameter boundary is involved, so the param-ownership defect that row describes does not cover it. | Split from B-2026-08-11-30, which is now solely about by-value Option/Result params. Same code area as B-2026-08-11-29 (SEGV, struct with a Map/Set field). |
 | B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
 | B-2026-08-12-9 | 2026-08-12 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at typecheck, so the codegen paths two E2E tests cover can never run in a shipped binary. Either the emitter is dead code to retire or the rule is stricter than intended -- open design call, not a defect report. | Vec[f64].sorted / Iterator.max / Iterator.min vs the F64 total-order rule |
 | B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
@@ -148,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1124 surfaced
 
 </details>
 
-### Fixed (1106)
+### Fixed (1107)
 
-<details><summary>1106 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1107 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2293,6 +2292,55 @@ two lanes, diff the exact bytes fed to each before believing the lanes differ.
 Saving a normalised copy for one side and the original for the other is enough to
 invent a divergence out of nothing -- and it survived a `git stash`-based
 with/without check, because both halves of that check ran on the same wrong file. |
+| B-2026-08-12-2 | codegen | medium | A `Map` field of an `Ok` payload leaks ~72 B per call when the `Result` is LET-BOUND before the match; matching the producing call INLINE is clean, a… | FIXED by c081b16.
+
+The match arm's struct-payload binding is now admitted when the struct's only
+non-duplicable heap is a `Map`/`Set` HANDLE, so it registers the
+`track_struct_var` that frees it.
+
+WHY IT WAS EXCLUDED, and why the exclusion was one condition too wide. The
+`is_inline_optres_struct_payload` arm (pattern_binding.rs, B-2026-07-10-3) exists
+for exactly this class -- "the struct's inner heap was owned by NOBODY and
+leaked" -- but gates on `aggregate_param_copy_supported_struct`, which is FALSE
+for a Map/Set field because the entry copy cannot duplicate a side-table handle.
+Copy-supported and drop-supported come apart here: the synthesized struct drop
+DOES free a Map field, which is why the same struct let-bound directly
+(`let s = mk();` over `fn mk() -> S`) was already leak-clean. The arm needs the
+FREE, not the copy, so the new predicate `struct_heap_copyable_or_handle` admits
+a direct handle field and nothing else -- a nested struct still has to be fully
+copy-supported, so the widening is exactly the measured case.
+
+Nobody else owned it: the consuming arm zeroes the scrutinee's payload words
+unconditionally (`respl.suppress.w1..w3`, read off the emitted IR for this
+shape), so the `Result`'s own payload drop finds a null handle and frees
+nothing. valgrind: 14,400 B direct plus 105,600 B indirect over 200 iterations,
+the whole map from `karac_map_new`.
+
+THREE CONDITIONS NARROW IT, and each was forced by a test rather than chosen:
+
+  * the arm must only BORROW the binding. An arm that moves it on
+    (`Ok(s) => take(s)`) hands ownership to the move machinery, whose
+    source-zeroing clears Vec/String CAPS and not a side-table handle -- so a
+    drop registered here is never retracted and the handle is freed twice. That
+    is B-2026-08-11-29's SEGV, and its pin
+    (`test_e2e_result_struct_wrapper_moved_to_callee_and_its_controls`) caught
+    the over-fire immediately. Needed a new per-ARM flag,
+    `pattern_binding_arm_only_borrows`; every neighbouring flag is per-match,
+    but this is a property of the arm body.
+  * the scrutinee must not be a FRESH OWNING TEMP (`match mk() { .. }`). That
+    temp keeps its own payload cleanup, so the shape was already clean and a
+    drop here is a second owner -- caught by the same pin's `inline_use` control.
+  * the scrutinee must not be an OWNED PARAM, which is the case the surrounding
+    comment's use-after-free warning is about: a non-copy-supported payload
+    leaves an owned param on caller-retains, so freeing the binding there would
+    turn a status-quo leak into a UAF on `sink(e); use(e)`.
+
+VERIFIED at KARAC_OPT_LEVEL=0 under valgrind over 200 iterations: the row's
+repro and every shape in its matrix are clean -- `Map` and `Set` fields,
+`Option` and `Result` wrappers -- and the controls that were already clean stay
+clean (bare `Result[Map,E]` with no struct, the struct with no enum wrapper, the
+inline match, and the let-bound-unused form). `#[ignore]` lifted on
+`asan_let_bound_result_map_field_leaks_on_match`. |
 | B-2026-08-12-3 | other | medium | `tests/codegen.rs`'s E2E harness ran `resolve` and `typecheck` only to feed `lower` and DISCARDED their errors, so the suite stayed green on 40 progr… | FIXED by e0c6bab. `common::assert_check_clean` panics when an E2E test program has a resolve or typecheck error, with the 40 measured offenders grandfathered by name and diagnostic in `CHECK_GATE_GRANDFATHERED`. Verified by negative control; suite green at 2905/0. |
 | B-2026-08-12-4 | codegen | high | `asan_vec_element_field_move_by_assignment_no_double_free` is red on main with a LeakSanitizer leak, and NONDETERMINISTICALLY so: green in the full p… | FIXED by 3e8d8fa9 -- and the row's nondeterminism has a mundane explanation that
 is worth more than the fix: the leak is DETERMINISTIC, and LeakSanitizer was the
