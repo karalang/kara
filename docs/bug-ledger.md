@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 50 | 0 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
-| other | 28 | 0 |
+| other | 29 | 1 |
 | use-after-free | 18 | 0 |
 
 ### By surface
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 46 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
-| cli | 28 | 0 |
+| cli | 29 | 1 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
 | parser | 14 | 0 |
@@ -124,12 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1137 surfaced · 4 open · 1121 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1138 surfaced · 5 open · 1121 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
+| B-2026-08-11-35 | 2026-08-11 | cli | high | `karac fix` DESTROYS SOURCE, silently and while reporting success, when the machine-applicable diagnostic sits INSIDE AN F-STRING INTERPOLATION. The replacement span is applied at the wrong file offset -- it lands near the top of the file instead of at the diagnostic site -- truncating mid-token and deleting everything between. It prints `applied 1 fix(es)` and exits 0; there is no backup and no dry-run, so the original is gone. MINIMAL REPRO (5 lines): `fn f(xs: mut Slice[i64]) -> i64 { return xs.len(); }` / `fn g(xs: mut Slice[i64]) {` / `    println(f"{f(mut xs)}");` / `}` / `fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }`. The diagnostic is the correct one -- `3:18: this argument is already a mut-ref; drop the mut marker` -- and the fix is a 4-character deletion. After `karac fix` the file is 3 lines and begins `fn f(xs: mut Slice[i` + `xs)}");`: the edit was applied at roughly byte 19 rather than at byte ~96 where line 3 col 18 actually is. NOT a multibyte/UTF-8 offset bug: probed with an ASCII-only file, a file with em-dashes near the site, and a file with 30 em-dash comment lines before the site -- all three fix CORRECTLY. The same `drop the mut marker` fix applied to `return f(mut xs)` OUTSIDE an f-string also fixes correctly in the same file shape. The single distinguishing factor is that the argument sits in an f-string hole. SEVERITY HIGH because of the blast radius rather than the shape: CLAUDE.md directs `karac fix` as the PRIMARY fix path for machine-applicable diagnostics in the Mend loop, so this is reachable by the documented workflow on any file that formats a mut-ref call into a string -- which is the ordinary way these katas print results. FIX DIRECTION: the fix's replacement range is presumably computed against the interpolation's sub-expression source rather than the enclosing file, so it needs the hole's absolute file offset added back before the edit is applied. Worth auditing every machine-applicable fix for the same relative-span assumption, not just this one, and worth refusing to write when a computed span does not re-lex to the token the diagnostic named. | karac fix — machine-applicable edit span for a diagnostic inside an f-string interpolation |
 | B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
 | B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
 | B-2026-08-12-26 | 2026-08-12 | codegen | medium | ELEMENT-TO-ELEMENT index assign LEAKS one buffer per assignment: `ps[0] = ps[1]` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 400 B in 40 allocations, one per assign. Output is correct on all three backends -- this is a pure leak, not a miscompile. | `src/codegen/stmts.rs`, the `ExprKind::Index` assignment arm -- `emit_displaced_index_elem_drop` + `compile_index_store` with an INDEX rhs |
