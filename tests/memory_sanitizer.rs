@@ -20722,6 +20722,151 @@ fn main() {
         );
     }
 
+    /// B-2026-08-12-22 — the OTHER side of the same store. The fixture above
+    /// covers the DISPLACED element (the slot's old occupant); this covers the
+    /// INCOMING one. `ps[0] = b` for a named `b` whose type is a struct with a
+    /// live heap field moved `b`'s field pointers into the slot while `b`'s own
+    /// `StructDrop` stayed armed, so the container's element drain and `b`
+    /// freed the same buffer: `free(): double free detected in tcache 2` on a
+    /// default `karac build`, a `ptr::copy_nonoverlapping` UB panic under the
+    /// JIT, and correct output from the interpreter.
+    ///
+    /// `target_owns_heap_vec_elem` did not reach it because that gate asks
+    /// whether the ELEMENT is a `{ptr,len,cap}` — which is why a `Vec[String]`
+    /// was safe and a `Vec[<struct with a String>]` was not.
+    ///
+    /// EVERY LEG USES AN f-STRING, never a string literal, and that is the
+    /// point rather than a style choice. The filing's boundary table recorded a
+    /// fresh struct literal and a field-wise rebuild as SAFE; both abort once
+    /// the field is genuinely allocated. Those probes used string literals,
+    /// whose `cap` is 0, so the second free was a guarded no-op and the shape
+    /// only looked clean. A literal-valued fixture here would pass without the
+    /// fix and prove nothing.
+    ///
+    /// The legs are the distinct sources a named binding can have, plus the two
+    /// container spellings and the motivating swap:
+    ///
+    ///   * `elem`  — the binding is an element READ (the filed repro)
+    ///   * `lit`   — the binding is a fresh struct literal
+    ///   * `call`  — the binding is a function result
+    ///   * `field` — the container is field-rooted (`h.xs[j] = b`)
+    ///   * `veck`  — the heap field is a `Vec`, not a `String`
+    ///   * `swap`  — the swap at the heart of any hand-written sort, which is
+    ///     what makes this worth a high severity despite the narrow shape.
+    ///     Spelled with TWO temps (`let t = qs[0]; let u = qs[1]; qs[0] = u;
+    ///     qs[1] = t;`) rather than the terser one-temp form, because the
+    ///     terser form contains `qs[0] = qs[1]` and would drag in the
+    ///     unrelated pre-existing leak described below. Both spellings
+    ///     DOUBLE-FREED before this fix; this one exercises the suppression
+    ///     twice and is leak-clean, so it can gate.
+    ///
+    /// THE OBVIOUS CONTROL IS DEFERRED, NOT OMITTED. `ps[0] = ps[1]` (no
+    /// binding) would be the natural must-not-disturb leg, and it cannot go
+    /// here because it is RED for an unrelated, pre-existing reason: it leaks
+    /// one buffer per assignment, measured identically with and without this
+    /// fix (400 B in 40 allocations either way). Its RHS is an `Index`, not an
+    /// `Identifier`, so the suppression added here never runs for it. It has
+    /// its own deferred fixture immediately below and its own row.
+    #[test]
+    fn asan_index_assign_named_struct_source_freed_once() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { word: String, n: i64 }
+struct Bag { xs: Vec[i64], n: i64 }
+struct Holder { ps: Vec[Pair] }
+fn mk(k: i64) -> Pair { return Pair { word: f"call{k}", n: k }; }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 40 {
+        let mut ps: Vec[Pair] = Vec.new();
+        ps.push(Pair { word: f"alpha{k + i}", n: 1 });
+        ps.push(Pair { word: f"beta{k + i}", n: 2 });
+        // elem: the filed repro.
+        let b = ps[1];
+        ps[0] = b;
+        acc = acc + ps[0].word.len() + ps[1].word.len();
+        // lit: a fresh literal bound to a name first.
+        let lit = Pair { word: f"gamma{k + i}", n: 3 };
+        ps[0] = lit;
+        acc = acc + ps[0].word.len();
+        // call: a function result bound to a name.
+        let c = mk(k + i);
+        ps[1] = c;
+        acc = acc + ps[1].word.len();
+        // swap: the sort primitive.
+        let mut qs: Vec[Pair] = Vec.new();
+        qs.push(Pair { word: f"one{k + i}", n: 1 });
+        qs.push(Pair { word: f"two{k + i}", n: 2 });
+        let t = qs[0];
+        let u = qs[1];
+        qs[0] = u;
+        qs[1] = t;
+        acc = acc + qs[0].word.len() + qs[1].word.len();
+        // field: a field-rooted container.
+        let mut h = Holder { ps: Vec.new() };
+        h.ps.push(Pair { word: f"hx{k + i}", n: 1 });
+        h.ps.push(Pair { word: f"hy{k + i}", n: 2 });
+        let hb = h.ps[1];
+        h.ps[0] = hb;
+        acc = acc + h.ps[0].word.len();
+        // veck: the heap field is a Vec rather than a String.
+        let mut v1: Vec[i64] = Vec.new();
+        v1.push(7);
+        let mut v2: Vec[i64] = Vec.new();
+        v2.push(9);
+        let mut bs: Vec[Bag] = Vec.new();
+        bs.push(Bag { xs: v1, n: 1 });
+        bs.push(Bag { xs: v2, n: 2 });
+        let bb = bs[1];
+        bs[0] = bb;
+        acc = acc + bs[0].xs[0] + bs[1].xs[0];
+        i = i + 1;
+    }
+    println(acc > 0);
+}
+"#,
+            &["true"],
+            "index_assign_named_struct_source_freed_once",
+        );
+    }
+
+    /// B-2026-08-12-26 — the deferred control for the fixture above.
+    /// `ps[0] = ps[1]` over a struct element with a heap field LEAKS one buffer
+    /// per assignment: 400 B in 40 allocations. Pre-existing and measured on
+    /// both sides of B-2026-08-12-22 — that row's suppression is gated on an
+    /// `Identifier` RHS and this one's is an `Index`, so it neither caused nor
+    /// cured it.
+    ///
+    /// Kept as a live fixture rather than deleted so the coverage is visibly
+    /// deferred; flip to `#[test]` when the row lands.
+    #[test]
+    #[ignore = "B-2026-08-12-26: `ps[0] = ps[1]` leaks one element buffer per assignment (400 B / 40 allocations); pre-existing, unrelated to B-2026-08-12-22"]
+    fn asan_index_assign_elem_to_elem_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { word: String, n: i64 }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 40 {
+        let mut ps: Vec[Pair] = Vec.new();
+        ps.push(Pair { word: f"alpha{k + i}", n: 1 });
+        ps.push(Pair { word: f"beta{k + i}", n: 2 });
+        ps[0] = ps[1];
+        acc = acc + ps[0].word.len();
+        i = i + 1;
+    }
+    println(acc > 0);
+}
+"#,
+            &["true"],
+            "index_assign_elem_to_elem_no_leak",
+        );
+    }
+
     /// B-2026-08-01-31 — `let x = o.h.r`: a struct field moved out of a
     /// struct reached through a DEEPER field chain never cap-zeroed the
     /// source, so BOTH x's cleanup and o's StructDrop freed the same name

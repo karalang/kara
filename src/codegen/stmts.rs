@@ -8688,6 +8688,72 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-08-12-22 — the AoS peer of the SoA arm just above,
+                    // and a DOUBLE FREE rather than the leak the neighbouring
+                    // arms guard: `ps[0] = b` for a named `b` whose type is a
+                    // struct with a live heap field moves `b`'s field pointers
+                    // into the element slot while `b`'s own `StructDrop` stays
+                    // armed, so the container's element drain and `b` free the
+                    // same buffer at scope exit. `free(): double free detected
+                    // in tcache 2` on a default `karac build`, and a
+                    // `ptr::copy_nonoverlapping` UB panic under the JIT; the
+                    // interpreter is correct.
+                    //
+                    // NOT COVERED BY `target_owns_heap_vec_elem` above, which
+                    // is why a `Vec[String]` is safe and a `Vec[<struct with a
+                    // String>]` is not: that gate asks whether the ELEMENT is a
+                    // `{ptr,len,cap}`, and a struct whose FIELD is one is not.
+                    //
+                    // THE RHS FORM IS IRRELEVANT, which the filing's boundary
+                    // table got wrong: it recorded a fresh struct literal and a
+                    // field-wise rebuild as safe, but both abort too once the
+                    // heap field is genuinely allocated. Those rows used STRING
+                    // LITERALS, whose `cap` is 0, so the second free was a
+                    // guarded no-op and the shape only looked clean. Any named
+                    // binding of a struct with a live heap field does it — an
+                    // element read, a literal, or a call result — so the gate
+                    // here is the ELEMENT TYPE plus a named source, not the
+                    // provenance of the value.
+                    //
+                    // Field-rooted containers (`h.xs[j] = b`) go through the
+                    // same path: `vec_index_elem_type_expr` resolves both
+                    // spellings, and the field-rooted one aborts identically
+                    // without this.
+                    //
+                    // `zero_struct_move_caps` only touches heap-field caps, so
+                    // an all-scalar element struct is a no-op, and running it
+                    // after the SoA arm above is idempotent for a struct both
+                    // reach.
+                    if let ExprKind::Identifier(src) = &value.kind {
+                        if !self.ref_params.contains_key(src) {
+                            let elem_struct =
+                                self.vec_index_elem_type_expr(object).and_then(|te| {
+                                    let TypeKind::Path(p) = &te.kind else {
+                                        return None;
+                                    };
+                                    p.segments.last().cloned().filter(|n| {
+                                        self.struct_types.contains_key(n.as_str())
+                                            && !self.shared_types.contains_key(n.as_str())
+                                    })
+                                });
+                            // A slice or map target does not own its elements
+                            // (borrowed / side-table), so disarming the source
+                            // there would free nothing and leave the value
+                            // dangling.
+                            let container_owns = match &object.kind {
+                                ExprKind::Identifier(c) => {
+                                    !self.slice_elem_types.contains_key(c.as_str())
+                                        && !self.map_key_types.contains_key(c.as_str())
+                                }
+                                _ => true,
+                            };
+                            if let Some(sname) = elem_struct.filter(|_| container_owns) {
+                                if let Some(src_slot) = self.variables.get(src).copied() {
+                                    self.zero_struct_move_caps(src_slot.ptr, &sname);
+                                }
+                            }
+                        }
+                    }
                 } else if let ExprKind::TupleIndex { object, index } = &target.kind {
                     // B-2026-08-02-5 — tuple-element assignment target
                     // (`t.0 = v`, `o.t.0 = v`): previously NO arm matched, so

@@ -11177,6 +11177,50 @@ fn main() {
         assert_eq!(out, "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n");
     }
 
+    /// B-2026-08-12-22 — the INCOMING side of that same store, and a DOUBLE
+    /// FREE rather than the leak its sibling guards. `ps[0] = b` for a named
+    /// `b` whose type is a struct with a heap field moved `b`'s field pointers
+    /// into the element slot while `b`'s own drop stayed armed, so the
+    /// container's element drain and `b` freed the same buffer:
+    /// `free(): double free detected in tcache 2` under `karac build`, a
+    /// `ptr::copy_nonoverlapping` UB panic under the JIT, correct output from
+    /// the interpreter.
+    ///
+    /// This is the OBSERVABLE half — the swap at the heart of any hand-written
+    /// sort, checked against the interpreter oracle. The memory half is
+    /// `tests/memory_sanitizer.rs`'s
+    /// `asan_index_assign_named_struct_source_freed_once`, which carries the
+    /// full source matrix.
+    ///
+    /// Every string here is an f-STRING on purpose: a string LITERAL has
+    /// `cap` 0, so the second free is a guarded no-op and the shape looks
+    /// clean. Three of the filing's "safe" boundary rows were literal-valued
+    /// and abort once the field is genuinely allocated.
+    #[test]
+    fn e2e_index_assign_named_struct_source_swap() {
+        let Some(out) = run_program(
+            "struct Pair { word: String, n: i64 }\n\
+             fn main() {\n\
+             \x20   let k = 1;\n\
+             \x20   let mut ps: Vec[Pair] = Vec.new();\n\
+             \x20   ps.push(Pair { word: f\"alpha{k}\", n: 1 });\n\
+             \x20   ps.push(Pair { word: f\"beta{k}\", n: 2 });\n\
+             \x20   let t = ps[0];\n\
+             \x20   let u = ps[1];\n\
+             \x20   ps[0] = u;\n\
+             \x20   ps[1] = t;\n\
+             \x20   println(ps[0].word + \" \" + ps[1].word);\n\
+             \x20   let c = Pair { word: f\"gamma{k}\", n: 3 };\n\
+             \x20   ps[0] = c;\n\
+             \x20   println(ps[0].word + \" \" + ps[1].word);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        // Matches `karac run --interp` on the identical source.
+        assert_eq!(out, "beta1 alpha1\ngamma1 alpha1\n");
+    }
+
     /// B-2026-08-01-20 — a FIELD-assign displaces the old field value,
     /// whose Drop bodies now fire before the store (both backends were
     /// silent; the memory side always freed). Struct fields with Drop
