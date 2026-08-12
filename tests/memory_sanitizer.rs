@@ -38328,38 +38328,67 @@ fn main() {
         );
     }
 
-    /// B-2026-08-12-19 — the one position the row above does NOT cover, split
-    /// out so its `-O0` quarantine does not blanket the six that are fixed.
+    /// B-2026-08-12-19 — the CALLEE's ENTRY COPY of the same shape. The row
+    /// above owns the caller's value; this owns the copy the callee makes of
+    /// it, which is a genuinely separate allocation.
     ///
-    /// A fresh-temp `Result[S, i64]` argument whose callee's arm binds NOTHING
-    /// (`Result.Ok(_)`). The caller is clean, which is why this passes at
-    /// `-O2`; what leaks is the CALLEE's entry copy, and only `-O0` shows it
-    /// because the copy folds away under the optimizer. Both leaked
-    /// allocations are attributed to `cls` in the LSan trace — 40 boxes at
-    /// 32 B plus their 40 interior Strings.
+    /// THE COUNT IS THE ARGUMENT, and it is what rules out "the caller already
+    /// owns it, so this is a double free": the program reports 168 allocations
+    /// for 40 iterations — FOUR per call, two boxes and two Strings. The entry
+    /// copy deep-copies through the box, so each side needs its own owner and
+    /// freeing here cannot reach the caller's.
     ///
-    /// Distinct from B-2026-08-12-18 and untouched by its fix, measured on
-    /// both sides: pre-fix `-O0` reports 1551 B in 120 allocations, post-fix
-    /// 1391 B in 80 — the difference is exactly the 40 caller-side Strings
-    /// that row closed, and the remainder was there before and is unchanged.
+    /// A MATRIX OVER THE CALLEE'S BODY, because that is the axis that decides
+    /// ownership — not the argument form, which is what the row was filed
+    /// against. Measured per callee at `-O0` before the fix:
+    ///
+    ///   * `wild`    — `Result.Ok(_)`, binds nothing:        LEAKED 1,391 B
+    ///   * `nomatch` — never matches the param at all:       LEAKED 1,391 B
+    ///   * `sbind`   — `Result.Ok(s) => 2`, binds the struct: clean
+    ///   * `deep`    — binds the struct and reads the String: clean
+    ///
+    /// The two clean ones are the DOUBLE-FREE GUARD and the reason this could
+    /// not be an unconditional registration. `functions.rs` declined this
+    /// population precisely because they abort — an arm that binds gets its own
+    /// `StructDrop`, so a second owner is a glibc `double free detected in
+    /// tcache 2`. They stay green because the param now joins
+    /// `struct_field_boxed_payload_vars`, which is what lets the existing
+    /// arm-bind handoff zero the box word and disarm this action; registering
+    /// WITHOUT joining that set is the earlier attempt the old comment records
+    /// failing.
+    ///
+    /// `-O0` IS WHERE THIS PINS. At `-O2` the copy is dead and LLVM deletes it,
+    /// so all four legs pass there whether the fix is present or not — the
+    /// `scripts/asan-o0-leg.sh` run is the gate, exactly as for the fixtures
+    /// this file's `-O0` list was built for.
     #[test]
     fn asan_struct_field_boxed_interior_nonbinding_callee() {
         assert_clean_asan_run_min_allocs(
             r#"
 struct S { o: Option[Option[String]] }
-fn cls(r: Result[S, i64]) -> i64 { match r { Result.Ok(_) => 1, Result.Err(e) => e } }
+fn wild(r: Result[S, i64]) -> i64 { match r { Result.Ok(_) => 1, Result.Err(e) => e } }
+fn nomatch(r: Result[S, i64]) -> i64 { return 3; }
+fn sbind(r: Result[S, i64]) -> i64 { match r { Result.Ok(s) => 2, Result.Err(e) => e } }
+fn deep(r: Result[S, i64]) -> i64 {
+    match r { Result.Ok(s) => match s.o { Option.Some(Option.Some(t)) => t.len() as i64, _ => -1 }, Result.Err(e) => e }
+}
 fn main() {
     let n = env.args().len() as i64;
     let mut i: i64 = 0;
     let mut acc: i64 = 0;
     while i < 40 {
-        acc = acc + cls(Result.Ok(S { o: Option.Some(Option.Some(f"g{n + i}")) }));
+        acc = acc + wild(Result.Ok(S { o: Option.Some(Option.Some(f"g{n + i}")) }));
+        acc = acc + nomatch(Result.Ok(S { o: Option.Some(Option.Some(f"h{n + i}")) }));
+        acc = acc + sbind(Result.Ok(S { o: Option.Some(Option.Some(f"i{n + i}")) }));
+        acc = acc + deep(Result.Ok(S { o: Option.Some(Option.Some(f"j{n + i}")) }));
         i = i + 1;
     }
     println(acc);
 }
 "#,
-            &["40"],
+            // Per iteration: 1 + 3 + 2 + len("j1".."j40"). Over 40 iterations
+            // that is 40*6 = 240 constant plus 9*2 + 31*3 = 111 for the lengths.
+            &["351"],
             "struct_field_boxed_interior_nonbinding_callee",
             40,
         );

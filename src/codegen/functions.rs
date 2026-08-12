@@ -2159,18 +2159,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     // terminal consumer stays the only owner (B-2026-08-05-7's
                     // argument, reused).
                     //
-                    // DELIBERATELY NOT widened to B-2026-08-12-15's
-                    // struct-field population (`Result[W, i64]` over
-                    // `struct W { o: Option[Option[i64]] }`), though the
-                    // let-site peer of this loop is. That box already HAS a
-                    // callee-side owner — the arm that binds `W` out runs
-                    // `__karac_drop_struct_W`, which frees it — so registering
-                    // here makes two, measured as a glibc `double free
-                    // detected in tcache 2` on all three of the temp-argument,
-                    // bound-argument and matched-after-call forms. It is the
-                    // same asymmetry the `inner_struct.is_none()` gate above
-                    // encodes: a STRUCT payload has a move-out mirror and a
-                    // bare enum payload does not.
                     for (outer_enum, outer_variant, inner_enum, inner_variant, deeper) in
                         self.nested_boxed_enum_payload_variants(&mono_ty)
                     {
@@ -2183,6 +2171,75 @@ impl<'ctx> super::Codegen<'ctx> {
                             inner_variant,
                             deeper,
                         );
+                    }
+                    // B-2026-08-12-19 — B-2026-08-12-15's struct-field
+                    // population, which this loop used to decline. Its
+                    // stated reason was that the box "already HAS a
+                    // callee-side owner — the arm that binds `W` out runs
+                    // `__karac_drop_struct_W`". That is true of an arm that
+                    // BINDS and false of every other body: `Result.Ok(_)`,
+                    // and a body that never matches the param at all, leave
+                    // the ENTRY COPY owned by nobody. Measured over 40 calls
+                    // at -O0, with `struct S { o: Option[Option[String]] }`:
+                    // 1,391 B in 80 allocations — the copy's 40 boxes plus
+                    // the 40 Strings inside them, both malloc'd in the
+                    // callee.
+                    //
+                    // WHAT THIS FREES IS THE COPY, NOT THE CALLER'S VALUE,
+                    // which is why it does not collide with the caller-owns
+                    // contract the arg site enforces (`the
+                    // struct_field_boxed_payload_vars` exception to
+                    // `suppress_nested_boxed_drop_for_var`). Counted rather
+                    // than assumed: the same program reports 168 allocations
+                    // for 40 iterations — FOUR per call, i.e. two boxes and
+                    // two Strings — so the entry copy is a genuinely separate
+                    // allocation and each side needs its own owner.
+                    //
+                    // GATED ON THE ENTRY COPY ACTUALLY HAPPENING. Without a
+                    // copy the slot holds the caller's box and freeing it here
+                    // is a double free, so this asks the same predicate the
+                    // copy itself is emitted under rather than assuming the
+                    // shape implies it.
+                    //
+                    // THE DOUBLE FREE THE OLD COMMENT RECORDS IS REAL and is
+                    // handled, not risked: an arm that binds the struct out
+                    // gets its own `StructDrop`, and
+                    // `suppress_struct_field_boxed_payload_arm_bind` hands the
+                    // box over to it by zeroing the box word — but only for a
+                    // name in `struct_field_boxed_payload_vars`, which is why
+                    // the previous attempt (registering without joining that
+                    // set) aborted on the binding forms. Joining it is the
+                    // whole difference, and it is the same disarm the let site
+                    // has always relied on.
+                    if self.optres_param_entry_copied_te(&mono_ty) {
+                        let mut armed = false;
+                        for (
+                            outer_enum,
+                            outer_variant,
+                            inner_tag_field,
+                            inner_enum,
+                            inner_variant,
+                            deeper,
+                            box_contents,
+                        ) in self.struct_payload_boxed_field_variants(&mono_ty)
+                        {
+                            self.track_nested_boxed_enum_var_at_field(
+                                &param_name,
+                                alloca,
+                                outer_enum,
+                                outer_variant,
+                                inner_tag_field,
+                                inner_enum,
+                                inner_variant,
+                                deeper,
+                                box_contents,
+                            );
+                            armed = true;
+                        }
+                        if armed {
+                            self.struct_field_boxed_payload_vars
+                                .insert(param_name.clone());
+                        }
                     }
                 }
                 // RC-fallback boxing for non-shared, non-Vec parameters flagged by the
