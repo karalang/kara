@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 238 | 0 |
-| leak | 168 | 2 |
+| leak | 168 | 1 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 0 |
 | run-vs-build | 103 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 816 | 2 |
+| codegen | 816 | 1 |
 | typecheck | 156 | 0 |
 | interp | 138 | 0 |
 | ownership | 45 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1128 surfaced · 2 open · 1114 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1128 surfaced · 1 open · 1115 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-17 | 2026-08-12 | codegen | medium | A boxed `Option` FIELD envelope inside an inline STRUCT enum payload still leaks 32 B per call when the by-value ARGUMENT is not a fresh construction: `cls(Result.Ok(w))` wrapping a live `w`, and `cls(mkw(n))` handing on a callee-manufactured value. B-2026-08-12-15 fixed every form that either binds the value or constructs it at the call site; these two are the remainder it deliberately left. | — |
 | B-2026-08-12-18 | 2026-08-12 | codegen | low | The INTERIOR of a boxed `Option` field envelope owned by the fresh-temp argument spill has no owner: `cls(Result.Ok(S { o: Option.Some(Option.Some(f"v{n}")) }))` over `struct S { o: Option[Option[String]] }` leaks the String, 4 B per call. Surfaced by B-2026-08-12-15, which freed the envelope that had been leaking around it. | — |
 
 ### Wontfix (2)
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1128 surfaced
 
 </details>
 
-### Fixed (1114)
+### Fixed (1115)
 
-<details><summary>1114 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1115 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2846,6 +2845,63 @@ says registering the field "changes no free behaviour; it only makes the field
 readable". That was accurate for what it shipped -- the cap was still pinned to
 0 -- but the registration it added was also the precondition for this fix, and
 the comment it left at the seed site has been rewritten accordingly. |
+| B-2026-08-12-17 | codegen | medium | A boxed `Option` FIELD envelope inside an inline STRUCT enum payload still leaks 32 B per call when the by-value ARGUMENT is not a fresh construction… | FIXED by 5015d5d. Both shapes are clean at -O0 under valgrind and under
+LeakSanitizer; `asan_struct_payload_boxed_field_envelope_owned_in_arg_position`
+pins them (3,840 B in 120 allocations against the pre-fix compiler).
+
+ONE ROOT CAUSE, NOT TWO, and the row filed it as two. The bound spellings are
+what collapse them together -- each leaking form has a `let`-bound twin that
+was already clean:
+
+    let r = Result.Ok(w);   clean        takw(Result.Ok(w));   1,280 B / 40
+    let m = mkw(n);         clean        takw(mkw(n));         1,280 B / 40
+
+So neither the ctor move nor the callee's escaping return is at fault, and the
+row's two proposed fix sketches -- a move-suppression peer for the first, a
+discard-position owner for the second -- were both aimed one step off. Both are
+handled the moment a binding exists to own the result. What was missing is the
+ARGUMENT-POSITION owner, and one predicate refused both.
+
+WHAT CHANGED. `optres_arg_mints_field_envelope` admitted only constructions,
+because a place read can alias an envelope its owner still frees. It now admits
+two more shapes, each with a discriminator rather than a loosening:
+
+  * A plain call to a known function, when `nested_boxed_owner_source_of`
+    reports no live owner. That resolver already walks passthrough chains and
+    the alias map to a fixpoint, and it is exactly the question being asked --
+    `takw(idw(mkw(n)))` forwards a TEMP (nobody owns it, admit) while
+    `takw(idw(b))` forwards a BINDING (its let site owns it, refuse). Both are
+    in the fixture, because the second is the shape a careless widening turns
+    into a double free.
+  * An identifier NESTED INSIDE a construction, when it is not itself an armed
+    envelope owner (checked against all three registration families). Split
+    into its own entry point, `envelope_operand_is_unowned`, because the
+    question genuinely differs by depth: at top level `take(r)` names the enum
+    value and its let site owns the envelope, while one level in `Ok(w)` names
+    the STRUCT being moved into a fresh envelope and the move disarms it.
+
+MEASURED, baseline vs fixed, valgrind at -O0 over 40 iterations:
+
+  takw(Result.Ok(w)) for a live w    1,280 B / 40  ->  CLEAN
+  takw(mkw(n))                       1,280 B / 40  ->  CLEAN
+  takw(idw(mkw(n))) chained          1,280 B / 40  ->  CLEAN
+  takw(idw(b)) for a bound b            CLEAN      ->  CLEAN   (control)
+  let r = Result.Ok(w); match r         CLEAN      ->  CLEAN   (control)
+
+VERIFIED AGAINST THE CHECK THIS ROW WARNED ABOUT. The row records that widening
+the sibling PAYLOAD predicate aborted the self-host parser with `double free
+detected in tcache 2` while the whole -O0 valgrind matrix and 1044
+memory_sanitizer fixtures stayed green -- i.e. the local evidence was not
+sufficient then and is not sufficient now. All 8 self-host oracle tests pass
+(lexer, parser, parser-items, parser-types, resolver, resolver-program,
+typechecker, codegen-vs-seed), and drop-fuzz reports 0 memory-safety findings
+and 0 invariant violations over 200 generated programs / 558 valid executions /
+2,271 scheduled drops. Full suite 13,476 passed / 0 failed; -O0 leg green with
+an empty quarantine list.
+
+NOT COVERED: the String INTERIOR of a temp-argument envelope, which is
+B-2026-08-12-18 and unaffected by this -- the probe carrying it still reports
+its 160 B, unchanged. |
 
 </details>
 
