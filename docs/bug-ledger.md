@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 238 | 0 |
-| leak | 166 | 2 |
+| leak | 166 | 1 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 0 |
 | run-vs-build | 103 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 814 | 2 |
+| codegen | 814 | 1 |
 | typecheck | 156 | 0 |
 | interp | 138 | 0 |
 | ownership | 45 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced · 2 open · 1112 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced · 1 open · 1113 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-15 | 2026-08-12 | codegen | high | `c24343b3` (the B-2026-08-12-1 by-value Option/Result param entry-copy) LEAKS the copied payload: `asan_struct_field_boxed_heapless_option_envelope_owned` is red on the -O0 ASAN leg with 2560 bytes in 80 allocations, and GREEN at the default opt level -- so the ordinary `cargo test --features llvm` run does not see it and only `scripts/asan-o0-leg.sh` does. | regression from c24343b3 (B-2026-08-12-1); asan_struct_field_boxed_heapless_option_envelope_owned |
-| B-2026-08-12-16 | 2026-08-12 | codegen | low | `Json.parse`'s error message LEAKS: codegen copies the runtime's diagnostic into a Kara String but pins that String's `cap` to 0, so the scope-exit free is a permanent no-op. MEASURED under LeakSanitizer: 39 bytes in 1 allocation on a one-line parse-error program. Bounded (one allocation per failed parse) but unbounded in a loop that parses attacker-supplied JSON. | `src/codegen/json.rs`, the `Build Result.Err(JsonError { line, column, message })` packing -- field 5 (`message`'s `cap`) is pinned to `i64_ty.const_zero()` |
 
 ### Wontfix (2)
 
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1126 surfaced
 
 </details>
 
-### Fixed (1112)
+### Fixed (1113)
 
-<details><summary>1112 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1113 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2685,6 +2684,72 @@ Filed as B-2026-08-12-16. It is also why this commit adds no ASAN fixture for
 the shape: one would be RED on the Linux `memory-sanitizer` job today.
 
 Suite green at 13471 passed / 0 failed across 116 targets; clippy and fmt clean. |
+| B-2026-08-12-16 | codegen | low | `Json.parse`'s error message LEAKS: codegen copies the runtime's diagnostic into a Kara String but pins that String's `cap` to 0, so the scope-exit f… | FIXED by ec58cb0. The message no longer leaks: LeakSanitizer reports a
+clean run on the four-position matrix that was RED at 400 allocations.
+
+THE ROW'S FIX SHAPE WAS HALF THE FIX, and the missing half is the more
+interesting one. Wiring the real `cap` into w4 (`msg_len_word`, which is exact
+in all three incoming paths -- the alloc path mallocs precisely `msg_len_i64`
+bytes, and the null and empty paths both arrive with ptr == 0 AND len == 0, so
+the guarded free stays a no-op there) took the matrix from 400 leaked
+allocations to 200. It did NOT fix the two commonest shapes.
+
+MEASURED, per position, after the cap alone:
+  1. bare arm binding      `Err(e) => n + e.line`          -- STILL LEAKING
+  2. passed BY VALUE       `Err(e) => describe(e)`         -- clean
+  3. field read then value `let p = e.message.len(); ...`  -- clean
+  4. `?`-propagated        across a frame boundary         -- STILL LEAKING
+The two that passed did so for a reason that has nothing to do with this row:
+the CALLEE's own param drop owned the payload. Nothing in the caller ever did.
+
+ROOT CAUSE OF THE REMAINDER: `bind_pattern_values`'s
+`is_inline_optres_struct_payload` gate -- the B-2026-07-10-3 machinery that
+gives a `Some(e)`/`Err(e)` struct payload its scope-exit `StructDrop` -- was
+returning false for `JsonError`, so the arm binding got NO drop registered at
+all. Both of its admission tests (`aggregate_param_copy_supported_struct` and
+`struct_heap_copyable_or_handle`) read `struct_field_type_exprs`, and both bail
+to `false` the moment that map has no entry for the name. B-2026-08-12-14
+seeded `struct_types`, `struct_field_names` and `struct_field_type_names` --
+enough to make the field READABLE, which is all that row was about -- but not
+the TypeExprs the ownership gates consult. So there was a `cap > 0`-guarded
+drop synthesized and no binding registered to fire it.
+
+Seeding `struct_field_type_exprs` for `JsonError` (`i64`, `i64`, `String`,
+matching the as-built layout choice the sibling row documents) closes it. The
+`String` entry is the load-bearing one. The seed sits inside the same
+`!struct_types.contains_key` guard as the rest and runs before
+`declare_structs`, which unconditionally overwrites all three maps -- so a user
+program declaring its own `struct JsonError` still overrides it, exactly as it
+already overrides `Response`.
+
+DIRECTION THE FIX OPENS, and why the matrix is four positions rather than a
+smoke test: before this, every read of `e.message` was trivially safe because
+the buffer was never freed at all. Now it is genuinely freed, so each position
+where the payload could acquire a second owner is a potential double-free or
+use-after-free rather than a leak. ASAN catches that direction as loudly as
+LSan catches the leak, and all four are green -- including the by-value and
+`?`-propagation legs, which are the two that cross a frame boundary.
+
+PINNED by two tests. `asan_json_parse_error_message_freed_once`
+(tests/memory_sanitizer.rs) is the memory gate: the four positions in a
+100-iteration loop, verified non-vacuous in stages -- 400 leaked allocations
+before any change, 200 with the cap alone, 0 with both halves.
+`e2e_json_parse_error_fields_are_readable` (tests/codegen.rs) gains the
+correctness half: `describe` now reports the message's LENGTH and the caller
+compares it against the length it read before handing the struct over, so a
+mis-scoped free shows up as wrong output and not only as a sanitizer trip.
+Still length rather than content, so neither pin encodes serde_json's wording.
+
+VERIFIED byte-identical across all three backends (`--interp`, LLJIT, AOT) on a
+program that prints the message, both integer fields, and the message through a
+by-value callee, plus a `?`-propagated error and a successful parse in the same
+run. Suite green at 116 targets, 0 failures; fmt and clippy clean.
+
+NOTE for the reader coming from B-2026-08-12-14: that row's closing paragraph
+says registering the field "changes no free behaviour; it only makes the field
+readable". That was accurate for what it shipped -- the cap was still pinned to
+0 -- but the registration it added was also the precondition for this fix, and
+the comment it left at the seed site has been rewritten accordingly. |
 
 </details>
 
