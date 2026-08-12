@@ -46116,8 +46116,11 @@ fn main() with reads(FileSystem) {{
     ///
     /// Uses a `Vec` payload because that one survives `-O2`, which is what this
     /// harness builds.
+    ///
+    /// FIXED: the callee now OWNS such a param by transfer (functions.rs), in
+    /// lockstep with the caller's zeroing, so it frees the payload the caller
+    /// already gave up.
     #[test]
-    #[ignore = "B-2026-08-11-30: by-value Result param the callee never destructures leaks its payload"]
     fn asan_result_param_never_destructured_leaks_payload() {
         assert_clean_asan_run(
             r#"
@@ -46137,7 +46140,6 @@ fn main() { let r = mk(); take(r); println("end"); }
     /// shape is CLEAN (it takes the callee-owned entry-copy path), which is
     /// what localises the defect to `Option`/`Result` rather than to enums.
     #[test]
-    #[ignore = "B-2026-08-11-30: by-value Option param the callee never destructures leaks its payload"]
     fn asan_option_param_never_destructured_leaks_payload() {
         assert_clean_asan_run(
             r#"
@@ -46147,6 +46149,42 @@ fn main() { take(Some(mkv())); println("end"); }
 "#,
             &["got", "end"],
             "option_param_never_destructured",
+        );
+    }
+
+    /// B-2026-08-11-30, the safety property the fix rests on. Own-by-transfer
+    /// registers the callee's payload drop WITHOUT an entry copy, which is only
+    /// sound because the caller has already zeroed the source slot. Passing the
+    /// same binding TWICE therefore hands the second call all zeros, and every
+    /// `cap > 0` guard in its drop must skip — otherwise this is a double free,
+    /// which is the failure mode the first three passes of the row declined to
+    /// risk. Kāra deliberately accepts double-consume (param_own.rs, "Why not
+    /// move-by-default"), so this shape has to keep working.
+    ///
+    /// Reads the payload in the callee as well, so a drop that fired twice
+    /// would show up as a use-after-free rather than passing quietly.
+    #[test]
+    fn asan_by_value_optres_arg_passed_twice_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+enum E { Missing(String) }
+fn mkv() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("x"); return v; }
+fn mk() -> Result[Vec[String], E] { return Ok(mkv()); }
+fn takr(r: Result[Vec[String], E]) -> i64 { match r { Ok(v) => v.len(), Err(_e) => -1 } }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let r = mk();
+        acc = acc + takr(r);
+        acc = acc + takr(r);
+        i = i + 1;
+    }
+    println(f"{acc > -1000}");
+}
+"#,
+            &["true"],
+            "by_value_optres_arg_passed_twice",
         );
     }
 

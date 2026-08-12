@@ -1845,6 +1845,66 @@ impl<'ctx> super::Codegen<'ctx> {
                             // local source-cap suppression.
                             self.owned_struct_params.remove(&param_name);
                         }
+                        // B-2026-08-11-30 — OWN BY TRANSFER for the two BUILT-IN
+                        // enums. `make_aggregate_param_callee_owned_inst` bails on
+                        // `Option`/`Result` (they are type-erased, and their
+                        // payloads have their own machinery), so a by-value
+                        // `Option`/`Result` param was on caller-retains. But the
+                        // CALLER does not retain it: passing a binding by value
+                        // emits a whole-slot `store zeroinitializer` into the
+                        // source (`suppress_inline_option_result_binding_move`,
+                        // call_dispatch.rs), which zeroes the TAG as well as the
+                        // payload — so the caller's own overlay drop then reads
+                        // tag 0, takes the `Err`/`None` arm and frees nothing.
+                        // Neither frame owned the value and the whole `Ok`/`Some`
+                        // payload leaked, once per call, for every heap field.
+                        //
+                        // This is B-2026-08-05-33's pattern, one type-class over,
+                        // and it rests on the same lockstep argument: the caller
+                        // has ALREADY transferred (measured in the emitted IR, not
+                        // inferred), so there is no original left to protect and a
+                        // copy would be pointless. Registering the drop is what
+                        // the copy-supported arms do one line after their copy;
+                        // this is that pair minus the copy.
+                        //
+                        // Gated on the param NEVER ESCAPING, which is what keeps
+                        // exactly one owner in each direction:
+                        //
+                        //   * a param that reaches a return (`fn id(r) -> .. { r }`)
+                        //     hands ownership back, and the caller's arg-site
+                        //     zeroing is itself suppressed for that shape
+                        //     (`!call_arg_flows_into_return`) — so the caller kept
+                        //     its drop and the callee must not add one.
+                        //   * a param used only as a MATCH SCRUTINEE is consumed in
+                        //     place; the arm binding becomes the owner and the
+                        //     standard local move-suppression retracts this
+                        //     registration, exactly as it does for the entry-copied
+                        //     user-enum params that already take this path.
+                        //
+                        // `nonescaping_param_names` is that predicate and is
+                        // already computed per function (the field is named for its
+                        // first consumer, the `Result[shared]` rc leg; the analysis
+                        // itself is type-agnostic).
+                        //
+                        // `take(r); take(r)` stays safe without a copy: the first
+                        // call zeroed the caller's slot, so the second receives all
+                        // zeros and every `cap > 0` guard in the callee's drop
+                        // skips. That the second call also READS the zeroed value
+                        // as `Err`/`None` is a real defect, but a pre-existing and
+                        // separate one — B-2026-08-12-1, whose fix is on the
+                        // caller side and does not change the ownership decided
+                        // here.
+                        if matches!(&param.ty.kind, TypeKind::Path(_))
+                            && (type_name == "Option" || type_name == "Result")
+                            && self
+                                .result_shared_nonescaping_param_names
+                                .contains(&param_name)
+                        {
+                            let te = param.ty.clone();
+                            self.track_inline_option_payload_var(&param_name, alloca, &te);
+                            self.track_inline_result_payload_var(&param_name, alloca, &te);
+                            self.track_inline_option_map_payload_var(&param_name, alloca, &te);
+                        }
                     }
                 }
                 // #21 — a bare (non-ref) by-value TUPLE param carrying an enum /
