@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 238 | 2 |
-| leak | 163 | 2 |
+| leak | 164 | 2 |
 | double-free | 120 | 0 |
 | codegen-gap | 104 | 1 |
 | run-vs-build | 102 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 810 | 6 |
+| codegen | 811 | 6 |
 | typecheck | 156 | 3 |
 | interp | 138 | 0 |
-| ownership | 44 | 0 |
+| ownership | 45 | 1 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
 | cli | 28 | 0 |
@@ -124,20 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1122 surfaced · 8 open · 1102 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1123 surfaced · 8 open · 1103 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-2 | 2026-08-12 | codegen | medium | A `Map` field of an `Ok` payload leaks ~72 B per call when the `Result` is LET-BOUND before the match; matching the producing call INLINE is clean, and the identical shape with a `Vec` field is clean. Split out of B-2026-08-11-30 leg A -- no by-value parameter boundary is involved, so the param-ownership defect that row describes does not cover it. | Split from B-2026-08-11-30, which is now solely about by-value Option/Result params. Same code area as B-2026-08-11-29 (SEGV, struct with a Map/Set field). |
-| B-2026-08-12-4 | 2026-08-12 | codegen | high | `asan_vec_element_field_move_by_assignment_no_double_free` is red on main with a LeakSanitizer leak, and NONDETERMINISTICALLY so: green in the full parallel suite run, red standalone, on one unchanged tree. It is the un-ignored regression pin from 970dadf (B-2026-08-11-25) and fails in exactly the over-broad-repair mode its own comment predicts, so the assignment-path cap-zeroing looks to have traded the double free for a per-iteration leak. | Regression pin from 970dadf (B-2026-08-11-25). NOT caused by 19d0e9a (B-2026-08-11-30) -- verified by stash-and-rebuild. |
 | B-2026-08-12-5 | 2026-08-12 | codegen | high | SILENT WRONG ANSWER (run-vs-build): `#[derive(Eq)]` equality over a struct with a `Vec[String]` field reports NOT EQUAL in both compiled backends for two vectors whose CONTENTS are equal, while the interpreter correctly reports equal. Measured on one program: `S { v: a } == S { v: b }` with both vectors holding \"abcd\" gives interp `true`, JIT `false`, AOT `false`. It is a FALSE NEGATIVE only -- differing contents correctly give `false` on all three -- so the failure mode is a comparison that silently never matches. NARROW AND MEASURED: a `Vec[i64]` field is CORRECT on all three (`true`), and a plain `String` field is CORRECT on all three, so it is specific to a Vec of HEAP elements. Reproduces with two struct LOCALS, no temporaries and no `ref` params, so it is independent of B-2026-08-11-24 / -33 (which are leaks in the same lowering's neighbourhood and cannot change a boolean). | `compile_struct_eq` in src/codegen/expr_ops.rs — the per-field recursion compares a `Vec` field by its `{ptr,len,cap}` words instead of element-wise; the interpreter's `value_compare` Array arm does compare contents |
 | B-2026-08-12-1 | 2026-08-12 | codegen | high | Passing a by-value `Option`/`Result` argument TWICE makes every call after the first read the WRONG VARIANT -- `Err`/`None` for a value that is still `Ok`/`Some`. The caller's pass-as-arg move cap-zeros a binding it still owns, on a destination-takes-ownership assumption that holds for `v.push(r)` but not for a plain call. AOT and JIT both wrong, interpreter correct; a user enum in the same shape is correct everywhere. | Same root cause as B-2026-08-11-30 (caller retracts, callee bails) surfacing as a wrong answer rather than a leak. The fix design in that row -- callee-owned entry deep-copy plus dropping the caller-side retraction for a plain-call argument -- fixes both; neither half is safe alone. |
 | B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
 | B-2026-08-12-9 | 2026-08-12 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at typecheck, so the codegen paths two E2E tests cover can never run in a shipped binary. Either the emitter is dead code to retire or the rule is stricter than intended -- open design call, not a defect report. | Vec[f64].sorted / Iterator.max / Iterator.min vs the F64 total-order rule |
 | B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
 | B-2026-08-12-12 | 2026-08-12 | codegen | low | SIX type names still lower to the silent `i64` default with no LLVM layout of their own, across 16 of the 2906 `tests/codegen.rs` programs: `Unit` (6 tests), `Expr` (3), `ParBlockInfo` (2), `E` (2), `TaskInfo` (1), `JsonError` (1). Each is a REAL type name, not a generic parameter -- the audit filters those -- so each is a slot potentially sized `i64` while the value stored into it is some other shape. | run `KARAC_STRICT_TYPE_LOWERING=1 cargo test --features llvm --test codegen` to reproduce the list; the fall-through is `llvm_type_for_name`'s final `else` in `src/codegen/types_lowering.rs` |
+| B-2026-08-12-13 | 2026-08-12 | codegen+ownership | low | Assigning TWICE from the same already-moved-out place (`cur = box[0].s;` … `cur = box[0].s;`) leaks that buffer: the first assignment cap-zeroes the source into `cur`, so on the second both source and target carry cap 0 and neither frees it. `karac check` accepts the program -- the second read of a moved-out place is not flagged as a use-after-move. | repeated assignment from the same already-moved place |
 
 ### Wontfix (2)
 
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1122 surfaced
 
 </details>
 
-### Fixed (1102)
+### Fixed (1103)
 
-<details><summary>1102 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1103 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2296,6 +2296,77 @@ Saving a normalised copy for one side and the original for the other is enough t
 invent a divergence out of nothing -- and it survived a `git stash`-based
 with/without check, because both halves of that check ran on the same wrong file. |
 | B-2026-08-12-3 | other | medium | `tests/codegen.rs`'s E2E harness ran `resolve` and `typecheck` only to feed `lower` and DISCARDED their errors, so the suite stayed green on 40 progr… | FIXED by e0c6bab. `common::assert_check_clean` panics when an E2E test program has a resolve or typecheck error, with the 40 measured offenders grandfathered by name and diagnostic in `CHECK_GATE_GRANDFATHERED`. Verified by negative control; suite green at 2905/0. |
+| B-2026-08-12-4 | codegen | high | `asan_vec_element_field_move_by_assignment_no_double_free` is red on main with a LeakSanitizer leak, and NONDETERMINISTICALLY so: green in the full p… | FIXED by 3e8d8fa9 -- and the row's nondeterminism has a mundane explanation that
+is worth more than the fix: the leak is DETERMINISTIC, and LeakSanitizer was the
+unreliable part.
+
+WHAT IT ACTUALLY IS. `cur = stats[j].region` cap-zeroes the source so the
+element's owner stops freeing it (B-2026-08-11-25's fix) -- which leaves whatever
+`cur` held BEFORE with no owner at all. `trigger_eager_free` (src/codegen/stmts.rs,
+the Assign arm) frees the target's displaced buffer and classifies every other
+transferring RHS -- a moved alias, a fresh ref, the `mk().s` fresh-temp staging, a
+bare `v[i]` -- but had NO arm for a field moved out of a deeper place. A
+`FieldAccess` matches none of them, so the displaced buffer was orphaned once per
+execution of the assignment.
+
+So the row's reading was right in substance: the assignment-path cap-zeroing did
+trade the double free for a leak, in exactly the mode the fixture's comment
+predicts. What it could not see is that the leak arrives through the DISPLACED
+TARGET rather than the moved source, which is why it is invisible to the value
+pins and why the repair is an added free rather than a narrowed suppression.
+
+WHY IT LOOKED NONDETERMINISTIC. The fixture's max-by-revenue loop overwrites
+`best_region` only when the running max improves -- twice across its 40 elements
+-- so exactly ONE buffer is displaced per run. One leaked pointer left behind in a
+stale stack slot reads to LSan as still-reachable, and whether that slot survives
+depends on what ran before it in the process. Under valgrind, which reports
+`definitely lost` from the same tree on every run, it is 8 bytes in 1 block,
+every time. That also explains the direction of the flake the row found puzzling
+(green in the full parallel suite, red standalone): it is not scheduling, it is
+stack residue.
+
+It did not reproduce for me at all -- 15 standalone runs green, the full suite
+green, KARAC_PAR_WORKERS 1/2/4/8/16 all green, and green on the row's own tree
+(9789448) at three runs. `cannot reproduce` would have been the wrong conclusion:
+valgrind found it immediately on the first try.
+
+BISECTED to the leg rather than guessed: of the fixture's three assignments, the
+`out = cat[0].region` and `got = vs[0].xs` legs are clean and only the loop leaks,
+and the leak scales exactly with the overwrite count (6 iterations -> 5 blocks, 11
+-> 10). Two controls stay clean and bound the shape: `cur = <fresh String>` and
+`cur = s.region` where `s` is a plain local. It is the deeper-place branch only.
+
+THE ALIAS GUARD, which is the part worth reading. The naive fix -- add the arm --
+is WORSE than the bug. This arm is the only one whose RHS can alias the slot it
+overwrites: after the first `cur = box[0].s` the source is cap-zeroed INTO `cur`,
+so a second execution of the same assignment reads a place that now aliases `cur`
+itself, and freeing "the old value" frees the buffer about to be stored back.
+Measured with the arm unguarded: correct content on the first read, garbage on
+the second, two invalid reads under valgrind. `zero_vec_slot_header_if_aliases`
+compares the two pointers and zeroes len/cap when they match, so the cap-gated
+free and the len-gated element walks all no-op -- one icmp and two selects on a
+path that already loads the header.
+
+PINS, and why the existing one could not do this job. The sibling ASAN fixture
+leaks one block, which is what LSan misses -- keeping it and adding a line would
+have re-created the same blind spot.
+`asan_place_field_move_assign_overwrite_no_leak` overwrites 200 times, past any
+reachability accident: 3088 bytes in 193 allocations pre-fix, clean post-fix.
+`test_e2e_repeated_place_field_move_assign_reads_correctly` pins the guard with a
+CONTENT read, because `.len()` comes from the header and reads correctly off a
+dangling pointer -- a length-only pin would have seen nothing.
+
+Corrected while here, as the row asked: the sibling fixture's stale
+B-2026-08-11-33 cross-reference (an id collision from 2026-08-11) now reads -25,
+and its "the loop is here to make such a leak accumulate" comment now says
+plainly that it does not, and points at the fixture that does.
+
+REMAINDER, split out as B-2026-08-12-13 rather than buried here: assigning twice
+from the same already-moved place still leaks that one buffer, because both
+source and target end up cap-zeroed and neither frees it. That is unchanged from
+before this fix (it leaked the same 8 bytes then), and strictly better than the
+pre-B-25 double free -- but it is a live defect, and `karac check` accepts the
+program. |
 | B-2026-08-12-6 | other | medium | 103 of the 109 codegen-invoking test harnesses in `tests/` resolved the RAW parse tree, skipping some or all of the three AST rewrites `karac build`… | FIXED by b3a1061. `karac::prepare_for_resolve` owns the parse->resolve rewrite sequence; `cli.rs` and all 109 codegen-invoking test harnesses call it, so no driver can run a subset. Pinned by `desugar_dependent_constructs_reach_codegen_through_the_harness` (multi-assign, trait default method, `impl Trait` param), verified by negative control. |
 | B-2026-08-12-7 | typecheck | medium | A union or `#[derive(Copy)]` struct with a RAW POINTER field is rejected as not-`Copy` by the one rule whose own suggestion is "hold it behind a raw… | FIXED by 9410488b -- added a `Type::Pointer { .. } => true` arm to `is_type_copy` (src/typechecker/derives.rs). Pinned by `test_e2e_union_and_struct_raw_pointer_fields_are_copy` in tests/codegen.rs, which covers both pointer spellings in a union AND a `#[derive(Copy, Clone)]` struct holding a `*mut u8`; verified to fail pre-fix with the E_UNION_FIELD_NOT_COPY pair and pass post-fix. |
 | B-2026-08-12-11 | codegen | medium | Codegen's TWO type-lowering entry points kept two hand-maintained lists of built-in handle types and DISAGREED: `llvm_type_for_type_expr` answered `p… | FIXED by 9b2f5ad. `builtin_opaque_ptr_handle` is the single table both entry points consult, so the same type cannot lower to `ptr` through one and `i64` through the other. `KARAC_STRICT_TYPE_LOWERING=1` reports any remaining unknown name at the point of the decision, filtering generic parameters (user program + baked stdlib) so it is quiet on `hello world` and fires on 16 of 2906 E2E programs. |
