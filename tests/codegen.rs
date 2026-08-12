@@ -70156,7 +70156,7 @@ fn main() {
         // is exercised by length rather than content so the pin does not
         // encode serde_json's wording.
         let out = run_program(
-            "fn describe(e: JsonError) -> String { return f\"{e.line}:{e.column}\"; }\n\
+            "fn describe(e: JsonError) -> String { return f\"{e.line}:{e.column}:{e.message.len()}\"; }\n\
              fn main() {\n\
                  let bad = Json.parse(\"{bad\");\n\
                  match bad {\n\
@@ -70165,7 +70165,8 @@ fn main() {
                          println(e.line);\n\
                          println(f\"col={e.column}\");\n\
                          println(e.message.len() > 0);\n\
-                         println(describe(e));\n\
+                         let outer_len = e.message.len();\n\
+                         println(describe(e) == f\"1:2:{outer_len}\");\n\
                      }\n\
                  }\n\
                  let good = Json.parse(\"{\\\"a\\\": 1}\");\n\
@@ -70174,7 +70175,18 @@ fn main() {
         );
         // Matches `karac run --interp` on the identical source, verified
         // before this pin was written.
-        assert_eq!(out.as_deref(), Some("1\ncol=2\ntrue\n1:2\nparsed\n"));
+        //
+        // B-2026-08-12-16 extended the by-value leg: `describe` now reports
+        // the message's LENGTH, compared against the length the caller read
+        // before handing the struct over. That closes the direction the leak
+        // fix opened. Wiring a real `cap` (and the `struct_field_type_exprs`
+        // seed that finally armed the arm-binding drop) means the message
+        // buffer is now genuinely freed rather than left alive until process
+        // exit — so a mis-scoped free would be a use-after-free that reads a
+        // garbage length here, where before the fix EVERY read was trivially
+        // safe because nothing was ever freed. Still length rather than
+        // content, so the pin does not encode serde_json's wording.
+        assert_eq!(out.as_deref(), Some("1\ncol=2\ntrue\ntrue\nparsed\n"));
     }
 
     #[test]

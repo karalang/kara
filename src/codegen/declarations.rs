@@ -4574,12 +4574,6 @@ impl<'ctx> super::Codegen<'ctx> {
             // describe what is actually built, not what the source
             // declares. Seeding `i32` would put the field GEPs half a word
             // out of step with the packing.
-            //
-            // `message`'s `cap` is pinned to 0 by that same packing (so the
-            // scope-exit free stays a no-op — see the comment there), and
-            // the drop synthesis this registration enables is guarded on
-            // `cap > 0`, so registering the field changes no free
-            // behaviour; it only makes the field readable.
             let json_err_ty = self
                 .context
                 .struct_type(&[i64_t.into(), i64_t.into(), str_ty], false);
@@ -4600,6 +4594,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some("i64".to_string()),
                     Some("String".to_string()),
                 ],
+            );
+            // B-2026-08-12-16 — the field TypeExprs matter separately from the
+            // names above, and leaving them out is what kept the message
+            // leaking after the `cap` was wired. `struct_field_type_exprs` is
+            // the map the OWNERSHIP gates read: both
+            // `aggregate_param_copy_supported_struct` and
+            // `struct_heap_copyable_or_handle` bail to `false` the moment it
+            // has no entry for the name, so `JsonError` failed the
+            // `is_inline_optres_struct_payload` test in `bind_pattern_values`
+            // and a `match … { Err(e) => … }` arm binding got no scope-exit
+            // `StructDrop` at all. A real `cap` alone therefore fixed only the
+            // shapes where some OTHER frame happened to own the payload (a
+            // by-value `describe(e)` — the callee's own param drop) and left
+            // the two commonest shapes — a bare arm binding, and a
+            // `?`-propagated payload — leaking exactly as before.
+            //
+            // Seeded `i64` for the integers to match the as-built layout
+            // decision above; for these gates only heap-ness matters, and
+            // neither width is heap. The `String` entry is the load-bearing
+            // one: it is what makes the synthesized drop free the message.
+            let path_te = |seg: &str| TypeExpr {
+                kind: TypeKind::Path(PathExpr {
+                    segments: vec![seg.to_string()],
+                    generic_args: None,
+                    span: crate::token::Span::default(),
+                }),
+                span: crate::token::Span::default(),
+            };
+            self.struct_field_type_exprs.insert(
+                "JsonError".to_string(),
+                vec![path_te("i64"), path_te("i64"), path_te("String")],
             );
         }
         // Phase-8 line 156 — baked `std.tracing` value structs (`SpanField`,

@@ -44699,6 +44699,80 @@ fn main() {
         );
     }
 
+    // B-2026-08-12-16 — the ERROR half of the same API. `json.rs` copies the
+    // runtime's diagnostic into a Kāra String but pinned that String's `cap`
+    // to 0, so the scope-exit free was a permanent no-op: 39 bytes leaked per
+    // failed parse, unbounded in a loop over attacker-supplied JSON. Fixed by
+    // packing the REAL cap (the malloc'd size, which is exactly `len`) into
+    // w4 of the widened `Result[Json, JsonError]`.
+    //
+    // The pin was safe-by-construction before B-2026-08-12-14: with no
+    // `struct_types` registration for `JsonError`, no drop was synthesized,
+    // and a nonzero cap would have been read out of an UNDEF stack word.
+    // That row seeded the layout, so a real `cap > 0`-guarded drop now
+    // exists to fire — which is what makes this fixable and, equally, what
+    // makes a real cap DANGEROUS if any position produces a second owner.
+    //
+    // So this is a matrix over the four positions that could, not a
+    // single-shape smoke test. Each is a place a real cap turns one owner
+    // into two if the move is not tracked, and ASAN catches that direction
+    // (double-free / use-after-free) as loudly as LSan catches the leak:
+    //
+    //   1. bare scope exit          — the leak itself; nothing else touches it
+    //   2. pass BY VALUE to a fn    — callee frame and caller frame both see it
+    //   3. field-read then by-value — the read must not be mistaken for a move
+    //   4. `?`-propagation          — the payload crosses a frame boundary
+    //
+    // Looped so a per-iteration leak accumulates well past LSan's noise
+    // floor rather than sitting at one 39-byte allocation.
+    #[test]
+    fn asan_json_parse_error_message_freed_once() {
+        assert_clean_asan_run(
+            r#"
+fn describe(e: JsonError) -> i64 { return e.message.len() + (e.line as i64); }
+
+fn propagate(text: String) -> Result[i64, JsonError] {
+    let j = Json.parse(text)?;
+    return Result.Ok(1i64);
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 100i64 {
+        // 1. Bare scope exit — the message is read and then dropped.
+        match Json.parse("{bad") {
+            Result.Ok(j) => { n = n + 100000; }
+            Result.Err(e) => { n = n + (e.line as i64); }
+        }
+        // 2. Passed BY VALUE into a callee that reads the String field.
+        match Json.parse("[1,") {
+            Result.Ok(j) => { n = n + 100000; }
+            Result.Err(e) => { n = n + describe(e); }
+        }
+        // 3. Field read in the caller AND then handed over by value.
+        match Json.parse("nope") {
+            Result.Ok(j) => { n = n + 100000; }
+            Result.Err(e) => {
+                let pre = e.message.len();
+                n = n + pre + describe(e);
+            }
+        }
+        // 4. `?`-propagated across a frame boundary, then destructured.
+        match propagate("{\"a\":") {
+            Result.Ok(v) => { n = n + 100000; }
+            Result.Err(e) => { n = n + (e.column as i64); }
+        }
+        i = i + 1i64;
+    }
+    println(n > 0i64);
+}
+"#,
+            &["true"],
+            "json_parse_error_message_freed_once",
+        );
+    }
+
     // B-2026-07-31-11 — early `return` out of a provider body. The
     // `karac_provider_pop` is now a cleanup action drained on every exit
     // path; this gate exercises the RETURN edge with a heap-owning body

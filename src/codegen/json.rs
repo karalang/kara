@@ -1913,15 +1913,29 @@ impl<'ctx> super::Codegen<'ctx> {
         //   w1 = column (zext from u32)
         //   w2 = message data ptr (as i64)
         //   w3 = message len
-        //   w4 = message cap = 0 (explicit — see below)
+        //   w4 = message cap = len (the buffer is malloc'd at exactly `len`)
         // `JsonError` is a 5-word binding (line, col, msg.{data,len,cap}),
         // so after the phase-8 line-39 Result widening the `Err(e)`
-        // destructure reads w4 as the message String's `cap`. We pin it to
-        // 0 so the scope-exit free stays a no-op (the historical behavior;
-        // the message bytes leak but stay valid until process exit) rather
-        // than reading an undef stack word and freeing a garbage-cap
-        // buffer. Wiring real `cap` here would fix the leak but is out of
-        // scope for line 39.
+        // destructure reads w4 as the message String's `cap`.
+        //
+        // B-2026-08-12-16 — this word used to be pinned to 0, which made the
+        // scope-exit free a permanent no-op: 39 bytes leaked per failed
+        // parse, unbounded in a loop over attacker-supplied JSON. The pin
+        // was correct WHEN WRITTEN, though: `JsonError` had no
+        // `struct_types` registration, so no drop was synthesized for the
+        // `message` field, and a nonzero cap would have been read out of an
+        // UNDEF stack word — freeing a garbage pointer. Zero was the safe
+        // choice while no owner existed.
+        //
+        // B-2026-08-12-14 seeded the layout with `message` typed `String`,
+        // so a real `cap > 0`-guarded scope-exit drop now exists to fire,
+        // and the true cap can be wired. `msg_len_word` is exactly right in
+        // all three incoming paths, which is why the phi feeds both words:
+        // the alloc path mallocs precisely `msg_len_i64` bytes (cap == len,
+        // the same "the malloc'd buffer is sized exactly" rule the object-key
+        // lift above already follows), and the null and empty paths both
+        // arrive with ptr == 0 AND len == 0, so cap == 0 there and the
+        // guarded free stays a no-op for them.
         let mut err_agg = result_ty.get_undef();
         err_agg = self
             .builder
@@ -1933,7 +1947,7 @@ impl<'ctx> super::Codegen<'ctx> {
             (2u32, col_i64),
             (3u32, msg_ptr_word),
             (4u32, msg_len_word),
-            (5u32, i64_ty.const_zero()),
+            (5u32, msg_len_word),
         ] {
             err_agg = self
                 .builder
