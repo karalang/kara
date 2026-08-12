@@ -942,6 +942,16 @@ impl<'a> super::TypeChecker<'a> {
             | Type::Unit
             | Type::Never
             | Type::Error => true,
+            // Raw pointers are unconditionally Copy — they carry no
+            // ownership and have no destructor, which is exactly why
+            // `E_UNION_FIELD_NOT_COPY` tells the user to "hold it behind a
+            // raw pointer (`*mut T` / `*const T`)". Without this arm that
+            // advice was self-contradictory: `union EpollData { ptr: *mut
+            // u8, … }` — the canonical `epoll_data` FFI shape, and the one
+            // the union feature exists to express — was rejected by the
+            // very rule whose suggested fix it already followed
+            // (B-2026-08-12-7).
+            Type::Pointer { .. } => true,
             Type::Tuple(types) => types.iter().all(|t| self.is_type_copy(t)),
             // Array[T, N] is Copy iff T is Copy.
             Type::Array { element, .. } => self.is_type_copy(element),

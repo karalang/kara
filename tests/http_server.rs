@@ -106,6 +106,7 @@ mod http_server_tests {
         karac::lower(&mut parsed.program, &typed);
         let _effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()

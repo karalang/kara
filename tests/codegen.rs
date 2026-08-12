@@ -4914,7 +4914,7 @@ fn main() { println(build2().v); }
              impl Cache {\n\
                  fn new(capacity: u64) -> Cache { Cache { capacity, index: Map.new() } }\n\
                  fn put(mut ref self, k: i64, v: u64) { let _ = self.index.insert(k, v); }\n\
-                 fn count(ref self) -> u64 { self.index.len() }\n\
+                 fn count(ref self) -> u64 { self.index.len() as u64 }\n\
              }\n\
              fn main() {\n\
                  let mut c = Cache.new(2);\n\
@@ -4969,7 +4969,7 @@ fn main() { println(build2().v); }
              impl Cache {\n\
                  fn new(capacity: u64) -> Cache { Cache { capacity, index: Map.new() } }\n\
                  fn put(mut ref self, k: i64, v: u64) { let _ = self.index.insert(k, v); }\n\
-                 fn count(ref self) -> u64 { self.index.len() }\n\
+                 fn count(ref self) -> u64 { self.index.len() as u64 }\n\
              }\n\
              fn main() {\n\
                  let mut c = Cache.new(2);\n\
@@ -19939,7 +19939,7 @@ fn main() {
                  let mut xs: Vec[Row] = Vec.new();\n\
                  xs.push(Row { v: 10 });\n\
                  xs.push(Row { v: 32 });\n\
-                 println(f\"len={xs.len()} total={total(xs)}\");\n\
+                 println(f\"len={xs.len()} total={total(xs as NonEmpty[Row])}\");\n\
              }",
         ) {
             assert_eq!(out, "len=2 total=42\n");
@@ -20015,7 +20015,7 @@ fn main() {
              pub type PositiveQty = i64 where self > 0;\n\
              pub struct Row { name: BoundedText, price: PositivePrice, qty: PositiveQty }\n\
              fn main() {\n\
-                 let r = Row { name: \"widget\", price: 2.5, qty: 3 };\n\
+                 let r = Row { name: \"widget\" as BoundedText, price: 2.5 as PositivePrice, qty: 3 };\n\
                  println(f\"{r.name} {r.price} x{r.qty}\");\n\
              }",
         ) {
@@ -21371,6 +21371,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         let id = std::process::id();
@@ -27348,7 +27349,7 @@ fn main() {
              }\n\
              fn main() {\n\
                  let mut m: Map[i64, i64] = Map.new();\n\
-                 match fill(m) {\n\
+                 match fill(mut m) {\n\
                      Ok(_) => println(m.len()),\n\
                      Err(_) => println(\"err\"),\n\
                  }\n\
@@ -27369,7 +27370,7 @@ fn main() {
              }\n\
              fn main() {\n\
                  let mut v: Vec[i64] = Vec.new();\n\
-                 match fill(v) {\n\
+                 match fill(mut v) {\n\
                      Ok(_) => println(v.len()),\n\
                      Err(_) => println(\"err\"),\n\
                  }\n\
@@ -27736,7 +27737,7 @@ fn main() {
                  println((2.1_f64).to_bits());\n\
                  println((0.0_f64).to_bits());\n\
                  println((-0.0_f64).to_bits());\n\
-                 let b: i64 = (2.1_f64).to_bits();\n\
+                 let b: i64 = (2.1_f64).to_bits() as i64;\n\
                  println(b.bits_as_f64());\n\
                  println((1.5_f64).to_bits32());\n\
                  let b32: i64 = (1.5_f64).to_bits32();\n\
@@ -30385,6 +30386,7 @@ fn main() {
         // on ownership errors, so a test program that flunks the checker
         // feeds codegen input production never reaches (that masked
         // B-2026-07-01-10 for weeks).
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         // W3.3 — LLJIT dispatch under env-var control. Routes the whole
@@ -31609,7 +31611,7 @@ fn main() {
             r#"
 struct FakeRng { v: i64 }
 impl FakeRng { fn next_u64(ref self) -> i64 { self.v } }
-fn draw() -> i64 reads(RandomSource) { rand.next_u64() }
+fn draw() -> i64 reads(RandomSource) { rand.next_u64() as i64 }
 fn main() reads(RandomSource) {
     with_provider[RandomSource](FakeRng { v: 777 }, || {
         println(draw());
@@ -32391,7 +32393,7 @@ fn main() {
         // dominated by the 8-byte / 8-aligned `u64val` field. Storage
         // collapses to `{ i64 }`; `size_of` / `align_of` both report 8.
         let out = run_program(
-            "#[repr(C)] union EpollData { ptr: *mut Unit, fd: i32, u32val: u32, u64val: u64 }\n\
+            "#[repr(C)] union EpollData { ptr: *mut u8, fd: i32, u32val: u32, u64val: u64 }\n\
              fn main() { println(size_of[EpollData]()); }",
         );
         if let Some(out) = out {
@@ -32401,12 +32403,39 @@ fn main() {
 
     #[test]
     fn test_e2e_align_of_epoll_data_style_union() {
+        // B-2026-08-12-7: the raw-pointer field is the point. `is_type_copy`
+        // had no `Type::Pointer` arm, so `E_UNION_FIELD_NOT_COPY` rejected
+        // the one shape its own suggestion ("hold it behind a raw pointer")
+        // tells the user to write — and this test only ran at all because
+        // the harness discarded typecheck errors (B-2026-08-11-34).
         let out = run_program(
-            "#[repr(C)] union EpollData { ptr: *mut Unit, fd: i32, u32val: u32, u64val: u64 }\n\
+            "#[repr(C)] union EpollData { ptr: *mut u8, fd: i32, u32val: u32, u64val: u64 }\n\
              fn main() { println(align_of[EpollData]()); }",
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "8");
+        }
+    }
+
+    #[test]
+    fn test_e2e_union_and_struct_raw_pointer_fields_are_copy() {
+        // B-2026-08-12-7, the direct pins. A `*const T` field is as Copy as a
+        // `*mut T` one, and the same predicate backs `#[derive(Copy)]` on a
+        // struct — so a Copy struct holding a raw pointer must also be
+        // accepted. Both were rejected before the fix.
+        let out = run_program(
+            "#[repr(C)] union Slot { c: *const u8, m: *mut i64, n: i64 }\n\
+             #[derive(Copy, Clone)] struct Handle { p: *mut u8, tag: i64 }\n\
+             fn main() {\n\
+                 println(size_of[Slot]());\n\
+                 let mut buf: Array[u8, 2] = [1u8, 2u8];\n\
+                 let h = Handle { p: buf.as_mut_ptr(), tag: 7 };\n\
+                 let g = h;\n\
+                 println(g.tag + h.tag);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "8\n14\n");
         }
     }
 
@@ -33121,7 +33150,7 @@ fn main() {
     println(bytes[0]);
     println(bytes[1]);
     // `as_mut_ptr()` addresses the same first element.
-    let s2 = unsafe { CStr.from_ptr(a.as_mut_ptr()) };
+    let s2 = unsafe { CStr.from_ptr(a.as_mut_ptr() as *const u8) };
     println(s2.len());
 }
 "#;
@@ -34535,8 +34564,8 @@ fn main() {
         // Generic function calling another generic function.
         let out = run_program(
             r#"
-fn double_val[T](x: T) -> T { x + x }
-fn quad[T](x: T) -> T { double_val(double_val(x)) }
+fn double_val[T: Add](x: T) -> T { x + x }
+fn quad[T: Add](x: T) -> T { double_val(double_val(x)) }
 fn main() {
     println(quad(3));
 }
@@ -46343,7 +46372,7 @@ fn main() {
     b.push(20);
     b.push(30);
     let mut arr: Array[Vec[i64], 2] = [a, b];
-    outer_lens(arr);
+    outer_lens(mut arr);
 }
 "#,
         );
@@ -50452,6 +50481,7 @@ fn main() {
     fn test_e2e_struct_equality() {
         let out = run_program(
             r#"
+#[derive(Eq)]
 struct Point { x: i64, y: i64 }
 fn main() {
     let a = Point { x: 1, y: 2 };
@@ -50473,6 +50503,7 @@ fn main() {
     fn test_e2e_struct_equality_mixed_types() {
         let out = run_program(
             r#"
+#[derive(Eq)]
 struct Pair { name: String, value: i64 }
 fn main() {
     let a = Pair { name: "hello", value: 42 };
@@ -50506,8 +50537,8 @@ fn get_value(opt: MyOption) -> i64 {
     }
 }
 fn main() {
-    println(get_value(Some(42)));
-    println(get_value(None));
+    println(get_value(MyOption.Some(42)));
+    println(get_value(MyOption.None));
 }
 "#,
         );
@@ -50726,7 +50757,7 @@ fn set_first(xs: mut Slice[i64]) {
 }
 fn main() {
     let mut a: Array[i64, 3] = [1, 2, 3];
-    set_first(a);
+    set_first(mut a);
     println(a[0]);
 }
 "#,
@@ -51943,6 +51974,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed")
     }
@@ -52845,7 +52877,7 @@ fn main() { println(build_and_sum(5)); }
         // link slot) and the walk would chase a corrupted pointer.
         let out = run_program_with_ownership(
             r#"
-shared struct ListNode { val: i64, mut next: Option[ListNode] }
+shared struct ListNode { mut val: i64, mut next: Option[ListNode] }
 fn build_and_sum(n: i64) -> i64 {
     let dummy = ListNode { val: 0, next: None };
     let mut tail = dummy;
@@ -55489,6 +55521,7 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         // Ownership-loaded, same rationale as `run_program_capturing_inner`.
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -59782,6 +59815,7 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
 
@@ -62470,7 +62504,7 @@ fn show(b: mut ref Bag) -> i64 {
 }
 fn main() {
     let mut b = Bag { n: 10 };
-    println(show(b));
+    println(show(mut b));
 }
 "#,
         );
@@ -62514,7 +62548,7 @@ fn mutate(b: mut ref Bag) -> i64 {
 }
 fn main() {
     let mut b = Bag { n: 10 };
-    let _ = mutate(b);
+    let _ = mutate(mut b);
     println(b.n);
 }
 "#,
@@ -62543,7 +62577,7 @@ fn mutate(opt: mut ref Option[i64]) -> i64 {
 }
 fn main() {
     let mut opt = Option.Some(7);
-    let _ = mutate(opt);
+    let _ = mutate(mut opt);
     match opt {
         Option.Some(v) => println(v),
         Option.None => println(-1),
@@ -62574,7 +62608,7 @@ fn mutate(p: mut ref Pair) -> i64 {
 }
 fn main() {
     let mut p = Pair { a: 1, b: 2 };
-    let _ = mutate(p);
+    let _ = mutate(mut p);
     println(p.a);
     println(p.b);
 }
@@ -62614,7 +62648,7 @@ fn mutate(p: mut ref Pair) -> i64 {
 }
 fn main() {
     let mut p = Pair { a: 1, b: 2 };
-    let _ = mutate(p);
+    let _ = mutate(mut p);
     println(p.a);
     println(p.b);
 }
@@ -63645,6 +63679,7 @@ fn main() {
         parsed.program.callee_purely_polymorphic_effects =
             build_callee_purely_polymorphic_effects_set(&effects);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let ir = compile_to_ir_with_coro_split(&parsed.program, None, None)
             .expect("coro split codegen failed");
@@ -70818,12 +70853,12 @@ fn main() {
         // global pointer. Catches any drift in the CompoundAssign
         // arm's identifier-LHS fast path.
         let output = run_program(
-            "let mut N: i64 = 5;\n\
+            "let mut ACC: i64 = 5;\n\
              fn main() {\n\
-                 N += 10;\n\
-                 N -= 3;\n\
-                 N *= 2;\n\
-                 println(N);\n\
+                 ACC += 10;\n\
+                 ACC -= 3;\n\
+                 ACC *= 2;\n\
+                 println(ACC);\n\
              }",
         )
         .expect("compile + run failed");
@@ -70907,13 +70942,13 @@ fn main() {
         // slice-6 effect-checker test which proves synthetic
         // resources are per-binding; this is the codegen analogue.
         let output = run_program(
-            "let mut A: i64 = 0;\n\
-             let mut B: i64 = 0;\n\
+            "let mut LHS: i64 = 0;\n\
+             let mut RHS: i64 = 0;\n\
              fn main() {\n\
-                 A = 7;\n\
-                 B = 11;\n\
-                 println(A);\n\
-                 println(B);\n\
+                 LHS = 7;\n\
+                 RHS = 11;\n\
+                 println(LHS);\n\
+                 println(RHS);\n\
              }",
         )
         .expect("compile + run failed");
@@ -71240,13 +71275,13 @@ fn main() {
         // Two distinct module-scope Map bindings each get their own global
         // handle filled by the prologue; a write to one doesn't leak into
         // the other (the static-init emits one karac_map_new per binding).
-        let src = "let mut A: Map[i64, i64] = Map.new();\n\
-                   let mut B: Map[i64, i64] = Map.new();\n\
+        let src = "let mut LHS: Map[i64, i64] = Map.new();\n\
+                   let mut RHS: Map[i64, i64] = Map.new();\n\
                    fn main() {\n\
-                       A.insert(1, 100);\n\
-                       B.insert(1, 200);\n\
-                       println(A.get(1).unwrap_or(0));\n\
-                       println(B.get(1).unwrap_or(0));\n\
+                       LHS.insert(1, 100);\n\
+                       RHS.insert(1, 200);\n\
+                       println(LHS.get(1).unwrap_or(0));\n\
+                       println(RHS.get(1).unwrap_or(0));\n\
                    }";
         let parsed = karac::parse(src);
         assert!(
@@ -73053,8 +73088,8 @@ fn main() {
         // the right slot.
         let output = run_program(
             "struct Pair { a: i64, b: i64 }\n\
-             let P: Pair = Pair { b: 22, a: 11 };\n\
-             fn main() { println(P.a); println(P.b); }",
+             let PR: Pair = Pair { b: 22, a: 11 };\n\
+             fn main() { println(PR.a); println(PR.b); }",
         )
         .expect("compile + run failed");
         assert_eq!(output, "11\n22\n");
@@ -73083,12 +73118,12 @@ fn main() {
         // initialised to `v`. Verifies the count fold + element-value
         // replication path.
         let output = run_program(
-            "let R: Array[i64, 4] = [7; 4];\n\
+            "let REPS: Array[i64, 4] = [7; 4];\n\
              fn main() {\n\
                  let mut s: i64 = 0;\n\
                  let mut i: i64 = 0;\n\
                  while i < 4 {\n\
-                     s = s + R[i];\n\
+                     s = s + REPS[i];\n\
                      i = i + 1;\n\
                  }\n\
                  println(s);\n\
@@ -80002,7 +80037,7 @@ fn main() { let mut c = Counter { n: 0 }; c.dec(); println(7); }
         // A constructor that produces a valid instance prints normally.
         let out = run_program(
             r#"
-struct Counter { n: i64, invariant self.n >= 0 }
+pub struct Counter { n: i64, invariant self.n >= 0 }
 impl Counter { pub fn make() -> Counter { Counter { n: 7 } } }
 fn main() { let c = Counter.make(); println(c.n); }
 "#,
@@ -80019,7 +80054,7 @@ fn main() { let c = Counter.make(); println(c.n); }
         // though no method ran.
         let captured = run_program_capturing(
             r#"
-struct Counter { n: i64, invariant self.n >= 0 }
+pub struct Counter { n: i64, invariant self.n >= 0 }
 impl Counter { pub fn bad() -> Counter { Counter { n: 0 - 5 } } }
 fn main() { let c = Counter.bad(); println(c.n); println(42); }
 "#,
@@ -80047,7 +80082,7 @@ fn main() { let c = Counter.bad(); println(c.n); println(42); }
         // also accepts a literal `Self` defensively.)
         let captured = run_program_capturing(
             r#"
-struct Counter { n: i64, impl invariant self.n >= 0 }
+pub struct Counter { n: i64, impl invariant self.n >= 0 }
 impl Counter { pub fn bad() -> Counter { Counter { n: 0 - 1 } } }
 fn main() { let c = Counter.bad(); println(c.n); }
 "#,
@@ -80089,7 +80124,7 @@ fn main() { println(Counter.answer()); }
         // emission via `constructor_invariant_self_type`).
         let out = run_program(
             r#"
-shared struct Scell { n: i64, invariant self.n >= 0 }
+pub shared struct Scell { n: i64, invariant self.n >= 0 }
 impl Scell { pub fn make() -> Scell { Scell { n: 3 } } }
 fn main() { let c = Scell.make(); println(c.n); }
 "#,
@@ -80108,7 +80143,7 @@ fn main() { let c = Scell.make(); println(c.n); }
         // (unenforced); now they enforce like owned ones.
         let captured = run_program_capturing(
             r#"
-shared struct Scell { n: i64, invariant self.n >= 0 }
+pub shared struct Scell { n: i64, invariant self.n >= 0 }
 impl Scell { pub fn bad() -> Scell { Scell { n: 0 - 1 } } }
 fn main() { let c = Scell.bad(); println(c.n); println(42); }
 "#,
@@ -84008,7 +84043,7 @@ fn main() {
                  println(ret_i16());\n\
                  println(u8_var());\n\
                  println(i8_inc(5));\n\
-                 println(i8_inc(0 - 2));\n\
+                 println(i8_inc((0 - 2) as i8));\n\
                  let p = P { v: 0 };\n\
                  println(p.add_small(4));\n\
                  println(f32_op(2.0));\n\
@@ -88658,6 +88693,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -88747,6 +88783,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let obj = format!("/tmp/karac_ffi_cunwind_{}.o", std::process::id());
         let result = compile_to_object_with_options(

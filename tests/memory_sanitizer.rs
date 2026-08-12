@@ -240,6 +240,7 @@ mod memory_sanitizer_tests {
             );
         }
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -416,6 +417,7 @@ mod memory_sanitizer_tests {
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
 
@@ -14837,6 +14839,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);

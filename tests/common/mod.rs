@@ -378,6 +378,7 @@ pub fn assert_ownership_clean(ownership: &karac::ownership::OwnershipCheckResult
 pub const CHECK_GATE_GRANDFATHERED: &[&str] = &[
     // ── REAL FRONT-END GAPS: codegen pins a shape `karac check` rejects,
     //    so no user can compile the program under test. Fix the compiler.
+    //    B-2026-08-12-8.
     // `no method 'clear' on type 'Set'`
     "test_e2e_set_clear",
     // `no method 'iter_mut' on type 'Vec'`
@@ -387,65 +388,20 @@ pub const CHECK_GATE_GRANDFATHERED: &[&str] = &[
     // `no method 'collect' on type 'Vec'` (the `.values()` / `.keys()`
     // terminals return a Vec, and the chain then re-`collect`s it)
     "e2e_map_values_keys_collect_to_vec",
-    // `undefined type 'Unit'` — the union corpus names a type the
-    // resolver does not know.
-    "test_e2e_align_of_epoll_data_style_union",
-    "test_e2e_size_of_epoll_data_style_union",
-    // `CStr.from_ptr expects a *const u8, but got *mut u8`
-    "test_e2e_array_as_ptr_feeds_cstr_from_ptr",
-    // `expected 'MyOption', found 'Option<i64>'` — an Option-shaped user
-    // enum is not interchangeable with the builtin at the front end.
-    "test_e2e_option_like_enum",
-    // `arithmetic operator requires numeric type, found 'T'` — an
-    // unbounded type param used arithmetically inside a generic chain.
-    "test_e2e_generic_higher_order_chain",
-    // `shared struct field 'ListNode.val' is not declared mut`
-    "test_e2e_headerless_member_primitive_field_write",
     //
-    // ── STALE TEST PROGRAMS: the checker is right, the source predates
-    //    the rule. Fix the program, not the compiler.
-    //
-    // Call-site `mut` marker (design.md Feature 4 Part 1½): a fresh owned
-    // binding passed to a `mut ref T` / `mut Slice[T]` param must be
-    // written `mut <expr>`.
-    "e2e_map_try_insert_question_propagation_codegen",
-    "e2e_try_push_question_propagation_codegen",
-    "test_e2e_indexed_receiver_slice_path_len",
-    "test_e2e_match_at_binding_outer_and_nested_write_through",
-    "test_e2e_match_mut_ref_option_payload_write_through_propagates",
-    "test_e2e_match_mut_ref_struct_field_passes_to_mut_ref_param",
-    "test_e2e_match_mut_ref_struct_field_write_through_propagates",
-    "test_e2e_match_mut_ref_struct_two_fields_independent_write_through",
-    "test_e2e_mut_slice_indexing_writes_back",
-    // Implicit narrowing / sign-changing coercion needs an explicit `as`.
-    "e2e_float_to_bits_codegen",
-    "e2e_map_field_constructed_in_associated_fn",
-    "e2e_shared_struct_map_field_constructed_in_associated_fn",
-    "test_e2e_sub64_widths_across_boundaries",
-    "test_e2e_with_provider_override_rand_next_u64_scalar",
-    // `==` / `!=` on a struct without `#[derive(Eq)]`.
-    "test_e2e_struct_equality",
-    "test_e2e_struct_equality_mixed_types",
-    // A private type leaking through a `pub` method's return type.
-    "test_e2e_constructor_impl_invariant_aborts",
-    "test_e2e_constructor_invariant_holds",
-    "test_e2e_constructor_invariant_violation_aborts",
-    "test_e2e_shared_constructor_invariant_holds",
-    "test_e2e_shared_constructor_invariant_violation_aborts",
-    // `E_MODULE_BINDING_NAMING`: a single-letter module-level binding is
-    // Type-class, and module `let` introduces Const-class identifiers.
-    "test_e2e_modbind_compound_assign",
-    "test_e2e_modbind_repeat_literal",
-    "test_e2e_modbind_struct_literal_field_order_in_source",
-    "test_e2e_modbind_two_distinct_bindings_independent",
-    "test_e2e_modbind_two_distinct_maps_independent",
-    // `E_REFINEMENT_IMPLICIT_NARROWING`: narrowing to a refinement type
-    // needs `try_from` / `as`.
-    "e2e_refinement_alias_collection_method_and_iteration",
-    "e2e_refinement_typed_struct_fields_layout",
-    // Float total-order gate (B-2026-08-11-7 / -15): `Vec.sorted()` and
-    // `Iterator.max`/`min` require an `Ord` element, which `f64` is not.
+    // ── UNREACHABLE EMITTER: the float total-order gate (B-2026-08-11-7 /
+    //    -15) makes `Vec[f64].sorted()` a type error, so this pins the
+    //    behaviour of a `sorted` emitter production can never run. Kept
+    //    rather than deleted because retiring the emitter vs. relaxing the
+    //    rule is an open design call — B-2026-08-12-9.
     "test_e2e_vec_sorted_immutable_returns_new_vec",
+    //
+    // ── DELIBERATE NEGATIVE TEST (tests/par_codegen.rs): asserts the
+    //    CODEGEN-layer rejection of an atomic op with an implicit ordering.
+    //    The typechecker rejects it first, so production never reaches the
+    //    codegen arm — which is the point of the test, and gating it would
+    //    delete the coverage rather than fix anything.
+    "test_atomic_implicit_ordering_rejected_by_codegen",
 ];
 
 /// Fail loudly when an E2E test program flunks `resolve` or `typecheck`.
@@ -472,6 +428,14 @@ pub const CHECK_GATE_GRANDFATHERED: &[&str] = &[
 /// [`CHECK_GATE_GRANDFATHERED`], so the gate lands strict for new tests
 /// while the backlog is triaged incrementally — the same posture, and the
 /// same thread-name matching caveat, as the ownership gate.
+///
+/// Wired at every site that calls [`assert_ownership_clean`] — 24 across
+/// `codegen`, `par_codegen`, `memory_sanitizer`, `coro_e2e`,
+/// `disjoint_differential` and `http_server` — since that call is already
+/// the marker for "this harness feeds codegen production-shaped input".
+/// The 40 programs the first measurement found were triaged rather than
+/// parked: 32 were stale test sources and are fixed, so the list above is
+/// what genuinely remains.
 pub fn assert_check_clean(
     resolved: &karac::resolver::ResolveResult,
     typed: &karac::typechecker::TypeCheckResult,

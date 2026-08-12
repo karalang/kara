@@ -364,6 +364,7 @@ fn heavy(v: i64, work: i64) -> i64 {
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let analysis = fanout
             .then(|| karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed)));

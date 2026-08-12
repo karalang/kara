@@ -643,6 +643,7 @@ mod tests {
             build_callee_purely_polymorphic_effects_set(&effects);
 
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         let pid = std::process::id();
@@ -1821,6 +1822,7 @@ mod tests {
         parsed.program.callee_purely_polymorphic_effects =
             build_callee_purely_polymorphic_effects_set(&effects);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_check_clean(&resolved, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         // Load concurrency analysis — the CLI `karac build` path passes it, and
