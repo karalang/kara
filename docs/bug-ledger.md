@@ -95,8 +95,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 238 | 0 |
 | leak | 164 | 2 |
 | double-free | 120 | 0 |
-| codegen-gap | 104 | 1 |
-| run-vs-build | 102 | 0 |
+| codegen-gap | 104 | 0 |
+| run-vs-build | 103 | 1 |
 | missing-feature | 91 | 1 |
 | perf | 64 | 0 |
 | false-positive | 60 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 811 | 4 |
+| codegen | 812 | 4 |
 | typecheck | 156 | 3 |
 | interp | 138 | 0 |
 | ownership | 45 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1123 surfaced · 6 open · 1105 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1124 surfaced · 6 open · 1106 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -134,8 +134,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1123 surfaced
 | B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
 | B-2026-08-12-9 | 2026-08-12 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at typecheck, so the codegen paths two E2E tests cover can never run in a shipped binary. Either the emitter is dead code to retire or the rule is stricter than intended -- open design call, not a defect report. | Vec[f64].sorted / Iterator.max / Iterator.min vs the F64 total-order rule |
 | B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
-| B-2026-08-12-12 | 2026-08-12 | codegen | low | SIX type names still lower to the silent `i64` default with no LLVM layout of their own, across 16 of the 2906 `tests/codegen.rs` programs: `Unit` (6 tests), `Expr` (3), `ParBlockInfo` (2), `E` (2), `TaskInfo` (1), `JsonError` (1). Each is a REAL type name, not a generic parameter -- the audit filters those -- so each is a slot potentially sized `i64` while the value stored into it is some other shape. | run `KARAC_STRICT_TYPE_LOWERING=1 cargo test --features llvm --test codegen` to reproduce the list; the fall-through is `llvm_type_for_name`'s final `else` in `src/codegen/types_lowering.rs` |
 | B-2026-08-12-13 | 2026-08-12 | codegen+ownership | low | Assigning TWICE from the same already-moved-out place (`cur = box[0].s;` … `cur = box[0].s;`) leaks that buffer: the first assignment cap-zeroes the source into `cur`, so on the second both source and target carry cap 0 and neither frees it. `karac check` accepts the program -- the second read of a moved-out place is not flagged as a use-after-move. | repeated assignment from the same already-moved place |
+| B-2026-08-12-14 | 2026-08-12 | codegen | medium | Reading a field off a `Json.parse` error is a RUN-VS-BUILD split: `karac run --interp` prints `e.line` / `e.column` / `e.message` correctly, while `karac build` REFUSES with `codegen: cannot resolve field 'line' on this receiver (its type was not recorded for codegen); this is a compiler gap`. So the error type `Json.parse` is documented to return cannot be inspected at all from a compiled binary -- only matched on and discarded. | `JsonError` has no `struct_types` registration -- `runtime/stdlib/json.kara` is not in `compiled_stdlib_programs`, and `src/codegen/json.rs` hand-rolls the Err value (`Build Result.Err(JsonError { line, column, message })`) |
 
 ### Wontfix (2)
 
@@ -148,9 +148,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1123 surfaced
 
 </details>
 
-### Fixed (1105)
+### Fixed (1106)
 
-<details><summary>1105 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1106 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2439,6 +2439,58 @@ caller to know whether the ctor's payload move already retracted `x`'s own
 cleanup, which is a separate question from this row's. |
 | B-2026-08-12-7 | typecheck | medium | A union or `#[derive(Copy)]` struct with a RAW POINTER field is rejected as not-`Copy` by the one rule whose own suggestion is "hold it behind a raw… | FIXED by 9410488b -- added a `Type::Pointer { .. } => true` arm to `is_type_copy` (src/typechecker/derives.rs). Pinned by `test_e2e_union_and_struct_raw_pointer_fields_are_copy` in tests/codegen.rs, which covers both pointer spellings in a union AND a `#[derive(Copy, Clone)]` struct holding a `*mut u8`; verified to fail pre-fix with the E_UNION_FIELD_NOT_COPY pair and pass post-fix. |
 | B-2026-08-12-11 | codegen | medium | Codegen's TWO type-lowering entry points kept two hand-maintained lists of built-in handle types and DISAGREED: `llvm_type_for_type_expr` answered `p… | FIXED by 9b2f5ad. `builtin_opaque_ptr_handle` is the single table both entry points consult, so the same type cannot lower to `ptr` through one and `i64` through the other. `KARAC_STRICT_TYPE_LOWERING=1` reports any remaining unknown name at the point of the decision, filtering generic parameters (user program + baked stdlib) so it is quiet on `hello world` and fires on 16 of 2906 E2E programs. |
+| B-2026-08-12-12 | codegen | low | SIX type names still lower to the silent `i64` default with no LLVM layout of their own, across 16 of the 2906 `tests/codegen.rs` programs: `Unit` (6… | FIXED by 75fbfc0. Three of the six resolved, three measured and left alone.
+
+REAL BUG -- `Expr`. `declare_enums` asks for a shared enum's own LLVM layout
+while computing that same enum's drop kind: `Expr.Blk(Block)` where `struct
+Block { tail: Option[Expr] }` walks to "is the Option payload boxed?" -> "how
+wide is `Expr`?", and at that moment `Expr` is not in `shared_types` yet, so the
+answer came from the unknown-name `i64` default. Right only by coincidence -- a
+shared handle and an `i64` are both one word -- which is also why NO behavioural
+test can distinguish the two, and why the guard had to be the lever rather than
+an output assertion. Fixed with a name-only `shared_type_names` set collected
+before any layout pass and consulted alongside `shared_types`; being shared is a
+name-level property, so a name set built first is sufficient -- the same
+argument `build_struct_types` already makes for its own `shared_struct_names`
+pre-pass, which exists for the identical forward-reference reason.
+
+LEVER PRECISION -- `E`. Not a type at all: the generic parameter of the baked
+`Result[T, E]` declaration, reaching the default on any program that calls a
+Result combinator. The generic-name filter scanned the USAGE-GATED stdlib set,
+which excludes the prelude-baked declarations; it now scans every baked program.
+Confirmed benign first: `and_then` over a `Result[i64, String]` builds and
+matches the interpreter on both arms, and `map_err` over a String `E` is refused
+by codegen outright, so the `E` width never decided anything.
+
+KNOWN TYPE READING AS UNKNOWN -- `Unit`. Written as a name throughout the baked
+stdlib (`-> Unit`, `Result[Unit, IoError]`) with no declaration anywhere. Given
+an explicit arm returning the same `i64` the `TypeKind::Tuple(&[])` arm already
+produces, so no layout changes -- it stops a KNOWN type reading as an unknown
+one, which is what the lever needs to stay honest.
+
+NOT DEFECTS. `ParBlockInfo` / `TaskInfo` are a deliberate v1 placeholder that
+`stmts.rs` documents in situ -- "using `i64` as a placeholder element type keeps
+Vec dispatch working for the v1 contract surface (`.len()` / `.is_empty()`
+ignore element type). Field access is a v1.x follow-up that requires registering
+the baked struct types." The audit found the documented deferral, not a bug.
+
+`JsonError`'s width query is likewise benign: it comes from
+`nested_boxed_enum_payload_variants` off the `let r = Json.parse(..)` binding,
+and nothing materialises the payload by layout because the only operation that
+would -- field access -- is refused first. Opaque propagation of a parse error
+was verified to match the interpreter on both arms. But that refusal is itself a
+real run-vs-build gap, so it is SPLIT OUT rather than buried here.
+
+PINNED by a subprocess CLI test (`strict_type_lowering_is_quiet_on_a_recursive_
+shared_enum`) -- the lever is an env var and `cargo test` shares one process, so
+an in-process setting would leak into whatever else is compiling concurrently.
+Verified non-vacuous: dropping the `shared_type_names` consult alone makes it
+fail with ``type name `Expr```.
+
+MEASURED: the corpus audit goes from 16 firing tests over 6 names to 4 over 3,
+and the 4 that remain are the two documented placeholders plus the split-out
+gap. Full suite green at 13467 passed / 0 failed across 116 targets; clippy and
+fmt clean. |
 
 </details>
 
