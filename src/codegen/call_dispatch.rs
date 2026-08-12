@@ -2534,15 +2534,58 @@ impl<'ctx> super::Codegen<'ctx> {
     /// included: those can evaluate to a live binding's value, and the cost of
     /// a false negative is the status-quo leak while a false positive is a
     /// double free.
+    /// B-2026-08-12-17 — the NESTED-operand rule for
+    /// [`Self::optres_arg_mints_field_envelope`]: an expression sitting INSIDE
+    /// a construction, rather than the whole argument.
+    ///
+    /// A bare identifier is a different question at the two depths, which is
+    /// why this is a separate entry point rather than an arm of the main match.
+    /// At top level `take(r)` names the enum value itself and its let site owns
+    /// the envelope, so admitting it would make two owners. One level in,
+    /// `take(Result.Ok(w))` names the STRUCT being moved into a fresh envelope
+    /// — the ctor mints the envelope and the move disarms `w`, so the temp is
+    /// the only owner left. The `let r = Result.Ok(w);` spelling of that move
+    /// is CLEAN, which is what localizes the leak to argument position rather
+    /// than to the move.
+    ///
+    /// Still refuses an identifier that is ITSELF an armed envelope owner —
+    /// `Option.Some(o)` for a bound `o: Option[Option[i64]]` hands over a box
+    /// `o`'s let site still frees. The three sets are the three registration
+    /// families that can own one.
+    fn envelope_operand_is_unowned(&self, e: &Expr) -> bool {
+        if let ExprKind::Identifier(n) = &e.kind {
+            return !self.boxed_enum_payload_vars.contains(n.as_str())
+                && !self.nested_boxed_payload_vars.contains(n.as_str())
+                && !self.struct_field_boxed_payload_vars.contains(n.as_str());
+        }
+        self.optres_arg_mints_field_envelope(e)
+    }
+
     pub(super) fn optres_arg_mints_field_envelope(&self, arg: &Expr) -> bool {
         match &arg.kind {
-            // Constructions only — a plain call returns a value whose envelope
-            // the callee minted and may still own.
             ExprKind::Call { args, .. } => {
-                self.enum_name_of_expr(arg).is_some()
-                    && args
+                if self.enum_name_of_expr(arg).is_some() {
+                    return args
                         .iter()
-                        .all(|a| self.optres_arg_mints_field_envelope(&a.value))
+                        .all(|a| self.envelope_operand_is_unowned(&a.value));
+                }
+                // B-2026-08-12-17 — a plain call to a known function
+                // (`take(mkw(n))`). The callee MANUFACTURED the envelope and
+                // then returned it, which retracts its own registration as an
+                // escape, so the value arrives owned by nobody: 32 B per call.
+                //
+                // Admitted only when no live binding owns it, and
+                // `nested_boxed_owner_source_of` is exactly that question —
+                // it walks passthrough chains and the alias map to a fixpoint.
+                // `take(idw(b))` for a bound `b` resolves to `b` and is refused
+                // (registering there is a double free, and it is measured clean
+                // today because `b`'s let site is the owner); `take(idw(mkw(n)))`
+                // resolves to nothing and is admitted, because the passthrough
+                // is forwarding a temp rather than a binding.
+                matches!(&arg.kind, ExprKind::Call { callee, .. }
+                    if matches!(&callee.kind, ExprKind::Identifier(n)
+                        if self.fn_return_type_names.contains_key(n)))
+                    && self.nested_boxed_owner_source_of(arg).is_none()
             }
             ExprKind::StructLiteral {
                 path,

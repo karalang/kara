@@ -38128,6 +38128,87 @@ fn main() {
     /// temp-argument envelope — this family frees envelopes box-only by design,
     /// so the interior keeps whatever owner it had, which for that one shape is
     /// nobody.
+    /// B-2026-08-12-17 — the two by-value ARGUMENT forms B-2026-08-12-15 left
+    /// leaking, where the argument carries a boxed field envelope that no
+    /// construction at the call site minted.
+    ///
+    /// ONE ROOT CAUSE, not two, and the bound spellings are what prove it. Each
+    /// leaking form has a `let`-bound twin that was already clean:
+    ///
+    ///   let r = Result.Ok(w);  -- clean        takw(Result.Ok(w));  -- leaked
+    ///   let m = mkw(n);        -- clean        takw(mkw(n));        -- leaked
+    ///
+    /// So neither the ctor move nor the callee's return is at fault: both are
+    /// handled the moment a binding exists to own the result. What was missing
+    /// is the ARGUMENT-POSITION owner, and both forms were refused by the same
+    /// predicate (`optres_arg_mints_field_envelope`) for the same reason — it
+    /// admitted only constructions, because a place read can alias an envelope
+    /// its owner still frees.
+    ///
+    /// THE DISCRIMINATOR IS `nested_boxed_owner_source_of`, which already
+    /// resolves passthrough chains and the alias map to a fixpoint. It is what
+    /// separates the two `idw(...)` legs here, and they are the whole reason
+    /// this fixture has controls:
+    ///
+    ///   * `takw(idw(mkw(n)))` — the passthrough forwards a TEMP, nothing owns
+    ///     it, so the caller must. Leaked before this row.
+    ///   * `takw(idw(b))` — the passthrough forwards a BINDING, whose let site
+    ///     owns it. Clean before and after; registering here would be a double
+    ///     free, so this leg is the guard against buying the fix with a crash.
+    ///
+    /// `takw(Result.Ok(w))` is the matching guard on the other side: `w` is a
+    /// live struct binding, and the temp may own its envelope only because the
+    /// ctor move disarms `w`. `let r2 = Result.Ok(w2)` is the same move with a
+    /// binding on the far side, which must stay single-owner too.
+    ///
+    /// The `sbox` leg and the `-O0` caveat are as described on the sibling
+    /// fixture above: all-scalar envelopes fold away at `-O2`, so the String
+    /// leg is what makes the allocation count real, and `scripts/asan-o0-leg.sh`
+    /// is where this actually pins.
+    #[test]
+    fn asan_struct_payload_boxed_field_envelope_owned_in_arg_position() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct W { o: Option[Option[i64]] }
+struct S { o: Option[Option[String]] }
+fn takw(r: Result[W, i64]) -> i64 {
+    match r { Result.Ok(w) => match w.o { Option.Some(Option.Some(x)) => x, _ => -1 }, Result.Err(e) => e }
+}
+fn idw(r: Result[W, i64]) -> Result[W, i64] { r }
+fn mkw(n: i64) -> Result[W, i64] { Result.Ok(W { o: Option.Some(Option.Some(n)) }) }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let sbox: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"s{n + i}")) });
+        acc = acc + match sbox {
+            Result.Ok(s) => match s.o { Option.Some(Option.Some(t)) => t.len() as i64, _ => -1 },
+            Result.Err(e) => e,
+        };
+        let w: W = W { o: Option.Some(Option.Some(n + i)) };
+        acc = acc + takw(Result.Ok(w));
+        acc = acc + takw(mkw(n + i));
+        acc = acc + takw(idw(mkw(n + i)));
+        let b: Result[W, i64] = Result.Ok(W { o: Option.Some(Option.Some(n + i)) });
+        acc = acc + takw(idw(b));
+        let w2: W = W { o: Option.Some(Option.Some(n + i)) };
+        let r2: Result[W, i64] = Result.Ok(w2);
+        acc = acc + match r2 {
+            Result.Ok(v) => match v.o { Option.Some(Option.Some(x)) => x, _ => -1 },
+            Result.Err(e) => e,
+        };
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["4211"],
+            "struct_payload_boxed_field_envelope_owned_in_arg_position",
+            40,
+        );
+    }
+
     #[test]
     fn asan_struct_payload_boxed_field_envelope_owned_without_call() {
         assert_clean_asan_run_min_allocs(
