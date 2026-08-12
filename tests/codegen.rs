@@ -25674,13 +25674,25 @@ fn main() {
         // unique span so the float-bitcast / int-truncate arms fire. Float max
         // reduce → 2.5; f64 sum-reduce → 4.5; direct `.max()`/`.min()` desugar
         // (which reuses this lowering) → 2.5 / 0.5.
+        //
+        // The `.max()` / `.min()` legs run over the total-order wrapper `F64`
+        // rather than bare `f64`: B-2026-08-11-15 restored the `Ord`-element
+        // gate on `Iterator.max`/`min`, so the bare-`f64` spelling this test
+        // used no longer typechecks and `karac build` refuses it. The reduce
+        // legs above — the row's actual subject — are untouched, and the
+        // wrapper legs still reach the same synthesized-`Some(<acc>)`
+        // lowering, so the coverage is unchanged. Caught by the check gate
+        // (`assert_check_clean`).
         if let Some(out) = run_program(
             "fn main() {\n\
                  let f: Vec[f64] = [1.5, 2.5, 0.5];\n\
                  match f.iter().reduce(|a, x| if x > a { x } else { a }) { Some(s) => println(s), None => println(-1.0) }\n\
                  match f.iter().reduce(|a, x| a + x) { Some(s) => println(s), None => println(-1.0) }\n\
-                 println(f.max().unwrap_or(0.0))\n\
-                 println(f.min().unwrap_or(0.0))\n\
+                 let w: Vec[F64] = f.iter().map(F64.from).collect();\n\
+                 let hi: F64 = w.max().unwrap_or(F64.from(0.0));\n\
+                 let lo: F64 = w.min().unwrap_or(F64.from(0.0));\n\
+                 println(hi.value)\n\
+                 println(lo.value)\n\
              }",
         ) {
             assert_eq!(out, "2.5\n4.5\n2.5\n0.5\n");
@@ -30292,6 +30304,12 @@ fn main() {
         karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
+        // Resolve/typecheck gate — `karac build` refuses to reach codegen
+        // when either phase errors (cli.rs `has_fatal_errors`), so a program
+        // that flunks them is input production never compiles. Runs before
+        // `lower` so the diagnostic names the real cause instead of whatever
+        // the mistyped program later trips in the backend. See the fn doc.
+        super::common::assert_check_clean(&resolved, &typed, src);
         karac::lower(&mut parsed.program, &typed);
         // Ownership-loaded by default — `karac build` (cli.rs) always
         // passes `pipeline.ownership` to codegen, so a harness that

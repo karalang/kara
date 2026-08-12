@@ -352,3 +352,176 @@ pub fn assert_ownership_clean(ownership: &karac::ownership::OwnershipCheckResult
     msg.push_str(src);
     panic!("{msg}");
 }
+
+// ── Check gate for E2E harnesses ─────────────────────────────────────
+
+/// Tests grandfathered past [`assert_check_clean`]. Same contract as
+/// [`OWNERSHIP_GATE_GRANDFATHERED`]: a bare test-fn name (matched against
+/// the test thread's name) or a `*`-suffixed corpus prefix, each carrying
+/// the reason it can't be made check-clean yet. The list exists to shrink.
+///
+/// Two distinct populations are in here, and they want opposite fixes:
+///
+///   * **STALE TEST PROGRAM** — the checker is right and the test source
+///     predates the rule (call-site `mut` markers, explicit narrowing
+///     casts, `#[derive(Eq)]`, the module-binding naming class, refinement
+///     narrowing, the float total-order gate). Fix is to update the
+///     program; the codegen coverage is unaffected.
+///   * **REAL FRONT-END GAP** — codegen implements something the
+///     typechecker rejects, so the pinned shape cannot be compiled by any
+///     user at all (`Set.clear`, `Vec.iter_mut`, `Column.range`,
+///     `Vec.collect`, the `Unit` type, `CStr.from_ptr` pointer mutability).
+///     Fix is in the compiler, and each is worth a ledger row.
+///
+/// Measured 2026-08-12 over the whole `tests/codegen.rs` suite (2905
+/// tests): 40 programs reached codegen that `karac check` rejects.
+pub const CHECK_GATE_GRANDFATHERED: &[&str] = &[
+    // ── REAL FRONT-END GAPS: codegen pins a shape `karac check` rejects,
+    //    so no user can compile the program under test. Fix the compiler.
+    // `no method 'clear' on type 'Set'`
+    "test_e2e_set_clear",
+    // `no method 'iter_mut' on type 'Vec'`
+    "test_e2e_for_iter_mut_scalar",
+    // `no method 'range' on type 'Column'`
+    "test_e2e_builtin_column_tensor_range",
+    // `no method 'collect' on type 'Vec'` (the `.values()` / `.keys()`
+    // terminals return a Vec, and the chain then re-`collect`s it)
+    "e2e_map_values_keys_collect_to_vec",
+    // `undefined type 'Unit'` — the union corpus names a type the
+    // resolver does not know.
+    "test_e2e_align_of_epoll_data_style_union",
+    "test_e2e_size_of_epoll_data_style_union",
+    // `CStr.from_ptr expects a *const u8, but got *mut u8`
+    "test_e2e_array_as_ptr_feeds_cstr_from_ptr",
+    // `expected 'MyOption', found 'Option<i64>'` — an Option-shaped user
+    // enum is not interchangeable with the builtin at the front end.
+    "test_e2e_option_like_enum",
+    // `arithmetic operator requires numeric type, found 'T'` — an
+    // unbounded type param used arithmetically inside a generic chain.
+    "test_e2e_generic_higher_order_chain",
+    // `shared struct field 'ListNode.val' is not declared mut`
+    "test_e2e_headerless_member_primitive_field_write",
+    //
+    // ── STALE TEST PROGRAMS: the checker is right, the source predates
+    //    the rule. Fix the program, not the compiler.
+    //
+    // Call-site `mut` marker (design.md Feature 4 Part 1½): a fresh owned
+    // binding passed to a `mut ref T` / `mut Slice[T]` param must be
+    // written `mut <expr>`.
+    "e2e_map_try_insert_question_propagation_codegen",
+    "e2e_try_push_question_propagation_codegen",
+    "test_e2e_indexed_receiver_slice_path_len",
+    "test_e2e_match_at_binding_outer_and_nested_write_through",
+    "test_e2e_match_mut_ref_option_payload_write_through_propagates",
+    "test_e2e_match_mut_ref_struct_field_passes_to_mut_ref_param",
+    "test_e2e_match_mut_ref_struct_field_write_through_propagates",
+    "test_e2e_match_mut_ref_struct_two_fields_independent_write_through",
+    "test_e2e_mut_slice_indexing_writes_back",
+    // Implicit narrowing / sign-changing coercion needs an explicit `as`.
+    "e2e_float_to_bits_codegen",
+    "e2e_map_field_constructed_in_associated_fn",
+    "e2e_shared_struct_map_field_constructed_in_associated_fn",
+    "test_e2e_sub64_widths_across_boundaries",
+    "test_e2e_with_provider_override_rand_next_u64_scalar",
+    // `==` / `!=` on a struct without `#[derive(Eq)]`.
+    "test_e2e_struct_equality",
+    "test_e2e_struct_equality_mixed_types",
+    // A private type leaking through a `pub` method's return type.
+    "test_e2e_constructor_impl_invariant_aborts",
+    "test_e2e_constructor_invariant_holds",
+    "test_e2e_constructor_invariant_violation_aborts",
+    "test_e2e_shared_constructor_invariant_holds",
+    "test_e2e_shared_constructor_invariant_violation_aborts",
+    // `E_MODULE_BINDING_NAMING`: a single-letter module-level binding is
+    // Type-class, and module `let` introduces Const-class identifiers.
+    "test_e2e_modbind_compound_assign",
+    "test_e2e_modbind_repeat_literal",
+    "test_e2e_modbind_struct_literal_field_order_in_source",
+    "test_e2e_modbind_two_distinct_bindings_independent",
+    "test_e2e_modbind_two_distinct_maps_independent",
+    // `E_REFINEMENT_IMPLICIT_NARROWING`: narrowing to a refinement type
+    // needs `try_from` / `as`.
+    "e2e_refinement_alias_collection_method_and_iteration",
+    "e2e_refinement_typed_struct_fields_layout",
+    // Float total-order gate (B-2026-08-11-7 / -15): `Vec.sorted()` and
+    // `Iterator.max`/`min` require an `Ord` element, which `f64` is not.
+    "test_e2e_vec_sorted_immutable_returns_new_vec",
+];
+
+/// Fail loudly when an E2E test program flunks `resolve` or `typecheck`.
+///
+/// The sibling of [`assert_ownership_clean`], one phase earlier and for
+/// the same reason: `karac build` runs both phases and refuses to reach
+/// codegen when either reports an error (`cli.rs` `has_fatal_errors`
+/// ORs `has_resolve_errors` and `has_type_errors` in), while the E2E
+/// harnesses ran them only to feed `lower` and threw the errors away. So
+/// the suite could — and did — stay green on programs no user can
+/// compile: `test_e2e_set_clear` pins `Set.clear` codegen while
+/// `karac check` answers `no method 'clear' on type 'Set'` and
+/// `karac build` exits 1 on the identical source.
+///
+/// It also makes the failure LEGIBLE in the other direction. A test
+/// program with a resolve error still reaches codegen today, where the
+/// mistyped call it produces trips the LLVM verifier — surfacing as
+/// `codegen failed for test program: Module verification failed: Function
+/// return type does not match operand type of return inst!`, which reads
+/// as a backend bug and sends the reader into codegen rather than into
+/// the six lines of test source that actually caused it (B-2026-08-11-34).
+///
+/// Existing offenders are grandfathered by test name in
+/// [`CHECK_GATE_GRANDFATHERED`], so the gate lands strict for new tests
+/// while the backlog is triaged incrementally — the same posture, and the
+/// same thread-name matching caveat, as the ownership gate.
+pub fn assert_check_clean(
+    resolved: &karac::resolver::ResolveResult,
+    typed: &karac::typechecker::TypeCheckResult,
+    src: &str,
+) {
+    if resolved.errors.is_empty() && typed.errors.is_empty() {
+        return;
+    }
+    let thread = std::thread::current();
+    let test_name = thread.name().unwrap_or("<unnamed>");
+    if CHECK_GATE_GRANDFATHERED.iter().any(|g| {
+        if let Some(prefix) = g.strip_suffix('*') {
+            let bare = test_name.rsplit("::").next().unwrap_or(test_name);
+            bare.starts_with(prefix)
+        } else {
+            test_name == *g || test_name.ends_with(&format!("::{g}"))
+        }
+    }) {
+        eprintln!(
+            "[check-gate] {test_name}: {} resolve + {} type error(s) \
+             grandfathered — see CHECK_GATE_GRANDFATHERED in \
+             tests/common/mod.rs",
+            resolved.errors.len(),
+            typed.errors.len()
+        );
+        return;
+    }
+    let mut msg = format!(
+        "[check-gate] test `{test_name}`: program fails `karac check` \
+         ({} resolve + {} type error(s)) — `karac build` exits 1 on this \
+         source, so codegen is being fed input it never sees in \
+         production. Fix the test program, or (for a front-end gap the \
+         backend already implements) file a docs/bug-ledger.jsonl entry \
+         and grandfather the test in tests/common/mod.rs:\n",
+        resolved.errors.len(),
+        typed.errors.len()
+    );
+    for e in &resolved.errors {
+        msg.push_str(&format!(
+            "  resolve {}:{}: {}\n",
+            e.span.line, e.span.column, e.message
+        ));
+    }
+    for e in &typed.errors {
+        msg.push_str(&format!(
+            "  type {}:{}: {}\n",
+            e.span.line, e.span.column, e.message
+        ));
+    }
+    msg.push_str("program:\n");
+    msg.push_str(src);
+    panic!("{msg}");
+}
