@@ -13516,6 +13516,80 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_derive_eq_struct_with_vec_field_compares_contents() {
+        // B-2026-08-12-5 — `#[derive(Eq)]` equality over a struct with a `Vec`
+        // field compared the WRONG BYTES. `compile_struct_eq` recurses per
+        // field through `compile_binop`, which dispatches on LLVM SHAPE, and a
+        // `Vec` field has the identical `{ptr, len, cap}` layout as a `String`
+        // — so Vec fields were routed to the String byte-compare, which reads
+        // `len` bytes. For a String `len` IS the byte count; for a Vec it is
+        // the ELEMENT count, so the compare looked at the first `len` bytes of
+        // the element buffer and ignored everything past them.
+        //
+        // Both directions were wrong, and the FALSE POSITIVE is the dangerous
+        // one — an equality that wrongly matches silently merges distinct
+        // values in a dedup or returns a wrong cache hit:
+        //   * `Vec[i64]`: `[7] == [263]` was TRUE (263 = 0x107, same low
+        //     byte), and `[1,2] == [1,3]` was TRUE (the two bytes read are
+        //     element 0's low bytes, both identical).
+        //   * `Vec[String]`: equal contents compared UNEQUAL, since the bytes
+        //     read are the low bytes of two distinct heap pointers.
+        //
+        // Fixed by routing a Vec-carrying struct to `emit_eq_fn_for_struct`,
+        // the TYPE-directed comparator that already existed for `Set`/`Map`
+        // keys (B-2026-06-20-15 fixed this same bug in the hashing path); the
+        // `==` operator had never picked it up. Every line below is asserted
+        // against `karac run --interp`, which was correct throughout.
+        let out = run_program(
+            r#"
+#[derive(Eq)]
+struct I { v: Vec[i64] }
+#[derive(Eq)]
+struct S { v: Vec[String] }
+#[derive(Eq)]
+struct P { name: String, n: i64 }
+fn one(a: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(a); v }
+fn two(a: i64, b: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(a); v.push(b); v }
+fn strs(a: String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(a); v }
+fn main() {
+    // False positives: differ only above the first byte / in a later element.
+    println(I { v: one(7) } == I { v: one(263) });
+    println(I { v: two(1, 2) } == I { v: two(1, 3) });
+    // Genuine equality and genuine difference still work.
+    println(I { v: one(7) } == I { v: one(7) });
+    println(I { v: one(7) } == I { v: one(8) });
+    // Length difference.
+    println(I { v: one(1) } == I { v: two(1, 2) });
+    // False negative: equal String contents in distinct allocations.
+    println(S { v: strs("abcd") } == S { v: strs("abcd") });
+    println(S { v: strs("abcd") } == S { v: strs("zzzz") });
+    // `!=` must be the exact negation.
+    println(I { v: two(1, 2) } != I { v: two(1, 3) });
+    // A struct with NO Vec field keeps the inline field walk — control.
+    println(P { name: "abcd", n: 1 } == P { name: "abcd", n: 1 });
+    println(P { name: "abcd", n: 1 } == P { name: "abcd", n: 2 });
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "false
+false
+true
+false
+false
+true
+false
+true
+true
+false
+"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_total_order_wrapper_from_and_display() {
         // B-2026-08-11-8 — `F64.from(x)` is the constructor design.md § Float
         // semantics names and the `T: Ord` bound diagnostic prescribes

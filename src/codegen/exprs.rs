@@ -540,6 +540,32 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-08-12-5 — a struct carrying a `Vec` field must be
+                    // compared by the TYPE-directed `karac_eq_<S>`, not the
+                    // shape-directed field walk in `compile_binop`: a Vec and
+                    // a String share the `{ptr,len,cap}` layout, so the walk
+                    // sent Vec fields to the String byte-compare and read
+                    // `len` BYTES of an ELEMENT buffer. Must run before
+                    // `compile_binop`, which is where that walk lives.
+                    if matches!(op, BinOp::Eq | BinOp::NotEq)
+                        && lhs.is_struct_value()
+                        && rhs.is_struct_value()
+                        && !self.llvm_ty_is_vec_struct(lhs.get_type())
+                    {
+                        if let Some(r) = self.try_compile_struct_eq_typed(
+                            op,
+                            left,
+                            right,
+                            lhs.into_struct_value(),
+                            rhs.into_struct_value(),
+                        ) {
+                            // The operand-ownership arms below still apply:
+                            // this only changes HOW the comparison is done.
+                            self.track_fresh_struct_temp_operand(left, lhs.into_struct_value());
+                            self.track_fresh_struct_temp_operand(right, rhs.into_struct_value());
+                            return Ok(r);
+                        }
+                    }
                     let result = self.compile_binop(op, lhs, rhs)?;
                     // B-2026-07-21-12: a string concat that STAYED a surface
                     // `Binary` (the `String.add` desugar skips it when an

@@ -911,6 +911,107 @@ impl<'ctx> super::Codegen<'ctx> {
         self.track_struct_var_inst(&name, slot, inst);
     }
 
+    /// True when `struct_name` has a `Vec`-typed field, directly or through a
+    /// nested struct field. B-2026-08-12-5 — the gate for routing `==` to the
+    /// type-directed comparator; see `try_compile_struct_eq_typed`.
+    pub(super) fn struct_has_vec_field_deep(&self, struct_name: &str) -> bool {
+        self.struct_has_vec_field_deep_inner(struct_name, 0)
+    }
+
+    fn struct_has_vec_field_deep_inner(&self, struct_name: &str, depth: u32) -> bool {
+        // A self-referential struct cannot exist by value, but a malformed or
+        // generic registry entry should not spin.
+        if depth > 8 {
+            return false;
+        }
+        let Some(field_tes) = self.struct_field_type_exprs.get(struct_name) else {
+            return false;
+        };
+        field_tes.iter().any(|te| match &te.kind {
+            TypeKind::Path(p) => match p.segments.last().map(String::as_str) {
+                Some("Vec") => true,
+                Some(nested) => {
+                    nested != struct_name
+                        && self.struct_field_type_exprs.contains_key(nested)
+                        && self.struct_has_vec_field_deep_inner(nested, depth + 1)
+                }
+                None => false,
+            },
+            _ => false,
+        })
+    }
+
+    /// B-2026-08-12-5 — compare two structs with the TYPE-directed comparator
+    /// `karac_eq_<S>` instead of the shape-directed field walk, when the
+    /// struct carries a `Vec` field.
+    ///
+    /// `compile_struct_eq` recurses per field through `compile_binop`, which
+    /// dispatches on LLVM SHAPE. A `Vec` field and a `String` field have the
+    /// identical `{ptr, len, cap}` layout, so a Vec field was routed to
+    /// `compile_string_binop` — a byte compare of `len` bytes. For a String
+    /// `len` IS the byte count and that is correct; for a Vec it is the
+    /// ELEMENT count, so the comparison looked at the first `len` bytes of the
+    /// element buffer and ignored the rest.
+    ///
+    /// That is a FALSE POSITIVE machine, not merely a false negative:
+    /// `Vec[i64]` `[7]` compared equal to `[263]` (`263 = 0x107`, same low
+    /// byte) and `[1, 2]` compared equal to `[1, 3]` (two bytes read: the low
+    /// byte of element 0 and the second byte of element 0, both zero). A
+    /// `Vec[String]` field went the other way and compared UNEQUAL for equal
+    /// contents, since the bytes read are the low bytes of two distinct heap
+    /// pointers.
+    ///
+    /// The correct comparator already existed — `emit_eq_fn_for_struct`
+    /// dispatches per field on the declared TypeExpr and routes a `Vec[T]`
+    /// field to `karac_eq_Vec_<T>` (length, then element-wise, recursing for
+    /// heap elements). It was built for `Set`/`Map` keys by B-2026-06-20-15,
+    /// which is the same bug in the hashing path; the `==` OPERATOR never
+    /// picked it up.
+    ///
+    /// Gated to structs that actually contain a Vec (directly or nested) so
+    /// the ordinary scalar/String struct comparison keeps its existing inline
+    /// field walk and this cannot regress it.
+    pub(super) fn try_compile_struct_eq_typed(
+        &mut self,
+        op: &BinOp,
+        left: &Expr,
+        right: &Expr,
+        lhs: inkwell::values::StructValue<'ctx>,
+        rhs: inkwell::values::StructValue<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let name = self
+            .type_name_of_expr(left)
+            .or_else(|| self.type_name_of_expr(right))?;
+        if !self.struct_types.contains_key(name.as_str())
+            || self.shared_types.contains_key(name.as_str())
+            || !self.struct_has_vec_field_deep(&name)
+        {
+            return None;
+        }
+        // The comparator takes pointers, so both operands are spilled to
+        // scratch slots. These are plain reads — no ownership is transferred
+        // and nothing is dropped, so the slots need no tracking.
+        let fn_val = self.current_fn?;
+        let eq_fn = self.emit_eq_fn_for_struct(&name);
+        let a = self.create_entry_alloca(fn_val, "eqs.a", lhs.get_type().into());
+        let b = self.create_entry_alloca(fn_val, "eqs.b", rhs.get_type().into());
+        self.builder.build_store(a, lhs).ok()?;
+        self.builder.build_store(b, rhs).ok()?;
+        let r = self
+            .builder
+            .build_call(eq_fn, &[a.into(), b.into()], "eqs.call")
+            .ok()?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let out = if matches!(op, BinOp::NotEq) {
+            self.builder.build_not(r, "eqs.ne").ok()?
+        } else {
+            r
+        };
+        Some(out.into())
+    }
+
     fn track_freshtemp_field_access_object(
         &mut self,
         object: &Expr,
