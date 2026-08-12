@@ -103,15 +103,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 48 | 1 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
-| other | 28 | 1 |
+| other | 28 | 0 |
 | use-after-free | 18 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 813 | 3 |
-| typecheck | 156 | 3 |
+| codegen | 813 | 2 |
+| typecheck | 156 | 2 |
 | interp | 138 | 0 |
 | ownership | 45 | 0 |
 | other | 41 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1125 surfaced · 5 open · 1108 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1125 surfaced · 4 open · 1109 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-8 | 2026-08-12 | typecheck | medium | Four methods that CODEGEN FULLY IMPLEMENTS are rejected by the typechecker, so `karac build` refuses programs the backend demonstrably compiles and runs: `Vec.iter_mut()`, `Set.clear()`, `Column.range()`, and `.collect()` on a direct `Vec` receiver. Each has a green E2E test proving the emitter works; each fails `karac check` with "no method 'X' on type 'Y'". | Vec.iter_mut / Set.clear / Column.range / Vec.collect |
-| B-2026-08-12-9 | 2026-08-12 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at typecheck, so the codegen paths two E2E tests cover can never run in a shipped binary. Either the emitter is dead code to retire or the rule is stricter than intended -- open design call, not a defect report. | Vec[f64].sorted / Iterator.max / Iterator.min vs the F64 total-order rule |
 | B-2026-08-12-10 | 2026-08-12 | typecheck | low | Implicit narrowing to a refinement type works for an INTEGER literal but not for a FLOAT or STRING literal, and the diagnostic then states something false: `let b: PositivePrice = 2.5;` is rejected with "the value is not a compile-time constant" -- `2.5` plainly is one. Same for `"widget"` against a `String where self.len() >= 1` refinement. | E_REFINEMENT_IMPLICIT_NARROWING constant-folding by base type |
 | B-2026-08-12-14 | 2026-08-12 | codegen | medium | Reading a field off a `Json.parse` error is a RUN-VS-BUILD split: `karac run --interp` prints `e.line` / `e.column` / `e.message` correctly, while `karac build` REFUSES with `codegen: cannot resolve field 'line' on this receiver (its type was not recorded for codegen); this is a compiler gap`. So the error type `Json.parse` is documented to return cannot be inspected at all from a compiled binary -- only matched on and discarded. | `JsonError` has no `struct_types` registration -- `runtime/stdlib/json.kara` is not in `compiled_stdlib_programs`, and `src/codegen/json.rs` hand-rolls the Err value (`Build Result.Err(JsonError { line, column, message })`) |
 | B-2026-08-12-15 | 2026-08-12 | codegen | high | `c24343b3` (the B-2026-08-12-1 by-value Option/Result param entry-copy) LEAKS the copied payload: `asan_struct_field_boxed_heapless_option_envelope_owned` is red on the -O0 ASAN leg with 2560 bytes in 80 allocations, and GREEN at the default opt level -- so the ordinary `cargo test --features llvm` run does not see it and only `scripts/asan-o0-leg.sh` does. | regression from c24343b3 (B-2026-08-12-1); asan_struct_field_boxed_heapless_option_envelope_owned |
@@ -147,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1125 surfaced
 
 </details>
 
-### Fixed (1108)
+### Fixed (1109)
 
-<details><summary>1108 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1109 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2486,6 +2485,7 @@ self-host double free, and a leak is the safe direction; closing it needs the
 caller to know whether the ctor's payload move already retracted `x`'s own
 cleanup, which is a separate question from this row's. |
 | B-2026-08-12-7 | typecheck | medium | A union or `#[derive(Copy)]` struct with a RAW POINTER field is rejected as not-`Copy` by the one rule whose own suggestion is "hold it behind a raw… | FIXED by 9410488b -- added a `Type::Pointer { .. } => true` arm to `is_type_copy` (src/typechecker/derives.rs). Pinned by `test_e2e_union_and_struct_raw_pointer_fields_are_copy` in tests/codegen.rs, which covers both pointer spellings in a union AND a `#[derive(Copy, Clone)]` struct holding a `*mut u8`; verified to fail pre-fix with the E_UNION_FIELD_NOT_COPY pair and pass post-fix. |
+| B-2026-08-12-9 | typecheck+codegen | low | The `f64` sort/max/min emitters are UNREACHABLE from any valid program: the F64 total-order rule rejects `Vec[f64].sorted()` / `.max()` / `.min()` at… | 2768ad1 (premise refuted, not a design call: `Body::FloatScalar` in emit_cmp_fn_for_type_expr goes from the ORDERED IEEE predicates to the total-order key, with NaN canonicalized first; the grandfathered test's float leg is rewritten through a generic and removed from CHECK_GATE_GRANDFATHERED) |
 | B-2026-08-12-11 | codegen | medium | Codegen's TWO type-lowering entry points kept two hand-maintained lists of built-in handle types and DISAGREED: `llvm_type_for_type_expr` answered `p… | FIXED by 9b2f5ad. `builtin_opaque_ptr_handle` is the single table both entry points consult, so the same type cannot lower to `ptr` through one and `i64` through the other. `KARAC_STRICT_TYPE_LOWERING=1` reports any remaining unknown name at the point of the decision, filtering generic parameters (user program + baked stdlib) so it is quiet on `hello world` and fires on 16 of 2906 E2E programs. |
 | B-2026-08-12-12 | codegen | low | SIX type names still lower to the silent `i64` default with no LLVM layout of their own, across 16 of the 2906 `tests/codegen.rs` programs: `Unit` (6… | FIXED by 75fbfc0. Three of the six resolved, three measured and left alone.
 
