@@ -823,6 +823,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(extracted);
             }
         }
+        // A chained indexed receiver (`a[i][j].field`) is a KNOWN deferral,
+        // not an unrecorded type: the method-call sibling path already
+        // rejects it with an actionable message (FR5, src/codegen/calls.rs).
+        // Reaching the generic "please report it" arm below sent writers to
+        // file a compiler bug for a limitation the compiler can already
+        // explain — and only for a plain field read, since adding a method
+        // call to the very same expression (`a[i][j].field.to_string()`)
+        // routed to FR5 and printed the fix. Mirror FR5 here.
+        if let ExprKind::Index { object: outer, .. } = &object.kind {
+            if matches!(outer.kind, ExprKind::Index { .. }) {
+                return Err(format!(
+                    "codegen: chained indexed field receivers \
+                     (`a[i][j].field…`) are deferred to v1.x; \
+                     bind the intermediate element first (field '{}')",
+                    field
+                ));
+            }
+        }
         // B-2026-07-20-9: this used to fall through to a SILENT `i64 0`
         // constant — a miscompile factory (an unresolved field read compiled
         // to a literal zero, and with the nondeterministic shape reverse-
