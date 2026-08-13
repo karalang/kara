@@ -2623,6 +2623,50 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "char"
             )
         }
+        // B-2026-08-13-2 — the THIRD instance of the gap the comment above
+        // describes, and the one neither existing arm can close. `dispatch_key`
+        // is span-keyed and a chain shares one, so in `7.to_string().len()` the
+        // inner link reads the outer's `String.len`; `type_name_of_expr` is a
+        // NAME lookup, so it answers for `n.to_string()` (B-2026-08-11-22's fix)
+        // and returns `None` for a receiver that has no name — a literal, a
+        // parenthesized expression, a cast. Both arms decline and the scalar
+        // `to_string` lowering below never fires, which is why every failing
+        // shape on that row is a non-identifier scalar: `'x'`, `7`, `3.5`,
+        // `true`, `(7 + 1)`.
+        //
+        // Answered SYNTACTICALLY, which is exactly what the other two arms
+        // cannot be: the receiver's scalar-ness is visible in the expression
+        // itself, and reading it costs no compilation of the receiver — the
+        // property the comment above notes this gate was written to preserve.
+        //
+        // Primitive arithmetic arrives as an intrinsic CALL (`7 + 1` desugars
+        // to `i64.add(7, 1)` before either backend sees it), so the `Call` arm
+        // is what covers `(7 + 1).to_string()`; without it that shape alone
+        // kept failing.
+        fn expr_is_syntactic_scalar(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Integer(..)
+                | ExprKind::Float(..)
+                | ExprKind::Bool(..)
+                | ExprKind::CharLit(..)
+                | ExprKind::ByteLit(..) => true,
+                ExprKind::Cast { ty, .. } => matches!(
+                    &ty.kind,
+                    TypeKind::Path(p)
+                        if p.segments.last().is_some_and(|s| is_scalar_primitive_name(s))
+                ),
+                ExprKind::Unary { operand, .. } => expr_is_syntactic_scalar(operand),
+                ExprKind::Binary { left, right, .. } => {
+                    expr_is_syntactic_scalar(left) && expr_is_syntactic_scalar(right)
+                }
+                ExprKind::Call { callee, args } => {
+                    matches!(&callee.kind, ExprKind::Path { segments, .. }
+                        if segments.len() == 2 && is_scalar_primitive_name(&segments[0]))
+                        && args.iter().all(|a| expr_is_syntactic_scalar(&a.value))
+                }
+                _ => false,
+            }
+        }
         let recv_is_scalar_primitive = dispatch_key
             .as_deref()
             .and_then(|k| k.rsplit_once('.'))
@@ -2630,7 +2674,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or(false)
             || self
                 .type_name_of_expr(object)
-                .is_some_and(|t| is_scalar_primitive_name(&t));
+                .is_some_and(|t| is_scalar_primitive_name(&t))
+            || expr_is_syntactic_scalar(object);
 
         if method == "clone" && args.is_empty() {
             if let Some(value) = self.try_compile_clone(object)? {

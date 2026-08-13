@@ -23075,6 +23075,52 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_to_string_on_non_identifier_scalar_receiver() {
+        // B-2026-08-13-2 — `<non-identifier scalar>.to_string()` used as the
+        // RECEIVER of a further call was check-green and interp-green while
+        // BOTH compiled backends died, in three different ways: a
+        // "Vec/String method 'to_string' is not yet supported" build error, an
+        // internal "this is a codegen bug — add a dispatcher arm" to-do printed
+        // at whoever wrote the program, and an outright ICE
+        // ("Found IntValue i32 120 but expected the StructValue variant" — 120
+        // is `'x'`, the un-lowered codepoint reaching a caller that had already
+        // decided the receiver was string-like).
+        //
+        // THE LOWERING ALREADY EXISTED; its gate never fired. `dispatch_key` is
+        // span-keyed and a chain shares one, so the inner link reads the OUTER
+        // call's `String.<m>`; `type_name_of_expr` is a NAME lookup, so it
+        // answers for an identifier receiver (B-2026-08-11-22 added that arm)
+        // and returns `None` for a literal, a cast or a parenthesized
+        // expression. Both arms declined and the scalar arm was skipped — which
+        // is exactly why every failing shape had a non-identifier receiver.
+        //
+        // `(7 + 1)` earns its line: primitive arithmetic desugars to an
+        // intrinsic CALL (`i64.add(7, 1)`) before either backend sees it, so it
+        // needs the call arm of the syntactic check rather than the literal one.
+        // `n.to_string()` and `"hi".to_string()` are the controls that were
+        // already working and must stay so.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     println('x'.to_string().to_uppercase());\n\
+                     println(7.to_string().len());\n\
+                     println(true.to_string().to_uppercase());\n\
+                     println((7 + 1).to_string().len());\n\
+                     println(3.5.to_string().len());\n\
+                     println('x'.to_string().to_string());\n\
+                     println((-7).to_string().len());\n\
+                     println((7 as u8).to_string().len());\n\
+                     let n = 7;\n\
+                     println(n.to_string().len());\n\
+                     println(\"hi\".to_string().to_uppercase());\n\
+                 }"
+            )
+            .as_deref(),
+            Some("X\n1\nTRUE\n1\n3\nx\n2\n1\n1\nHI\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_user_trait_impl_on_string_dispatches() {
         // B-2026-08-12-32 — the END-TO-END half. The typecheck fix alone was
         // measured check-green, interp-green and DEAD on both compiled backends
