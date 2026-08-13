@@ -17730,6 +17730,78 @@ fn main() {
         }
     }
 
+    /// B-2026-08-12-24 — inside a generic impl, `let`-binding a `T`-typed
+    /// struct FIELD and then calling a trait method on that local failed the
+    /// whole build: `codegen: no handler for method 'describe' on variable
+    /// 'a'`, on a program `karac check` accepts and the interpreter runs.
+    ///
+    /// A GENERIC PARAMETER REACHES THE BINDING RECORDER UNDER TWO SPELLINGS,
+    /// and only one was handled — which is why the boundary looked so strange.
+    /// A `T`-typed PARAM infers `Type::Named { name: "T" }` and records into
+    /// `pattern_binding_types`; a `T`-typed FIELD READ infers
+    /// `Type::TypeParam("T")` and fell through every arm of
+    /// `bind_pattern_types`, so codegen got NO binding type and had no
+    /// concrete receiver to dispatch on. The monomorph never lost the type —
+    /// it was never told.
+    ///
+    /// Covers the shapes the boundary distinguishes, plus the two the filing
+    /// did not reach:
+    ///
+    ///   * `let a = self.cells[0];` — the filed repro (field read to a local)
+    ///   * `let a = self.get(i)?;` — the ORIGINAL probe's shape, one level out
+    ///   * `match self.get(i) { Ok(v) => v.describe() }` — the match-arm
+    ///     sibling, which has its own recorder
+    ///     (`record_pattern_binding_surface_types`) with the same hole
+    ///
+    /// TWO MONOMORPHS, a scalar (`i64`) and a user struct (`P`), because
+    /// recording the param NAME is only right if the subst resolves it per
+    /// mono — one instantiation would pass with a hardcoded answer.
+    #[test]
+    fn e2e_generic_impl_local_bound_from_t_field_dispatches() {
+        let Some(out) = run_program(
+            "trait Zero { fn describe(ref self) -> String; }\n\
+             impl Zero for i64 { fn describe(ref self) -> String { return f\"i64:{self}\"; } }\n\
+             struct P { n: i64 }\n\
+             impl Zero for P { fn describe(ref self) -> String { return f\"P:{self.n}\"; } }\n\
+             struct Grid[T] { cells: Vec[T] }\n\
+             impl[T: Zero] Grid[T] {\n\
+             \x20   fn get(ref self, i: i64) -> Result[T, String] {\n\
+             \x20       if i < 0 { return Result.Err(\"oob\"); }\n\
+             \x20       return Result.Ok(self.cells[i]);\n\
+             \x20   }\n\
+             \x20   fn show(ref self, i: i64) -> Result[String, String] {\n\
+             \x20       let a = self.get(i)?;\n\
+             \x20       return Result.Ok(a.describe());\n\
+             \x20   }\n\
+             \x20   fn show_match(ref self, i: i64) -> String {\n\
+             \x20       match self.get(i) {\n\
+             \x20           Result.Ok(v) => { return v.describe(); }\n\
+             \x20           Result.Err(e) => { return f\"err:{e}\"; }\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   fn direct(ref self) -> String { let a = self.cells[0]; return a.describe(); }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut cs: Vec[i64] = Vec.new();\n\
+             \x20   cs.push(7);\n\
+             \x20   let g: Grid[i64] = Grid { cells: cs };\n\
+             \x20   match g.show(0) { Result.Ok(s) => println(s), Result.Err(e) => println(e) }\n\
+             \x20   println(g.show_match(0));\n\
+             \x20   println(g.direct());\n\
+             \x20   let mut ps: Vec[P] = Vec.new();\n\
+             \x20   ps.push(P { n: 5 });\n\
+             \x20   let h: Grid[P] = Grid { cells: ps };\n\
+             \x20   match h.show(0) { Result.Ok(s) => println(s), Result.Err(e) => println(e) }\n\
+             \x20   println(h.show_match(0));\n\
+             \x20   println(h.direct());\n\
+             }",
+        ) else {
+            return;
+        };
+        // Matches `karac run --interp` on the identical source.
+        assert_eq!(out, "i64:7\ni64:7\ni64:7\nP:5\nP:5\nP:5\n");
+    }
+
     /// B-2026-07-11-25: a GENERIC struct's ASSOCIATED function (`W.make(7)` for
     /// `impl[T] W[T]`) returning a struct was miscompiled — the call fell through
     /// `compile_assoc_call` (which only knows concrete `module.get_function`

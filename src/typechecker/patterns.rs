@@ -1776,12 +1776,46 @@ impl<'a> super::TypeChecker<'a> {
                 // as its base (phase-9 step 5a); `local_scope` above keeps
                 // the real refinement type for type-checking.
                 let ty = strip_refinement(ty);
+                // B-2026-08-12-24 — a generic parameter reaches this recorder
+                // under TWO spellings, and only one was handled. A `T`-typed
+                // PARAM infers `Type::Named { name: "T" }` and records; a
+                // `T`-typed struct FIELD read (`let a = self.v;` inside
+                // `impl[T: Zero] Box2[T]`) infers `Type::TypeParam("T")` and
+                // fell through every arm, so codegen got no binding type at
+                // all and `a.describe()` died with "no handler for method
+                // 'describe' on variable 'a'" — a hard build failure on a
+                // program `karac check` and the interpreter both accept.
+                //
+                // Recording the param NAME is exactly what the `Named` arm
+                // already does for the working spelling: codegen's
+                // `record_var_type_name` resolves it through the monomorph's
+                // `type_subst_names` (`T` -> `i64`), and outside a mono that
+                // map is empty so the name stays put. So this makes the two
+                // spellings agree rather than adding a new behaviour.
+                //
+                // DELIBERATELY NOT MIRRORED into the match-arm recorder
+                // (`record_pattern_binding_surface_types`), which is the
+                // obvious-looking next step and is WRONG. It was tried and
+                // measured: it breaks `test_e2e_generic_enum_{heap,struct_heap,
+                // vec}_payload_match_return` with `Module verification failed:
+                // Function return type does not match operand type of return
+                // inst` — there the recorded name drives PAYLOAD WORD COUNT,
+                // and `"T"` reads as a 1-word named type where the live
+                // payload is a 3-word `{ptr,len,cap}`. The `let` site has no
+                // such payload reconstruction, which is why the same record is
+                // safe here and not there. The match-arm shape needs no fix
+                // anyway: `match self.get(i) { Ok(v) => v.describe() }`
+                // dispatches correctly with only this arm in place, verified
+                // on the same probe.
                 if let Type::Named {
                     name: type_name, ..
                 } = ty
                 {
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_name.clone());
+                } else if let Type::TypeParam(param_name) = ty {
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), param_name.clone());
                 } else if matches!(ty, Type::Str) {
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), "String".to_string());
