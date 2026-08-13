@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 240 | 0 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 106 | 1 |
+| run-vs-build | 107 | 1 |
 | codegen-gap | 105 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 835 | 0 |
+| codegen | 836 | 1 |
 | typecheck | 161 | 0 |
-| interp | 140 | 0 |
+| interp | 141 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
-| cli | 30 | 1 |
+| cli | 30 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
 | parser | 16 | 1 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1158 surfaced · 2 open · 1144 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1159 surfaced · 2 open · 1145 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-12 | 2026-08-13 | cli | low | The DELIBERATE codegen deferral of chained field receivers (`e.doc.lines.len()`, FR4) is invisible to `karac check`: check reports `All checks passed.`, `--output=json` reports `"diagnostics":[]`, `karac fix` reports nothing fixable, and `--targets=native` also passes -- then `karac build` refuses. The remedy is a purely mechanical rewrite the compiler already names, so this is a free `check`-time gate and a free machine-applicable fix-it that are simply not wired up. | src/codegen/calls.rs:403 (`FR4: reject chained field receivers up front`). Deferral itself is intentional and documented -- see docs/implementation_checklist/phase-11-stdlib-longtail.md, where the autograd stdlib works around it by binding `let tp = self.tape;`. This row is about the MISSING CHECK-TIME SURFACE, not about implementing the feature. |
 | B-2026-08-13-13 | 2026-08-13 | parser | low | A parse diagnostic PRESCRIBES CODE THAT DOES NOT PARSE: the bare-assignment-in-a-match-arm error says "wrap it in braces: `pattern => { place = value }`", and that exact text fails with `Expected Semicolon, found RightBrace`. The working form needs the semicolon -- `{ place = value; }`. No `replacement` is attached either, so `karac fix` cannot repair it. | the E0001 message text for a bare assignment as a `match` arm body. |
+| B-2026-08-13-14 | 2026-08-13 | interp+codegen | high | Binding a NESTED STRUCT field (`let mut t = b.a;`) EMPTIES the source under both compiled backends while the interpreter treats it as an ALIAS: codegen prints the copy's contents and `0` for the source, interp prints the same value twice. Neither backend implements the COPY the language's field-read semantics call for, and they disagree with each other | the struct-field binding path — the source-side cap-zeroing that makes `let t = b.a` a MOVE in codegen, against the interpreter's alias |
 
 ### Wontfix (2)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1158 surfaced
 
 </details>
 
-### Fixed (1144)
+### Fixed (1145)
 
-<details><summary>1144 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1145 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4439,6 +4439,68 @@ row's own bare-Vec and let-bound controls, which were clean before and stay so.
 The fixtures build their payloads with `String.new()` + `push_str` — the row's
 recorded measurement hazard, since a string literal is static and hides the
 second free entirely. |
+| B-2026-08-13-12 | cli | low | The DELIBERATE codegen deferral of chained field receivers (`e.doc.lines.len()`, FR4) is invisible to `karac check`: check reports `All checks passed… | FIXED by 30ea825 for the GATE half. The fix-it half is not delivered, and that is
+a measurement rather than a shortfall — see below.
+
+WHAT LANDED. A new check-phase lint, `chained_field_receiver`
+(src/chained_receiver_lint.rs), registered at Deny, wired beside the existing
+per-module lints. The four surfaces the row measured now read:
+
+    karac check                    error[typecheck]: chained field receivers … ;
+                                   bind the inner field to a temporary first —
+                                   `let tmp = e.doc;`, then `tmp.…`
+    karac check --output=json      one diagnostic, carrying `chained_field_receiver`
+    karac check -A chained_field_receiver   All checks passed.
+    karac run --interp             1            (unchanged — still runs)
+    karac build                    the same message, now BEFORE codegen
+
+Deny rather than Warn because the program cannot compile: a warning would leave
+`check` exiting 0 on a program `build` refuses, which is the gap the row is
+about. `-A` exists for a program that only ever runs under `--interp`.
+
+THE SHAPE IS WIDER THAN THE ROW'S TABLE. It listed method calls only; an INDEX
+through a chained field (`e.doc.lines[0]`) is refused by the same helper and was
+missing from the table. Both refusals come from `lower_field_access_ptr`, which
+the method-receiver and index paths share, so one predicate covers both and it
+mirrors that helper's own test (the inner of the `FieldAccess` is itself a
+`FieldAccess`) rather than restating the rule in different terms.
+
+`--interp` IS EXEMPT, AND THAT COST A PIPELINE FLAG. The first wiring made the
+lint an unconditional check error, which killed `karac run --interp` on a
+program the interpreter executes perfectly — trading a working execution path
+for a warning about one that was never used. `Pipeline` now carries
+`codegen_bound`, false only for `run --interp`; every other entry point (check,
+build, `run` on the JIT) keeps the gate.
+
+THE FIX-IT IS NOT DELIVERED, AND THE REASON IS THE INTERESTING PART. The row
+called it free: "hoist the receiver prefix to a fresh `let` immediately before
+the statement and rewrite the call. The compiler already computes and prints
+exactly that instruction." Measured, that rewrite is not semantics-preserving:
+
+  - For a MUTATING call it silently drops the write. `b.a.lines.push("y")`
+    refuses to build today; hoisted to `let mut t = b.a; t.lines.push("y")` it
+    BUILDS and `b.a.lines` never sees the element. Trading a build error for a
+    silent wrong answer is strictly worse than the silence this row is fixing.
+  - The hoist diverges run-vs-build before the mutation even happens.
+    `let mut t = b.a;` leaves `b.a.lines` EMPTY under both compiled backends
+    (measured: `0` where the source held one element) while the interpreter
+    keeps it intact and treats the binding as an alias (`2` and `2` where
+    codegen says `2` and `0`). Filed as its own row.
+
+So the compiler's own prescribed remedy is unsound for a mutating receiver, and
+the lint has no reliable syntactic test for which kind of call it is looking at —
+`remove` reads like a reader at a call site and mutates. The diagnostic therefore
+names the remedy in prose, exactly as codegen does, and leaves the edit to the
+author. Once the divergence above is fixed, a fix-it gated to provably read-only
+uses is a defensible follow-up; attaching one now would ship the autofix
+equivalent of the bug this cluster keeps closing.
+
+MEASURED: the row's own boundary table reproduced (depth-1 method builds, plain
+field access at any depth builds, the hoisted form builds, depth-2 and depth-3
+method receivers refused), plus the index shape it missed; the four CLI surfaces
+above pinned in `tests/cli.rs`, including that `--interp` still executes and
+prints the right answer; and controls that must stay silent (the hoisted
+rewrite, a depth-1 receiver) verified clean. |
 
 </details>
 
