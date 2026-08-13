@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 240 | 0 |
 | leak | 172 | 0 |
-| double-free | 127 | 1 |
+| double-free | 127 | 0 |
 | run-vs-build | 106 | 1 |
 | codegen-gap | 105 | 0 |
 | missing-feature | 95 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 835 | 2 |
+| codegen | 835 | 1 |
 | typecheck | 161 | 0 |
 | interp | 140 | 0 |
 | ownership | 47 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1158 surfaced · 4 open · 1142 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1158 surfaced · 3 open · 1143 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-13-10 | 2026-08-13 | codegen | medium | kara is 1.58x behind EQUAL-SAFETY rustc and 1.49x behind clang on the min/argmin/second-min reduction of kata #265's O(n*k) DP, because LLVM if-converts and FULLY unrolls that loop for rustc/clang but only partially unrolls it (4x) for kara and leaves a data-dependent branch per element. Measured cmov counts in main: rustc -O 133, rustc -O -C overflow-checks=on 127, clang -O3 129, kara 17. | LLVM unroll-factor and if-conversion decisions on the counted reduction loop karac emits (src/codegen loop lowering + pass pipeline); compare against the fully-unrolled branchless form rustc produces for the same k=32 min/argmin/second-min update |
-| B-2026-08-13-11 | 2026-08-13 | codegen | high | DOUBLE FREE on both compiled backends when a heap payload makes an ENUM-MEDIATED ROUND TRIP through a Vec: read out of a Vec element into a returned enum, moved back into the Vec by the next call, then read out again into another returned enum. `karac check` is clean and the interpreter is correct. The identical round trip WITHOUT an enum is clean in three separate forms, so the enum is load-bearing. | the enum-payload construction path that reads a Vec ELEMENT directly into a variant (`Cmd.Delete(at, d.lines[at as usize])`) and the `let`-bound sibling (`let gone = d.lines[at]; ... Cmd.Insert(at, gone)`) -- BOTH reads are required, see the control table. |
 | B-2026-08-13-12 | 2026-08-13 | cli | low | The DELIBERATE codegen deferral of chained field receivers (`e.doc.lines.len()`, FR4) is invisible to `karac check`: check reports `All checks passed.`, `--output=json` reports `"diagnostics":[]`, `karac fix` reports nothing fixable, and `--targets=native` also passes -- then `karac build` refuses. The remedy is a purely mechanical rewrite the compiler already names, so this is a free `check`-time gate and a free machine-applicable fix-it that are simply not wired up. | src/codegen/calls.rs:403 (`FR4: reject chained field receivers up front`). Deferral itself is intentional and documented -- see docs/implementation_checklist/phase-11-stdlib-longtail.md, where the autograd stdlib works around it by binding `let tp = self.tape;`. This row is about the MISSING CHECK-TIME SURFACE, not about implementing the feature. |
 | B-2026-08-13-13 | 2026-08-13 | parser | low | A parse diagnostic PRESCRIBES CODE THAT DOES NOT PARSE: the bare-assignment-in-a-match-arm error says "wrap it in braces: `pattern => { place = value }`", and that exact text fails with `Expected Semicolon, found RightBrace`. The working form needs the semicolon -- `{ place = value; }`. No `replacement` is attached either, so `karac fix` cannot repair it. | the E0001 message text for a bare assignment as a `match` arm body. |
 
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1158 surfaced
 
 </details>
 
-### Fixed (1142)
+### Fixed (1143)
 
-<details><summary>1142 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1143 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4293,6 +4292,72 @@ compose without either being touched for the other: with both in, the two-impls-
 under-one-head probe that this row kept as an untouched control (`mimi` compiled
 against the interpreter's `msms`) now reads `mims` on all four surfaces, and
 every probe here is unchanged. Suite green at 13552 on the rebased tree. |
+| B-2026-08-13-11 | codegen | high | DOUBLE FREE on both compiled backends when a heap payload makes an ENUM-MEDIATED ROUND TRIP through a Vec: read out of a Vec element into a returned… | FIXED by 3e62426. The row's own 14-line repro runs clean on both compiled
+backends with output matching the interpreter, and the ASAN pin fails without
+the code change.
+
+THE NECESSARY-CONDITIONS TABLE WAS WRONG, and correcting it is the finding. The
+row required, together: (1) an enum with a heap payload; (2) a function taking it
+by value and returning a new one; (3) TWO reads, one out of the Vec into a
+returned variant and another back in and out again; (4) TWO chained calls so the
+value completed a `Vec -> enum -> Vec -> enum` loop. None of that is needed. One
+call, one read, no round trip, no second arm:
+
+    enum Cmd { Insert(i64, String), Delete(i64, String) }
+    struct Doc { lines: Vec[String] }
+    fn take(d: mut ref Doc, at: i64) -> Cmd {
+        Cmd.Delete(at, d.lines[at as usize])          // <- the whole bug
+    }
+
+WHAT THE ROW'S CONTROLS COULD NOT SEE is that they all shared one container
+shape. The same enum round trip over a BARE `Vec[String]` param is clean, and so
+is the field-rooted read when it is BOUND first (`let g = d.lines[i]`) rather
+than consumed directly. So the trigger is the STRUCT FIELD, and the enum is not
+load-bearing at all — it is simply one of the ~25 argument positions that route
+through `maybe_defensive_copy_param_arg`. Its first arm asks
+`expr_is_heap_vec_index`, which required an `Identifier` container and got a
+`FieldAccess`, so the payload kept a `{ptr,len,cap}` ALIAS of the element and the
+container's element drop and the enum's payload drop freed one buffer.
+
+The row's conclusion — "that points at the variant-construction path duplicating
+the element handle" — was half right about the site and wrong about the cause:
+the variant-construction path does not duplicate anything, it FAILS to, and it
+fails for reads through a field rather than for enum payloads.
+
+THE CLONE WAS READY ALL ALONG. `clone_owned_vec_index_element` resolves its
+element type through `vec_index_elem_type_expr`, which has had a `recv.field[i]`
+arm since the field-rooted index-swap fix (B-2026-07-11-32). Only the GATE that
+routes to it was narrower than the thing it gates — a gap in REACH, the same
+shape as B-2026-08-13-3 (`d.inner.word`), -13-4 (`ds[0].inner.word`) and -13-5
+(slice / map containers) earlier in this cluster.
+
+THE RETURN POSITION IS EXCLUDED, and that gate is a measurement rather than
+caution. `maybe_defensive_copy_param_arg` is shared by argument AND return
+positions, and widening it for both took three green ASAN fixtures to 72–78 B of
+leak — `fn at(ref self, i: i64) -> T { self.xs[i] }` and two siblings — because
+the return path already reconciles that read and clones again, leaving the first
+clone with no owner. A single position flag, set only while the return wrapper
+runs, beats threading a bool through ~25 argument call sites to reach the one
+caller that needs to say no. The three fixtures are back to green and stand as
+the regression pins for that half.
+
+THE SIBLING PREDICATE IS LEFT ALONE ON PURPOSE. `expr_is_heap_vec_index` also
+arms three other behaviours — an rc-inc suppression at a struct-literal field, an
+eager LHS free at an assignment, and match-scrutinee materialization — each of
+which would newly fire for a field-rooted read if the widening happened in place.
+None were measured here, so the widening lives in its own predicate used by the
+one path this row is about; widening the others is a separate change with its own
+measurements.
+
+MEASURED, interp / JIT / AOT agreeing with zero invalid frees and zero leaks: the
+row's repro; the one-call reduction; an owning `Vec.push` destination; a `ref
+self` method (`self.lines[0]` — the shape the self-hosted parser is full of); a
+200-iteration loop (the leak half, which would report 200 blocks if the clone's
+cleanup stopped firing); a SCALAR-element control that must not clone; and the
+row's own bare-Vec and let-bound controls, which were clean before and stay so.
+The fixtures build their payloads with `String.new()` + `push_str` — the row's
+recorded measurement hazard, since a string literal is static and hides the
+second free entirely. |
 
 </details>
 
