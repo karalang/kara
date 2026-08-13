@@ -28303,6 +28303,48 @@ fn test_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-08-13-11 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_field_rooted_vec_elem_read_into_enum_payload_values`, same source
+/// and expected string.
+///
+/// The interpreter was correct throughout this row — it was the oracle that said
+/// the compiled abort was a bug rather than a program error — so pinning its
+/// output keeps the comparison the fix was argued from checkable.
+#[test]
+fn test_field_rooted_vec_elem_read_into_enum_payload_values() {
+    assert_eq!(
+        run("enum Cmd { Insert(i64, String), Delete(i64, String) }\n\
+             struct Doc { lines: Vec[String] }\n\
+             fn apply(d: mut ref Doc, c: Cmd) -> Cmd {\n\
+                 match c {\n\
+                     Insert(at, text) => {\n\
+                         d.lines.insert(at as usize, text);\n\
+                         Cmd.Delete(at, d.lines[at as usize])\n\
+                     }\n\
+                     Delete(at, _text) => {\n\
+                         let gone = d.lines[at as usize];\n\
+                         d.lines.remove(at as usize);\n\
+                         Cmd.Insert(at, gone)\n\
+                     }\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut l: Vec[String] = Vec.new();\n\
+                 let mut a = String.new(); a.push_str(\"alpha\");\n\
+                 let mut b = String.new(); b.push_str(\"beta\");\n\
+                 l.push(a); l.push(b);\n\
+                 let mut d = Doc { lines: l };\n\
+                 let inv = apply(mut d, Cmd.Delete(1, \"beta\"));\n\
+                 match inv { Insert(i, t) => { println(t); } Delete(i, t) => { println(t); } }\n\
+                 let i2 = apply(mut d, inv);\n\
+                 match i2 { Insert(i, t) => { println(t); } Delete(i, t) => { println(t); } }\n\
+                 println(d.lines.len());\n\
+                 println(d.lines[0]);\n\
+             }"),
+        "beta\nbeta\n2\nalpha\n"
+    );
+}
+
 /// B-2026-08-13-9 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_user_trait_bound_call_over_builtin_containers_dispatches`, same
 /// source and expected string.

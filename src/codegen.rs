@@ -1328,6 +1328,18 @@ pub(super) struct Codegen<'ctx> {
     /// Append-only for the life of the module; entries are never removed, and
     /// the log is read by index, so it costs one `usize` at each read site.
     pub(crate) vec_elem_field_clone_log: Vec<(usize, usize)>,
+    /// B-2026-08-13-11 — set only while `maybe_defensive_copy_return_value` is
+    /// running, so the shared helper can tell an ARGUMENT position from a RETURN
+    /// one.
+    ///
+    /// The field-rooted Vec-element clone this row added belongs to the argument
+    /// half only. In return position the same read is ALREADY reconciled — the
+    /// three ASAN fixtures that pin it (`fn at(ref self, i) -> T { self.xs[i] }`
+    /// and two siblings) went from clean to 72–78 B of leak when the clone fired
+    /// there too, because the return path clones again and this one is left with
+    /// no owner. One flag beats threading a bool through ~25 argument call sites
+    /// to reach the one caller that needs to say no.
+    pub(crate) in_return_defensive_copy: bool,
     /// B-2026-08-06-32 — result binding of a passthrough call → the binding
     /// that actually owns its nested box (`let back = id(b)` ⇒ `back → b`).
     ///
@@ -8042,6 +8054,7 @@ impl<'ctx> Codegen<'ctx> {
             struct_field_boxed_payload_vars: std::collections::HashSet::new(),
             vec_elem_field_clone_slots: std::collections::HashMap::new(),
             vec_elem_field_clone_log: Vec::new(),
+            in_return_defensive_copy: false,
             nested_boxed_passthrough_owner_alias: std::collections::HashMap::new(),
             refinement_bases: HashMap::new(),
             refinement_generic_params: HashMap::new(),

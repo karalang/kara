@@ -4348,7 +4348,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.current_fn_returns_ref {
             return val;
         }
-        self.maybe_defensive_copy_param_arg(ret_expr, val)
+        // B-2026-08-13-11 — mark the position. The field-rooted Vec-element arm
+        // below is an ARGUMENT-position rule; in return position the read is
+        // already reconciled, and cloning again leaks (measured on three pinned
+        // ASAN fixtures, `fn at(ref self, i) -> T { self.xs[i] }` among them).
+        let saved = std::mem::replace(&mut self.in_return_defensive_copy, true);
+        let out = self.maybe_defensive_copy_param_arg(ret_expr, val);
+        self.in_return_defensive_copy = saved;
+        out
     }
 
     /// B-2026-08-10-21 — the copy half of the `UseAfterMove` defensive copy.
@@ -4497,7 +4504,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // non-range, non-trivially-copyable index and leaves the source intact,
         // so the container's single drop and the sink's clone free distinct
         // buffers. No-op for POD elements and non-index args.
-        if self.expr_is_heap_vec_index(arg_expr) {
+        if self.expr_is_heap_vec_index(arg_expr)
+            || (!self.in_return_defensive_copy
+                && self.expr_is_heap_vec_index_field_rooted(arg_expr))
+        {
             return self
                 .clone_owned_vec_index_element(arg_expr, val)
                 .unwrap_or(val);

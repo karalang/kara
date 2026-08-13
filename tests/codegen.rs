@@ -22936,6 +22936,59 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_field_rooted_vec_elem_read_into_enum_payload_values() {
+        // B-2026-08-13-11's VALUE side — the row's own undo/redo repro, with the
+        // payloads PRINTED rather than counted.
+        //
+        // The memory claim is the asan twin's; what this pins is that the round
+        // trip preserves the text. `beta` comes out of the Vec into the returned
+        // `Cmd.Insert`, goes back INTO the Vec on the next call, and comes out
+        // again into the next returned command — so a clone emitted at the wrong
+        // point prints an empty or garbled payload here rather than merely
+        // double-freeing. `d.lines[0]` last says the element the round trip did
+        // NOT touch is still intact.
+        //
+        // Payloads are built with `String.new()` + `push_str` on purpose: a
+        // string LITERAL is static, so the second free lands on a non-heap
+        // pointer and the whole bug disappears — the measurement hazard the row
+        // recorded after its first reduction attempt looked clean.
+        assert_eq!(
+            run_program(
+                "enum Cmd { Insert(i64, String), Delete(i64, String) }\n\
+                 struct Doc { lines: Vec[String] }\n\
+                 fn apply(d: mut ref Doc, c: Cmd) -> Cmd {\n\
+                     match c {\n\
+                         Insert(at, text) => {\n\
+                             d.lines.insert(at as usize, text);\n\
+                             Cmd.Delete(at, d.lines[at as usize])\n\
+                         }\n\
+                         Delete(at, _text) => {\n\
+                             let gone = d.lines[at as usize];\n\
+                             d.lines.remove(at as usize);\n\
+                             Cmd.Insert(at, gone)\n\
+                         }\n\
+                     }\n\
+                 }\n\
+                 fn main() {\n\
+                     let mut l: Vec[String] = Vec.new();\n\
+                     let mut a = String.new(); a.push_str(\"alpha\");\n\
+                     let mut b = String.new(); b.push_str(\"beta\");\n\
+                     l.push(a); l.push(b);\n\
+                     let mut d = Doc { lines: l };\n\
+                     let inv = apply(mut d, Cmd.Delete(1, \"beta\"));\n\
+                     match inv { Insert(i, t) => { println(t); } Delete(i, t) => { println(t); } }\n\
+                     let i2 = apply(mut d, inv);\n\
+                     match i2 { Insert(i, t) => { println(t); } Delete(i, t) => { println(t); } }\n\
+                     println(d.lines.len());\n\
+                     println(d.lines[0]);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("beta\nbeta\n2\nalpha\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_shared_struct_heap_field_read_is_a_copy() {
         // B-2026-08-13-6's VALUE side, and the leg that decides between the two
         // candidate fixes. Cap-zeroing the source — the move model that

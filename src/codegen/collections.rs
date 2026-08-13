@@ -2673,6 +2673,46 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-13-11 — [`Self::expr_is_heap_vec_index`] with a FIELD-ROOTED
+    /// container (`d.lines[i]`, `self.rows[i]`) admitted as well.
+    ///
+    /// The Identifier-only gate is why `Cmd.Delete(at, d.lines[at])` DOUBLE-FREES
+    /// while `Cmd.Delete(at, l[at])` over a bare `Vec` param is clean: the
+    /// enum-payload argument runs through `maybe_defensive_copy_param_arg`, whose
+    /// first arm asks this question, and a `FieldAccess` container answered no —
+    /// so the payload kept a `{ptr,len,cap}` ALIAS of the element, and the
+    /// container's element drop and the enum's payload drop freed one buffer.
+    ///
+    /// The CLONE was ready for this all along: `clone_owned_vec_index_element`
+    /// resolves its element type through `vec_index_elem_type_expr`, which has had
+    /// a `recv.field[i]` arm since the field-rooted index-swap fix
+    /// (B-2026-07-11-32). Only the gate that routes to it was narrower than the
+    /// thing it gates — a gap in REACH, not a difference in ownership.
+    ///
+    /// SEPARATE FROM ITS SIBLING ON PURPOSE. The Identifier-only predicate also
+    /// arms three other behaviours — an rc-inc suppression at a struct-literal
+    /// field, an eager LHS free at an assignment, and match-scrutinee
+    /// materialization — each of which would newly fire for a field-rooted read
+    /// if the widening happened in place. None of those were measured here, and
+    /// this row is about the argument position, so the widening lives in its own
+    /// predicate used by that one path. Widening the others is a separate change
+    /// with its own measurements.
+    pub(super) fn expr_is_heap_vec_index_field_rooted(&self, expr: &Expr) -> bool {
+        let ExprKind::Index { object, index } = &expr.kind else {
+            return false;
+        };
+        if matches!(&index.kind, ExprKind::Range { .. }) {
+            return false;
+        }
+        if !matches!(&object.kind, ExprKind::FieldAccess { .. }) {
+            return false;
+        }
+        match self.vec_index_elem_type_expr(object) {
+            Some(elem_te) => !super::vec_method::is_trivially_copyable_te(&elem_te),
+            None => false,
+        }
+    }
+
     /// True when `expr` is a plain element index (`make()[i]`, not a range)
     /// into an *inline `Vec` temporary* — either a fresh-owned one
     /// (`inline_temp_vec_te` matches the callee's return signature) or a

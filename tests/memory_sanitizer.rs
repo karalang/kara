@@ -20895,6 +20895,86 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-11 — a FIELD-ROOTED Vec element read (`d.lines[i]`) consumed
+    /// into an argument is deep-cloned, so it no longer double-frees.
+    ///
+    /// THE ROW'S NECESSARY-CONDITIONS TABLE WAS WRONG, and the correction is the
+    /// finding. It required, together: an enum with a heap payload, a function
+    /// taking it by value and returning a new one, TWO reads (one out of the Vec
+    /// into a returned variant, one back in and out again), and TWO chained calls
+    /// so the value completed a `Vec -> enum -> Vec -> enum` loop. None of that
+    /// is needed. One call, one read, no round trip:
+    ///
+    ///     fn take(d: mut ref Doc, at: i64) -> Cmd {
+    ///         Cmd.Delete(at, d.lines[at as usize])
+    ///     }
+    ///
+    /// What the row's controls could not see, because every one of them used the
+    /// same container shape, is that the STRUCT FIELD is the trigger: the
+    /// identical enum round trip over a bare `Vec[String]` param is clean, and
+    /// so is the field-rooted read when it is BOUND first (`let g = d.lines[i]`)
+    /// rather than consumed directly. The enum is not load-bearing — it is just
+    /// one of the ~25 argument positions that route through
+    /// `maybe_defensive_copy_param_arg`, whose gate asked for an `Identifier`
+    /// container and got a `FieldAccess`.
+    ///
+    /// The legs here are that corrected axis: the row's own 14-line repro, the
+    /// one-call reduction, an owning `Vec.push` destination, a `ref self` method
+    /// (`self.lines[0]`, the shape the self-hosted parser is full of), a
+    /// 200-iteration loop that reports blocks if the clone's cleanup stops
+    /// firing, and a SCALAR-element control that must NOT clone.
+    #[test]
+    fn asan_field_rooted_vec_elem_read_into_arg_cloned() {
+        assert_clean_asan_run(
+            r#"
+enum Cmd { Insert(i64, String), Delete(i64, String) }
+struct Doc { lines: Vec[String] }
+struct Nums { xs: Vec[i64] }
+enum Got { N(i64) }
+impl Doc { fn first(ref self) -> String { let g = self.lines[0]; g } }
+fn apply(d: mut ref Doc, c: Cmd) -> Cmd {
+    match c {
+        Insert(at, text) => { d.lines.insert(at as usize, text); Cmd.Delete(at, d.lines[at as usize]) }
+        Delete(at, _text) => { let gone = d.lines[at as usize]; d.lines.remove(at as usize); Cmd.Insert(at, gone) }
+    }
+}
+fn one(d: mut ref Doc, at: i64) -> Cmd { Cmd.Delete(at, d.lines[at as usize]) }
+fn scalar(n: ref Nums) -> Got { Got.N(n.xs[0]) }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut l: Vec[String] = Vec.new();
+    let mut a = String.new(); a.push_str("alpha"); a.push_str(k.to_string());
+    let mut b = String.new(); b.push_str("beta"); b.push_str(k.to_string());
+    l.push(a); l.push(b);
+    let mut d = Doc { lines: l };
+    let inv = apply(mut d, Cmd.Delete(1, "beta"));
+    let i2 = apply(mut d, inv);
+    let mut acc = d.lines.len() as i64;
+    match i2 { Insert(i, t) => { acc = acc + t.len(); } Delete(i, t) => { acc = acc + t.len(); } }
+    let c = one(mut d, 0);
+    match c { Insert(i, t) => { acc = acc + t.len(); } Delete(i, t) => { acc = acc + t.len(); } }
+    let mut out: Vec[String] = Vec.new();
+    out.push(d.lines[0]);
+    acc = acc + out[0].len();
+    acc = acc + d.first().len();
+    let mut i = 0i64;
+    while i < 200 {
+        let cc = one(mut d, 0);
+        match cc { Insert(x, t) => { acc = acc + t.len(); } Delete(x, t) => { acc = acc + t.len(); } }
+        i = i + 1;
+    }
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7);
+    let n = Nums { xs: v };
+    match scalar(n) { N(x) => { acc = acc + x; } }
+    println(acc > 0);
+}
+"#,
+            &["true"],
+            "field_rooted_vec_elem_read_into_arg_cloned",
+        );
+    }
+
     /// B-2026-08-13-6 — a heap field read off a `shared struct` is deep-cloned,
     /// so it no longer double-frees.
     ///
