@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
-| diagnostics | 53 | 1 |
+| diagnostics | 53 | 0 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
 | other | 30 | 0 |
@@ -119,18 +119,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
-| parser | 16 | 1 |
+| parser | 16 | 0 |
 | effect | 5 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1159 surfaced · 2 open · 1145 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1159 surfaced · 1 open · 1146 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-13 | 2026-08-13 | parser | low | A parse diagnostic PRESCRIBES CODE THAT DOES NOT PARSE: the bare-assignment-in-a-match-arm error says "wrap it in braces: `pattern => { place = value }`", and that exact text fails with `Expected Semicolon, found RightBrace`. The working form needs the semicolon -- `{ place = value; }`. No `replacement` is attached either, so `karac fix` cannot repair it. | the E0001 message text for a bare assignment as a `match` arm body. |
 | B-2026-08-13-14 | 2026-08-13 | interp+codegen | high | Binding a NESTED STRUCT field (`let mut t = b.a;`) EMPTIES the source under both compiled backends while the interpreter treats it as an ALIAS: codegen prints the copy's contents and `0` for the source, interp prints the same value twice. Neither backend implements the COPY the language's field-read semantics call for, and they disagree with each other | the struct-field binding path — the source-side cap-zeroing that makes `let t = b.a` a MOVE in codegen, against the interpreter's alias |
 
 ### Wontfix (2)
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1159 surfaced
 
 </details>
 
-### Fixed (1145)
+### Fixed (1146)
 
-<details><summary>1145 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1146 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4501,6 +4500,78 @@ method receivers refused), plus the index shape it missed; the four CLI surfaces
 above pinned in `tests/cli.rs`, including that `--interp` still executes and
 prints the right answer; and controls that must stay silent (the hoisted
 rewrite, a depth-1 receiver) verified clean. |
+| B-2026-08-13-13 | parser | low | A parse diagnostic PRESCRIBES CODE THAT DOES NOT PARSE: the bare-assignment-in-a-match-arm error says "wrap it in braces: `pattern => { place = value… | FIXED by 0fa42ca. The message now reads `pattern => { place = value; }`, and the
+repair is machine-applicable: `karac fix` performs the brace wrap.
+
+The one-character prose fix was the easy half. THE FIX-IT DID NOT FIT THE
+CHANNEL THAT EXISTED, which is why B-2026-08-12-21 shipped without one and said
+so in its own close note. A wrap is TWO insertions -- `{ ` before the
+assignment target, `; }` after the value -- and the parser holds tokens, not
+source text, so it cannot build the single (offset, length, replacement) that
+`ParseResult::fix_edits` takes: reproducing the middle of the range requires
+reading the middle. The options were source access in the parser (a lifetime or
+a whole-source clone through every `Parser::new` site) or a multi-edit channel.
+
+Took the multi-edit channel, because it is not a new idea -- the resolver
+(`error_fix_diffs`, the `E_MODULE_BINDING_NAMING` rename) and the ownership
+checker (the `par struct` migration) both already have one, with the same
+key (the DIAGNOSTIC's span) and the same JSON rendering. `ParseResult` now
+carries `fix_diffs` alongside `fix_edits` and every consumer reads both:
+`cmd_fix`'s parse-error branch, `collect_diagnostics` (`"fix_diff":[...]`), and
+`check_source`. A diagnostic uses one channel or the OTHER -- the wrap's single
+slot stays empty, so a consumer that applies only what it finds cannot leave an
+unbalanced brace behind. That mutual exclusion is the same invariant the
+resolver's channel documents, and a test asserts it here.
+
+MEASURED end to end, on the row's own repro plus two variants:
+
+  Op.Set(n) => v[0] = n,          -> Op.Set(n) => { v[0] = n; },      runs, prints 7
+  Op.Add(q) => total += q,        -> Op.Add(q) => { total += q; },    runs, prints 5
+  Op.Add(q) => total = total+q;,  -> Op.Add(q) => { total = total+q; },  runs, prints 5
+
+The third is the case worth calling out: the author already wrote the `;` (the
+braced form's muscle memory, which `recover_assignment_arm_body` has always
+eaten). The closer reuses that semicolon rather than adding a second, so the
+fix does not produce `;;`.
+
+ALSO FIXED, and it would have defeated the point: the MEND HARNESS never
+called `karac fix` for a `fix_diff`-only diagnostic. `mend.py`'s
+`has_machine_applicable_fixes` -- the predicate that decides whether the loop
+runs `karac fix` at all -- tested `"replacement" in d` and nothing else, so a
+file whose only defect was multi-edit-fixable went straight back to the LLM
+with a repair the compiler could have performed. `karac fix` itself applied
+those envelopes fine; the loop just never invoked it. That gap PREDATES this
+row and covered the two existing producers too (the module-binding rename, the
+`par struct` migration), so fixing it recovers coverage the harness was already
+supposed to have. `format_diagnostics_for_llm` now shows the edits, and
+`mend_score.py`'s `_has_replacement` counts them, so those codes stop being
+ranked as fix-less backlog.
+
+THE ROW'S GOOD-NEWS PARAGRAPH STAYS TRUE and is worth restating as the reason
+the severity was right at low: nothing ever auto-rewrote source into the
+non-parsing shape, because there was no edit at all. This was a prose defect
+plus a missing fix-it.
+
+PINNED by three tests. `test_braces_suggestion_for_a_bare_assignment_arm_body_
+actually_parses` does not hard-code the corrected string next to a hand-written
+copy of it -- it LIFTS the backticked snippet out of the diagnostic, substitutes
+a concrete place and value for the metavariables, and parses the result, so the
+message and the grammar cannot drift apart again whatever the wording becomes.
+`test_bare_assignment_arm_body_carries_an_applicable_brace_wrap` applies the
+envelope by hand (descending by offset, exactly as `cmd_fix` does) across all
+three variants above and asserts the result parses, that the single-edit slot is
+empty, and that no `;;` appears. `test_fix_wraps_bare_assignment_match_arm_
+bodies_in_braces` drives the CLI: two offending arms, `--output=json` carries
+`fix_diff` and no `replacement`, `karac fix` applies 4 edits, and the rewritten
+file passes `karac check`.
+
+NON-VACUITY CHECKED against the pre-fix compiler, not assumed. Restoring the old
+message fails the first test; making the closer ` }` instead of `; }` fails the
+second on "applying the fix left the file unparseable". The `fix_diffs` field
+did not exist before, so the envelope assertions cannot pass against it either.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean. |
 
 </details>
 
