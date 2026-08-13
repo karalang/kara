@@ -2021,6 +2021,16 @@ impl<'a> Interpreter<'a> {
             // and same one-line shape as the `Column`/`Tensor`/`Vec` entries
             // below; it is simply the entry nobody added.
             Value::Map(_) => "Map".to_string(),
+            // B-2026-08-13-7 — `Slice[T]`, and this entry has to come FIRST of
+            // its family. Its typecheck and codegen halves were implemented and
+            // reverted twice (B-2026-08-12-32, B-2026-08-12-34) because landing
+            // them while this was missing produced a program that `karac check`
+            // accepted and both compiled backends ran, while `--interp` failed:
+            // a slice receiver reported as `Vec` (via the `Value::Array` arm
+            // below) never finds an impl registered under `Slice`. A
+            // run-vs-build divergence in the opposite direction from the one
+            // that family usually produces.
+            Value::Slice { .. } => "Slice".to_string(),
             // S6c-12: name the handle-backed containers so a user-defined
             // `impl Trait for Column[T]` / `Tensor[T,S]` method dispatches
             // through `try_eval_impl_method` (keyed `Column.method`) instead

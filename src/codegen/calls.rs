@@ -1633,16 +1633,37 @@ impl<'ctx> super::Codegen<'ctx> {
     /// built-in/primitive handling. Keys off `var_type_names`, which the
     /// existing struct-literal and struct-param paths populate.
     pub(super) fn inferred_receiver_type(&self, object: &Expr) -> Option<String> {
-        match &object.kind {
-            ExprKind::Identifier(name) => self.var_type_names.get(name.as_str()).cloned(),
+        let name = match &object.kind {
+            ExprKind::Identifier(name) => name.as_str(),
             // `self.method()` inside an impl body: the receiver parses as
             // `SelfValue`, not `Identifier("self")`. `make_impl_method_function`
             // prepends a regular `self` param whose declared type registers in
             // `var_type_names["self"]`, so the qualified `Type.method` lookup
             // resolves the same way an identifier receiver would.
-            ExprKind::SelfValue => self.var_type_names.get("self").cloned(),
-            _ => None,
+            ExprKind::SelfValue => "self",
+            _ => return None,
+        };
+        if let Some(t) = self.var_type_names.get(name) {
+            return Some(t.clone());
         }
+        // B-2026-08-13-7 — a slice binding has no `var_type_names` entry:
+        // `register_var_from_type_expr` registers `Slice[T]` / `mut Slice[T]`
+        // into `slice_elem_types` and returns early, never reaching the arm that
+        // records a receiver NAME. That was invisible until user impls on
+        // `Slice[T]` became callable, and then it split the surface: a `mut
+        // Slice[T]` PARAM receiver was check-green and interp-green with both
+        // compiled backends reporting "no handler for method '<m>' on variable
+        // 's'", because dispatch below never got a name to qualify with.
+        //
+        // Additive by construction, not by inspection: every consumer of this
+        // name either compares it against a specific type (`"Secret"`) or looks
+        // the qualified `Slice.<method>` up in `module` / `generic_fns` and
+        // declines when it is absent. A program with no `impl … for Slice[T]`
+        // emits no such symbol, so nothing that compiles today changes path.
+        if self.slice_elem_types.contains_key(name) {
+            return Some("Slice".to_string());
+        }
+        None
     }
 
     /// The `self`-free half of [`Self::expr_is_char`]: the receiver shapes that

@@ -1478,13 +1478,33 @@ impl<'a> super::Interpreter<'a> {
         // returned lengths were correct either way, so only a write-then-read
         // through the ORIGINAL collection distinguishes them. The test pins
         // both receivers for exactly that reason.
+        //
+        // B-2026-08-13-7 — a USER trait impl on `Slice[T]` is the third
+        // exemption, and it is the one that made this snapshot a run-vs-build
+        // divergence rather than an implementation detail. The snapshot renames
+        // the receiver `Vec` (`value_type_name` reads the resulting
+        // `Value::Array`), so `try_eval_impl_method` builds the key
+        // `Vec.<method>` and never finds the impl registered under
+        // `Slice.<method>` — `--interp` reported `no method` on a program both
+        // compiled backends ran. Keeping the `Value::Slice` here is safe
+        // precisely because the name is one no builtin arm answers, so the only
+        // dispatch left below IS the impl-table path.
+        //
+        // BUILTIN NAMES KEEP PRECEDENCE, via the same list the typechecker's
+        // call-site gate uses — one list rather than two, so the two surfaces
+        // cannot drift into disagreeing about which impl wins.
+        let slice_routes_to_user_impl = !crate::typechecker::SLICE_BUILTIN_METHODS
+            .contains(&method)
+            && self.env.get(&format!("Slice.{method}")).is_some();
         let obj = match obj {
             Value::Slice {
                 storage,
                 start,
                 len,
                 ..
-            } if !matches!(method, "as_slice" | "as_slice_mut" | "split_at_mut") => {
+            } if !slice_routes_to_user_impl
+                && !matches!(method, "as_slice" | "as_slice_mut" | "split_at_mut") =>
+            {
                 let snap = storage.read().unwrap()[start..start + len].to_vec();
                 Value::array_of(snap)
             }

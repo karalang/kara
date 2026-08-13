@@ -540,6 +540,16 @@ pub(super) fn impl_table_key(ty: &Type) -> Option<(String, Vec<Type>)> {
         Type::Bool => Some(("bool".to_string(), Vec::new())),
         Type::Char => Some(("char".to_string(), Vec::new())),
         Type::Str => Some(("String".to_string(), Vec::new())),
+        // B-2026-08-13-7. Unlike the scalars above, a slice carries an element
+        // type, so it keys like `Named` rather than like `Str`: the args vector
+        // holds the element so `impl Zero for Slice[i64]` does not answer for a
+        // `Slice[String]` receiver. `env_add_impl` stores the same shape (and
+        // stores empty args for a generic `Slice[T]` impl, which
+        // `impl_args_match` then treats as generic-on-name).
+        //
+        // `Array` / `Vector` are still absent: registration deliberately keeps
+        // them out, so a key here would only ever miss.
+        Type::Slice { element, .. } => Some(("Slice".to_string(), vec![(**element).clone()])),
         Type::Named { name, args } => Some((name.clone(), args.clone())),
         // A refinement keys its own inherent / trait impls under its
         // nominal name (`impl Positive { ... }`), distinct from the base's

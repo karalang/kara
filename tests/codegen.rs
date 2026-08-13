@@ -23191,6 +23191,75 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_trait_impl_on_slice_dispatches() {
+        // B-2026-08-13-7 — DIRECT dispatch of a user trait impl on `Slice[T]`,
+        // end to end. This one was reverted TWICE before landing, and the order
+        // of work is the whole story: its typecheck and codegen halves were
+        // implemented and worked on both compiled backends, but the interpreter
+        // snapshots a `Value::Slice` receiver into a `Value::Array` before
+        // dispatch, which renames it `Vec`, so `--interp` reported `no method`
+        // on a program `karac build` ran. Naming the slice receiver had to land
+        // first; the interpreter now skips that snapshot for exactly the names
+        // the builtin surface does not answer.
+        //
+        // BOTH a `Slice` and a `Vec` impl are in scope on purpose. Every
+        // single-impl probe passed for the sibling `Map`/`Set` attempt too, and
+        // the wrong-impl selection only appeared once a second impl existed —
+        // any retry in this family needs a two-impl fixture as its first check.
+        // A slice variable is registered in `vec_elem_types` (it is built from
+        // one), so the Vec dispatcher gets the call first and its fallthrough
+        // has to discriminate rather than hand every receiver to whichever impl
+        // it finds.
+        //
+        // `s.len()` alongside proves the builtin surface keeps precedence, and
+        // `sub` proves a non-full-range window dispatches the same way.
+        //
+        // `take_mut` earns its line. A slice binding gets NO `var_type_names`
+        // entry (`register_var_from_type_expr` files it under
+        // `slice_elem_types` and returns early), so a `mut Slice[T]` param
+        // receiver had no name to qualify dispatch with and both compiled
+        // backends died on it — check-green and interp-green — while every other
+        // slice spelling in this program worked. `inferred_receiver_type` now
+        // falls back to `Slice` for a slice-registered binding. It runs on its
+        // own `w` because a `mut Slice` of `v` would conflict with the immutable
+        // windows still live above it — an ownership error, not a dispatch one.
+        //
+        // The trait-BOUND spelling is deliberately ABSENT — same reason as the
+        // `Map`/`Set` twin above: `inferred_receiver_type` resolves one receiver
+        // name per compiled generic body, so a bound call selects a single impl
+        // for every instantiation. That needs per-receiver monomorphization, not
+        // another fallthrough.
+        assert_eq!(
+            run_program(
+                "trait Zero { fn describe(ref self) -> String; }\n\
+                 impl Zero for Slice[i64] { fn describe(ref self) -> String { return f\"S{self.len()}\"; } }\n\
+                 impl Zero for Vec[i64] { fn describe(ref self) -> String { return f\"V{self.len()}\"; } }\n\
+                 fn via_param(s: ref Slice[i64]) -> String { return s.describe(); }\n\
+                 fn take_mut(s: mut Slice[i64]) -> String { return s.describe(); }\n\
+                 fn main() {\n\
+                     let mut v: Vec[i64] = Vec.new();\n\
+                     v.push(10);\n\
+                     v.push(20);\n\
+                     v.push(30);\n\
+                     let s: Slice[i64] = v[..];\n\
+                     println(s.describe());\n\
+                     println(s.len());\n\
+                     let sub: Slice[i64] = v[1..3];\n\
+                     println(sub.describe());\n\
+                     println(via_param(sub));\n\
+                     println(v.describe());\n\
+                     let mut w: Vec[i64] = Vec.new();\n\
+                     w.push(1);\n\
+                     w.push(2);\n\
+                     println(take_mut(w.as_slice_mut()));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("S3\n3\nS2\nS2\nV3\nS2\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_to_string_on_non_identifier_scalar_receiver() {
         // B-2026-08-13-2 — `<non-identifier scalar>.to_string()` used as the
         // RECEIVER of a further call was check-green and interp-green while

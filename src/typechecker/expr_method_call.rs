@@ -99,6 +99,39 @@ pub(super) const STRING_BUILTIN_METHODS: &[&str] = &[
     "trim_end",
     "trim_start",
 ];
+
+/// Every method name `infer_slice_method` answers — the builtin `Slice`
+/// surface. B-2026-08-13-7, the `Slice` peer of `STRING_BUILTIN_METHODS` and
+/// used the same way: the impl table is consulted only for a name this list
+/// does not contain, so a user impl defining `len` cannot hijack `s.len()`.
+///
+/// Keeping this complete matters more here than for the `Map`/`Set` peers,
+/// because the fall-through it guards is what routes a slice receiver to the
+/// generic dispatch at the bottom of `infer_method_call`. A name MISSING from
+/// this list is merely shadowable; a name here that `infer_slice_method`
+/// does not actually answer would be unreachable.
+pub(crate) const SLICE_BUILTIN_METHODS: &[&str] = &[
+    "binary_search",
+    "chunks",
+    "contains",
+    "fill",
+    "first",
+    "get",
+    "get_unchecked",
+    "into_iter",
+    "is_empty",
+    "iter",
+    "last",
+    "len",
+    "reverse",
+    "sort",
+    "sort_by",
+    "sort_by_key",
+    "split_at",
+    "split_at_mut",
+    "swap",
+    "windows",
+];
 use crate::resolver::{SpanKey, SymbolKind};
 use crate::token::Span;
 use std::collections::HashMap;
@@ -2620,8 +2653,23 @@ impl<'a> super::TypeChecker<'a> {
         // `Slice[T]` and `mut Slice[T]` method dispatch. These types are not
         // `Type::Named` so they fall through the generic branch below; handle
         // them here before the named-type extraction.
+        //
+        // B-2026-08-13-7 — a USER trait impl on `Slice[T]` gets the names the
+        // builtin surface does not have, exactly as the `String` gate further
+        // down does, and with the same precedence: builtin first, so `s.len()`
+        // cannot be hijacked by an impl that happens to define `len`. This
+        // return used to be unconditional, which is what made
+        // `impl Zero for Slice[i64]` register (see `env_add_impl`) and then
+        // report `no method 'zero' on type 'Slice[i64]'` at every call site.
         if let Type::Slice { element, mutable } = &obj_ty.clone() {
-            return self.infer_slice_method(element, *mutable, method, args, span);
+            let routes_to_user_impl = !SLICE_BUILTIN_METHODS.contains(&method)
+                && !self
+                    .env
+                    .find_methods_with_args("Slice", &[(**element).clone()], method)
+                    .is_empty();
+            if !routes_to_user_impl {
+                return self.infer_slice_method(element, *mutable, method, args, span);
+            }
         }
 
         // `Vector[T, N]` instance-method dispatch (design.md § Portable SIMD).
@@ -6193,10 +6241,14 @@ impl<'a> super::TypeChecker<'a> {
             // `impl_table_key` so this cannot drift from what `env_add_impl`
             // registers.
             //
-            // `Str` ONLY. Widening it to `Slice`/`Array`/`Vector` intercepts
-            // those receivers ahead of the branch below that renders the
-            // "iterator adaptors require an explicit `.iter()`" hint, turning a
-            // helpful rejection into a silent `Type::Error`
+            // `Slice` joins it in B-2026-08-13-7 and on the same terms: its
+            // gate near the top of this function declines only names the
+            // builtin surface does not answer, so a slice receiver reaching
+            // here has a user impl waiting for it. `Array`/`Vector` are still
+            // OUT — they have no such gate, so widening to them intercepts
+            // every absent-method call ahead of the branch below that renders
+            // the "iterator adaptors require an explicit `.iter()`" hint,
+            // turning a helpful rejection into a silent `Type::Error`
             // (`test_absent_fixed_array_methods_rejected_with_iter_hint`).
             //
             // Without this arm they fell to the `else` branch below, which
@@ -6204,15 +6256,17 @@ impl<'a> super::TypeChecker<'a> {
             // the historical fall-through that comment describes. That silence
             // is why the row's declaration-side symptom looked like a missing
             // feature rather than a hole: nothing complained anywhere.
-            Type::Str => match super::types::impl_table_key(&receiver_for_lookup) {
-                Some(key) => key,
-                None => {
-                    for arg in args {
-                        self.infer_expr(&arg.value);
+            Type::Str | Type::Slice { .. } => {
+                match super::types::impl_table_key(&receiver_for_lookup) {
+                    Some(key) => key,
+                    None => {
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                        return Type::Error;
                     }
-                    return Type::Error;
                 }
-            },
+            }
             // A refinement receiver that survived the base-deref above
             // (i.e. it declares this method itself) resolves under its
             // nominal name. Non-generic at v1, so no type args.

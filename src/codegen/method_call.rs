@@ -4910,10 +4910,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .get_function(&format!("String.{method}"))
                                         .is_some();
 
-                            if !has_user_impl {
+                            // B-2026-08-13-7 — a `Slice[T]` variable is
+                            // registered in `vec_elem_types` TOO (it is built
+                            // from one), so this dispatcher runs first and gets
+                            // the method before the slice block below ever sees
+                            // it. Without this clause an `impl Trait for
+                            // Slice[T]` call loud-failed here with the Vec
+                            // message, which is why the row's symptom named
+                            // "Vec/String" for a slice receiver. The
+                            // `slice_elem_types` conjunct keeps a genuine `Vec`
+                            // receiver out: a program with a `Slice`-only impl
+                            // must still reject `v.describe()` rather than
+                            // dispatch a Vec to it.
+                            let slice_has_user_impl =
+                                self.slice_elem_types.contains_key(name.as_str())
+                                    && self
+                                        .module
+                                        .get_function(&format!("Slice.{method}"))
+                                        .is_some();
+
+                            if !has_user_impl && !slice_has_user_impl {
                                 return Err(e);
                             }
-                            // fall through to user-impl dispatch
+                            // fall through to user-impl dispatch (via the slice
+                            // block below when it is a slice receiver)
                         }
                     }
                 }
@@ -5042,6 +5062,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             return self
                                 .compile_binary_search(data, len, elem_ty, &elem_name, &args[0]);
                         }
+                        // B-2026-08-13-7 — the `Slice` peer of the blanket-`Vec`
+                        // fallthrough above. When the builtin dispatcher has no
+                        // arm for `method` but `impl Trait for Slice[..]`
+                        // emitted a `Slice.<method>` fn, fall out of this match
+                        // (and out of the enclosing `if`) so the generic
+                        // user-impl dispatch below gets it, instead of
+                        // loud-failing here. Without this line the typecheck
+                        // half of this row is check-green and interp-green with
+                        // BOTH compiled backends dead — strictly worse than the
+                        // `no method` error it replaced.
+                        _ if self
+                            .module
+                            .get_function(&format!("Slice.{method}"))
+                            .is_some() => {}
                         _ => {
                             return Err(format!(
                                 "codegen: no handler for slice method '{}' on '{}'",

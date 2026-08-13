@@ -37491,18 +37491,18 @@ fn test_string_builtin_surface_still_wins() {
     );
 }
 
-/// B-2026-08-12-32 — `Slice[T]` is deliberately NOT covered, and this pins the
-/// boundary rather than leaving it to drift.
+/// B-2026-08-13-7 — a user trait `impl` on `Slice[T]` resolves at the call site.
 ///
-/// Registering `Slice` the same way makes `T: Zero` accept a `Slice` at
-/// `karac check` while both compiled backends still fail to emit the call —
-/// converting a clean compile error into a check-green/backend-dead program,
-/// which is a strictly worse failure than the one this row reports. If this
-/// test ever starts failing, the Slice call-site gate and codegen fallthrough
-/// have landed and the follow-up row should close with it.
+/// This replaces the two guards that pinned the opposite behavior
+/// (`test_user_trait_impl_on_slice_still_rejected` from B-2026-08-12-32 and its
+/// `_second_guard` twin from B-2026-08-12-34). Both were correct while the
+/// interpreter still named a slice receiver `Vec`: landing typecheck + codegen
+/// alone produced a program `karac check` accepted and both compiled backends
+/// ran while `--interp` reported `no method`. `value_type_name` names it
+/// `Slice` now, so all four surfaces agree and the rejection is obsolete.
 #[test]
-fn test_user_trait_impl_on_slice_still_rejected() {
-    let errors = typecheck_errors(
+fn test_user_trait_impl_on_slice_resolves() {
+    typecheck_ok(
         "trait Zero { fn describe(ref self) -> String; }\n\
          impl Zero for Slice[i64] { fn describe(ref self) -> String { return f\"z\"; } }\n\
          fn main() {\n\
@@ -37510,14 +37510,6 @@ fn test_user_trait_impl_on_slice_still_rejected() {
              let s: Slice[i64] = v[..];\n\
              println(s.describe());\n\
          }",
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("no method 'describe'")),
-        "a Slice user-impl call must still be REJECTED at check rather than \
-         accepted and then failing in codegen; got: {:?}",
-        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
     );
 }
 
@@ -37566,24 +37558,41 @@ fn test_map_set_builtin_surface_still_wins() {
     }
 }
 
-/// B-2026-08-12-34 — `Slice[T]` is still NOT covered, and this pins that
-/// boundary for the second time (the first is
-/// `test_user_trait_impl_on_slice_still_rejected`, from B-2026-08-12-32).
-///
-/// The blocker found here is new and is why it stayed out: the typecheck and
-/// codegen halves were implemented and worked, but the INTERPRETER names a
-/// slice receiver `Vec` (it models `v[..]` as an array value), so the impl —
-/// registered under `Slice` — is not found and `--interp` fails on a program
-/// both compiled backends run. That is a divergence in the opposite direction
-/// from the one this family usually produces, and a consistent compile error
-/// is better than either.
+/// B-2026-08-13-7 — the builtin `Slice` surface keeps precedence over a user
+/// impl of the same name, exactly as `String`'s and `Map`/`Set`'s do. `len` is
+/// the sharp case: the builtin returns `i64` and the shadowing impl returns
+/// `String`, so a hijack would fail to typecheck here.
 #[test]
-fn test_user_trait_impl_on_slice_still_rejected_second_guard() {
-    let errors = typecheck_errors(
-        "trait Zero { fn describe(ref self) -> String; }\n\
-         impl Zero for Slice[i64] { fn describe(ref self) -> String { return f\"z\"; } }\n\
+fn test_slice_builtin_surface_still_wins() {
+    typecheck_ok(
+        "trait Shadow { fn len(ref self) -> String; }\n\
+         impl Shadow for Slice[i64] { fn len(ref self) -> String { return f\"shadowed\"; } }\n\
          fn main() {\n\
              let v: Vec[i64] = Vec.new();\n\
+             let s: Slice[i64] = v[..];\n\
+             let n: i64 = s.len();\n\
+             println(n);\n\
+         }",
+    );
+}
+
+/// B-2026-08-13-7 — `impl … for mut Slice[T]` is rejected as an impl TARGET,
+/// while a `mut Slice[T]` RECEIVER still reaches an `impl … for Slice[T]`.
+///
+/// The asymmetry is forced by codegen: `mut Slice[T]` parses as
+/// `TypeKind::MutSlice`, not a path, so `impl_target_name` declines it and no
+/// `Slice.<method>` fn is emitted. Registering it was measured check-green with
+/// BOTH compiled backends dead — the exact shape this row exists to remove — so
+/// the target stays rejected. Mutability is a property of the view, not a
+/// distinct impl target, which is why the receiver direction is fine.
+#[test]
+fn test_impl_on_mut_slice_target_rejected_but_mut_receiver_resolves() {
+    let errors = typecheck_errors(
+        "trait Zero { fn describe(ref self) -> String; }\n\
+         impl Zero for mut Slice[i64] { fn describe(ref self) -> String { return f\"z\"; } }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
              let s: Slice[i64] = v[..];\n\
              println(s.describe());\n\
          }",
@@ -37592,8 +37601,77 @@ fn test_user_trait_impl_on_slice_still_rejected_second_guard() {
         errors
             .iter()
             .any(|e| e.message.contains("no method 'describe'")),
-        "a Slice user-impl call must stay REJECTED until the interpreter can name \
-         a slice receiver; got: {:?}",
+        "`impl … for mut Slice[T]` must NOT register — codegen emits no fn for \
+         it, so accepting the call is check-green/backend-dead; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+    // The receiver direction: a `mut Slice[T]` receiver resolves the plain
+    // `Slice[T]` impl, because `impl_table_key` keys on the element alone.
+    typecheck_ok(
+        "trait Zero { fn describe(ref self) -> String; }\n\
+         impl Zero for Slice[i64] { fn describe(ref self) -> String { return f\"z\"; } }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             let mut s: mut Slice[i64] = v.as_slice_mut();\n\
+             println(s.describe());\n\
+         }",
+    );
+}
+
+/// B-2026-08-13-7 — a GENERIC `impl[T] … for Slice[T]` stays rejected, and the
+/// reason is the same one that gates the `mut` target above: codegen mangles a
+/// generic impl's methods per instantiation, so no plain `Slice.<method>` fn
+/// exists and the build dies while check and `--interp` both pass. Registering
+/// it would trade this row's failure shape for another instance of itself.
+///
+/// The identical gap exists today for `impl[T] … for Vec[T]` (check-green,
+/// interp-green, build dead) — pre-existing, filed separately. `Slice` is
+/// deliberately kept out of it rather than joined to it.
+#[test]
+fn test_generic_impl_on_slice_still_rejected() {
+    let errors = typecheck_errors(
+        "trait Zero { fn describe(ref self) -> String; }\n\
+         impl[T] Zero for Slice[T] { fn describe(ref self) -> String { return f\"z\"; } }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             let s: Slice[i64] = v[..];\n\
+             println(s.describe());\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'describe'")),
+        "a generic `impl[T] … for Slice[T]` must NOT register — codegen emits \
+         no plain `Slice.<method>` fn for it; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}
+
+/// B-2026-08-13-7 — the boundary the fix does NOT cross. `Array[T, N]` and
+/// `Vector[T, N]` stay out of `env_add_impl` and out of the dispatch fork,
+/// because neither has a call-site gate: widening to them intercepts every
+/// absent-method call ahead of the `.iter()` hint
+/// (`test_absent_fixed_array_methods_rejected_with_iter_hint`). Pinned here so
+/// a later widening has to confront that test rather than drift past it.
+#[test]
+fn test_user_trait_impl_on_fixed_array_still_rejected() {
+    let errors = typecheck_errors(
+        "trait Zero { fn describe(ref self) -> String; }\n\
+         impl Zero for Array[i64, 3] { fn describe(ref self) -> String { return f\"z\"; } }\n\
+         fn main() {\n\
+             let a: Array[i64, 3] = [1, 2, 3];\n\
+             println(a.describe());\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'describe'")),
+        "an Array user-impl call must still be REJECTED — it has no call-site \
+         gate, so accepting it would be check-green/backend-dead; got: {:?}",
         errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
     );
 }

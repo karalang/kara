@@ -2295,18 +2295,63 @@ impl<'a> super::TypeChecker<'a> {
             // is what the value-receiver call site looks up — the same
             // correspondence the primitive arm relies on.
             //
-            // `Slice[T]` / `Array[T, N]` / `Vector[T, N]` are DELIBERATELY NOT
-            // here, and the reason is measured rather than cautious: registering
-            // them makes `T: Zero` accept a `Slice` at `karac check` while both
-            // compiled backends still fail to emit the call, i.e. it converts a
-            // clean compile error into a check-green/backend-dead program. That
-            // is a strictly worse failure than the one this row reports. They
-            // need their own call-site gate and codegen fallthrough first — see
-            // the follow-up row.
             Type::Str => match method_callee_type_name(&lowered_target) {
                 Some(name) => (name, Vec::new()),
                 None => return,
             },
+            // B-2026-08-13-7 — `Slice[T]` joins on the same terms, and the
+            // ORDER in which it did is the lesson. Registering it was tried
+            // twice before (B-2026-08-12-32, B-2026-08-12-34) and reverted both
+            // times, because the typecheck and codegen halves alone left
+            // `--interp` failing on a program both compiled backends ran: the
+            // interpreter reported a slice receiver as `Vec`, so an impl
+            // registered here under `Slice` was never found. Naming it there
+            // (`value_type_name`) had to land FIRST; with that done this is
+            // safe.
+            //
+            // `Array[T, N]` / `Vector[T, N]` are still out — they have no
+            // call-site gate or codegen fallthrough, and a wider arm here also
+            // swallows the "requires an explicit `.iter()`" hint for an Array
+            // receiver (`test_absent_fixed_array_methods_rejected_with_iter_hint`).
+            //
+            // A NON-CONCRETE element is NOT registered — `impl[T] Zero for
+            // Slice[T]` stays rejected at check, as it was before this row.
+            // Codegen mangles a generic impl's methods per instantiation, so no
+            // plain `Slice.<method>` fn exists for the slice dispatcher to find
+            // and the build dies with "no handler for slice method" while check
+            // and `--interp` both pass. That check-green/backend-dead shape is
+            // the failure this row exists to remove, so it is not worth trading
+            // one instance of it for another. (The same gap exists today for a
+            // generic `impl[T] … for Vec[T]`, which is check-green and
+            // interp-green with the build dead — pre-existing and filed
+            // separately; `Slice` deliberately does not join it.)
+            //
+            // The element arg is therefore always present and always concrete,
+            // so `impl Zero for Slice[i64]` cannot answer for a `Slice[String]`
+            // receiver.
+            //
+            // `mutable` GATES THE TARGET but not the receiver. `impl … for mut
+            // Slice[T]` parses as `TypeKind::MutSlice`, which is not a path, so
+            // codegen's `impl_target_name` declines it and no `Slice.<method>`
+            // fn is ever emitted — registering it would make the call
+            // check-green with both compiled backends dead (measured: `--interp`
+            // "not found on type 'Vec'", build "no handler for slice method"),
+            // which is the exact failure shape this row exists to avoid. A `mut
+            // Slice[T]` RECEIVER still reaches an `impl … for Slice[T]`, because
+            // `impl_table_key` keys on the element alone — mutability is a
+            // property of the view, not a distinct impl target.
+            Type::Slice {
+                element,
+                mutable: false,
+            } => {
+                let Some(name) = method_callee_type_name(&lowered_target) else {
+                    return;
+                };
+                if !type_is_fully_concrete(element) {
+                    return;
+                }
+                (name, vec![(**element).clone()])
+            }
             // Non-path target types (`impl Foo for (i32, i32)` etc.) are
             // unsupported in v1; bail without registering. Matches the
             // pre-Theme-4 behavior of the path-only short-circuit.

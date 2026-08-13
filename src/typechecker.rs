@@ -53,6 +53,14 @@ pub(crate) use const_eval::const_value_to_i128;
 pub use const_eval::ConstEvalError;
 use const_eval::{binop_glyph, const_value_type, format_const_value, unaryop_glyph};
 pub use env::{EnumInfo, FunctionSig, ImplInfo, StructInfo, TraitInfo, TypeEnv, UnionInfo};
+/// B-2026-08-13-7 — re-exported so the INTERPRETER applies the same
+/// builtin-wins precedence the typechecker's slice call-site gate does. The
+/// interpreter snapshots a `Value::Slice` receiver into a `Value::Array`
+/// before dispatch, which renames it `Vec` and hides any `impl … for Slice[T]`;
+/// it now skips that snapshot for exactly the names this list does not contain.
+/// One list rather than two so the two surfaces cannot drift apart into a
+/// run-vs-build divergence — the failure that reverted this fix twice.
+pub(crate) use expr_method_call::SLICE_BUILTIN_METHODS;
 #[cfg(test)]
 use inference::substitute_type_params;
 use types::type_is_fully_concrete;

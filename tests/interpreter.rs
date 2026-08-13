@@ -24637,6 +24637,41 @@ fn main() {
 }
 
 #[test]
+fn user_trait_impl_over_slice_dispatches() {
+    // B-2026-08-13-7 — the INTERPRETER half, which is the piece that had to land
+    // before the typecheck and codegen halves could. A `Value::Slice` receiver is
+    // snapshotted into a `Value::Array` before dispatch so the builtin seq
+    // surface sees a uniform shape; that snapshot renames it `Vec`, so
+    // `try_eval_impl_method` built the key `Vec.describe` and never found the
+    // impl registered under `Slice.describe`. The snapshot is now skipped for
+    // exactly the names the builtin surface does not answer.
+    //
+    // Both a `Slice` and a `Vec` impl are in scope so the two receivers must be
+    // told apart, and `s.len()` pins that the builtin keeps precedence — with
+    // the snapshot skipped, `len` still has to reach the seq surface.
+    let out = run_no_errors(
+        r#"
+trait Zero { fn describe(ref self) -> String; }
+impl Zero for Slice[i64] { fn describe(ref self) -> String { return f"S{self.len()}"; } }
+impl Zero for Vec[i64] { fn describe(ref self) -> String { return f"V{self.len()}"; } }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    let s: Slice[i64] = v[..];
+    println(s.describe());
+    println(s.len());
+    let sub: Slice[i64] = v[1..3];
+    println(sub.describe());
+    println(v.describe());
+}
+"#,
+    );
+    assert_eq!(out, "S3\n3\nS2\nV3\n");
+}
+
+#[test]
 fn user_trait_impl_over_tensor_dispatches() {
     // S6c-12 slice 2: Tensor twin of `user_trait_impl_over_column_dispatches`.
     // The interpreter already named Tensor in `value_type_name` and admitted a
