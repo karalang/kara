@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 240 | 1 |
+| miscompile | 240 | 0 |
 | leak | 172 | 0 |
 | double-free | 126 | 0 |
 | codegen-gap | 105 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 833 | 2 |
+| codegen | 833 | 1 |
 | typecheck | 161 | 0 |
-| interp | 140 | 1 |
+| interp | 140 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1154 surfaced · 2 open · 1140 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1154 surfaced · 1 open · 1141 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-8 | 2026-08-13 | interp+codegen | high | Two impls of one trait on the same container with different element types collapse to ONE dispatch target, and the backends pick OPPOSITE ones -- `--interp` answers with the last impl, `karac build` with the first, both for every receiver. Check accepts it. The generic `impl[T] ... for Vec[T]` spelling is the same root from the other side: no unmangled symbol at all, so it is check-green and interp-green with the build dead. | — |
 | B-2026-08-13-9 | 2026-08-13 | codegen | medium | A trait-BOUND call over a user-impl'd builtin container (`fn show[T: Zero](x: ref T)` with a `Map`/`Set`/`Slice`) is check-green and interp-green with both compiled backends dead. Direct dispatch on all of those receivers now works; the bound spelling is the only one left. Routing it through the Vec/String fallthrough was tried and REVERTED -- it returns the WRONG impl once a second one exists. | — |
 
 ### Wontfix (2)
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1154 surfaced
 
 </details>
 
-### Fixed (1140)
+### Fixed (1141)
 
-<details><summary>1140 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1141 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4188,6 +4187,25 @@ MEASURED ON ALL FOUR SURFACES (check / --interp / run JIT / build), not just che
 Both guard tests deleted as the row required, not worked around. New: `test_user_trait_impl_on_slice_resolves`, `test_slice_builtin_surface_still_wins`, `test_impl_on_mut_slice_target_rejected_but_mut_receiver_resolves`, `test_generic_impl_on_slice_still_rejected`, `test_user_trait_impl_on_fixed_array_still_rejected` (typechecker); `user_trait_impl_over_slice_dispatches` (interpreter); `test_e2e_user_trait_impl_on_slice_dispatches` (codegen E2E).
 
 FOUND WHILE MEASURING, NOT INTRODUCED HERE: two impls of one trait on the same container with DIFFERENT element types collapse to one dispatch target, and the two backends pick opposite ones; and a generic `impl[T] … for Vec[T]` is check-green and interp-green with the build dead. Both confirmed PRE-EXISTING by re-running the identical `Vec` programs on the unmodified compiler. Filed separately; `Slice` is deliberately gated out of the second rather than joined to it. |
+| B-2026-08-13-8 | interp+codegen | high | Two impls of one trait on the same type head with different type arguments collapse to ONE dispatch target, and the backends pick OPPOSITE ones -- `-… | FIXED by e9ab6470. BOTH HALVES FIXED, and they turned out to be two unrelated defects that happened to share a symptom shape -- not "one mangling change closes both" as this row predicted. Recording that, because the prediction is what would send a future reader looking for a single mechanism.
+
+SCOPE CORRECTION (the row understated it): the concrete-collision half is NOT specific to builtin containers. A user-defined `struct Box[T]` with `impl Zero for Box[i64]` and `impl Zero for Box[String]` reproduces it exactly -- `--interp` printed `BOX-STR` twice, `karac build` printed `BOX-I64` twice. It is EVERY generic type. The row was found on `Vec` and generalized only as far as the containers, which made it look like a container-dispatcher problem; it is a naming problem in the impl-method symbol.
+
+HALF A (generic impl on a builtin container: check-green, interp-green, build dead) IS A GATE, NOT A MISSING FEATURE, and the probe that showed it is the one worth keeping: the IDENTICAL generic impl on a USER struct already worked on all four surfaces. So the monomorphization machinery was never involved. `make_generic_impl_method_function` routes a generic impl method through the monomorphizer, which mangles bodies per instantiation and emits NO unmangled `Vec.describe` symbol -- and each of the four builtin container dispatchers decided "loud-fail vs fall through to generic dispatch" by asking `module.get_function("Vec.describe")` alone, which is always None for such a method. Each one therefore loud-failed immediately before the generic dispatch that reads exactly that key. Fixed by one shared `user_impl_method_exists(call_span, head, method)` that consults `generic_fns` too, replacing four open-coded lookups so they cannot drift apart again. Map and Set had the same hole and were never reported -- only Vec was.
+
+HALF B (two concrete impls on one head) is the naming change, done as DISAMBIGUATE-ONLY-ON-COLLISION rather than as an unconditional rename. That choice is the whole risk story. An unconditional `Vec[i64].describe` scheme would move every impl symbol in the language and touch ~30 codegen sites plus 6 interpreter sites that only ever hold a head name; any one of them missed turns a wrong answer into a link error, which is the failure mode this row explicitly warns against. Minting a longer name ONLY for a `(head, method)` group that genuinely has two or more differing concrete impls means a program that compiles today has no colliding group and not one symbol moves.
+
+ONE RENDERER, THREE PHASES. `src/impl_dispatch.rs` is the single place that decides which impls need more than a head name and what that name is. All three phases call it on the same AST and key it by the impl target's SPAN, so the symbol codegen EMITS and the key the interpreter BINDS and the entry the typechecker RECORDS cannot disagree -- a second renderer is exactly how this class of fix breaks.
+
+THE TYPE SEGMENT IS QUALIFIED, NOT THE METHOD: `Vec[i64].describe`, never `Vec.describe$i64`. Dispatch code throughout codegen splits these keys on the LAST `.` to recover the method segment -- the chained-call guard in `compile_method_call` is the sharp case, since `recv.inner().outer()` aliases one span and that guard tells the links apart by comparing the segment to the call's own method name. Widening the type segment leaves every such split working; a suffix after the method would have broken all of them silently.
+
+WHO NAMES THE WINNER. Neither runtime can: codegen's `inferred_receiver_type` reads `var_type_names`, which holds head names, and the interpreter's `value_type_name` reads a type-ERASED value (a `Value::Array` of ints knows nothing about its static element type). The typechecker already resolved correctly -- `impl_args_match` compares the args vector -- so it now records the winning impl's qualified segment per call site (`TypeCheckResult::method_impl_dispatch` -> `Program::method_impl_dispatch`) and both backends read it. Keyed by `(span, method)` rather than by span alone: every sibling table lives with the `MethodCall.span == receiver.span` aliasing by re-checking its method segment afterwards, and carrying the method name IN the key makes that class of mistake unrepresentable instead of merely guarded.
+
+TWO DELIBERATE NON-QUALIFICATIONS, both of which would make things worse if reversed. A generic impl is skipped entirely (it owns no unmangled symbol to collide over, so renaming it would move a symbol nothing looks up). A group in which ANY member fails to render -- a const arg like `Array[i64, 3]`, a shape literal, a non-path target -- is left wholly unqualified, because half-qualifying leaves the group still ambiguous AND sends some call sites to a name nobody emitted.
+
+MEASURED ON ALL FOUR SURFACES (check / --interp / run JIT / build), seven fixtures agreeing exactly: `Vec[i64]`+`Vec[String]`; `Box[i64]`+`Box[String]` (user struct); `Map[String,i64]`+`Map[String,String]`; `Map[String,i64]`+`Map[i64,String]` (ARG ORDER only -- a renderer that sorted or dropped args would collapse these back together behind a name that merely looked disambiguated); `Slice[i64]`+`Slice[String]`; a three-way `Vec` collision with a builtin `len()` interleaved; and a CHAINED receiver (`a.describe().len()`), which is where a span-keyed table normally goes wrong.
+
+TESTS: 8 unit tests on the collision pass itself (`src/impl_dispatch.rs`) pinning both directions -- single impl / distinct heads / generic impl / const-arg group are NOT qualified, same-head-differing-args and multi-arg-order ARE; `same_head_impls_dispatch_to_their_own_target` (interpreter); `test_e2e_same_head_impls_dispatch_to_their_own_target`, `test_e2e_same_head_impls_dispatch_through_a_chain`, `test_e2e_generic_impl_on_builtin_container_dispatches` (codegen E2E). The E2E fixtures interleave receivers and put a builtin call between them, so a fix that merely made the LAST call correct would still fail. |
 
 </details>
 
