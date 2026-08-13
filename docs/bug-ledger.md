@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 239 | 0 |
 | leak | 172 | 0 |
-| double-free | 126 | 2 |
+| double-free | 126 | 1 |
 | codegen-gap | 105 | 0 |
 | run-vs-build | 104 | 0 |
 | missing-feature | 94 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 830 | 3 |
+| codegen | 830 | 2 |
 | typecheck | 160 | 1 |
 | interp | 138 | 0 |
 | ownership | 47 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1151 surfaced · 3 open · 1136 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1151 surfaced · 2 open · 1137 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-34 | 2026-08-13 | typecheck+codegen | medium | A user trait `impl` on `Slice[T]` / `Map` / `Set` is still not callable, and `Map`'s is check-green with BOTH compiled backends dead. B-2026-08-12-32 fixed `String` end-to-end; these are the receivers whose call-site gate and codegen fallthrough it deliberately did not add. | — |
-| B-2026-08-13-5 | 2026-08-13 | codegen | high | A heap field read off a SLICE element double-frees at ANY depth: `fn take(xs: Slice[Pair]) -> String { xs[0].word }` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string — the Vec twin of this read has been cloned since B-2026-08-12-27, and the slice arm was excluded on reasoning the measurement now contradicts | `clone_vec_elem_heap_field_read`'s owning-Vec gate (src/codegen/collections.rs) — the arm that declines a slice container |
 | B-2026-08-13-6 | 2026-08-13 | codegen | high | A heap field read through a SHARED-struct hop off a Vec element double-frees: `shared struct Inner { word: String }` inside `struct Holder { inner: Inner, .. }`, then `let w = hs[0].inner.word` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string | the per-hop gate in `clone_vec_elem_heap_field_read` (src/codegen/collections.rs) meets the RC machinery — a `shared` hop declines there by design |
 
 ### Wontfix (2)
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1151 surfaced
 
 </details>
 
-### Fixed (1136)
+### Fixed (1137)
 
-<details><summary>1136 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1137 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4005,6 +4004,60 @@ this change and filed as their own rows rather than folded in here:
     escapes into an owning destination anyway, so declining is not safe there
     either. That reasoning needs revisiting on its own terms, which is why it is
     a row and not a line in this one. |
+| B-2026-08-13-5 | codegen | high | A heap field read off a SLICE element double-frees at ANY depth: `fn take(xs: Slice[Pair]) -> String { xs[0].word }` aborts with `free(): double free… | FIXED by f005e16. Both containers are clean on both compiled backends with output
+matching the interpreter, and the ASAN pin fails without the code change.
+
+THE ROW ASKED FOR THE QUESTION TO BE SETTLED BEFORE THE CODE, and it settles
+against the comment that created the exclusion. B-2026-08-12-27's gate reads
+"Owning Vec only. A slice element is borrowed and a map value is side-table
+owned; cloning either would hand back a buffer whose original still has its own
+owner, i.e. a leak rather than a fix." Both halves of that are contradicted by
+measurement:
+
+  - NOT CLONING WAS NEVER THE SAFE SIDE. `fn take(xs: Slice[Pair]) -> String {
+    xs[0].word }` and `let w = m[k].word` both DOUBLE-FREE. The un-cloned read
+    escapes into an owning destination, which frees a buffer the lender still
+    owns. The status quo was not conservative; it was corruption, and for a
+    BORROWED container it corrupts memory this frame does not even own.
+  - CLONING IS NOT A LEAK, and the proof was one line away in the same file the
+    whole time: the WHOLE-ELEMENT read (`let p = xs[0]` / `let p = m[k]`) has
+    always cloned for these very containers, and it is clean under valgrind on
+    both. The clone carries its own scope cleanup, and a CONSUMING destination
+    takes that cleanup over (cap-zeroing the clone) rather than duplicating it.
+    That is the mechanism the comment's "still has its own owner" worry did not
+    account for.
+
+SO THE FIX IS ONE PREDICATE, NOT NEW MACHINERY: the container must be one of the
+three registered kinds (an unregistered name has no element type to resolve),
+but WHICH kind it is no longer decides whether to clone. The field read now
+follows its own whole-element sibling instead of diverging from it.
+
+WHY A COPY IS THE RIGHT SEMANTICS HERE, measured rather than asserted: `let mut
+p = xs[0]; p.word = p.word + "X"` leaves the lender's element reading `a1` while
+the copy reads `a1X`, on BOTH backends and on BOTH containers. A read off a
+container is a copy; the field read was the one shape that had not been taught
+that. The alternative -27 rejected for Vec (cap-zero the source, i.e. a move
+model) is even less admissible for a borrow, where the "source" belongs to
+another frame.
+
+MAP VALUES ARE INCLUDED, which the row flagged as unprobed. They have the same
+asymmetry and the same fix: `let w = m[k].word` aborted while `let p = m[k]` was
+clean.
+
+MEASURED: every shape interp / AOT byte-identical with zero invalid frees and
+zero leaks — the consuming read (bound, returned across the slice boundary), the
+non-consuming read, the whole-element read, the nested chain through a slice
+(B-2026-08-13-4's walk composes with this container gate), a `Vec[String]` field
+off a map value, and 200-iteration loops on both containers. The loops are the
+leak half of the pin: if the clone's cleanup did not fire per iteration LSan
+would report 200 blocks, and if a consuming destination did not take the clone
+over it would abort instead.
+
+ONE UNRELATED GAP MET ALONG THE WAY, not filed as new because it is the known
+chained-field-receiver deferral: `m[k].tags[0]` fails to build with "Index
+operator applied to non-array type", and `xs[0].word.len()` with the explicit
+"chained field receivers are deferred to v1.x" message. Both reproduce
+identically before this change; the fixtures bind an intermediate instead. |
 
 </details>
 
