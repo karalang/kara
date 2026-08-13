@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 172 | 0 |
 | double-free | 126 | 2 |
 | codegen-gap | 105 | 0 |
-| run-vs-build | 104 | 1 |
+| run-vs-build | 104 | 0 |
 | missing-feature | 94 | 1 |
 | perf | 64 | 0 |
 | false-positive | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 830 | 4 |
+| codegen | 830 | 3 |
 | typecheck | 160 | 1 |
 | interp | 138 | 0 |
 | ownership | 47 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1151 surfaced · 4 open · 1135 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1151 surfaced · 3 open · 1136 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-2 | 2026-08-13 | codegen | medium | `.to_string()` on a NON-IDENTIFIER scalar receiver is check-green and interp-green but dies under BOTH compiled backends the moment it is used as a receiver for a further method: `'x'.to_string().to_uppercase()`, `7.to_string().len()`, `true.to_string().to_uppercase()`, `(7 + 1).to_string().len()`, `3.5.to_string().len()` -- and one shape, `'x'.to_string().to_string()`, is an outright codegen ICE (`Found IntValue ... but expected the StructValue variant`) | `compile_method_call` / `try_compile_nonident_collection_method` in src/codegen/method_call.rs -- the non-identifier-receiver dispatch for `to_string` |
 | B-2026-08-12-34 | 2026-08-13 | typecheck+codegen | medium | A user trait `impl` on `Slice[T]` / `Map` / `Set` is still not callable, and `Map`'s is check-green with BOTH compiled backends dead. B-2026-08-12-32 fixed `String` end-to-end; these are the receivers whose call-site gate and codegen fallthrough it deliberately did not add. | — |
 | B-2026-08-13-5 | 2026-08-13 | codegen | high | A heap field read off a SLICE element double-frees at ANY depth: `fn take(xs: Slice[Pair]) -> String { xs[0].word }` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string — the Vec twin of this read has been cloned since B-2026-08-12-27, and the slice arm was excluded on reasoning the measurement now contradicts | `clone_vec_elem_heap_field_read`'s owning-Vec gate (src/codegen/collections.rs) — the arm that declines a slice container |
 | B-2026-08-13-6 | 2026-08-13 | codegen | high | A heap field read through a SHARED-struct hop off a Vec element double-frees: `shared struct Inner { word: String }` inside `struct Holder { inner: Inner, .. }`, then `let w = hs[0].inner.word` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string | the per-hop gate in `clone_vec_elem_heap_field_read` (src/codegen/collections.rs) meets the RC machinery — a `shared` hop declines there by design |
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1151 surfaced
 
 </details>
 
-### Fixed (1135)
+### Fixed (1136)
 
-<details><summary>1135 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1136 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3827,6 +3826,66 @@ run-vs-build divergence that this row did not touch and neither did I -- its
 impl registers (it is `Type::Named`), so `T: Zero` over a `Map` is check-green
 today while both compiled backends fail. That is a live bug independent of
 anything here. All of it is filed as the follow-up row. |
+| B-2026-08-13-2 | codegen | medium | `.to_string()` on a NON-IDENTIFIER scalar receiver is check-green and interp-green but dies under BOTH compiled backends the moment it is used as a r… | FIXED by 97a2a69. All six shapes the row measured now agree across all FOUR
+surfaces (`karac check`, `--interp`, `run` (JIT), `build`), with the right
+values; the ICE is gone.
+
+THE LOWERING ALREADY EXISTED — its GATE never fired, which is why this reads as
+a missing feature and is not one. `compile_method_call` has had a scalar
+`to_string` arm all along (compile the receiver, render it the way f-strings
+render any scalar, copy the bytes into an owning String). It is guarded by
+`recv_is_scalar_primitive`, and both of that gate's arms structurally cannot
+answer for these receivers:
+
+  * `dispatch_key` is SPAN-keyed and a chain shares one, so in
+    `7.to_string().len()` the inner link reads the outer call's `String.len`
+    and the receiver looks like a String;
+  * `type_name_of_expr` is a NAME lookup, so it answers for `n.to_string()`
+    and returns `None` for a literal, a cast, or a parenthesized expression.
+
+Which is exactly why every failing shape on the row has a NON-IDENTIFIER
+receiver and every working control has an identifier or a string literal. The
+row's boundary table is the fix's specification, not just evidence.
+
+THIRD INSTANCE OF ONE GAP. The comment above the gate is B-2026-08-11-22, which
+added the `type_name_of_expr` arm for precisely this failure one shape earlier
+(`n.to_string().to_string()`), and names the span-keyed-chain mechanism. This
+row is the same bug for receivers that have no name to look up. The fix
+continues that line with a third, SYNTACTIC arm: the receiver's scalar-ness is
+visible in the expression itself, and reading it compiles nothing — the
+property that comment notes the gate was written to preserve.
+
+`(7 + 1)` is the shape that would have been missed by a literals-only arm:
+primitive arithmetic desugars to an intrinsic CALL (`i64.add(7, 1)`) before
+either backend sees the AST, so it needs the call arm. It is in the test for
+that reason.
+
+THE ROW'S READING OF THE ICE IS CORRECT and worth keeping: `Found IntValue i32
+120 but expected the StructValue variant` — 120 is `'x'`. The inner
+`to_string()` did not lower at all, so the raw codepoint reached an outer call
+that had already decided the receiver was string-like (`expr_is_string_like`
+answers true for any MethodCall named `to_string`). That outer assumption is
+RIGHT — a `to_string()` result is a String — so the fix is the missing lowering
+rather than another receiver gate, exactly as the row predicted.
+
+MEASURED, per shape, all four surfaces, before -> after:
+
+  'x'.to_string().to_uppercase()   check ok / interp ok / JIT ERR / build ERR -> all four agree, X
+  7.to_string().len()              same before                                -> all four agree, 1
+  true.to_string().to_uppercase()  same before                                -> all four agree, TRUE
+  (7 + 1).to_string().len()        same before                                -> all four agree, 1
+  3.5.to_string().len()            same before                                -> all four agree, 3
+  'x'.to_string().to_string()      ICE at method_call.rs:2720                 -> all four agree, x
+
+THE ROW'S OPEN QUESTION, answered: "worth checking whether the same
+non-identifier-receiver hole exists for other scalar methods that the identifier
+path handles." Probed across the family — `7.clone()`, `(7 + 1).clone()`,
+`(-7).to_string().len()`, `(7 as u8).to_string().len()`,
+`(3.5 + 1.0).to_string().len()`, a three-deep chain
+`'x'.to_string().to_string().to_uppercase()`, and `to_string` in operand
+position — interpreter and compiled backend AGREE on every one. `clone` is the
+only other consumer of this gate and it is identity on a scalar, so widening the
+gate is correct for it too. No remaining divergence found in this family. |
 | B-2026-08-13-3 | codegen | high | Passing a Vec ELEMENT whose struct has a NESTED STRUCT field to a call and assigning the result back to that same slot DOUBLE-FREES on both compiled… | FIXED by 5e6b6f0. The abort is gone on both compiled backends, output matches the
 interpreter, and the ASAN pin fails without the code change.
 
