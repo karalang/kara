@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 239 | 0 |
 | leak | 171 | 1 |
 | double-free | 122 | 0 |
-| codegen-gap | 105 | 1 |
+| codegen-gap | 105 | 0 |
 | run-vs-build | 103 | 0 |
 | missing-feature | 93 | 2 |
 | perf | 64 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 823 | 2 |
+| codegen | 823 | 1 |
 | typecheck | 159 | 2 |
 | interp | 138 | 0 |
 | ownership | 47 | 1 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1144 surfaced · 5 open · 1127 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1144 surfaced · 4 open · 1128 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
 | B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
 | B-2026-08-12-31 | 2026-08-12 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS mentions the container through a CALL: `ps[0] = mk(ps[0].n + k)` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 400 B in 40 allocations, one per assign. B-2026-08-12-26 fixed the index-read RHS; this is the same displaced occupant with a different RHS shape. | — |
 | B-2026-08-13-1 | 2026-08-13 | ownership | low | The ownership checker treats an OWNED String passed as the ARGUMENT of a read-only String method as a MOVE, and does so INCONSISTENTLY across the three methods the compiler itself documents as read-only. `a.push_str(s)` twice on the same owned `s` reports `warning[ownership]: value 's' moved here, used again here`; `s.starts_with(t)` twice on the same owned `t` reports the same; `s.contains(t)` twice on the same owned `t` is CLEAN. All three are named together in `is_str_like`'s doc comment (src/typechecker/stdlib_seq.rs) as "String methods that read their argument's bytes (push_str, contains, starts_with) ... the callee only copies/scans the bytes, so there is no ownership reason to demand a move" -- the TYPECHECKER was deliberately widened to accept a borrow there, but the OWNERSHIP checker still classifies the owned-argument case as a consume for two of the three. NOT A CORRECTNESS BUG: the diagnostic is a warning, and the value really is still readable afterwards -- the same program prints `abc|abc` identically under `karac run --interp` and `karac build`. So this is a spurious move report plus, in the harder shapes, an unnecessary RC fallback. BOUNDARY (probed): argument `push_str` MOVED; argument `starts_with` MOVED; argument `contains` clean; RECEIVER reuse (`s.contains(lit)` twice) clean; argument reached through a `ref String` PARAMETER clean. COST: the only way to write the natural code without the diagnostic is to route the argument through a `ref`-parameter helper function, which is what kata #257's iterative builder had to do -- `extend(prefix: ref String, v: i64)` exists solely to turn two owned reads into two borrows. In a `Vec[Frame]`-style worklist, where the prefix is a field of an owned popped struct, there is no `ref` binding to hand and the helper is the ONLY spelling that avoids an RC. FIX DIRECTION: classify the argument of a read-only String method as a BORROW use in ownership.rs, matching what the typechecker already assumes and what `contains` already does. REPRO (1 line): `fn main(){ let s: String = "abc"; let mut a: String=""; a.push_str(s); let mut b: String=""; b.push_str(s); println(f"{a}{b}"); }` | ownership use-classification for read-only String stdlib arguments; cf. is_str_like in src/typechecker/stdlib_seq.rs |
@@ -147,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1144 surfaced
 
 </details>
 
-### Fixed (1127)
+### Fixed (1128)
 
-<details><summary>1127 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1128 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3255,6 +3254,74 @@ use-after-move the gate was silently missing. It is not par-specific -- the same
 double move in straight-line code reports the identical ownership WARNING and
 `karac check` passes. Use-after-move is a warning language-wide; nothing about
 `par` changes it. |
+| B-2026-08-12-24 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails th… | FIXED by 2282be2. `bind_pattern_types` and its match-arm sibling
+`record_pattern_binding_surface_types` now record a `Type::TypeParam(name)`
+binding, exactly as they already recorded `Type::Named { name }`.
+
+THE SURFACE IS TYPECHECK, NOT CODEGEN, and the row's mechanism guess is
+refuted rather than refined. It reads "the monomorph appears to lose the
+local's type"; the monomorph never had it. Instrumented at both ends on the
+minimal repro and on the boundary row that WORKS:
+
+  let a = p;       (T-typed PARAM)  -> Type::Named { name: "T" }  -> recorded
+  let a = self.v;  (T-typed FIELD)  -> Type::TypeParam("T")       -> NOTHING
+
+At the codegen let site the failing binding printed `pbt=None` with the
+monomorph subst `{"T": "i64"}` sitting right there, fully populated. Codegen
+was not losing anything -- it was never told. A generic parameter reaches the
+binding recorder under TWO SPELLINGS depending on where it came from, and only
+one of them had an arm.
+
+That is also what explains the boundary the filing found so strange. All three
+of its working variants either avoid a binding entirely (`self.v.describe()`)
+or bind something that infers `Named` (a param, in a free fn or a generic
+impl); only a FIELD read produces `TypeParam`.
+
+FIX: one arm in `bind_pattern_types`, recording the param NAME. That is not a new
+behaviour but the existing one made reachable -- codegen's
+`record_var_type_name` already resolves a recorded name through the
+monomorph's `type_subst_names` (`T` -> `i64`), which is precisely how the
+working `Named { name: "T" }` spelling has always worked. Outside a mono the
+subst map is empty and the name stays put, same as today.
+
+THE MATCH-ARM SIBLING LOOKS LIKE THE SAME HOLE AND IS NOT, which is the one
+thing worth carrying forward from this fix. `record_pattern_binding_surface_
+types` mirrors `bind_pattern_types` arm for arm and is likewise missing
+`TypeParam`, so mirroring the record there is the obvious next edit. It was
+made, and the suite refused it: `test_e2e_generic_enum_{heap,struct_heap,vec}_
+payload_match_return` all fail with `Module verification failed: Function
+return type does not match operand type of return inst! ret i64 0 / { ptr, i64,
+i64 }`. In a match arm the recorded name drives PAYLOAD WORD COUNT, and `"T"`
+reads as a one-word named type where the live payload is a three-word
+`{ptr,len,cap}`. The `let` site has no payload reconstruction, which is exactly
+why the same record is safe there and not here.
+
+The match-arm shape needs no fix regardless: `match self.get(i) { Ok(v) =>
+v.describe() }` dispatches correctly with only the `let` arm in place, verified
+on the same probe. The reverted attempt is recorded in situ at the `let` arm so
+the next reader does not re-make it.
+
+VERIFIED across `karac check`, `--interp`, LLJIT and AOT, all agreeing, on the
+filed repro and on the ORIGINAL probe's shape (`let a = self.get(x)?;`) that
+the row noted as "the same shape one level further out".
+
+PINNED by `e2e_generic_impl_local_bound_from_t_field_dispatches`, which covers
+the field read, the `?`-propagated form and the match arm, at TWO monomorphs --
+a scalar (`i64`) and a user struct (`P`). Two instantiations matter here rather
+than being thoroughness for its own sake: recording the param NAME is only
+correct if the subst resolves it per mono, and a single instantiation would
+pass against a hardcoded answer. Non-vacuous: against the pre-fix compiler it
+fails with the row's exact message, `no handler for method 'describe' on
+variable 'a'`.
+
+ONE ADJACENT GAP FOUND AND FILED AS B-2026-08-12-32, not fixed here: a user
+trait impl on `String` or `Slice[T]` is ACCEPTED at the declaration but never
+found at the call site, while the same impl on `i64` / `f64` / `bool` / even
+`Vec[i64]` resolves. It surfaced because `impl Zero for String` was the natural
+second monomorph for this test; the test uses a user struct instead. Confirmed
+pre-existing by measuring both sides of this fix.
+
+Suite green at 117 targets, 0 failures; clippy and fmt clean. |
 | B-2026-08-12-26 | codegen | medium | ELEMENT-TO-ELEMENT index assign LEAKS one buffer per assignment: `ps[0] = ps[1]` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 4… | FIXED by af532fb. `asan_index_assign_elem_to_elem_no_leak` is flipped from
 `#[ignore]` to live and extended; it pins at 1355 B in 160 allocations against
 the pre-fix compiler, on the DEFAULT leg (a `Vec` keeps the allocation alive, so
