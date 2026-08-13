@@ -28229,6 +28229,36 @@ fn test_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-08-13-5 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_slice_and_map_elem_field_read_is_a_copy`, same source and expected
+/// string.
+///
+/// The interpreter is the oracle this row's fix was argued from: it has always
+/// treated a field read off a slice element or a map value as a COPY, which is
+/// what makes cloning in codegen a correction rather than a preference. Pinning
+/// the bytes here keeps that argument checkable.
+#[test]
+fn test_slice_and_map_elem_field_read_is_a_copy() {
+    assert_eq!(
+        run("struct Pair { word: String, n: i64 }\n\
+             fn take(xs: Slice[Pair]) -> String { let w = xs[0].word; w }\n\
+             fn main() {\n\
+                 let k = 1;\n\
+                 let mut ps: Vec[Pair] = Vec.new();\n\
+                 ps.push(Pair { word: f\"a{k}\", n: 7 });\n\
+                 println(take(ps[0..1]));\n\
+                 println(ps[0].word);\n\
+                 let mut m: Map[String, Pair] = Map.new();\n\
+                 m.insert(f\"k{k}\", Pair { word: f\"c{k}\", n: 8 });\n\
+                 let mapped = m[f\"k{k}\"].word;\n\
+                 println(mapped);\n\
+                 println(m[f\"k{k}\"].word);\n\
+                 println(m[f\"k{k}\"].n);\n\
+             }"),
+        "a1\na1\nc1\nc1\n8\n"
+    );
+}
+
 /// B-2026-08-13-4 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_nested_vec_elem_field_read_is_a_copy`, same source and expected
 /// string.

@@ -20895,6 +20895,87 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-5 — a heap field read off a SLICE element or a MAP value is
+    /// deep-cloned too, so it no longer double-frees.
+    ///
+    /// B-2026-08-12-27 clones this read for an owning `Vec` and excluded the
+    /// other two containers in a comment: "a slice element is borrowed and a map
+    /// value is side-table owned; cloning either would hand back a buffer whose
+    /// original still has its own owner, i.e. a leak rather than a fix." The
+    /// measurement contradicts it in BOTH directions, which is why the arm is
+    /// now container-agnostic:
+    ///
+    ///   - NOT cloning was not the safe side. `fn take(xs: Slice[Pair]) ->
+    ///     String { xs[0].word }` and `let w = m[k].word` both DOUBLE-FREED,
+    ///     because the un-cloned read escapes into an owning destination which
+    ///     then frees a buffer the lender still owns.
+    ///   - Cloning is not a leak, and the proof was one line away the whole
+    ///     time: the WHOLE-element read (`let p = xs[0]` / `let p = m[k]`) has
+    ///     always cloned for these same containers and is clean, because the
+    ///     clone carries its own scope cleanup and a consuming destination takes
+    ///     that cleanup over instead of duplicating it.
+    ///
+    /// THE LOOP LEGS ARE THE LEAK HALF, and they are why this is not just a
+    /// double-free fixture: 200 iterations of a consuming read on both containers, and a second
+    /// bound read beside it (a bare `xs[0].word.len()` cannot be written — a
+    /// chained field receiver is a separate deferred gap). If the clone's cleanup did not fire per iteration, LSan
+    /// reports 200 blocks; if a consuming destination did not take the clone
+    /// over, this aborts instead.
+    ///
+    /// The `nested` leg carries B-2026-08-13-4's chain through a slice, since
+    /// the two fixes compose: the hop walk resolves the field and the container
+    /// gate now admits the borrow.
+    #[test]
+    fn asan_slice_and_map_elem_field_read_cloned_not_aliased() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { word: String, n: i64 }
+struct Deep { inner: Pair, tag: i64 }
+fn take(xs: Slice[Pair]) -> String { let w = xs[0].word; w }
+fn nested(xs: Slice[Deep]) -> String { let w = xs[0].inner.word; w }
+fn tally(xs: Slice[Pair]) -> i64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < 200 {
+        let w = xs[0].word;
+        let peek = xs[0].word;
+        acc = acc + w.len() + peek.len();
+        i = i + 1;
+    }
+    acc
+}
+fn main() {
+    let k = env.args().len() as i64;
+    let mut ps: Vec[Pair] = Vec.new();
+    ps.push(Pair { word: f"a{k}", n: 1 });
+    let borrowed = take(ps[0..1]);
+    let kept = ps[0].word;
+    let mut acc = borrowed.len() + kept.len();
+    acc = acc + tally(ps[0..1]);
+    let mut ds: Vec[Deep] = Vec.new();
+    ds.push(Deep { inner: Pair { word: f"b{k}", n: 2 }, tag: 3 });
+    let deep = nested(ds[0..1]);
+    let kept_deep = ds[0].inner.word;
+    acc = acc + deep.len() + kept_deep.len();
+    let mut m: Map[String, Pair] = Map.new();
+    m.insert(f"k{k}", Pair { word: f"c{k}", n: 4 });
+    let mapped = m[f"k{k}"].word;
+    let kept_map = m[f"k{k}"].word;
+    acc = acc + mapped.len() + kept_map.len();
+    let mut i = 0i64;
+    while i < 200 {
+        let w = m[f"k{k}"].word;
+        acc = acc + w.len();
+        i = i + 1;
+    }
+    println(acc > 0);
+}
+"#,
+            &["true"],
+            "slice_and_map_elem_field_read_cloned_not_aliased",
+        );
+    }
+
     /// B-2026-08-13-4 — a NESTED heap field read off a Vec ELEMENT
     /// (`ds[0].inner.word`) is deep-cloned at the read, so it no longer
     /// double-frees.

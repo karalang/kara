@@ -22936,6 +22936,45 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_slice_and_map_elem_field_read_is_a_copy() {
+        // B-2026-08-13-5's VALUE side. The clone was extended to a BORROWED
+        // container (a slice) and a side-table one (a map), so the thing to
+        // pin is that neither lender is disturbed: after the field is consumed
+        // — returned out of `take`, bound out of the map — reading it again
+        // through the container yields the same string.
+        //
+        // That is the whole reason the fix clones instead of cap-zeroing the
+        // lender's field: a read off a container is a COPY on both backends,
+        // and for a BORROWED container the move model would not merely be a
+        // use-after-free in this frame, it would corrupt a value this frame
+        // does not own.
+        //
+        // `m[..].n` last: the scalar sibling of the cloned field must be
+        // untouched, which a clone emitted at the wrong offset would corrupt.
+        assert_eq!(
+            run_program(
+                "struct Pair { word: String, n: i64 }\n\
+                 fn take(xs: Slice[Pair]) -> String { let w = xs[0].word; w }\n\
+                 fn main() {\n\
+                     let k = 1;\n\
+                     let mut ps: Vec[Pair] = Vec.new();\n\
+                     ps.push(Pair { word: f\"a{k}\", n: 7 });\n\
+                     println(take(ps[0..1]));\n\
+                     println(ps[0].word);\n\
+                     let mut m: Map[String, Pair] = Map.new();\n\
+                     m.insert(f\"k{k}\", Pair { word: f\"c{k}\", n: 8 });\n\
+                     let mapped = m[f\"k{k}\"].word;\n\
+                     println(mapped);\n\
+                     println(m[f\"k{k}\"].word);\n\
+                     println(m[f\"k{k}\"].n);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("a1\na1\nc1\nc1\n8\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_nested_vec_elem_field_read_is_a_copy() {
         // B-2026-08-13-4's VALUE side, and the reason the fix is a CLONE rather
         // than a move: after `let bound = ds[0].inner.word`, the ELEMENT still

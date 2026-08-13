@@ -3030,12 +3030,35 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(cname) = &container.kind else {
             return Ok(val);
         };
-        // Owning Vec only. A slice element is borrowed and a map value is
+        // B-2026-08-13-5 — an owning Vec, a SLICE, or a MAP. The container must
+        // be one of the three (an unregistered name has no element type to
+        // resolve), but which one it is no longer decides whether to clone.
+        //
+        // This arm used to be "owning Vec only", excluding the other two on the
+        // reasoning that "a slice element is borrowed and a map value is
         // side-table owned; cloning either would hand back a buffer whose
-        // original still has its own owner, i.e. a leak rather than a fix.
-        if self.slice_elem_types.contains_key(cname.as_str())
-            || self.map_key_types.contains_key(cname.as_str())
-            || !self.vec_elem_types.contains_key(cname.as_str())
+        // original still has its own owner, i.e. a leak rather than a fix." The
+        // measurement contradicts it in both directions:
+        //
+        //   - NOT cloning is not the safe side. `fn take(xs: Slice[Pair]) ->
+        //     String { xs[0].word }` and `let w = m[k].word` both DOUBLE-FREE —
+        //     the un-cloned read escapes into an owning destination, which frees
+        //     a buffer the lender still owns. The status quo was not
+        //     conservative, it was corruption.
+        //   - Cloning is not a leak, and the proof is one line away: the
+        //     WHOLE-element read (`let p = xs[0]` / `let p = m[k]`) has always
+        //     cloned for these same containers, and it is clean under valgrind
+        //     on both — because the clone carries its own scope cleanup, and a
+        //     consuming destination takes that cleanup over rather than
+        //     duplicating it.
+        //
+        // So the field read now follows its own whole-element sibling instead of
+        // diverging from it, which is also what the language says: a read off a
+        // container is a COPY on both backends (mutating `let mut p = xs[0]`
+        // leaves the lender's element untouched — measured, both containers).
+        if !self.slice_elem_types.contains_key(cname.as_str())
+            && !self.map_key_types.contains_key(cname.as_str())
+            && !self.vec_elem_types.contains_key(cname.as_str())
         {
             return Ok(val);
         }
