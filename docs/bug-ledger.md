@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 242 | 1 |
+| miscompile | 243 | 2 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 108 | 1 |
+| run-vs-build | 108 | 0 |
 | codegen-gap | 106 | 1 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 839 | 2 |
+| codegen | 840 | 3 |
 | typecheck | 162 | 0 |
-| interp | 142 | 1 |
+| interp | 142 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1163 surfaced · 3 open · 1148 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1164 surfaced · 3 open · 1149 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-16 | 2026-08-13 | interp | medium | The INTERPRETER aliases a struct binding: `let mut t = a; t.lines.push(x)` is visible through `a`, where JIT and AOT both copy. No field access is involved, so this is not the field-move family -- it is the whole-value rebinding, and here the COMPILED backends are on the design-correct answer | the tree-walk interpreter's `let` binding of a non-shared STRUCT value — it installs an alias where both compiled backends install a copy |
 | B-2026-08-13-17 | 2026-08-13 | codegen | medium | An ANNOTATED tuple binding ignores its annotation: `let t: (i64, i64) = (b, d)` with `b: u8` / `d: u32` lays the aggregate out from the element VALUES (`{i8, i32}`) while every read trusts the annotation, so `t.0` sign-extends and prints 200 as -56 on both compiled backends. The UNANNOTATED form of the same tuple is correct. | src/codegen/expr_ops.rs `compile_tuple` (~L22): the struct type is built from `vals.iter().map(|v| v.get_type())`, ignoring any annotated tuple TypeExpr; the read side resolves element types via `place_chain_tuple_tes`, which uses the annotation. |
 | B-2026-08-13-18 | 2026-08-13 | codegen | medium | An implicit int-to-FLOAT widening emits INVALID IR and fails module verification at three boundaries -- a struct-literal field, a field assignment, and a call argument -- so `struct W { mut f: f64 }` with `W { f: some_u8 }` does not compile at all, while the same conversion through an annotated `let` or a `Vec[f64]` element is fine. | src/codegen/expr_ops.rs `coerce_scalar_to_type_unsigned` (~L6880): matches (IntValue, IntType) and (FloatValue, FloatType) only; `(IntValue, FloatType)` falls through to `_ => val`. |
+| B-2026-08-13-19 | 2026-08-13 | codegen | medium | Binding a struct out of a TUPLE ELEMENT (`let r = t.0;`) EMPTIES the source under both compiled backends: a later read of `t.0` sees a zero-length Vec field where copy semantics call for the original contents. The field-access source shape was fixed by B-2026-08-13-14; the tuple-element source takes a different path and was not covered. | `uam_defensive_copy` (src/codegen) — B-2026-08-13-14 widened its consume-site match from `ExprKind::Identifier` to `FieldAccess`; `ExprKind::TupleIndex` is the same reach gap. Check the `uam_copied_sites` span key lines up for a tuple index. |
 
 ### Wontfix (2)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1163 surfaced
 
 </details>
 
-### Fixed (1148)
+### Fixed (1149)
 
-<details><summary>1148 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1149 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4759,6 +4759,81 @@ Suite green with `--features llvm` (13567 passed, 0 failed). The ASAN -O0 leg
 was run too, because coercing the container element changes what gets staged
 into the element slot: 1064 passed, 0 failed, quarantine list matched exactly.
 Clippy `--all --all-targets --features llvm` and fmt clean. |
+| B-2026-08-13-16 | interp | medium | The INTERPRETER aliases a struct binding: `let mut t = a; t.lines.push(x)` is visible through `a`, where JIT and AOT both copy | FIXED by 6cda7ae. The interpreter's `let` binding now takes an independent copy
+for every PLACE-rooted RHS, not just an identifier RHS holding a `Value::Array`.
+
+THE FIX ALREADY EXISTED AND WAS MEASURED AT THE WRONG BOUNDARY. B-2026-08-01-27
+had fixed exactly this aliasing for a bare `Vec` rebinding, with a three-part
+guard: binding pattern, `ExprKind::Identifier` RHS, `Value::Array` value. Those
+last two are the COORDINATES OF THE SHAPE THAT WAS REPORTED, not the boundary of
+the behaviour. Nothing about the aliasing is specific to either: `Value::Struct`
+holds its fields by value, so cloning a struct copies the field map and
+Arc-BUMPS a `Vec` field -- and a field/index/tuple-element RHS reads out of a
+place that keeps existing just as an identifier does.
+
+SCOPE, which is the part the row explicitly left unprobed. Seven positions,
+interpreter vs AOT, one program each:
+
+                                        pre-fix          post-fix
+                                     interp   build    interp  build
+  struct    <- identifier             2 2      2 1      2 1     2 1
+  Vec       <- struct field           2 2      2 1      2 1     2 1
+  struct    <- struct field           2 2      2 1      2 1     2 1
+  struct    <- Vec index              2 2      2 1      2 1     2 1
+  Map[K,Vec]<- identifier             2 2      2 1      2 1     2 1
+  struct    <- tuple element          2 2      2 0      2 1     2 0
+  tuple     <- identifier             2 2      no build 2 1     no build
+
+Five reach full three-surface agreement. The last two are the interesting ones
+and are NOT this bug:
+
+  * the tuple-element source EMPTIES under codegen (`2 0`, not `2 1`) -- the
+    tuple-element analogue of the field-source defect B-2026-08-13-14 fixed.
+    Filed as B-2026-08-13-19. Pre-fix both surfaces were wrong in opposite
+    directions and neither was an oracle; now the interpreter is right and the
+    codegen half is isolated, which is strictly better than the tie.
+  * the whole-tuple rebind does not compile at all -- B-2026-08-02-10's
+    tuple-element method-receiver gap, which names itself in the error.
+
+BOUNDING WHAT CHANGED, rather than hoping. Two clauses do it. A non-place RHS is
+a fresh temp with nothing to alias, so it is untouched by construction. And for
+every value kind `deep_clone_value` does not materialize, it falls through to
+the same `.clone()` this code already took -- so the behaviour delta is exactly
+{Set, Map, SortedMap, Tuple, Struct, EnumVariant} joining the Array that was
+already there.
+
+THE TWO EXCLUSIONS ARE BOTH LOAD-BEARING and both predate this. A SLICE is a
+VIEW: rebinding one copies the window on every backend, and `deep_clone_value`
+would materialize an owned Array instead -- changing the value's SHAPE, not just
+its identity. Reference-semantics values (`shared struct`, channel ends,
+`SharedCell`, `Atomic`) are shared by design and keep aliasing for free, because
+`deep_clone_value` Arc-bumps them. Both are pinned by a test.
+
+THE ROW'S THIRD UNPROBED QUESTION -- "whether any existing interpreter test PINS
+the aliasing as expected output -- that last one decides whether this is a
+one-line change or a corpus edit" -- answers ONE-LINE. The full `--features
+llvm` suite is green at 13567 with no fixture edited: nothing had ever asserted
+the aliasing.
+
+WHICH BACKEND WAS RIGHT, confirmed rather than assumed: the compiled ones, as
+the row said. design.md classes `let y = v` as a CONSUME and B-2026-08-10-21's
+defensive-copy machinery makes the reuse read an independent copy. That is the
+unusual shape of this run-vs-build divergence -- the INTERPRETER was the wrong
+surface, where the sibling row B-2026-08-13-14 (the READ half) had it as the
+oracle. Read semantics and mutation semantics were broken on opposite sides.
+
+PINNED by three tests. `test_let_rebinding_is_a_copy_not_an_alias` covers all
+seven positions and fails on all seven lines against the pre-fix interpreter.
+`test_e2e_let_rebinding_is_a_copy_not_an_alias` re-asserts the five that have a
+compiled twin as a three-surface differential -- the whole failure mode was two
+surfaces disagreeing silently, so the differential is the guard that matters.
+`test_let_rebinding_preserves_shared_and_slice_aliasing` covers the other
+direction and PASSES pre-fix by design: it is an over-reach guard, not a
+regression guard, and its doc says so rather than letting a reader assume both
+are guards.
+
+Suite green with `--features llvm` (13570 passed, 0 failed); clippy `--all --all-targets --features llvm`
+and fmt clean. |
 
 </details>
 
