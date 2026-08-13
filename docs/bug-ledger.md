@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 106 | 1 |
 | codegen-gap | 105 | 0 |
 | missing-feature | 95 | 0 |
-| perf | 65 | 1 |
+| perf | 65 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 1 |
 | crash | 44 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 835 | 1 |
+| codegen | 835 | 0 |
 | typecheck | 161 | 0 |
 | interp | 140 | 0 |
 | ownership | 47 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1158 surfaced · 3 open · 1143 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1158 surfaced · 2 open · 1144 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-10 | 2026-08-13 | codegen | medium | kara is 1.58x behind EQUAL-SAFETY rustc and 1.49x behind clang on the min/argmin/second-min reduction of kata #265's O(n*k) DP, because LLVM if-converts and FULLY unrolls that loop for rustc/clang but only partially unrolls it (4x) for kara and leaves a data-dependent branch per element. Measured cmov counts in main: rustc -O 133, rustc -O -C overflow-checks=on 127, clang -O3 129, kara 17. | LLVM unroll-factor and if-conversion decisions on the counted reduction loop karac emits (src/codegen loop lowering + pass pipeline); compare against the fully-unrolled branchless form rustc produces for the same k=32 min/argmin/second-min update |
 | B-2026-08-13-12 | 2026-08-13 | cli | low | The DELIBERATE codegen deferral of chained field receivers (`e.doc.lines.len()`, FR4) is invisible to `karac check`: check reports `All checks passed.`, `--output=json` reports `"diagnostics":[]`, `karac fix` reports nothing fixable, and `--targets=native` also passes -- then `karac build` refuses. The remedy is a purely mechanical rewrite the compiler already names, so this is a free `check`-time gate and a free machine-applicable fix-it that are simply not wired up. | src/codegen/calls.rs:403 (`FR4: reject chained field receivers up front`). Deferral itself is intentional and documented -- see docs/implementation_checklist/phase-11-stdlib-longtail.md, where the autograd stdlib works around it by binding `let tp = self.tape;`. This row is about the MISSING CHECK-TIME SURFACE, not about implementing the feature. |
 | B-2026-08-13-13 | 2026-08-13 | parser | low | A parse diagnostic PRESCRIBES CODE THAT DOES NOT PARSE: the bare-assignment-in-a-match-arm error says "wrap it in braces: `pattern => { place = value }`", and that exact text fails with `Expected Semicolon, found RightBrace`. The working form needs the semicolon -- `{ place = value; }`. No `replacement` is attached either, so `karac fix` cannot repair it. | the E0001 message text for a bare assignment as a `match` arm body. |
 
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1158 surfaced
 
 </details>
 
-### Fixed (1143)
+### Fixed (1144)
 
-<details><summary>1143 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1144 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4292,6 +4291,88 @@ compose without either being touched for the other: with both in, the two-impls-
 under-one-head probe that this row kept as an untouched control (`mimi` compiled
 against the interpreter's `msms`) now reads `mims` on all four surfaces, and
 every probe here is unchanged. Suite green at 13552 on the rebased tree. |
+| B-2026-08-13-10 | codegen | medium | kara is 1.58x behind EQUAL-SAFETY rustc and 1.49x behind clang on the min/argmin/second-min reduction of kata #265's O(n*k) DP, because LLVM if-conve… | FIXED by 3ea8310. The full-unroll hint now accepts a bound written as
+a NAME bound to an immutable integer literal, not only a literal written in the
+guard. Kata #265's bench lane: 620 ms -> 257 ms, a 2.4x speedup, interleaved A/B
+over 9 runs, same sink.
+
+THE ROW'S HYPOTHESIS WAS HALF RIGHT AND POINTED AT THE WRONG HALF. It suggested
+"raising the unroll threshold, or checking that the loop metadata karac
+attaches does not cap it". karac attached NO metadata to that loop at all. The
+existing `while_loop_wants_full_unroll` reads the bound off the SOURCE guard
+and only accepted `ExprKind::Integer`, and the kernel writes
+`let k = 32i64; … while j < k`. The 4x the row measured was LLVM's own default,
+not a `llvm.loop.unroll.count` cap.
+
+CONFIRMED BEFORE FIXING: the disassembly carries `cmp $0x20`, so LLVM had
+already constant-propagated the bound and knew the trip count was 32; it simply
+declined the full unroll. Patching the kata source to spell the bound as a
+literal took cmov in `main` from 55 to 168 and 608 ms to 305 -- which localised
+the gap to the source-level predicate rather than to the pass pipeline, before
+any compiler change.
+
+MEASURED ON THIS HOST, all five mirrors agreeing on sink 991930357, best of 11:
+
+  kara pre-fix                     605 ms
+  kara post-fix                    252 ms
+  rustc -O -C overflow-checks=on   407 ms
+  rustc -O                         281 ms
+  clang -O3                        405 ms
+
+So the lane goes from 1.5x behind equal-safety rustc to ahead of every mirror.
+(Absolute numbers differ from the row's -- this container is slower and my
+harness is best-of-N wall clock -- but every number above is from one sitting.)
+
+THE WIDENING NEEDED THREE COST GATES, and each one is a REGRESSION I measured,
+not a precaution. Sweeping all 53 newly-eligible kata bench kernels found:
+
+  #259  `while r < rounds` is the benchmark's OUTER loop; 26x-ing the whole
+        kernel cost 25%          (562 -> 704 ms)  =>  reject a body with a
+                                                      NESTED LOOP, and a body
+                                                      over 16 statements
+  #134  an 8-iteration SETUP loop doing `push(lcg(..))`; replicating the calls
+        cost 40%                 (484 -> 677 ms)  =>  reject a body with CALLS
+  #291  an inner loop doing `sj = sj + alpha[..]` over a `String` and a
+        `Vec[String]`; 30 allocating concats cost 1.9x
+                                 (224 -> 425 ms)  =>  reject HEAP operands
+
+THE THIRD GATE IS WHY THE CHECK IS TYPE-AWARE. `a + b` and `v[i]` are
+indistinguishable in the AST between `i64` and `String`, so the pure-AST cost
+check passed #291 straight through; the heap gate consults `string_vars` and
+`vec_elem_types`, which codegen has already populated for every `let` compiled
+ahead of the loop. Fail-closed: an index whose container type is unknown
+declines.
+
+FINAL SWEEP over all 53: six kernels' code changes, one improves (#265, 2.4x),
+five are unchanged within noise. Two of those five needed care to call
+correctly -- #253 looked 6% slower on sequential timing and its binaries are
+CODE-IDENTICAL (only non-.text padding differs), and #287's binaries are
+byte-identical too. Both were drift; interleaved A/B put them level. No kernel
+regressed and no kernel's output changed.
+
+PINNED by four tests. `test_ir_full_unroll_metadata_accepts_a_const_local_bound`
+covers the positive plus three negatives (a `mut` bound, a computed bound, a
+bound over the cap).
+`test_ir_full_unroll_declines_bodies_too_costly_to_replicate` pins one negative
+per measured regression above, with a `Vec[i64]` scalar control that must still
+be hinted -- otherwise the gates would have thrown #265's win away with them.
+`test_e2e_const_local_bound_unroll_is_sound` asserts the VALUE of a
+name-bounded three-way reduction against the interpreter, since an unroll that
+dropped or duplicated an iteration would still compile.
+
+STALENESS IS BOUNDED TO A MISSED OR SPURIOUS HINT. `llvm.loop.unroll.full`
+carries no count and LLVM still proves the trip count itself, so a wrong entry
+in the constant map cannot miscompile -- the same advisory-only argument the
+literal path already rested on. Only `let` WITHOUT `mut` is tracked, so "never
+reassigned" is structural rather than an analysis, and any other binding of the
+name removes the entry.
+
+Suite green at 117 targets, 0 failures; clippy and fmt clean.
+
+NOTE, unrelated to this change: the first full-suite run failed one codegen test
+with an undefined-symbol link error. That is the STALE-ARCHIVE signal
+(CLAUDE.md § Commands) -- a sibling commit added a runtime symbol. Rebuilt lean
+then full; the test passes. |
 | B-2026-08-13-11 | codegen | high | DOUBLE FREE on both compiled backends when a heap payload makes an ENUM-MEDIATED ROUND TRIP through a Vec: read out of a Vec element into a returned… | FIXED by 3e62426. The row's own 14-line repro runs clean on both compiled
 backends with output matching the interpreter, and the ASAN pin fails without
 the code change.
