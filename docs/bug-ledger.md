@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 172 | 0 |
 | double-free | 126 | 0 |
 | codegen-gap | 105 | 0 |
-| run-vs-build | 105 | 1 |
+| run-vs-build | 105 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 64 | 0 |
 | false-positive | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 833 | 1 |
+| codegen | 833 | 0 |
 | typecheck | 161 | 0 |
 | interp | 140 | 0 |
 | ownership | 47 | 0 |
@@ -124,13 +124,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1154 surfaced · 1 open · 1141 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1154 surfaced · 0 open · 1142 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-13-9 | 2026-08-13 | codegen | medium | A trait-BOUND call over a user-impl'd builtin container (`fn show[T: Zero](x: ref T)` with a `Map`/`Set`/`Slice`) is check-green and interp-green with both compiled backends dead. Direct dispatch on all of those receivers now works; the bound spelling is the only one left. Routing it through the Vec/String fallthrough was tried and REVERTED -- it returns the WRONG impl once a second one exists. | — |
+_None — the ledger is fully drained._
 
 ### Wontfix (2)
 
@@ -143,9 +141,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1154 surfaced
 
 </details>
 
-### Fixed (1141)
+### Fixed (1142)
 
-<details><summary>1141 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1142 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4206,6 +4204,90 @@ TWO DELIBERATE NON-QUALIFICATIONS, both of which would make things worse if reve
 MEASURED ON ALL FOUR SURFACES (check / --interp / run JIT / build), seven fixtures agreeing exactly: `Vec[i64]`+`Vec[String]`; `Box[i64]`+`Box[String]` (user struct); `Map[String,i64]`+`Map[String,String]`; `Map[String,i64]`+`Map[i64,String]` (ARG ORDER only -- a renderer that sorted or dropped args would collapse these back together behind a name that merely looked disambiguated); `Slice[i64]`+`Slice[String]`; a three-way `Vec` collision with a builtin `len()` interleaved; and a CHAINED receiver (`a.describe().len()`), which is where a span-keyed table normally goes wrong.
 
 TESTS: 8 unit tests on the collision pass itself (`src/impl_dispatch.rs`) pinning both directions -- single impl / distinct heads / generic impl / const-arg group are NOT qualified, same-head-differing-args and multi-arg-order ARE; `same_head_impls_dispatch_to_their_own_target` (interpreter); `test_e2e_same_head_impls_dispatch_to_their_own_target`, `test_e2e_same_head_impls_dispatch_through_a_chain`, `test_e2e_generic_impl_on_builtin_container_dispatches` (codegen E2E). The E2E fixtures interleave receivers and put a builtin call between them, so a fix that merely made the LAST call correct would still fail. |
+| B-2026-08-13-9 | codegen | medium | A trait-BOUND call over a user-impl'd builtin container (`fn show[T: Zero](x: ref T)` with a `Map`/`Set`/`Slice`) is check-green and interp-green wit… | FIXED by 4cf8f38. Every container head dispatches correctly through the bound on
+check / interp / JIT / AOT, with FIVE impls live at once — which is the shape the
+row insisted any retry start from.
+
+THE CAUSE WAS A MANGLE COLLISION, NOT A MISSING DISPATCHER ARM, and the row's
+diagnosis pointed one level away from it. It read the failure as "the receiver's
+own type is already gone by the time dispatch runs … the fix wants real
+per-receiver monomorphization (or dynamic dispatch through the trait)". The
+receiver's type is NOT gone: `type_subst_names` carries `{"T": "Map"}` into the
+monomorph and `var_type_names["x"]` reads back "Map". What was gone is the
+IDENTITY OF THE SYMBOL: `llvm_type_to_mangle_str` renders `Map`, `Set` and
+`Slice` all as `"ptr"`, so `show(map)` and `show(set)` both mangled to
+`show$ptr` and ONE body served both — which is also exactly why the reverted
+attempt returned a wrong impl. Per-receiver monomorphization already exists; it
+was keyed on a token that had erased the receiver.
+
+THREE FIXES, EACH THE SAME RULE ONE PLACE FURTHER ALONG.
+
+  1. THE MANGLE. `mangle_mono_name` already prefers the concrete NAME over the
+     LLVM token twice — for scalar primitives (B-2026-07-03-24, because widening
+     collapses i8/i32 into `i64`) and for user structs/enums (B-2026-07-03-11,
+     because every one of them lowers to `"struct"`). This adds the third
+     instance for the handle-shaped builtins. The arm above it says a builtin
+     "keeps the `$struct` token … its method dispatch never keys on
+     `var_type_names`, so the opaque token is still sound" — a premise that
+     expired the day user trait impls on `Map`/`Set` (ec1d19c) and `Slice[T]`
+     (b0ef988) landed, both of which dispatch BY RECEIVER NAME.
+
+  2. THE SUBST TABLE, which was quietly wrong in a way the row did not see.
+     `arg_collection_head_elem` read `var_elem_type_exprs`, found an entry, and
+     called the container a `Vec` — defaulting the head to "Vec" for anything
+     else. That table doubles as the MAP's value slot and carries a `Set`'s
+     element too, so a `Map[String, i64]` argument resolved to the type-expr
+     `Vec[i64]`: the monomorph registered its receiver as a Vec and every method
+     on it went to the Vec/String path, which is the "Vec/String method
+     'describe' is not yet supported in codegen" the row reported. The head name
+     survived only because the typechecker had already filled it and the
+     resolver uses `or_insert` — so the two subst tables disagreed, `{"T":
+     "Map"}` beside a `Vec[i64]`. Each container now resolves its own head with
+     its own element-aware type-expr, and the resolver returns a WHOLE container
+     type-expr because `Map[K, V]` has two arguments and could not be expressed
+     as a head plus one element.
+
+  3. THE NESTED GENERIC CALL, found by an adversarial control rather than by the
+     row. `fn outer[T: Zero](x: ref T) { show(x) }` reaches the mangle with NO
+     LLVM-type binding at all — `infer_type_args` leaves the inner `subst` empty
+     because the typechecker drops the self-referential `T -> T` it sees inside a
+     generic body — and every arm of the mangle is keyed on that binding, so the
+     inner call appended NOTHING. Two distinct outer monos called one shared
+     `inner`: `m! m!` where the interpreter says `m! s!`. The NAME is known there
+     even when the LLVM type is not, so the mangle now falls back to it, gated to
+     names that are a concrete type so a bare `T` never enters the symbol table.
+
+WHAT NARROWED THE FIRST ATTEMPT, and it is worth keeping: the first version
+listed `String` / `Vec` / `VecDeque` among the disambiguated heads and broke five
+per-mono destructor tests with `driver$String$T_ct_String`. Those three are
+already disambiguated — element-awarely, which is strictly better — by
+`append_collection_type_param_mangle`, whose own comment says it skips "Map/Set
+(single-`ptr` handle)" precisely because they "mangle distinctly already". They
+did not. So the two axes are now exact complements: `_ct_` covers the
+`{ptr,i64,i64}` collision class, this covers the `ptr` one, and neither touches
+the other's names.
+
+MEASURED, all four surfaces agreeing on every shape: `Map` / `Set` / `Slice` /
+`Vec` / `String` receivers through one bound with five impls in scope; both slice
+spellings (a binding and an inline `v[0..2]`, which resolve by different routes —
+the inline one has no binding for the resolver to look up); two bound params in
+one signature (`pair(m, s)` and `pair(s, m)`, so an argument-order bug shows);
+the nested generic call; direct dispatch beside the bound call in the same
+program; and a user-struct control that must keep its existing symbols.
+
+NOT FIXED, and deliberately untouched: B-2026-08-13-8's collapse (two impls of
+one trait on the SAME container head with different ELEMENT types) is a different
+axis — element identity within a head, not head identity — and is verified
+byte-identical before and after this change (`mimi` compiled against the
+interpreter's `msms`).
+
+REBASED ONTO B-2026-08-13-8's FIX AND RE-MEASURED, since the two rows are the
+same erasure on perpendicular axes — that one distinguishes impls sharing a HEAD
+(`Vec[i64]` vs `Vec[String]`), this one distinguishes the heads themselves. They
+compose without either being touched for the other: with both in, the two-impls-
+under-one-head probe that this row kept as an untouched control (`mimi` compiled
+against the interpreter's `msms`) now reads `mims` on all four surfaces, and
+every probe here is unchanged. Suite green at 13552 on the rebased tree. |
 
 </details>
 
