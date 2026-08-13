@@ -3386,7 +3386,7 @@ in BOTH directions (a `String` annotation on the char fold is rejected; a `char`
 annotation on the String transform is rejected), the arity hint, the radix-type
 error, and that the hint set did not widen. Full suite green at 13503 passed / 0
 failed; clippy native + both wasm targets, and fmt, clean. |
-| B-2026-08-12-26 | codegen | medium | ELEMENT-TO-ELEMENT index assign LEAKS one buffer per assignment: `ps[0] = ps[1]` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 4… | FIXED by af532fb. `asan_index_assign_elem_to_elem_no_leak` is flipped from
+| B-2026-08-12-26 | codegen | medium | ELEMENT-TO-ELEMENT index assign LEAKS one buffer per assignment: `ps[0] = ps[1]` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 4… | FIXED by 4da8bc7. `asan_index_assign_elem_to_elem_no_leak` is flipped from
 `#[ignore]` to live and extended; it pins at 1355 B in 160 allocations against
 the pre-fix compiler, on the DEFAULT leg (a `Vec` keeps the allocation alive, so
 unlike the boxed-envelope family this is not an -O0-only shape).
