@@ -22936,6 +22936,53 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_nested_field_move_out_of_owned_param_values_survive() {
+        // B-2026-08-13-3's VALUE side. Moving a nested heap field out of an
+        // owned by-value param now zeroes that field's `cap` in the source, so
+        // the param's callee-owned struct drop skips it — the memory claim is
+        // the asan twin's. What this pins is that the value SURVIVES the
+        // zeroing: `cap` is the ownership bit, `ptr`/`len` are untouched, so
+        // the string the caller receives must still read correctly, and the
+        // source struct's OTHER fields must still be droppable.
+        //
+        // `grown.inner.n` is printed right after `grown.inner.word` for that
+        // second half: the scalar sibling of the moved field has to survive
+        // intact, which a cap-zero at the wrong offset would corrupt.
+        //
+        // `let k = 1` rather than the asan twin's `env.args()`: this test is
+        // the ORACLE, so it wants a fixed expected string, and defeating
+        // constant-folding is the sanitizer fixture's job.
+        assert_eq!(
+            run_program(
+                "                 struct Pair { word: String, n: i64 }\n\
+                 struct Deep { inner: Pair, tag: i64 }\n\
+                 struct Outer { mid: Deep, label: String }\n\
+                 fn ret(d: Deep) -> String { d.inner.word }\n\
+                 fn lit(d: Deep) -> Deep {\n\
+                     Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag }\n\
+                 }\n\
+                 fn bound(d: Deep) -> String { let s = d.inner.word; s }\n\
+                 fn deeper(o: Outer) -> String { o.mid.inner.word }\n\
+                 fn main() {\n\
+                     let k = 1;\n\
+                     println(ret(Deep { inner: Pair { word: f\"a{k}\", n: 1 }, tag: 2 }));\n\
+                     let grown = lit(Deep { inner: Pair { word: f\"b{k}\", n: 3 }, tag: 4 });\n\
+                     println(grown.inner.word);\n\
+                     println(grown.inner.n);\n\
+                     println(bound(Deep { inner: Pair { word: f\"d{k}\", n: 7 }, tag: 8 }));\n\
+                     let o = Outer {\n\
+                         mid: Deep { inner: Pair { word: f\"e{k}\", n: 9 }, tag: 10 },\n\
+                         label: f\"L{k}\",\n\
+                     };\n\
+                     println(deeper(o));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("a1\nb1\n4\nd1\ne1\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_index_assign_call_rhs_carrying_container_heap_values_survive() {
         // B-2026-08-12-33's VALUE side. The displaced-element drop now fires for
         // an RHS that passes container heap into a call, which means a buffer

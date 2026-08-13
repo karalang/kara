@@ -20895,6 +20895,107 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-3 — a NESTED heap field moved out of an owned by-value
+    /// aggregate param no longer double-frees.
+    ///
+    /// `fn take(d: Deep) -> String { d.inner.word }` aborted with `free():
+    /// double free detected in tcache 2` on BOTH compiled backends while the
+    /// interpreter printed the string. The param is callee-owned (entry-copied
+    /// at the top of the frame), so moving a heap field out has to zero that
+    /// field's `cap` in the source or the param's struct drop frees what the
+    /// caller was just handed. The zeroing resolved its owner by matching the
+    /// receiver against an `Identifier`, so `d.word` was covered and
+    /// `d.inner.word` — one hop further — was not.
+    ///
+    /// THE ONE-LEVEL TWIN HAS ALWAYS WORKED, which is what made this a gap in
+    /// REACH rather than a disagreement about ownership, and it is pinned here
+    /// beside the nested form so a future refactor cannot fix one and lose the
+    /// other.
+    ///
+    /// THE SHAPES ARE THE FOUR CONSUMING POSITIONS a moved-out field can land
+    /// in, because the suppression is shared by all of them and each reaches it
+    /// by a different route: a bare tail RETURN, a struct LITERAL field, a call
+    /// ARGUMENT, and a `let` binding. The `let` form was already clean before
+    /// the fix — its own site handles the chain — so it is the control that
+    /// says the fix did not double up on a position that already worked.
+    ///
+    /// The `es` leg carries the nesting one level deeper (`Outer { mid: Deep {
+    /// inner: Pair { word } } }`), since the walk is a loop and a single hop
+    /// would not distinguish "walks the chain" from "handles exactly two".
+    #[test]
+    fn asan_nested_field_move_out_of_owned_param_freed_once() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { word: String, n: i64 }
+struct Deep { inner: Pair, tag: i64 }
+struct Outer { mid: Deep, label: String }
+fn ret(d: Deep) -> String { d.inner.word }
+fn lit(d: Deep) -> Deep { Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag } }
+fn sink(s: String) -> String { s + "!" }
+fn arg(d: Deep) -> String { sink(d.inner.word) }
+fn bound(d: Deep) -> String { let s = d.inner.word; s }
+fn deeper(o: Outer) -> String { o.mid.inner.word }
+fn one_level(p: Pair) -> String { p.word }
+fn main() {
+    let k = env.args().len() as i64;
+    println(ret(Deep { inner: Pair { word: f"a{k}", n: 1 }, tag: 2 }));
+    let grown = lit(Deep { inner: Pair { word: f"b{k}", n: 3 }, tag: 4 });
+    println(grown.inner.word);
+    println(arg(Deep { inner: Pair { word: f"c{k}", n: 5 }, tag: 6 }));
+    println(bound(Deep { inner: Pair { word: f"d{k}", n: 7 }, tag: 8 }));
+    println(deeper(Outer { mid: Deep { inner: Pair { word: f"e{k}", n: 9 }, tag: 10 }, label: f"L{k}" }));
+    println(one_level(Pair { word: f"f{k}", n: 11 }));
+}
+"#,
+            &["a1", "b1", "c1!", "d1", "e1", "f1"],
+            "nested_field_move_out_of_owned_param_freed_once",
+        );
+    }
+
+    /// B-2026-08-13-3, second half — with the double free gone, an index-assign
+    /// over an element whose struct has a NESTED STRUCT field is covered by
+    /// B-2026-08-12-33's entry-copy arm like any other.
+    ///
+    /// THE FIXTURE READS ONLY SCALARS back out of the element, which is not
+    /// squeamishness: binding a NESTED heap field off a Vec element
+    /// (`let w = ds[0].inner.word`) double-frees on its own, with no call and
+    /// no index-assign anywhere near it — B-2026-08-12-27 clones the ONE-level
+    /// `ps[0].word` and has no nested sibling. That is filed as its own row and
+    /// reproduces identically before this change; reading it here would assert
+    /// that bug rather than this one.
+    ///
+    /// That arm shipped with a narrower gate excluding exactly this shape,
+    /// because the shape aborted for an unrelated reason and no property could
+    /// be reasoned from a program that double-frees. The gate is gone now, and
+    /// this is the measurement that retired it: `ds[0] = bump(ds[0])` leaked
+    /// 60 B in 20 blocks with the gate in place and is clean without it.
+    #[test]
+    fn asan_index_assign_nested_struct_element_frees_displaced() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { word: String, n: i64 }
+struct Deep { inner: Pair, tag: i64 }
+fn bump(d: Deep) -> Deep { Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag } }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 20 {
+        let mut ds: Vec[Deep] = Vec.new();
+        ds.push(Deep { inner: Pair { word: f"seed{k + i}", n: 0 }, tag: 5 });
+        ds[0] = bump(ds[0]);
+        ds[0] = bump(ds[0]);
+        acc = acc + ds[0].inner.n + ds[0].tag;
+        i = i + 1;
+    }
+    println(acc > 0);
+}
+"#,
+            &["true"],
+            "index_assign_nested_struct_element_frees_displaced",
+        );
+    }
+
     /// B-2026-08-12-33 — the displaced element is freed when an index-assign's
     /// RHS passes container HEAP into a call, the case B-2026-08-12-31 left
     /// open because a call "gets no proof" that its argument is not the

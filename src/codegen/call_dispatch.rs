@@ -6680,6 +6680,123 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-13-3 — the struct-field move-out cap-zero one or more hops
+    /// DEEP: `d.inner.word` rather than `d.word`.
+    ///
+    /// Same act, same reason, longer reach. The caller's arm zeroes a moved
+    /// heap field's `cap` in its owner so the owner's drop skips it and the
+    /// consumer is left sole owner; it resolves the owner by matching the
+    /// receiver against an `Identifier`/`SelfValue`, which a chained place
+    /// expression is not. So an owned by-value param whose NESTED field was
+    /// moved out kept a live `cap`, its callee-owned struct drop recursed into
+    /// the nested struct and freed the buffer, and the caller freed it again.
+    ///
+    /// Walks the chain to its root and GEPs down the same path the drop walks,
+    /// then hands the innermost struct to the existing helper — so the zeroing
+    /// rule itself is unchanged and lives in one place.
+    ///
+    /// GATED THE WAY THE ONE-LEVEL ARM IS, for the same safety property rather
+    /// than by analogy:
+    ///
+    ///   - The ROOT slot must hold its struct INLINE. A `ref Struct` param's
+    ///     slot is an 8-byte pointer into the CALLER's frame; GEP-ing a `cap`
+    ///     off it writes past the alloca (the B-2026-07-07-4 class), and a
+    ///     borrow owns nothing to move out of anyway.
+    ///   - Every hop must be a non-shared user struct held INLINE in its
+    ///     parent's layout. A pointer-shaped field (an RC box, a boxed enum
+    ///     payload) is someone else's storage, and the refcount machinery owns
+    ///     that decision.
+    ///   - Each hop's LLVM field type must match the declared struct's
+    ///     registered type. Inside a monomorph a bare-`T` field is erased in
+    ///     the base layout, so a mismatch means the offsets cannot be trusted
+    ///     — decline rather than GEP at a guessed offset.
+    ///
+    /// Every decline is the status-quo double free, not a new failure mode.
+    fn zero_nested_struct_field_move_cap(&self, object: &Expr, field: &str) {
+        // Collect the hops from the innermost outward, then reverse: for
+        // `d.inner.word` (called with object = `d.inner`) this yields
+        // `["inner"]` and root `d`.
+        let mut hops: Vec<&str> = Vec::new();
+        let mut cur = object;
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    hops.push(field.as_str());
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                ExprKind::SelfValue => break "self",
+                _ => return,
+            }
+        };
+        if hops.is_empty() {
+            // A plain `d.word` — the caller's own arm handles it.
+            return;
+        }
+        hops.reverse();
+        let Some(slot) = self.variables.get(root).copied() else {
+            return;
+        };
+        let BasicTypeEnum::StructType(mut cur_ty) = slot.ty else {
+            return;
+        };
+        let Some(mut cur_name) = self.var_type_names.get(root).cloned() else {
+            return;
+        };
+        let mut cur_ptr = slot.ptr;
+        for hop in hops {
+            if self.shared_types.contains_key(cur_name.as_str()) {
+                return;
+            }
+            let Some(idx) = self
+                .struct_field_names
+                .get(cur_name.as_str())
+                .and_then(|names| names.iter().position(|n| n == hop))
+            else {
+                return;
+            };
+            // The hop's declared type must name a non-shared user struct, and
+            // its LLVM slot must be that struct held inline.
+            let Some(next_name) = self
+                .struct_field_type_exprs
+                .get(cur_name.as_str())
+                .and_then(|tes| tes.get(idx))
+                .and_then(|te| match &te.kind {
+                    TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                })
+            else {
+                return;
+            };
+            if !self.struct_types.contains_key(next_name.as_str())
+                || self.shared_types.contains_key(next_name.as_str())
+            {
+                return;
+            }
+            let Some(BasicTypeEnum::StructType(next_ty)) =
+                cur_ty.get_field_type_at_index(idx as u32)
+            else {
+                return;
+            };
+            if self.struct_types.get(next_name.as_str()) != Some(&next_ty) {
+                return;
+            }
+            let Ok(next_ptr) =
+                self.builder
+                    .build_struct_gep(cur_ty, cur_ptr, idx as u32, "nested.move.p")
+            else {
+                return;
+            };
+            cur_ptr = next_ptr;
+            cur_ty = next_ty;
+            cur_name = next_name;
+        }
+        if self.shared_types.contains_key(cur_name.as_str()) {
+            return;
+        }
+        self.zero_struct_field_move_cap_in(cur_ptr, &cur_name, field, Some(cur_ty));
+    }
+
     pub(super) fn suppress_source_vec_cleanup_for_arg_ex(
         &self,
         arg_expr: &Expr,
@@ -6878,6 +6995,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+            } else {
+                // B-2026-08-13-3 — the receiver is itself a place expression
+                // (`d.inner.word`), so the arms above see no `Identifier` and
+                // decline. A NESTED heap field moved out of an owned by-value
+                // aggregate param was therefore never cap-zeroed: the param's
+                // callee-owned struct drop walked into `inner` and freed
+                // `word`, while the value handed to the caller owned it too —
+                // `fn take(d: Deep) -> String { d.inner.word }` aborts with
+                // `free(): double free detected in tcache 2` on both compiled
+                // backends where the interpreter prints the string. The
+                // one-level twin (`fn take(p: Pair) -> String { p.word }`) has
+                // always worked, which is what makes this a gap in reach
+                // rather than a difference in ownership.
+                self.zero_nested_struct_field_move_cap(object, field);
             }
             return;
         }

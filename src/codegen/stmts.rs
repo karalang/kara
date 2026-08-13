@@ -11168,53 +11168,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|recent| recent.contains(&(arg.span.offset, arg.span.length)))
     }
 
-    /// B-2026-08-12-33 — are `struct_name`'s fields all either scalars or a
-    /// DIRECT `{ptr,len,cap}` buffer (`String`, `Vec[scalar]`, `Vec[String]`)?
-    ///
-    /// A second, narrower gate on top of `aggregate_param_copy_supported_struct`
-    /// for the entry-copy arm, and it is here because of a measurement rather
-    /// than a hunch. A NESTED STRUCT field (`Deep { inner: Pair, … }`) passes
-    /// the copy-support check, but the whole shape it would admit —
-    /// `ds[0] = bump(ds[0])` over such an element — already double-frees on
-    /// both compiled backends BEFORE this row's change (filed as its own row;
-    /// `ds[0] = mk(ds[0].tag + 1)` and `ds[0] = ds[1]` over the same element
-    /// are clean, so it is specific to handing the element itself to a call).
-    /// Whatever that bug is, it contradicts the premise this arm rests on —
-    /// that the callee's entry copy leaves the caller's element sole owner —
-    /// so admitting the shape would be reasoning from a property the target
-    /// program demonstrably does not have.
-    ///
-    /// Restricting to the field shapes actually measured leak-clean keeps the
-    /// arm inside its evidence. When the nested-struct double free is fixed,
-    /// re-measure and widen — this is a deliberate boundary, not a permanent
-    /// one.
-    fn elem_fields_are_scalar_or_direct_heap(&self, struct_name: &str) -> bool {
-        let Some(ftes) = self.struct_field_type_exprs.get(struct_name) else {
-            return false;
-        };
-        ftes.iter().all(|fte| {
-            if super::vec_method::is_trivially_copyable_te(fte) || self.is_string_type_expr(fte) {
-                return true;
-            }
-            // `Vec[T]` for a scalar or `String` element — one buffer plus, at
-            // most, one level of buffers under it, which is the deepest shape
-            // this arm was measured on.
-            let TypeKind::Path(p) = &fte.kind else {
-                return false;
-            };
-            if p.segments.last().map(String::as_str) != Some("Vec") {
-                return false;
-            }
-            let Some(args) = p.generic_args.as_ref() else {
-                return false;
-            };
-            let [crate::ast::GenericArg::Type(inner)] = args.as_slice() else {
-                return false;
-            };
-            super::vec_method::is_trivially_copyable_te(inner) || self.is_string_type_expr(inner)
-        })
-    }
-
     /// B-2026-08-12-33 — is `arg` a whole-element read (`ps[i]`) handed to a
     /// parameter the CALLEE deep-copies at entry?
     ///
@@ -11237,6 +11190,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// buffers, so the callee's scope-exit drop already frees what this would
     /// free again. Excluding it is the whole reason this asks for the copy
     /// arm specifically rather than for "is the param callee-owned".
+    ///
+    /// B-2026-08-13-3 UPDATE — this arm shipped with a second, narrower gate
+    /// restricting the element's fields to scalars or a DIRECT buffer, because
+    /// `ds[0] = bump(ds[0])` over an element with a NESTED STRUCT field
+    /// double-freed before that row was fixed, and admitting the shape would
+    /// have meant reasoning from a property the program did not have. The
+    /// double free was a nested heap field moved out of an owned param without
+    /// its `cap` being zeroed — nothing to do with this predicate — and with it
+    /// fixed the shape re-measures clean (no invalid free, no leak, output
+    /// matching interp). The gate is therefore removed rather than left as
+    /// permanent scar tissue, and `Deep { inner: Pair, .. }` elements are
+    /// covered like any other.
     ///
     /// Free functions only, and the param's declared type must name the
     /// container's element struct exactly. A method would have to resolve the
@@ -11273,7 +11238,6 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.struct_types.contains_key(elem_name.as_str())
             || self.shared_types.contains_key(elem_name.as_str())
             || !self.aggregate_param_copy_supported_struct(elem_name, &mut Vec::new())
-            || !self.elem_fields_are_scalar_or_direct_heap(elem_name)
         {
             return false;
         }

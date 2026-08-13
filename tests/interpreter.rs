@@ -28229,6 +28229,44 @@ fn test_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-08-13-3 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_nested_field_move_out_of_owned_param_values_survive`, same source
+/// and expected string.
+///
+/// The interpreter never had the bug — it copies values and GCs memory, so a
+/// nested field move-out is just a read. That is exactly what makes it the
+/// oracle: the compiled leg's cap-zeroing has to reproduce these bytes, and
+/// pinning them here means a future change to the suppression cannot redefine
+/// "correct" to match itself.
+#[test]
+fn test_nested_field_move_out_of_owned_param_values() {
+    assert_eq!(
+        run("             struct Pair { word: String, n: i64 }\n\
+             struct Deep { inner: Pair, tag: i64 }\n\
+             struct Outer { mid: Deep, label: String }\n\
+             fn ret(d: Deep) -> String { d.inner.word }\n\
+             fn lit(d: Deep) -> Deep {\n\
+                 Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag }\n\
+             }\n\
+             fn bound(d: Deep) -> String { let s = d.inner.word; s }\n\
+             fn deeper(o: Outer) -> String { o.mid.inner.word }\n\
+             fn main() {\n\
+                 let k = 1;\n\
+                 println(ret(Deep { inner: Pair { word: f\"a{k}\", n: 1 }, tag: 2 }));\n\
+                 let grown = lit(Deep { inner: Pair { word: f\"b{k}\", n: 3 }, tag: 4 });\n\
+                 println(grown.inner.word);\n\
+                 println(grown.inner.n);\n\
+                 println(bound(Deep { inner: Pair { word: f\"d{k}\", n: 7 }, tag: 8 }));\n\
+                 let o = Outer {\n\
+                     mid: Deep { inner: Pair { word: f\"e{k}\", n: 9 }, tag: 10 },\n\
+                     label: f\"L{k}\",\n\
+                 };\n\
+                 println(deeper(o));\n\
+             }"),
+        "a1\nb1\n4\nd1\ne1\n"
+    );
+}
+
 /// B-2026-08-12-33 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_index_assign_call_rhs_carrying_container_heap_values_survive`,
 /// same source and expected string.
