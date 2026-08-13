@@ -28229,6 +28229,46 @@ fn test_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-08-13-4 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_nested_vec_elem_field_read_is_a_copy`, same source and expected
+/// string.
+///
+/// This leg is the ORACLE in the strongest sense for this row: the compiled
+/// fix exists precisely to make codegen agree with what the interpreter has
+/// always done — a field read off a container element is a COPY, so the
+/// element still holds its value afterwards. Pinning the bytes here means a
+/// future move-model shortcut has to disagree with this file to land.
+#[test]
+fn test_nested_vec_elem_field_read_is_a_copy() {
+    assert_eq!(
+        run("struct Pair { word: String, n: i64 }\n\
+             struct Deep { inner: Pair, tag: i64 }\n\
+             struct Outer { mid: Deep, label: String }\n\
+             fn main() {\n\
+                 let k = 1;\n\
+                 let mut ds: Vec[Deep] = Vec.new();\n\
+                 ds.push(Deep { inner: Pair { word: f\"a{k}\", n: 7 }, tag: 8 });\n\
+                 let bound = ds[0].inner.word;\n\
+                 println(bound);\n\
+                 println(ds[0].inner.word);\n\
+                 let mut out: Vec[String] = Vec.new();\n\
+                 out.push(ds[0].inner.word);\n\
+                 println(out[0]);\n\
+                 println(ds[0].inner.word);\n\
+                 println(ds[0].inner.n);\n\
+                 let mut xs: Vec[Outer] = Vec.new();\n\
+                 xs.push(Outer {\n\
+                     mid: Deep { inner: Pair { word: f\"b{k}\", n: 9 }, tag: 10 },\n\
+                     label: f\"L{k}\",\n\
+                 });\n\
+                 let deep = xs[0].mid.inner.word;\n\
+                 println(deep);\n\
+                 println(xs[0].mid.inner.word);\n\
+             }"),
+        "a1\na1\na1\na1\n7\nb1\nb1\n"
+    );
+}
+
 /// B-2026-08-13-3 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_nested_field_move_out_of_owned_param_values_survive`, same source
 /// and expected string.

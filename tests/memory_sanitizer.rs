@@ -20895,6 +20895,77 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-4 — a NESTED heap field read off a Vec ELEMENT
+    /// (`ds[0].inner.word`) is deep-cloned at the read, so it no longer
+    /// double-frees.
+    ///
+    /// The one-level sibling is B-2026-08-12-27: `ps[0].word` loads a
+    /// `{ptr,len,cap}` ALIAS of the container's buffer, so every owning
+    /// destination shared one pointer with the element and both freed it. Its
+    /// clone is gated on the field sitting DIRECTLY on the element struct, so
+    /// a field of a field slipped through with the identical alias.
+    ///
+    /// CLONING RATHER THAN MOVING is inherited from that row and is the whole
+    /// reason this is not fixed by cap-zeroing the element: the semantics is a
+    /// COPY. `karac check` accepts reading `ds[0].inner.word` after binding it
+    /// and the interpreter still has the value, so a move model would trade
+    /// this double free for a silent use-after-free — the alternative -27
+    /// measured and rejected. Every leg here reads the element again AFTER
+    /// consuming the field, which is what pins that.
+    ///
+    /// THE LEGS ARE THE CONSUMING DESTINATIONS the alias escaped into, each
+    /// reaching the clone by a different route: a `let` binding, `Vec.push`, a
+    /// call argument, and a struct-literal field. `xs` carries the read TWO
+    /// hops deep (`xs[0].mid.inner.word`) since the walk is a loop, and the
+    /// `ps` leg is the one-level form — already correct, kept here so a
+    /// refactor cannot fix the nested case and lose its sibling.
+    #[test]
+    fn asan_nested_vec_elem_field_read_cloned_not_aliased() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { word: String, n: i64 }
+struct Deep { inner: Pair, tag: i64 }
+struct Outer { mid: Deep, label: String }
+fn sink(s: String) -> String { s + "!" }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 20 {
+        let mut ds: Vec[Deep] = Vec.new();
+        ds.push(Deep { inner: Pair { word: f"a{k + i}", n: 1 }, tag: 2 });
+        let bound = ds[0].inner.word;
+        acc = acc + bound.len();
+        let mut out: Vec[String] = Vec.new();
+        out.push(ds[0].inner.word);
+        acc = acc + out[0].len();
+        let passed = sink(ds[0].inner.word);
+        acc = acc + passed.len();
+        let held = Pair { word: ds[0].inner.word, n: 9 };
+        acc = acc + held.word.len() + held.n;
+        let still = ds[0].inner.word;
+        acc = acc + still.len();
+        let mut xs: Vec[Outer] = Vec.new();
+        xs.push(Outer {
+            mid: Deep { inner: Pair { word: f"b{k + i}", n: 3 }, tag: 4 },
+            label: f"L{k + i}",
+        });
+        let deep = xs[0].mid.inner.word;
+        acc = acc + deep.len();
+        let mut ps: Vec[Pair] = Vec.new();
+        ps.push(Pair { word: f"c{k + i}", n: 5 });
+        let flat = ps[0].word;
+        acc = acc + flat.len() + ps[0].word.len();
+        i = i + 1;
+    }
+    println(acc > 0);
+}
+"#,
+            &["true"],
+            "nested_vec_elem_field_read_cloned_not_aliased",
+        );
+    }
+
     /// B-2026-08-13-3 — a NESTED heap field moved out of an owned by-value
     /// aggregate param no longer double-frees.
     ///

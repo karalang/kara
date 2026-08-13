@@ -22936,6 +22936,51 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_nested_vec_elem_field_read_is_a_copy() {
+        // B-2026-08-13-4's VALUE side, and the reason the fix is a CLONE rather
+        // than a move: after `let bound = ds[0].inner.word`, the ELEMENT still
+        // has its string. That is what `karac check` accepts and what the
+        // interpreter does, so cap-zeroing the element instead — the cheaper
+        // fix — would have turned a double free into a silent use-after-free.
+        // Every leg reads the element back after consuming the field, which is
+        // the assertion that rules that shortcut out.
+        //
+        // `ds[0].inner.n` is read after the four string consumptions: the
+        // scalar sibling of the cloned field must be untouched, which a clone
+        // emitted at the wrong offset would corrupt.
+        assert_eq!(
+            run_program(
+                "struct Pair { word: String, n: i64 }\n\
+                 struct Deep { inner: Pair, tag: i64 }\n\
+                 struct Outer { mid: Deep, label: String }\n\
+                 fn main() {\n\
+                     let k = 1;\n\
+                     let mut ds: Vec[Deep] = Vec.new();\n\
+                     ds.push(Deep { inner: Pair { word: f\"a{k}\", n: 7 }, tag: 8 });\n\
+                     let bound = ds[0].inner.word;\n\
+                     println(bound);\n\
+                     println(ds[0].inner.word);\n\
+                     let mut out: Vec[String] = Vec.new();\n\
+                     out.push(ds[0].inner.word);\n\
+                     println(out[0]);\n\
+                     println(ds[0].inner.word);\n\
+                     println(ds[0].inner.n);\n\
+                     let mut xs: Vec[Outer] = Vec.new();\n\
+                     xs.push(Outer {\n\
+                         mid: Deep { inner: Pair { word: f\"b{k}\", n: 9 }, tag: 10 },\n\
+                         label: f\"L{k}\",\n\
+                     });\n\
+                     let deep = xs[0].mid.inner.word;\n\
+                     println(deep);\n\
+                     println(xs[0].mid.inner.word);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("a1\na1\na1\na1\n7\nb1\nb1\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_nested_field_move_out_of_owned_param_values_survive() {
         // B-2026-08-13-3's VALUE side. Moving a nested heap field out of an
         // owned by-value param now zeroes that field's `cap` in the source, so

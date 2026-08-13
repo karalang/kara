@@ -3003,13 +3003,27 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::FieldAccess { object, field } = &expr.kind else {
             return Ok(val);
         };
-        let ExprKind::Index {
-            object: container,
-            index,
-        } = &object.kind
-        else {
-            return Ok(val);
+        // B-2026-08-13-4 — the read may be NESTED (`ds[0].inner.word`), so walk
+        // the field hops down to the `Index` root instead of requiring the
+        // element itself to carry the field. A nested read aliases the
+        // container's buffer for exactly the same reason a direct one does —
+        // the load copies a `{ptr,len,cap}` out of storage the Vec owns — and
+        // it double-freed in every consuming position (`let w = …`,
+        // `out.push(…)`) while a non-consuming read (`println(ds[0].inner.word)`)
+        // was fine, which is the same split the one-level row measured.
+        let mut hops: Vec<&str> = Vec::new();
+        let mut cur = object.as_ref();
+        let (container, index) = loop {
+            match &cur.kind {
+                ExprKind::Index { object, index } => break (object, index),
+                ExprKind::FieldAccess { object, field } => {
+                    hops.push(field.as_str());
+                    cur = object.as_ref();
+                }
+                _ => return Ok(val),
+            }
         };
+        hops.reverse();
         if matches!(&index.kind, ExprKind::Range { .. }) {
             return Ok(val);
         }
@@ -3033,13 +3047,43 @@ impl<'ctx> super::Codegen<'ctx> {
         let TypeKind::Path(ep) = &elem_te.kind else {
             return Ok(val);
         };
-        let Some(sname) = ep.segments.last().cloned() else {
+        let Some(mut sname) = ep.segments.last().cloned() else {
             return Ok(val);
         };
         if !self.struct_types.contains_key(sname.as_str())
             || self.shared_types.contains_key(sname.as_str())
         {
             return Ok(val);
+        }
+        // Each intermediate hop must itself be a non-shared user struct held by
+        // VALUE in its parent, so the final field's buffer really is owned by
+        // the container's element and freeing it twice is the hazard. A hop
+        // through a `shared` handle, an `Option`, an enum or a `Vec` is a
+        // different owner with its own machinery — decline and leave those
+        // exactly as they are.
+        for hop in hops {
+            let Some(next) = self
+                .struct_field_names
+                .get(sname.as_str())
+                .and_then(|names| names.iter().position(|n| n == hop))
+                .and_then(|i| {
+                    self.struct_field_type_exprs
+                        .get(sname.as_str())
+                        .and_then(|tes| tes.get(i))
+                })
+                .and_then(|te| match &te.kind {
+                    TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                })
+            else {
+                return Ok(val);
+            };
+            if !self.struct_types.contains_key(next.as_str())
+                || self.shared_types.contains_key(next.as_str())
+            {
+                return Ok(val);
+            }
+            sname = next;
         }
         let Some(idx) = self
             .struct_field_names
