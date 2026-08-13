@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 241 | 1 |
+| miscompile | 242 | 1 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 108 | 1 |
-| codegen-gap | 105 | 0 |
+| codegen-gap | 106 | 1 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 837 | 1 |
-| typecheck | 162 | 1 |
+| codegen | 839 | 2 |
+| typecheck | 162 | 0 |
 | interp | 142 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1161 surfaced · 2 open · 1147 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1163 surfaced · 3 open · 1148 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-15 | 2026-08-13 | typecheck+codegen | high | SILENT WRONG ANSWER: `Set[i64].contains(x)` called with a NARROWER integer (a `u8` from `String.bytes()`) returns false for an element that IS present, under BOTH compiled backends, while the interpreter answers correctly. The typechecker accepts the width mismatch it rejects in arithmetic, and codegen then stores the narrow value into an elem_ty-sized slot without converting it, so the erased runtime probe hashes the undefined high bytes. | src/codegen/collections.rs Set `contains` arm (~L323-360): `compile_expr(&args[0].value)` then `build_store(elem_slot, elem_val)` into a `create_entry_alloca(.., elem_ty)` slot, with the mono fast path gated on `elem_val.get_type() == elem_ty`. Same alloca-and-store shape in the `insert` arm (~L116). Upstream question is whether typecheck should reject the mismatch at all — see DESIGN CALL in detail. |
 | B-2026-08-13-16 | 2026-08-13 | interp | medium | The INTERPRETER aliases a struct binding: `let mut t = a; t.lines.push(x)` is visible through `a`, where JIT and AOT both copy. No field access is involved, so this is not the field-move family -- it is the whole-value rebinding, and here the COMPILED backends are on the design-correct answer | the tree-walk interpreter's `let` binding of a non-shared STRUCT value — it installs an alias where both compiled backends install a copy |
+| B-2026-08-13-17 | 2026-08-13 | codegen | medium | An ANNOTATED tuple binding ignores its annotation: `let t: (i64, i64) = (b, d)` with `b: u8` / `d: u32` lays the aggregate out from the element VALUES (`{i8, i32}`) while every read trusts the annotation, so `t.0` sign-extends and prints 200 as -56 on both compiled backends. The UNANNOTATED form of the same tuple is correct. | src/codegen/expr_ops.rs `compile_tuple` (~L22): the struct type is built from `vals.iter().map(|v| v.get_type())`, ignoring any annotated tuple TypeExpr; the read side resolves element types via `place_chain_tuple_tes`, which uses the annotation. |
+| B-2026-08-13-18 | 2026-08-13 | codegen | medium | An implicit int-to-FLOAT widening emits INVALID IR and fails module verification at three boundaries -- a struct-literal field, a field assignment, and a call argument -- so `struct W { mut f: f64 }` with `W { f: some_u8 }` does not compile at all, while the same conversion through an annotated `let` or a `Vec[f64]` element is fine. | src/codegen/expr_ops.rs `coerce_scalar_to_type_unsigned` (~L6880): matches (IntValue, IntType) and (FloatValue, FloatType) only; `(IntValue, FloatType)` falls through to `_ => val`. |
 
 ### Wontfix (2)
 
@@ -144,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1161 surfaced
 
 </details>
 
-### Fixed (1147)
+### Fixed (1148)
 
-<details><summary>1147 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1148 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4653,6 +4654,111 @@ field (`b.n`) that must NOT change, since the disarm skip is per-field; and the
 disarm sites already skip a borrowed root) and stay clean. The fixtures build
 their payloads at runtime — a string LITERAL is static with `cap == 0` and
 hides every failure in this family. |
+| B-2026-08-13-15 | typecheck+codegen | high | SILENT WRONG ANSWER: `Set[i64].contains(x)` called with a NARROWER integer (a `u8` from `String.bytes()`) returns false for an element that IS presen… | FIXED by 675494c. Codegen now performs the implicit widening coercion the
+typechecker authorizes, with the SOURCE's signedness, at every boundary that
+had it wrong.
+
+THE ROW'S DESIGN CALL IS ALREADY DECIDED BY THE LANGUAGE, and not the way the
+row framed it. It offered (a) reject at typecheck, on the grounds that
+accepting a width mismatch at a container argument is inconsistent with the
+arithmetic rule, or (b) coerce in codegen. But the two rules are DELIBERATELY
+different: `check_int_widening_coercion` (typechecker/exprs.rs, B-2026-07-09-7
+decision B) rejects only NARROWING, and its own diagnostic states the rule out
+loud -- "widening coercions such as i32 -> i64 remain implicit". Measured:
+`t8(big_i64)` is refused with that message, `t64(some_u8)` is accepted. So
+option (a) would have deleted a documented feature; the bug is that codegen did
+not implement what the typechecker promised. Option (b), and no typechecker
+change.
+
+THE SCOPE IS MUCH WIDER THAN THE ROW, AND THE ROW'S SCOPE TABLE IS WRONG. It
+lists `insert(u8)`, `remove(u8)`, `Vec.contains(u8)` and `Map.contains_key(u8)`
+as correct. They are not. The table was probed with 97, and 97 is the one place
+the bug cannot show: sext and zext agree below 128, and the undefined high
+bytes happened to be zero. Re-probed with the high bit SET (200u8, 60000u16,
+4000000000u32), 14 of 15 shapes were wrong, the interpreter right on all 15:
+
+                              interp    JIT      AOT -O0   AOT -O2
+  fn arg u8->i64               200      -56       -56       -56
+  fn arg u32->i64        4000000000  -294967296 -294967296 -294967296
+  return u8->i64               200      -56       -56       -56
+  let x: i64 = b               200      -56       -56       -56
+  struct field init            200      -56       -56       -56
+  Vec.push                     200      -56       -56       -56
+  vec literal element          200      -56       -56       -56
+  Set.insert then contains    true     true      FALSE     false
+  Set.contains(u8)            true     TRUE      false     false
+  Set.remove -> len              0        0          1         0
+  Map.get_or after insert        7        7          0         0
+  Map.contains_key(u8)        true    false      false     false
+
+TWO DISTINCT DEFECTS, one root cause. The first is DETERMINISTIC: the boundary
+coercion `coerce_scalar_to_type` sign-extended unconditionally, on a documented
+premise ("legal programs only widen via explicit `as`, which carries its own
+signedness") that the widening-coercion rule had already falsified. That one
+reaches the plainest call in the language -- `fn f(v: i64)` given a `u8`. The
+second is the row's: the container element/key paths did not coerce AT ALL,
+storing a narrow value into an `elem_ty`-sized alloca and leaving the high
+bytes UNDEFINED for the erased runtime to hash. Look at the last five rows
+above: the answer depends on the BACKEND and on the OPTIMIZATION LEVEL, which
+is the signature of reading undefined memory and is the reason the row's own
+repro reproduced for me under the JIT but not at -O2.
+
+FIX SHAPE. `coerce_scalar_to_type_from(val, target, src_expr)` picks zext or
+sext from `expr_is_unsigned_int(src)`, which already existed for the print
+path. That predicate returns FALSE for anything it cannot resolve, so every
+unresolved source keeps the historical sext and the change is confined to
+sources positively known to be unsigned -- a bounded blast radius rather than a
+hopeful one. Sites converted: user/extern call args (coerced per-argument at
+the push, where the expression is still in hand, indexed by
+`compiled_args.len()` so value and source cannot drift), tail and explicit
+returns, annotated `let` slots (which were sized from the RHS, so
+`let x: i64 = b` allocated ONE BYTE), struct-literal fields, field assignment,
+Vec push/insert/index-assign and collection literals, Set
+insert/try_insert/contains/remove, Map insert/try_insert/get/get_or/remove/
+contains_key and both index forms. Coercing the container element also lets the
+scalar MONO fast path fire, which the mismatch had been diverting away from --
+straight into the erased path that is sensitive to the undefined bytes.
+
+ONE FIX IS A READ, NOT A WRITE, and worth separating: `t.0` off a tuple. A
+tuple's LLVM type is built from its element VALUES, so `(b, d)` is a
+`{i8, i32}` and the stored bytes were always right; the widening on the way out
+sign-extended because `expr_is_unsigned_int` had no `TupleIndex` arm. Same
+shape as the field-held-container arm B-2026-08-11 added, and the same fix.
+
+VERIFIED: 27 shapes across two probe programs, all four execution paths
+(interpreter, LLJIT, AOT -O0, AOT -O2) agreeing exactly. The row's own repro is
+right on all four. Kata #266's natural spelling -- `for b in s.bytes() { if
+odd.contains(b) { odd.remove(b) } else { odd.insert(b) } }` -- now agrees with
+the interpreter on all four; pre-fix it printed `aab -> false` at -O0 while
+being correct at -O2 and under the JIT.
+
+TWO REMAINDERS FILED RATHER THAN FOLDED IN, both measured, neither a
+regression from this change:
+
+  * B-2026-08-13-17 -- the ANNOTATED tuple (`let t: (i64, i64) = (b, d)`)
+    is still wrong, because the aggregate is laid out from the values while
+    the read trusts the annotation. Its fix is a different mechanism (carry
+    the annotation into `compile_tuple`), not another coercion site. The
+    unannotated form is fixed here.
+  * B-2026-08-13-18 -- int->FLOAT implicit widening emits INVALID IR
+    (`insertvalue { i64, double } …, i8 %b, 1`) at three boundaries. Confirmed
+    present pre-fix, so it is pre-existing; it is a hard verification failure
+    rather than a wrong answer, and its fix is one leg in the shared helper.
+
+PINNED by two E2E tests against the interpreter oracle.
+`test_e2e_implicit_unsigned_widening_matches_interpreter` covers 20 shapes and
+fails on 14 lines against the pre-fix compiler; it also asserts the ORACLE
+carries widened values, so it cannot pass by both sides being wrong.
+`test_e2e_byte_parity_set_matches_interpreter` carries kata #266's shape --
+with an explicit note that at the harness's default opt level this one was
+GREEN pre-fix and only went red at -O0, so it documents the real-world shape
+while the sibling is the deterministic guard. Saying which is which beats
+implying both are guards.
+
+Suite green with `--features llvm` (13567 passed, 0 failed). The ASAN -O0 leg
+was run too, because coercing the container element changes what gets staged
+into the element slot: 1064 passed, 0 failed, quarantine list matched exactly.
+Clippy `--all --all-targets --features llvm` and fmt clean. |
 
 </details>
 
