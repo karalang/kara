@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 126 | 1 |
 | codegen-gap | 105 | 0 |
 | run-vs-build | 104 | 0 |
-| missing-feature | 94 | 1 |
+| missing-feature | 95 | 1 |
 | perf | 64 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 52 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 830 | 2 |
-| typecheck | 160 | 1 |
-| interp | 138 | 0 |
+| codegen | 831 | 2 |
+| typecheck | 161 | 1 |
+| interp | 139 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1151 surfaced · 2 open · 1137 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1152 surfaced · 2 open · 1138 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-34 | 2026-08-13 | typecheck+codegen | medium | A user trait `impl` on `Slice[T]` / `Map` / `Set` is still not callable, and `Map`'s is check-green with BOTH compiled backends dead. B-2026-08-12-32 fixed `String` end-to-end; these are the receivers whose call-site gate and codegen fallthrough it deliberately did not add. | — |
 | B-2026-08-13-6 | 2026-08-13 | codegen | high | A heap field read through a SHARED-struct hop off a Vec element double-frees: `shared struct Inner { word: String }` inside `struct Holder { inner: Inner, .. }`, then `let w = hs[0].inner.word` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string | the per-hop gate in `clone_vec_elem_heap_field_read` (src/codegen/collections.rs) meets the RC machinery — a `shared` hop declines there by design |
+| B-2026-08-13-7 | 2026-08-13 | typecheck+interp+codegen | medium | Two remainders of user trait impls on builtin containers: a trait-BOUND call over a `Map` is still check-green with both compiled backends dead, and `Slice[T]` is still not callable at all. Both were implemented during B-2026-08-12-34 and REVERTED after measurement -- each produced a WORSE failure than the one it replaced. | — |
 
 ### Wontfix (2)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1151 surfaced
 
 </details>
 
-### Fixed (1137)
+### Fixed (1138)
 
-<details><summary>1137 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1138 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4004,6 +4004,65 @@ this change and filed as their own rows rather than folded in here:
     escapes into an owning destination anyway, so declining is not safe there
     either. That reasoning needs revisiting on its own terms, which is why it is
     a row and not a line in this one. |
+| B-2026-08-12-34 | typecheck+codegen | medium | A user trait `impl` on `Slice[T]` / `Map` / `Set` is still not callable, and `Map`'s is check-green with BOTH compiled backends dead | FIXED by ec1d19c for `Map` and `Set` DIRECT dispatch, which now agrees across
+all four surfaces (`karac check`, `--interp`, `run` (JIT), `build`). The
+trait-BOUND path and `Slice[T]` are NOT fixed and are filed on; both were
+implemented, measured wrong, and reverted, which is the useful content of this
+close.
+
+THREE SITES, ONE PER SURFACE, each the peer of a fix the parent row already
+made for `String`/`Vec`:
+
+  * TYPECHECK — the `Map`/`Set` early returns into `infer_map_method` /
+    `infer_set_method` were unconditional. They now consult the impl table for
+    names the builtin surface does not answer, with builtin precedence, so
+    `m.len()` cannot be hijacked by a user impl defining `len`.
+  * INTERPRETER — `value_type_name` named every other builtin container
+    (`Set`, `Vec`, `Column`, `Tensor`), each entry carrying a comment about
+    this exact "type 'unknown'" no-dispatch-arm failure, and simply did not
+    name `Map`. One line. It is also the whole reason `Set`'s bound dispatch
+    already worked while `Map`'s did not — a detail the row recorded as a
+    puzzle ("`Set` works end-to-end, `Map` does not") without its cause.
+  * CODEGEN — `compile_map_method` / `compile_set_method` now fall through to
+    user-impl dispatch when the builtin dispatcher has no arm and a
+    `Map.<m>` / `Set.<m>` fn was emitted, exactly as the blanket-`Vec` path does.
+
+THE BOUND PATH: IMPLEMENTED, MEASURED WRONG, REVERTED — and this is the part
+worth reading before anyone retries it. Routing a monomorphized `ref T`
+receiver through the Vec/String user-impl fallthrough makes the bound call
+build, and it returns the WRONG IMPL as soon as a second one exists: with both
+`impl Zero for Map` and `impl Zero for Set` in scope, `show(set)` printed the
+Map's answer (`m s m m` compiled against `m s m s` from the interpreter).
+
+The cause is structural, not a missing arm: that fallthrough hands off to a
+generic dispatch driven by `inferred_receiver_type`, which reads
+`var_type_names` — and inside `fn show[T: Zero](x: ref T)` the receiver
+resolves to ONE type name, so a single compiled body serves every
+instantiation and picks one impl for all of them. Fixing it wants real
+per-receiver monomorphization (or dynamic dispatch), not another fallthrough.
+
+So `Map`'s bound path is left as the pre-existing check-green / backends-dead
+divergence this row reported. That is unchanged rather than fixed, and it is
+the right trade at this site: a wrong answer is worse than a loud build error.
+Found only because the E2E test put BOTH impls in one program; every earlier
+probe had a single impl and passed.
+
+`Slice[T]` STAYS OUT for a second, different reason. Its typecheck half
+(registration + `impl_table_key` + call-site gate) and its codegen fallthrough
+were implemented and worked — direct dispatch built and ran — but `--interp`
+then failed on the same program, because the interpreter names a slice receiver
+`Vec` (it models `v[..]` as an array value), so an impl registered under
+`Slice` is never found. That is a run-vs-build divergence in the OPPOSITE
+direction from the one the parent row fixed, and a consistent compile error
+beats either. `test_user_trait_impl_on_slice_still_rejected_second_guard` pins
+it; the parent row's guard pins the same boundary from the other side.
+
+MEASURED, direct dispatch, before -> after (check / interp / JIT / build):
+
+  Map   ERR/ERR/ERR/ERR  ->  ok/z/z/z
+  Set   ERR/ERR/ERR/ERR  ->  ok/z/z/z
+  String, Vec, i64       ->  unchanged, all four green (regression controls)
+  Slice ERR/ERR/ERR/ERR  ->  unchanged, still consistently rejected |
 | B-2026-08-13-5 | codegen | high | A heap field read off a SLICE element double-frees at ANY depth: `fn take(xs: Slice[Pair]) -> String { xs[0].word }` aborts with `free(): double free… | FIXED by f005e16. Both containers are clean on both compiled backends with output
 matching the interpreter, and the ASAN pin fails without the code change.
 
