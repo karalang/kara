@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 241 | 1 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 107 | 1 |
+| run-vs-build | 108 | 1 |
 | codegen-gap | 105 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 837 | 2 |
+| codegen | 837 | 1 |
 | typecheck | 162 | 1 |
-| interp | 141 | 1 |
+| interp | 142 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1160 surfaced · 2 open · 1146 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1161 surfaced · 2 open · 1147 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-14 | 2026-08-13 | interp+codegen | high | Binding a NESTED STRUCT field (`let mut t = b.a;`) EMPTIES the source under both compiled backends while the interpreter treats it as an ALIAS: codegen prints the copy's contents and `0` for the source, interp prints the same value twice. Neither backend implements the COPY the language's field-read semantics call for, and they disagree with each other | the struct-field binding path — the source-side cap-zeroing that makes `let t = b.a` a MOVE in codegen, against the interpreter's alias |
 | B-2026-08-13-15 | 2026-08-13 | typecheck+codegen | high | SILENT WRONG ANSWER: `Set[i64].contains(x)` called with a NARROWER integer (a `u8` from `String.bytes()`) returns false for an element that IS present, under BOTH compiled backends, while the interpreter answers correctly. The typechecker accepts the width mismatch it rejects in arithmetic, and codegen then stores the narrow value into an elem_ty-sized slot without converting it, so the erased runtime probe hashes the undefined high bytes. | src/codegen/collections.rs Set `contains` arm (~L323-360): `compile_expr(&args[0].value)` then `build_store(elem_slot, elem_val)` into a `create_entry_alloca(.., elem_ty)` slot, with the mono fast path gated on `elem_val.get_type() == elem_ty`. Same alloca-and-store shape in the `insert` arm (~L116). Upstream question is whether typecheck should reject the mismatch at all — see DESIGN CALL in detail. |
+| B-2026-08-13-16 | 2026-08-13 | interp | medium | The INTERPRETER aliases a struct binding: `let mut t = a; t.lines.push(x)` is visible through `a`, where JIT and AOT both copy. No field access is involved, so this is not the field-move family -- it is the whole-value rebinding, and here the COMPILED backends are on the design-correct answer | the tree-walk interpreter's `let` binding of a non-shared STRUCT value — it installs an alias where both compiled backends install a copy |
 
 ### Wontfix (2)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1160 surfaced
 
 </details>
 
-### Fixed (1146)
+### Fixed (1147)
 
-<details><summary>1146 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1147 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4573,6 +4573,86 @@ did not exist before, so the envelope assertions cannot pass against it either.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-13-14 | interp+codegen | high | Binding a NESTED STRUCT field (`let mut t = b.a;`) EMPTIES the source under both compiled backends while the interpreter treats it as an ALIAS: codeg… | FIXED by 7994156. The row's own repro now reads the source's contents on all
+three surfaces, and the ASAN pin fails without the code change.
+
+THE ROW'S FRAMING WAS ONE MEASUREMENT SHORT, and the missing one changes the
+fix. It said "NEITHER backend is the oracle here and the fix needs the
+semantics settled first". Probing the scope it listed settled it: the
+interpreter IS the oracle for a READ, and the compiled backends were the only
+thing wrong.
+
+  let t = b.a;    println(t.lines.len()); let u = b.a; println(u.lines.len())
+      interp 1 1        build 1 0        copy semantics 1 1
+  let t = b.a;    println(t.name);        let u = b.a; println(u.name)
+      interp hi hi      build hi ""      copy semantics hi hi
+
+Every no-mutation probe has the interpreter on the copy-semantics answer. The
+`2 2` vs `2 1` the row quotes comes from the PUSH in its repro, not from the
+field bind — and that half is not this bug. A WHOLE-STRUCT rebinding with no
+field access anywhere (`let mut t = a; t.lines.push("y")`) diverges identically
+(interp 2 2, build 2 1, with the build on the design-correct answer), so the
+interpreter's mutation-through-a-binding aliasing is a separate, wider
+behaviour. Filed as its own row.
+
+THE COMPILER ALREADY DIAGNOSED THIS, WHICH IS THE ACTUAL FINDING. The row says
+"`karac check` is silent on all of it". It is not: the ownership pass reports
+`UseAfterMove` on every one of these programs, with the right spans and a
+machine-applicable `.clone()`. It is ADVISORY — excluded from `total_errors`
+and from the build gate — on a documented promise, quoted from
+`cli.rs::is_fatal_ownership_kind`: "codegen defensive-copies the reuse, so the
+binary is memory-safe". B-2026-08-10-21 built the machinery that makes that
+true: a deep copy at the consume site, plus a matching skip of the source
+disarm, the two keyed on `uam_copied_sites` so they cannot drift apart.
+
+The promise was FALSE at a FIELD-ACCESS consume site. `uam_defensive_copy`
+opens with `let ExprKind::Identifier(name) = &expr.kind else { return val }`, so
+`let t = b.a` fell straight through uncopied — while the source disarm ran
+anyway, leaving one buffer with two readers and one owner. A gap in REACH, not
+a difference in ownership: the same shape as B-2026-08-13-3, -13-4, -13-5,
+-13-6 and -13-11 earlier in this cluster. The parser gives a `FieldAccess` its
+OBJECT's span verbatim, so the flagged `b` and the `b.a` that reads it already
+shared one span key — the set was right, only the match arm was narrow.
+
+THE DEPTH-1 SPELLING IS A USE-AFTER-FREE, and it is worse than what the row
+measured. The row asked "whether the source's emptiness is observable as a
+use-after-free rather than just a wrong length". At depth 2 it is not — zeroing
+`len` (which `zero_struct_move_caps_mono` must do; B-2026-07-10-1's rc-dec walk
+is len-driven and not under the `cap` guard) makes the source read a safe,
+plausible `0`. At DEPTH 1 only `cap` is zeroed, so the source keeps a live
+`{ptr,len}` into the buffer the new binding owns:
+
+    let mut t = a.lines;            // a.lines keeps {ptr, len}, cap = 0
+    while i < 2000 { t.push(q) }    // realloc frees that allocation
+    println(a.lines[0]);            // reads freed memory, prints "x", exits 0
+
+valgrind: `Invalid read of size 8 … free'd by realloc`. `karac check` clean, no
+crash, right answer printed. One push was not enough — the allocator grew the
+block in place and the program was accidentally clean, which is how this stayed
+invisible; the pin uses 2000.
+
+That measurement is also what ruled out the obvious alternative fix. Making the
+nested bind preserve `len` — so the source reads `1` instead of `0` — would
+have traded the silent emptiness for the silent use-after-free depth 1 already
+had. The copy fixes both.
+
+COVERAGE IS PARTIAL ON PURPOSE, and monotone. The new arm copies a direct
+`{ptr,len,cap}` field (String / Vec / VecDeque) and a nested non-shared STRUCT
+field. A `Map`/`Set` handle, a `shared` handle, an `Option`/`Result` and an
+enum field are left exactly as they were — `uam_copied_sites` records only what
+was really copied and the disarm skip keys on that set, so an uncovered shape
+keeps today's behaviour instead of gaining a half-copy that would turn a wrong
+read into a double free. Same discipline B-2026-08-10-21 set for its own type
+axis, and for the same reason.
+
+MEASURED, interp / JIT / AOT / `KARAC_AUTO_PAR=0` all agreeing, valgrind and
+ASAN clean with no new leak: the row's repro; the nested, depth-1 and String
+spellings; the 2000-push realloc that made depth 1 a UAF; a scalar sibling
+field (`b.n`) that must NOT change, since the disarm skip is per-field; and the
+`ref B` parameter and `ref self` receiver forms, which never had the bug (the
+disarm sites already skip a borrowed root) and stay clean. The fixtures build
+their payloads at runtime — a string LITERAL is static with `cap == 0` and
+hides every failure in this family. |
 
 </details>
 
