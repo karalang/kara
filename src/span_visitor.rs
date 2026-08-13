@@ -36,6 +36,12 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         Item::Function(f) => visit_function(f, visit),
         Item::StructDef(s) => {
             visit(&s.span);
+            visit_generics(
+                s.generic_params.as_ref(),
+                &[],
+                s.where_clause.as_ref(),
+                visit,
+            );
             // The keyword spans the `par struct` migration's machine-applicable
             // edits are built from (`ownership/concurrent_shared.rs`). Missing
             // them here left them at file-local offsets under the multi-module
@@ -66,6 +72,12 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         }
         Item::EnumDef(e) => {
             visit(&e.span);
+            visit_generics(
+                e.generic_params.as_ref(),
+                &[],
+                e.where_clause.as_ref(),
+                visit,
+            );
             for v in &e.variants {
                 visit(&v.span);
                 match &v.kind {
@@ -86,10 +98,22 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         }
         Item::TraitDef(t) => {
             visit(&t.span);
+            visit_generics(
+                t.generic_params.as_ref(),
+                &t.supertraits,
+                t.where_clause.as_ref(),
+                visit,
+            );
             for ti in &t.items {
                 match ti {
                     crate::ast::TraitItem::Method(m) => {
                         visit(&m.span);
+                        visit_generics(
+                            m.generic_params.as_ref(),
+                            &[],
+                            m.where_clause.as_ref(),
+                            visit,
+                        );
                         // The `self` receiver's own token span — not covered by
                         // any `Param`, since the receiver is not one.
                         if let Some(sp) = &m.self_span {
@@ -113,15 +137,38 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
                     }
                     crate::ast::TraitItem::AssocType(a) => {
                         visit(&a.span);
+                        visit_generics(
+                            a.generic_params.as_ref(),
+                            &a.bounds,
+                            a.where_clause.as_ref(),
+                            visit,
+                        );
                     }
                 }
             }
         }
-        Item::TraitAlias(a) => visit(&a.span),
-        Item::MarkerTrait(m) => visit(&m.span),
+        Item::TraitAlias(a) => {
+            visit(&a.span);
+            visit_generics(
+                a.generic_params.as_ref(),
+                &a.bounds,
+                a.where_clause.as_ref(),
+                visit,
+            );
+        }
+        Item::MarkerTrait(m) => {
+            visit(&m.span);
+            visit_generics(
+                m.generic_params.as_ref(),
+                &m.supertraits,
+                m.where_clause.as_ref(),
+                visit,
+            );
+        }
         Item::ImplBlock(b) => visit_impl_block(b, visit),
         Item::EffectResource(r) => {
             visit(&r.span);
+            visit_generics(r.generic_params.as_ref(), &[], None, visit);
             if let Some(t) = &r.provider_trait_span {
                 visit(t);
             }
@@ -180,6 +227,7 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         }
         Item::TypeAlias(a) => {
             visit(&a.span);
+            visit_generics(a.generic_params.as_ref(), &[], None, visit);
             visit_type(&a.ty, visit);
             if let Some(r) = &a.refinement {
                 visit_expr(r, visit);
@@ -187,6 +235,7 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         }
         Item::DistinctType(d) => {
             visit(&d.span);
+            visit_generics(d.generic_params.as_ref(), &[], None, visit);
             visit_type(&d.base_type, visit);
             if let Some(r) = &d.refinement {
                 visit_expr(r, visit);
@@ -197,6 +246,12 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
 
 fn visit_function(f: &Function, visit: &mut impl FnMut(&Span)) {
     visit(&f.span);
+    visit_generics(
+        f.generic_params.as_ref(),
+        &[],
+        f.where_clause.as_ref(),
+        visit,
+    );
     for p in &f.params {
         visit_param(p, visit);
     }
@@ -214,12 +269,24 @@ fn visit_function(f: &Function, visit: &mut impl FnMut(&Span)) {
 
 fn visit_impl_block(b: &ImplBlock, visit: &mut impl FnMut(&Span)) {
     visit(&b.span);
+    visit_generics(
+        b.generic_params.as_ref(),
+        &[],
+        b.where_clause.as_ref(),
+        visit,
+    );
     visit_type(&b.target_type, visit);
     for ii in &b.items {
         match ii {
             ImplItem::Method(m) => visit_function(m, visit),
             ImplItem::AssocType(a) => {
                 visit(&a.span);
+                visit_generics(
+                    a.generic_params.as_ref(),
+                    &[],
+                    a.where_clause.as_ref(),
+                    visit,
+                );
                 visit_type(&a.ty, visit);
             }
         }
@@ -245,6 +312,120 @@ fn visit_type(t: &TypeExpr, visit: &mut impl FnMut(&Span)) {
     // pin a sub-region of a type expression. Deeper coverage (per
     // `TypeKind` variant) is a nice-to-have follow-up.
     visit(&t.span);
+}
+
+// ── Generics, bounds, where-clauses (B-2026-08-12-30) ────────────
+//
+// These were absent from the walker ENTIRELY — not a missing field but a
+// missing subtree: `generic_params`, `bounds`, `where_clause` and
+// `supertraits` appeared nowhere in either half, and `TraitBound` /
+// `WhereClause` were never named. Under `module.rs`'s multi-module rebase
+// every span around them shifted while they kept their FILE-LOCAL offsets,
+// which is exactly the condition that file's own comment warns about: "a span
+// this walk MISSES stays at its file-local offset and can still collide".
+//
+// Adding spans to the walk only WIDENS `module.rs`'s `max_end`, so this is
+// additive by construction rather than behaviour-altering.
+
+fn visit_generic_args(args: &[crate::ast::GenericArg], visit: &mut impl FnMut(&Span)) {
+    for a in args {
+        match a {
+            crate::ast::GenericArg::Type(t) => visit_type(t, visit),
+            crate::ast::GenericArg::Const(e) => visit_expr(e, visit),
+            crate::ast::GenericArg::Shape(s) => {
+                visit(&s.span);
+                for d in &s.dims {
+                    match d {
+                        crate::ast::ShapeDim::Const(e) => visit_expr(e, visit),
+                        crate::ast::ShapeDim::Dynamic { span }
+                        | crate::ast::ShapeDim::Splice { span, .. } => visit(span),
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn visit_trait_bound(b: &crate::ast::TraitBound, visit: &mut impl FnMut(&Span)) {
+    visit(&b.span);
+    if let Some(args) = &b.generic_args {
+        visit_generic_args(args, visit);
+    }
+}
+
+fn visit_generic_params(g: &crate::ast::GenericParams, visit: &mut impl FnMut(&Span)) {
+    visit(&g.span);
+    for p in &g.params {
+        visit(&p.span);
+        if let Some(v) = &p.variance_span {
+            visit(v);
+        }
+        if let Some(ct) = &p.const_type {
+            visit_type(ct, visit);
+        }
+        for b in &p.bounds {
+            visit_trait_bound(b, visit);
+        }
+    }
+    for ep in &g.effect_params {
+        visit(&ep.span);
+        for b in &ep.bounds {
+            visit_trait_bound(b, visit);
+        }
+    }
+}
+
+fn visit_where_clause(w: &crate::ast::WhereClause, visit: &mut impl FnMut(&Span)) {
+    visit(&w.span);
+    for c in &w.constraints {
+        match c {
+            crate::ast::WhereConstraint::TypeBound { bounds, span, .. } => {
+                visit(span);
+                for b in bounds {
+                    visit_trait_bound(b, visit);
+                }
+            }
+            crate::ast::WhereConstraint::AssocTypeEq { ty, span, .. } => {
+                visit(span);
+                visit_type(ty, visit);
+            }
+            crate::ast::WhereConstraint::ProjectionBound {
+                projection,
+                bounds,
+                span,
+            } => {
+                visit(span);
+                visit_type(projection, visit);
+                for b in bounds {
+                    visit_trait_bound(b, visit);
+                }
+            }
+            crate::ast::WhereConstraint::ConstPredicate { expr, span } => {
+                visit(span);
+                visit_expr(expr, visit);
+            }
+        }
+    }
+}
+
+/// The three-in-one call every generics-carrying item arm makes. Keeping it
+/// one helper is what makes the audit tractable: a new carrier needs one line,
+/// not three that can drift apart.
+fn visit_generics(
+    generic_params: Option<&crate::ast::GenericParams>,
+    bounds: &[crate::ast::TraitBound],
+    where_clause: Option<&crate::ast::WhereClause>,
+    visit: &mut impl FnMut(&Span),
+) {
+    if let Some(g) = generic_params {
+        visit_generic_params(g, visit);
+    }
+    for b in bounds {
+        visit_trait_bound(b, visit);
+    }
+    if let Some(w) = where_clause {
+        visit_where_clause(w, visit);
+    }
 }
 
 fn visit_block(b: &Block, visit: &mut impl FnMut(&Span)) {
@@ -1026,6 +1207,12 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
         Item::Function(f) => visit_function_mut(f, visit),
         Item::StructDef(s) => {
             visit(&mut s.span);
+            visit_generics_mut(
+                s.generic_params.as_mut(),
+                &mut [],
+                s.where_clause.as_mut(),
+                visit,
+            );
             // See the read-only arm: these three feed the `par struct`
             // migration's edits and must move with the rest.
             visit(&mut s.struct_keyword_span);
@@ -1052,6 +1239,12 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
         }
         Item::EnumDef(e) => {
             visit(&mut e.span);
+            visit_generics_mut(
+                e.generic_params.as_mut(),
+                &mut [],
+                e.where_clause.as_mut(),
+                visit,
+            );
             for v in &mut e.variants {
                 visit(&mut v.span);
                 match &mut v.kind {
@@ -1072,10 +1265,22 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
         }
         Item::TraitDef(t) => {
             visit(&mut t.span);
+            visit_generics_mut(
+                t.generic_params.as_mut(),
+                &mut t.supertraits,
+                t.where_clause.as_mut(),
+                visit,
+            );
             for ti in &mut t.items {
                 match ti {
                     crate::ast::TraitItem::Method(m) => {
                         visit(&mut m.span);
+                        visit_generics_mut(
+                            m.generic_params.as_mut(),
+                            &mut [],
+                            m.where_clause.as_mut(),
+                            visit,
+                        );
                         // See the read-only arm.
                         if let Some(sp) = &mut m.self_span {
                             visit(sp);
@@ -1098,15 +1303,38 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
                     }
                     crate::ast::TraitItem::AssocType(a) => {
                         visit(&mut a.span);
+                        visit_generics_mut(
+                            a.generic_params.as_mut(),
+                            &mut a.bounds,
+                            a.where_clause.as_mut(),
+                            visit,
+                        );
                     }
                 }
             }
         }
-        Item::TraitAlias(a) => visit(&mut a.span),
-        Item::MarkerTrait(m) => visit(&mut m.span),
+        Item::TraitAlias(a) => {
+            visit(&mut a.span);
+            visit_generics_mut(
+                a.generic_params.as_mut(),
+                &mut a.bounds,
+                a.where_clause.as_mut(),
+                visit,
+            );
+        }
+        Item::MarkerTrait(m) => {
+            visit(&mut m.span);
+            visit_generics_mut(
+                m.generic_params.as_mut(),
+                &mut m.supertraits,
+                m.where_clause.as_mut(),
+                visit,
+            );
+        }
         Item::ImplBlock(b) => visit_impl_block_mut(b, visit),
         Item::EffectResource(r) => {
             visit(&mut r.span);
+            visit_generics_mut(r.generic_params.as_mut(), &mut [], None, visit);
             if let Some(t) = &mut r.provider_trait_span {
                 visit(t);
             }
@@ -1165,6 +1393,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
         }
         Item::TypeAlias(a) => {
             visit(&mut a.span);
+            visit_generics_mut(a.generic_params.as_mut(), &mut [], None, visit);
             visit_type_spans_mut(&mut a.ty, visit);
             if let Some(r) = &mut a.refinement {
                 visit_expr_spans_mut(r, visit);
@@ -1172,6 +1401,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
         }
         Item::DistinctType(d) => {
             visit(&mut d.span);
+            visit_generics_mut(d.generic_params.as_mut(), &mut [], None, visit);
             visit_type_spans_mut(&mut d.base_type, visit);
             if let Some(r) = &mut d.refinement {
                 visit_expr_spans_mut(r, visit);
@@ -1182,6 +1412,12 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
 
 fn visit_function_mut(f: &mut Function, visit: &mut impl FnMut(&mut Span)) {
     visit(&mut f.span);
+    visit_generics_mut(
+        f.generic_params.as_mut(),
+        &mut [],
+        f.where_clause.as_mut(),
+        visit,
+    );
     for p in &mut f.params {
         visit_param_mut(p, visit);
     }
@@ -1199,12 +1435,24 @@ fn visit_function_mut(f: &mut Function, visit: &mut impl FnMut(&mut Span)) {
 
 fn visit_impl_block_mut(b: &mut ImplBlock, visit: &mut impl FnMut(&mut Span)) {
     visit(&mut b.span);
+    visit_generics_mut(
+        b.generic_params.as_mut(),
+        &mut [],
+        b.where_clause.as_mut(),
+        visit,
+    );
     visit_type_spans_mut(&mut b.target_type, visit);
     for ii in &mut b.items {
         match ii {
             ImplItem::Method(m) => visit_function_mut(m, visit),
             ImplItem::AssocType(a) => {
                 visit(&mut a.span);
+                visit_generics_mut(
+                    a.generic_params.as_mut(),
+                    &mut [],
+                    a.where_clause.as_mut(),
+                    visit,
+                );
                 visit_type_spans_mut(&mut a.ty, visit);
             }
         }
@@ -1311,6 +1559,95 @@ fn visit_generic_arg_mut(a: &mut crate::ast::GenericArg, visit: &mut impl FnMut(
                 }
             }
         }
+    }
+}
+
+// ── Generics, bounds, where-clauses — mut half (B-2026-08-12-30) ─
+//
+// Mirrors the read-only helpers above arm for arm. The two halves have to stay
+// in step: the read-only walk decides which spans get a module attributed to
+// them, and the mut walk decides which get REBASED. A span in one and not the
+// other is worse than a span in neither.
+
+fn visit_trait_bound_mut(b: &mut crate::ast::TraitBound, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut b.span);
+    if let Some(args) = &mut b.generic_args {
+        for a in args {
+            visit_generic_arg_mut(a, visit);
+        }
+    }
+}
+
+fn visit_generic_params_mut(g: &mut crate::ast::GenericParams, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut g.span);
+    for p in &mut g.params {
+        visit(&mut p.span);
+        if let Some(v) = &mut p.variance_span {
+            visit(v);
+        }
+        if let Some(ct) = &mut p.const_type {
+            visit_type_spans_mut(ct, visit);
+        }
+        for b in &mut p.bounds {
+            visit_trait_bound_mut(b, visit);
+        }
+    }
+    for ep in &mut g.effect_params {
+        visit(&mut ep.span);
+        for b in &mut ep.bounds {
+            visit_trait_bound_mut(b, visit);
+        }
+    }
+}
+
+fn visit_where_clause_mut(w: &mut crate::ast::WhereClause, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut w.span);
+    for c in &mut w.constraints {
+        match c {
+            crate::ast::WhereConstraint::TypeBound { bounds, span, .. } => {
+                visit(span);
+                for b in bounds {
+                    visit_trait_bound_mut(b, visit);
+                }
+            }
+            crate::ast::WhereConstraint::AssocTypeEq { ty, span, .. } => {
+                visit(span);
+                visit_type_spans_mut(ty, visit);
+            }
+            crate::ast::WhereConstraint::ProjectionBound {
+                projection,
+                bounds,
+                span,
+            } => {
+                visit(span);
+                visit_type_spans_mut(projection, visit);
+                for b in bounds {
+                    visit_trait_bound_mut(b, visit);
+                }
+            }
+            crate::ast::WhereConstraint::ConstPredicate { expr, span } => {
+                visit(span);
+                visit_expr_spans_mut(expr, visit);
+            }
+        }
+    }
+}
+
+/// Mut sibling of [`visit_generics`].
+fn visit_generics_mut(
+    generic_params: Option<&mut crate::ast::GenericParams>,
+    bounds: &mut [crate::ast::TraitBound],
+    where_clause: Option<&mut crate::ast::WhereClause>,
+    visit: &mut impl FnMut(&mut Span),
+) {
+    if let Some(g) = generic_params {
+        visit_generic_params_mut(g, visit);
+    }
+    for b in bounds {
+        visit_trait_bound_mut(b, visit);
+    }
+    if let Some(w) = where_clause {
+        visit_where_clause_mut(w, visit);
     }
 }
 
