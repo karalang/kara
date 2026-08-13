@@ -23167,6 +23167,64 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-19 — the TUPLE-ELEMENT sibling of
+    /// `test_e2e_field_bound_out_of_local_is_a_copy`, and the interpreter is
+    /// the oracle here too: it read `2 1` on every line while both compiled
+    /// backends read `2 0`, the source EMPTIED rather than merely stale.
+    ///
+    /// `uam_defensive_copy` had grown a `FieldAccess` arm and still had none
+    /// for `ExprKind::TupleIndex`, so the bind copied nothing while
+    /// `suppress_tuple_index_move_source` zeroed the source's element anyway —
+    /// the same advisory-`UseAfterMove` promise failing at one more place-
+    /// expression spelling.
+    ///
+    /// Three roots, because the copy and the disarm have to be defined over the
+    /// SAME shapes or the pairing is not one: a bare local, a direct
+    /// `{ptr,len,cap}` element, and a tuple reached through a struct FIELD
+    /// (`h.pe.0`) — the disarm resolves that chain via `place_chain_tuple_tes`,
+    /// so the copy has to resolve it too.
+    ///
+    /// Lines 1 and 3 are the guard: they read `2 0` against the pre-fix
+    /// compiler. Line 2 already passed, because a direct Vec element's move-out
+    /// zeroes only `cap` and a `len()` read survives that — it is here as
+    /// coverage that the `{ptr,len,cap}` branch of the new arm did not break,
+    /// not as a regression witness. The memory error that branch DID have is
+    /// pinned in `tests/memory_sanitizer.rs`.
+    #[test]
+    fn test_e2e_tuple_elem_bound_out_of_local_is_a_copy() {
+        assert_eq!(
+            run_program(
+                "struct A { mut lines: Vec[String] }\n\
+                 struct H { mut pe: (A, i64) }\n\
+                 fn main() {\n\
+                     let mut seed = A { lines: Vec.new() };\n\
+                     seed.lines.push(f\"x\");\n\
+                     let t: (A, i64) = (seed, 1);\n\
+                     let mut r = t.0;\n\
+                     r.lines.push(f\"y\");\n\
+                     let chk = t.0;\n\
+                     println(f\"{r.lines.len()} {chk.lines.len()}\");\n\
+                     let mut v: Vec[i64] = Vec.new();\n\
+                     v.push(1);\n\
+                     let t2: (Vec[i64], i64) = (v, 2);\n\
+                     let mut r2 = t2.0;\n\
+                     r2.push(2);\n\
+                     let chk2 = t2.0;\n\
+                     println(f\"{r2.len()} {chk2.len()}\");\n\
+                     let mut v3: Vec[String] = Vec.new();\n\
+                     v3.push(f\"x\");\n\
+                     let h = H { pe: (A { lines: v3 }, 3) };\n\
+                     let mut r3 = h.pe.0;\n\
+                     r3.lines.push(f\"y\");\n\
+                     let chk3 = h.pe.0;\n\
+                     println(f\"{r3.lines.len()} {chk3.lines.len()}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("2 1\n2 1\n2 1\n"),
+        );
+    }
+
     /// B-2026-08-13-16 — the MUTATION half of `test_e2e_field_bound_out_of_
     /// local_is_a_copy`, asserted as a three-surface differential.
     ///

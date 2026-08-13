@@ -21054,6 +21054,88 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-19 — the TUPLE-ELEMENT sibling of the fixture above.
+    ///
+    /// Same advisory-`UseAfterMove` promise, same reach gap, one place-
+    /// expression spelling over: `uam_defensive_copy` grew a `FieldAccess` arm
+    /// and still had none for `ExprKind::TupleIndex`, so `let r = t.0` copied
+    /// nothing while `suppress_tuple_index_move_source` zeroed the source's
+    /// element anyway.
+    ///
+    /// TWO HALVES had to land together, which is why this fixture exists rather
+    /// than only an output test. The copy alone left the source zeroed and the
+    /// output still wrong; the disarm-skip alone would have left two owners of
+    /// one buffer. Both key on `uam_copied_sites` — the set of sites where a
+    /// copy REALLY happened — so they cannot drift apart. A leak or a double
+    /// free is exactly what a mistake in that pairing looks like, and only a
+    /// sanitizer run sees it: the value assertion below passes either way as
+    /// long as the copy fires.
+    ///
+    /// The realloc loop is here for the same reason as the sibling's — a Vec
+    /// element whose source keeps a live `{ptr,len}` only dangles once the
+    /// buffer actually MOVES, and one push often grows in place.
+    #[test]
+    fn asan_tuple_elem_bound_out_of_local_then_reread_is_copied() {
+        assert_clean_asan_run(
+            r#"
+struct A { mut lines: Vec[String] }
+struct H { mut pe: (A, i64) }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut s = String.new(); s.push_str("alpha"); s.push_str(k.to_string());
+    let mut v: Vec[String] = Vec.new(); v.push(s);
+    let seed = A { lines: v };
+    let t: (A, i64) = (seed, 1);
+    let mut r = t.0;
+    let mut i = 0i64;
+    while i < 2000 {
+        let mut q = String.new(); q.push_str("y"); q.push_str(k.to_string());
+        r.lines.push(q);
+        i = i + 1;
+    }
+    let mut acc = r.lines.len() as i64;
+    let chk = t.0;
+    acc = acc + chk.lines.len() as i64;
+    acc = acc + chk.lines[0].len();
+
+    let mut v2: Vec[i64] = Vec.new(); v2.push(k); v2.push(k + 1);
+    let t2: (Vec[i64], i64) = (v2, 2);
+    let mut r2 = t2.0;
+    r2.push(9);
+    acc = acc + r2.len() as i64;
+    let chk2 = t2.0;
+    acc = acc + chk2.len() as i64;
+
+    let mut s3 = String.new(); s3.push_str("gamma"); s3.push_str(k.to_string());
+    let mut v3: Vec[String] = Vec.new(); v3.push(s3);
+    let h = H { pe: (A { lines: v3 }, 3) };
+    let mut r3 = h.pe.0;
+    r3.lines.push(f"w");
+    acc = acc + r3.lines.len() as i64;
+    let chk3 = h.pe.0;
+    acc = acc + chk3.lines.len() as i64;
+    acc = acc + chk3.lines[0].len();
+    println(acc);
+}
+"#,
+            // 2001 + 1 + 6 ("alpha1")  = 2008   struct element, Vec[String] field
+            //  + 3 + 2                  = 2013   direct Vec element
+            //  + 2 + 1 + 6 ("gamma1")   = 2022   struct element under a field
+            // `k` is a stable 1 (the binary runs with no args); it exists only
+            // to defeat literal folding, since a string LITERAL is static with
+            // `cap == 0` and hides every move-out failure in this family.
+            //
+            // The middle leg is `Vec[i64]` rather than `Vec[String]` on
+            // purpose: moving a HEAP-ELEMENT Vec out of a tuple SEGFAULTS on
+            // its own, with no reuse and no diagnostic — filed separately, and
+            // pre-existing (it crashes identically on the pre-fix compiler).
+            // Building this fixture on top of that crash would make it assert
+            // nothing about the copy it exists to pin.
+            &["2022"],
+            "tuple_elem_bound_out_of_local_then_reread_is_copied",
+        );
+    }
+
     /// B-2026-08-13-6 — a heap field read off a `shared struct` is deep-cloned,
     /// so it no longer double-frees.
     ///

@@ -6952,6 +6952,25 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(_) => {}
             None => return,
         }
+        // B-2026-08-13-19 — a `UseAfterMove` defensive copy was emitted at this
+        // consume site, so the new binding owns its OWN buffers and nothing was
+        // transferred. Zeroing here would empty a source that still owns
+        // everything it had: `let r = t.0; …; let chk = t.0;` read `chk`'s Vec
+        // field back as EMPTY on both compiled backends where the interpreter
+        // read its contents.
+        //
+        // Keyed on `uam_copied_sites` — what was REALLY copied — not on
+        // `uam_consume_sites`, for the reason that set exists: skipping the
+        // zeroing at a site where no copy happened would leave two owners of one
+        // buffer, turning a wrong read into a double free. The copy half is
+        // `uam_defensive_copy_tuple_elem`, and the two are inseparable by
+        // construction because both key on this one set.
+        if self
+            .uam_copied_sites
+            .contains(&(value.span.offset, value.span.length))
+        {
+            return;
+        }
         let Some(elems) = self.place_chain_tuple_tes(object) else {
             return;
         };

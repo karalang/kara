@@ -4404,6 +4404,16 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(v) = self.uam_defensive_copy_field(expr, val) {
             return v;
         }
+        // B-2026-08-13-19 — the TUPLE-ELEMENT consume site (`let r = t.0`).
+        // The same reach gap as the field arm above, at the other place-
+        // expression spelling: the parser gives a `TupleIndex` its OBJECT's
+        // span verbatim too (`span: lhs.span.clone()`), so the flagged `t` and
+        // the `t.0` that reads it already shared one key — only the match arm
+        // was missing. Measured: interp `2 1`, both compiled backends `2 0`,
+        // the source EMPTIED rather than merely stale.
+        if let Some(v) = self.uam_defensive_copy_tuple_elem(expr, val) {
+            return v;
+        }
         let ExprKind::Identifier(name) = &expr.kind else {
             return val;
         };
@@ -4593,6 +4603,112 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let elem_ty = self
             .extract_vec_elem_type(&fte)
+            .unwrap_or_else(|| self.context.i8_type().into());
+        let copied = self.emit_vecstr_defensive_copy(val, elem_ty, elem_te.as_ref());
+        self.uam_copied_sites
+            .insert((expr.span.offset, expr.span.length));
+        Some(copied)
+    }
+
+    /// B-2026-08-13-19 — the tuple-element half of [`Self::uam_defensive_copy`],
+    /// the sibling of [`Self::uam_defensive_copy_field`] one place-expression
+    /// spelling over.
+    ///
+    /// `Some(copy)` when `expr` is `<local>.<N>` at a flagged consume site and
+    /// the element's declared type is one this can copy independently; `None`
+    /// otherwise, so the caller falls through untouched.
+    ///
+    /// Scoped exactly like its sibling and monotone for the same reason: only
+    /// a non-shared user struct and the `{ptr,len,cap}` family are copied, and
+    /// `uam_copied_sites` records only what really was — the disarm skip keys
+    /// on that set, so a partial copy can never get out of step with it and
+    /// turn a wrong read into a double free.
+    ///
+    /// The element type comes from `tuple_index_elem_type_expr`, which resolves
+    /// the tuple through the same place-chain walk the tuple-element STORE path
+    /// uses; a tuple whose element types are unrecorded yields `None` and keeps
+    /// today's behaviour rather than guessing.
+    fn uam_defensive_copy_tuple_elem(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ExprKind::TupleIndex { object, index } = &expr.kind else {
+            return None;
+        };
+        if !self
+            .uam_consume_sites
+            .contains(&(expr.span.offset, expr.span.length))
+        {
+            return None;
+        }
+        // Root of the place CHAIN, not just a bare identifier object — the
+        // disarm this pairs with (`suppress_tuple_index_move_source`) resolves
+        // `h.pe.0` through `place_chain_tuple_tes` and zeroes it, so a copy
+        // that stopped at `t.0` would leave that shape disarmed-but-uncopied.
+        // The two must be defined over the SAME set of shapes or the pairing
+        // is not a pairing. `place_root_ident` is the resolver the disarm's own
+        // `owned_struct_params` bail uses, so they agree by construction.
+        let obj_name = Self::place_root_ident(expr)?.to_string();
+        // Roots that already receive an independent buffer elsewhere are
+        // excluded, or the two copies stack and the first one leaks — the same
+        // four sets the field arm dispatches on.
+        if self.owned_struct_params.contains(obj_name.as_str())
+            || self.for_loop_owned_agg_vars.contains(obj_name.as_str())
+            || self
+                .borrowed_agg_payload_struct_vars
+                .contains(obj_name.as_str())
+            || self
+                .shared_enum_payload_view_vars
+                .contains_key(obj_name.as_str())
+        {
+            return None;
+        }
+        let ete = self.tuple_index_elem_type_expr(object, *index)?;
+        let fn_val = self.current_fn?;
+        // A non-shared user STRUCT element: its own words are bit-copied into
+        // `val` already; what aliases is the heap ITS fields point at.
+        if let TypeKind::Path(p) = &ete.kind {
+            if let Some(head) = p.segments.last().map(|s| s.as_str()) {
+                if self.struct_types.contains_key(head)
+                    && !self.shared_types.contains_key(head)
+                    && val.is_struct_value()
+                    && val.get_type() != self.vec_struct_type().into()
+                {
+                    let head = head.to_string();
+                    let slot = self.create_entry_alloca(fn_val, "uam.tup.struct", val.get_type());
+                    self.builder.build_store(slot, val).ok()?;
+                    self.deep_copy_struct_heap_fields_in_place(slot, &head);
+                    let cloned = self
+                        .builder
+                        .build_load(val.get_type(), slot, "uam.tup.struct.clone")
+                        .ok()?;
+                    self.uam_copied_sites
+                        .insert((expr.span.offset, expr.span.length));
+                    return Some(cloned);
+                }
+            }
+        }
+        // A direct `{ptr,len,cap}` element — `String`, `Vec[T]`, `VecDeque[T]`.
+        if val.get_type() != self.vec_struct_type().into() {
+            return None;
+        }
+        let elem_te = match &ete.kind {
+            TypeKind::Path(p)
+                if matches!(
+                    p.segments.last().map(|s| s.as_str()),
+                    Some("Vec") | Some("VecDeque")
+                ) =>
+            {
+                p.generic_args.as_ref().and_then(|a| match a.first() {
+                    Some(crate::ast::GenericArg::Type(t)) => Some(t.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        };
+        let elem_ty = self
+            .extract_vec_elem_type(&ete)
             .unwrap_or_else(|| self.context.i8_type().into());
         let copied = self.emit_vecstr_defensive_copy(val, elem_ty, elem_te.as_ref());
         self.uam_copied_sites
