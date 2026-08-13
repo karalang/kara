@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
-| crash | 45 | 1 |
+| crash | 45 | 0 |
 | soundness | 42 | 0 |
 | other | 30 | 0 |
 | use-after-free | 18 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 841 | 3 |
+| codegen | 841 | 2 |
 | typecheck | 162 | 0 |
 | interp | 142 | 0 |
 | ownership | 47 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1165 surfaced · 3 open · 1150 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1165 surfaced · 2 open · 1151 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-13-17 | 2026-08-13 | codegen | medium | An ANNOTATED tuple binding ignores its annotation: `let t: (i64, i64) = (b, d)` with `b: u8` / `d: u32` lays the aggregate out from the element VALUES (`{i8, i32}`) while every read trusts the annotation, so `t.0` sign-extends and prints 200 as -56 on both compiled backends. The UNANNOTATED form of the same tuple is correct. | src/codegen/expr_ops.rs `compile_tuple` (~L22): the struct type is built from `vals.iter().map(|v| v.get_type())`, ignoring any annotated tuple TypeExpr; the read side resolves element types via `place_chain_tuple_tes`, which uses the annotation. |
 | B-2026-08-13-18 | 2026-08-13 | codegen | medium | An implicit int-to-FLOAT widening emits INVALID IR and fails module verification at three boundaries -- a struct-literal field, a field assignment, and a call argument -- so `struct W { mut f: f64 }` with `W { f: some_u8 }` does not compile at all, while the same conversion through an annotated `let` or a `Vec[f64]` element is fine. | src/codegen/expr_ops.rs `coerce_scalar_to_type_unsigned` (~L6880): matches (IntValue, IntType) and (FloatValue, FloatType) only; `(IntValue, FloatType)` falls through to `_ => val`. |
-| B-2026-08-13-20 | 2026-08-13 | codegen | high | SEGFAULT with no diagnostic: moving a HEAP-ELEMENT Vec out of a tuple (`let r = t.0;` where the element is `Vec[String]`) crashes both compiled backends, while `karac check` passes clean and the interpreter prints the right answer. `Vec[i64]` in the same position is fine, and reading the element IN PLACE (`t.0.len()`) is fine -- it is the move-out, and only when the element type is itself heap-bearing. | `suppress_tuple_index_move_source` (control_flow_match.rs) -> `zero_tuple_elem_cap_at` + `disarm_tuple_elem_bodies_at`; the crash needs a Vec element whose ELEMENT type is heap-bearing, so the per-element `__karac_dropelems_*` walk is the part that differs from the working `Vec[i64]` case. |
 
 ### Wontfix (2)
 
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1165 surfaced
 
 </details>
 
-### Fixed (1150)
+### Fixed (1151)
 
-<details><summary>1150 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1151 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4905,6 +4904,65 @@ Suite green with `--features llvm` (13572 passed, 0 failed); the ASAN -O0 leg
 run too (1065 passed, 0 failed, quarantine list matched exactly), because this
 touches the move-suppression machinery where -O2 deletes the very allocations
 the bug is about. Clippy `--all --all-targets --features llvm` and fmt clean. |
+| B-2026-08-13-20 | codegen | high | SEGFAULT with no diagnostic: moving a HEAP-ELEMENT Vec out of a tuple (`let r = t.0;` where the element is `Vec[String]`) crashes both compiled backe… | FIXED by fc1887a. The emitted `karac_drop_Vec_<E>` now puts the ELEMENT WALK under
+the same ownership guard as the buffer free, instead of only the free.
+
+MECHANISM, read off the IR rather than inferred. `cap == 0` is codegen's "this
+slot no longer owns its buffer" marker: every move suppression in the compiler
+disarms a source by zeroing its cap and leaving `{ptr, len}` alone. In the
+repro, `let r = t.0` disarms the tuple's element exactly that way, `r`'s
+cleanup frees the buffer AND each element String, and then the tuple's own
+`__karac_drop_tuple_*` still calls `karac_drop_Vec_String` on the disarmed slot
+-- whose loop is `0..len`, not gated on cap. It walks the freed buffer and
+free()s each inner String a second time. gdb puts the SIGSEGV in libc `free`
+with a shredded pointer (`0x5555555c0`, a real heap address minus its top
+bytes), which is the reading of a `{ptr,len,cap}` triple that is no longer
+there.
+
+THE TWO IMPLEMENTATIONS OF ONE OPERATION DISAGREED, and that is the actual
+finding. The INLINE `FreeVecBuffer` cleanup has always put the walk and the free
+inside ONE `cap > 0` block -- visible in the same function's IR, a few blocks
+up. The emitted twin guarded only the free. Anywhere the two paths met on a
+disarmed slot, the emitted one did what the inline one had already decided not
+to do.
+
+WHY THE ELEMENT TYPE IS WHAT MADE IT VISIBLE, and why it stayed hidden so long:
+a `Vec[i64]` element drop is a NO-OP, so the unguarded walk ran and did nothing
+and the shape looked correct. Only a heap element type turns the extra pass into
+a free. Narrowed with four one-variable A/Bs, each isolating one condition:
+
+  println(t.1)                scalar element                   OK
+  println(t.0.len())          heap element, READ IN PLACE      OK
+  let r = t.0                 Vec[i64] element, moved out      OK
+  let r = t.0                 Vec[String] element, moved out   SEGV
+
+FIXED IN THE DROP FN RATHER THAN BY ALSO ZEROING `len` AT THE MOVE SITE, which
+was the other available shape. Two reasons, and the second is the load-bearing
+one. It closes the class for EVERY suppression path at once rather than for the
+tuple-element one that happened to be reported. And it leaves `len` readable --
+which is precisely what the defensive-copy rows B-2026-08-13-14 and -19 depend
+on to keep a moved-from source's contents OBSERVABLE instead of empty. Zeroing
+more `len`s would have walked back the fix those rows just landed.
+
+MEASURED on four surfaces after the change -- interpreter, LLJIT, AOT -O0, AOT
+-O2 -- across the repro plus the reuse variant (`r.push` then re-read `t.0`,
+which also exercises -19's copy), a `Vec[Vec[i64]]` element, and a whole-struct
+rebinding. All agree; pre-fix the first crashed.
+
+PINNED at two levels because the crash and the correctness are different
+questions. `test_e2e_disarmed_vec_does_not_walk_its_elements` covers four shapes
+and returns EMPTY output against the pre-fix compiler (the process dies before
+flushing). `asan_disarmed_vec_skips_its_element_walk` is the one that matters
+for the fix's own risk: guarding a walk can go wrong in the other direction by
+skipping a drop that WAS owed, and LeakSanitizer is the only thing that would
+say so. It fails pre-fix with an ASAN memory error and uses `Vec[String]`
+throughout, since a `Vec[i64]` element drop is a no-op and would make the
+fixture assert nothing -- the same blindness that hid the bug.
+
+Suite green with `--features llvm` (13574 passed, 0 failed); the ASAN -O0 leg
+run too (1066 passed, 0 failed, quarantine list matched exactly), since -O2
+deletes many of the allocations this class is about. Clippy `--all --all-targets
+--features llvm` and fmt clean. |
 
 </details>
 
