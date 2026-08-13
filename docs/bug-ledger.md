@@ -94,13 +94,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 240 | 0 |
 | leak | 172 | 0 |
-| double-free | 126 | 0 |
+| double-free | 127 | 1 |
+| run-vs-build | 106 | 1 |
 | codegen-gap | 105 | 0 |
-| run-vs-build | 105 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 1 |
 | false-positive | 61 | 0 |
-| diagnostics | 52 | 0 |
+| diagnostics | 53 | 1 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
 | other | 30 | 0 |
@@ -110,27 +110,30 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 834 | 1 |
+| codegen | 835 | 2 |
 | typecheck | 161 | 0 |
 | interp | 140 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
-| cli | 29 | 0 |
+| cli | 30 | 1 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
-| parser | 15 | 0 |
+| parser | 16 | 1 |
 | effect | 5 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1155 surfaced · 1 open · 1142 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1158 surfaced · 4 open · 1142 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-13-10 | 2026-08-13 | codegen | medium | kara is 1.58x behind EQUAL-SAFETY rustc and 1.49x behind clang on the min/argmin/second-min reduction of kata #265's O(n*k) DP, because LLVM if-converts and FULLY unrolls that loop for rustc/clang but only partially unrolls it (4x) for kara and leaves a data-dependent branch per element. Measured cmov counts in main: rustc -O 133, rustc -O -C overflow-checks=on 127, clang -O3 129, kara 17. | LLVM unroll-factor and if-conversion decisions on the counted reduction loop karac emits (src/codegen loop lowering + pass pipeline); compare against the fully-unrolled branchless form rustc produces for the same k=32 min/argmin/second-min update |
+| B-2026-08-13-11 | 2026-08-13 | codegen | high | DOUBLE FREE on both compiled backends when a heap payload makes an ENUM-MEDIATED ROUND TRIP through a Vec: read out of a Vec element into a returned enum, moved back into the Vec by the next call, then read out again into another returned enum. `karac check` is clean and the interpreter is correct. The identical round trip WITHOUT an enum is clean in three separate forms, so the enum is load-bearing. | the enum-payload construction path that reads a Vec ELEMENT directly into a variant (`Cmd.Delete(at, d.lines[at as usize])`) and the `let`-bound sibling (`let gone = d.lines[at]; ... Cmd.Insert(at, gone)`) -- BOTH reads are required, see the control table. |
+| B-2026-08-13-12 | 2026-08-13 | cli | low | The DELIBERATE codegen deferral of chained field receivers (`e.doc.lines.len()`, FR4) is invisible to `karac check`: check reports `All checks passed.`, `--output=json` reports `"diagnostics":[]`, `karac fix` reports nothing fixable, and `--targets=native` also passes -- then `karac build` refuses. The remedy is a purely mechanical rewrite the compiler already names, so this is a free `check`-time gate and a free machine-applicable fix-it that are simply not wired up. | src/codegen/calls.rs:403 (`FR4: reject chained field receivers up front`). Deferral itself is intentional and documented -- see docs/implementation_checklist/phase-11-stdlib-longtail.md, where the autograd stdlib works around it by binding `let tp = self.tape;`. This row is about the MISSING CHECK-TIME SURFACE, not about implementing the feature. |
+| B-2026-08-13-13 | 2026-08-13 | parser | low | A parse diagnostic PRESCRIBES CODE THAT DOES NOT PARSE: the bare-assignment-in-a-match-arm error says "wrap it in braces: `pattern => { place = value }`", and that exact text fails with `Expected Semicolon, found RightBrace`. The working form needs the semicolon -- `{ place = value; }`. No `replacement` is attached either, so `karac fix` cannot repair it. | the E0001 message text for a bare assignment as a `match` arm body. |
 
 ### Wontfix (2)
 
