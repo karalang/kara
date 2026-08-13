@@ -43,6 +43,17 @@ pub struct ParseResult {
     /// delete a stray comma in a comma-separated `with` clause). Consumed by
     /// `collect_diagnostics` (JSON `replacement`) and `cmd_fix`.
     pub fix_edits: std::collections::HashMap<crate::resolver::SpanKey, crate::resolver::TextEdit>,
+    /// Multi-edit envelopes, keyed by the DIAGNOSTIC's span exactly like
+    /// [`Self::fix_edits`]. The parse twin of
+    /// [`crate::resolver::ResolveResult::error_fix_diffs`], and here for the
+    /// same reason: some repairs are inherently two-sided. Wrapping a bare
+    /// assignment arm body in braces is an insert at the body's start *and*
+    /// one after its end, and neither half is a valid program on its own — so
+    /// they cannot go in the single-edit slot, where a consumer that applied
+    /// only what it found would leave an unbalanced brace behind. A diagnostic
+    /// uses one channel or the other, never both.
+    pub fix_diffs:
+        std::collections::HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 }
 
 /// Surrounding signature kind for parameter parsing — selects between the
@@ -195,6 +206,11 @@ pub struct Parser {
     /// comma-separated-effect-clause recovery in `parse_effect_list`.
     pub(crate) fix_edits:
         std::collections::HashMap<crate::resolver::SpanKey, crate::resolver::TextEdit>,
+    /// Multi-edit sibling of [`Self::fix_edits`], same key, same rationale —
+    /// see [`ParseResult::fix_diffs`] for why a repair sometimes needs both
+    /// halves or neither.
+    pub(crate) fix_diffs:
+        std::collections::HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 }
 
 /// Reason an `impl Trait` type expression is rejected at the current
@@ -238,6 +254,7 @@ impl Parser {
             allow_type_class_param_name: false,
             no_struct_literal: false,
             fix_edits: std::collections::HashMap::new(),
+            fix_diffs: std::collections::HashMap::new(),
         }
     }
 
@@ -307,6 +324,7 @@ impl Parser {
             program,
             errors: self.errors,
             fix_edits: self.fix_edits,
+            fix_diffs: self.fix_diffs,
         }
     }
 

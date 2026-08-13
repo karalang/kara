@@ -3288,6 +3288,34 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     json_string(&e.replacement),
                 )
             });
+        // Multi-edit parse envelope, rendered exactly like the resolver's and
+        // ownership's `"fix_diff":[{...},{...}]`. Mutually exclusive with
+        // `replacement` per diagnostic — a repair is one-sided or it is not.
+        let fix_diff_json = pipeline
+            .parsed
+            .fix_diffs
+            .get(&crate::resolver::SpanKey::from_span(&err.span))
+            .filter(|v| !v.is_empty())
+            .map(|edits| {
+                let items: Vec<String> = edits
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                            e.offset,
+                            e.length,
+                            json_string(&e.replacement),
+                        )
+                    })
+                    .collect();
+                format!("\"fix_diff\":[{}]", items.join(","))
+            });
+        let parse_extra_json = match (replacement_json, fix_diff_json) {
+            (Some(rep), Some(f)) => Some(format!("{rep},{f}")),
+            (Some(rep), None) => Some(rep),
+            (None, Some(f)) => Some(f),
+            (None, None) => None,
+        };
         diags.add(DiagEntry {
             id: &format!("d{id_counter}"),
             severity: "error",
@@ -3298,7 +3326,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             filename,
             span: &err.span,
             suggestion: None,
-            extra_json: replacement_json,
+            extra_json: parse_extra_json,
             lint_name: None,
             fix_it: None,
             class: None,
@@ -8612,6 +8640,7 @@ fn run_multi_file_codegen(
         program: super_program,
         errors: Vec::new(),
         fix_edits: std::collections::HashMap::new(),
+        fix_diffs: std::collections::HashMap::new(),
     };
     let mut pipeline = Pipeline {
         filename: mf.name.clone(),
@@ -11440,6 +11469,10 @@ fn cmd_fix(filename: &str, dry_run: bool) {
         // on an unparseable file, so only parse edits are available here; if
         // there are none, report the parse errors and exit as before.
         edits.extend(pipeline.parsed.fix_edits.values().cloned());
+        // Multi-edit parse envelopes (B-2026-08-13-13) — the brace-wrap for a
+        // bare assignment `match` arm body. Both halves or neither, so they
+        // live only here, never in the single-edit map.
+        edits.extend(pipeline.parsed.fix_diffs.values().flatten().cloned());
         if edits.is_empty() {
             for err in &pipeline.parsed.errors {
                 eprintln!(

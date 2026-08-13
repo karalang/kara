@@ -5555,6 +5555,149 @@ fn test_assignment_as_bare_match_arm_body_reports_braces_without_cascading() {
     );
 }
 
+/// B-2026-08-13-13. The message above tells the reader to write
+/// `pattern => { place = value; }`. Assert that what it prescribes actually
+/// PARSES — the original shipped without the semicolon, and following it
+/// verbatim produced a second, different error (`Expected Semicolon, found
+/// RightBrace`).
+///
+/// The test does not hard-code the suggested text and then separately check a
+/// hand-written copy of it: it LIFTS the snippet out of the diagnostic,
+/// substitutes a concrete place and value for the metavariables, and parses
+/// the result. So the message and the grammar cannot drift apart again without
+/// this failing, whatever the message is reworded to.
+#[test]
+fn test_braces_suggestion_for_a_bare_assignment_arm_body_actually_parses() {
+    let (_, errors) = parse_with_errors(
+        "fn main() {\n\
+             let mut total = 0;\n\
+             match Some(3) {\n\
+                 Some(q) => total = total + q,\n\
+                 None => {}\n\
+             }\n\
+         }",
+    );
+    assert_eq!(errors.len(), 1, "{:?}", errors);
+    let msg = &errors[0].message;
+
+    // Lift the backticked snippet after "wrap it in braces: ".
+    let tail = msg
+        .split("wrap it in braces: ")
+        .nth(1)
+        .unwrap_or_else(|| panic!("message lost its fix-it: {msg}"));
+    let suggested = tail
+        .trim()
+        .trim_start_matches('`')
+        .trim_end_matches('`')
+        .to_string();
+
+    // `pattern => { place = value; }` with the metavariables filled in.
+    let concrete = suggested
+        .replace("pattern", "Some(q)")
+        .replace("place", "total")
+        .replace("value", "total + q");
+    let program = format!(
+        "fn main() {{\n\
+             let mut total = 0;\n\
+             match Some(3) {{\n\
+                 {concrete},\n\
+                 None => {{}}\n\
+             }}\n\
+         }}"
+    );
+    let reparsed = parse(&program);
+    assert!(
+        reparsed.errors.is_empty(),
+        "the diagnostic prescribes code that does not parse.\n  suggested: {suggested}\n  \
+         program:\n{program}\n  errors: {:?}",
+        reparsed
+            .errors
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// B-2026-08-13-13, second half: the repair is machine-applicable. A wrap is
+/// two insertions and the parser holds no source text, so it cannot fit the
+/// single-edit `fix_edits` slot — it lands in the `fix_diffs` envelope, keyed
+/// by the diagnostic's span like every other fix channel. Applying the
+/// envelope must produce a program that parses; applying HALF of it must not
+/// be something a consumer can do by accident, which is why the single-edit
+/// slot stays empty for this diagnostic.
+#[test]
+fn test_bare_assignment_arm_body_carries_an_applicable_brace_wrap() {
+    for (label, src) in [
+        (
+            "plain assignment",
+            "fn main() {\n\
+                 let mut total = 0;\n\
+                 match Some(3) {\n\
+                     Some(q) => total = total + q,\n\
+                     None => {}\n\
+                 }\n\
+             }",
+        ),
+        (
+            "compound assignment",
+            "fn main() {\n\
+                 let mut total = 0;\n\
+                 match Some(3) {\n\
+                     Some(q) => total += q,\n\
+                     None => {}\n\
+                 }\n\
+             }",
+        ),
+        (
+            // The braced form's muscle memory: the author already wrote the
+            // `;`. The closer must reuse it rather than add a second.
+            "author-supplied semicolon",
+            "fn main() {\n\
+                 let mut total = 0;\n\
+                 match Some(3) {\n\
+                     Some(q) => total = total + q;,\n\
+                     None => {}\n\
+                 }\n\
+             }",
+        ),
+    ] {
+        let result = parse(src);
+        assert_eq!(result.errors.len(), 1, "{label}: {:?}", result.errors);
+        let key = karac::resolver::SpanKey::from_span(&result.errors[0].span);
+        assert!(
+            !result.fix_edits.contains_key(&key),
+            "{label}: a two-sided wrap must not advertise a one-sided fix",
+        );
+        let edits = result
+            .fix_diffs
+            .get(&key)
+            .unwrap_or_else(|| panic!("{label}: no fix envelope attached to the diagnostic"));
+        assert_eq!(edits.len(), 2, "{label}: a wrap is an open and a close");
+
+        // Apply descending by offset, exactly as `cmd_fix` does.
+        let mut applied = src.to_string();
+        let mut sorted = edits.clone();
+        sorted.sort_by_key(|e| std::cmp::Reverse(e.offset));
+        for e in &sorted {
+            applied.replace_range(e.offset..e.offset + e.length, &e.replacement);
+        }
+        let reparsed = parse(&applied);
+        assert!(
+            reparsed.errors.is_empty(),
+            "{label}: applying the fix left the file unparseable:\n{applied}\n  errors: {:?}",
+            reparsed
+                .errors
+                .iter()
+                .map(|e| &e.message)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !applied.contains(";;"),
+            "{label}: the author's own semicolon was duplicated:\n{applied}",
+        );
+    }
+}
+
 #[test]
 fn test_compound_assignment_as_bare_match_arm_body_reports_braces() {
     // Sibling of the test above for the compound forms (`+=` and friends),

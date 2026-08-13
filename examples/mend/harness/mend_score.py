@@ -73,7 +73,10 @@ def _diagnostics(envelope: dict | None) -> list[dict]:
 
 
 def _has_replacement(diag: dict) -> bool:
-    return "replacement" in diag
+    # A multi-edit `fix_diff` envelope is machine-applicable too — `karac fix`
+    # applies it. Counting only the single-edit slot understated fix coverage
+    # and would have parked already-fixable codes in the backlog.
+    return "replacement" in diag or bool(diag.get("fix_diff"))
 
 
 def _count_applied_fixes(fix_log: str) -> int:

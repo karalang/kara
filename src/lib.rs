@@ -902,11 +902,21 @@ fn run_static_checks(
             // Parse recovery edits are keyed by the error's span, so each
             // error claims only its own (a stray-comma delete attaches to the
             // comma that caused it, not to every parse error in the file).
-            let fixes = parsed
+            let mut fixes: Vec<SourceFix> = parsed
                 .fix_edits
                 .get(&crate::resolver::SpanKey::from_span(&e.span))
                 .map(|edit| vec![fix_of(edit)])
                 .unwrap_or_default();
+            // …plus the multi-edit envelope, which a two-sided repair (the
+            // brace-wrap for a bare assignment arm body) lands in *instead of*
+            // the single slot. Reading only one channel is how a fix gets
+            // applied half-way.
+            if let Some(diff) = parsed
+                .fix_diffs
+                .get(&crate::resolver::SpanKey::from_span(&e.span))
+            {
+                fixes.extend(diff.iter().map(fix_of));
+            }
             push_diag_fixed(&mut diagnostics, "parse", e.message.clone(), &e.span, fixes);
         }
         return (diagnostics, None);

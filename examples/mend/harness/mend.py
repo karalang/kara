@@ -156,13 +156,31 @@ def format_diagnostics_for_llm(envelope: dict) -> str:
                 f"    machine-applicable replacement: "
                 f"offset={r['offset']} length={r['length']} text={r['text']!r}"
             )
+        for r in d.get("fix_diff", []):
+            # Multi-edit repairs (a rename touching use sites, a `par struct`
+            # migration, a brace wrap). Same shape per edit; the set applies
+            # together or not at all.
+            lines.append(
+                f"    machine-applicable edit (multi): "
+                f"offset={r['offset']} length={r['length']} text={r['text']!r}"
+            )
         for hint in d.get("hints", []):
             lines.append(f"    hint: {hint['description']}")
     return "\n".join(lines) if lines else "(no diagnostics)"
 
 
 def has_machine_applicable_fixes(envelope: dict) -> bool:
-    return any("replacement" in d for d in envelope.get("diagnostics", []))
+    # `fix_diff` counts too. It is the channel a repair lands in when it cannot
+    # be one range-replacement — a rename that also touches use sites, the
+    # `par struct` migration, the brace wrap for a bare assignment `match` arm
+    # body. `karac fix` has always applied those; this predicate is what
+    # decides whether the loop CALLS `karac fix` at all, so reading only
+    # `replacement` meant a file whose sole defect was multi-edit-fixable went
+    # straight back to the LLM with a repair the compiler could have performed.
+    return any(
+        "replacement" in d or d.get("fix_diff")
+        for d in envelope.get("diagnostics", [])
+    )
 
 
 def is_clean(envelope: dict) -> bool:

@@ -838,6 +838,45 @@ impl super::Parser {
                                     edit,
                                 );
                             }
+                            // Same rebase for the multi-edit channel. It has
+                            // no producer reachable from inside a hole today,
+                            // but dropping it here is exactly the B-2026-08-11-5
+                            // failure — a side-channel silently emptied by the
+                            // sub-parse — and a half-rebased WRAP would be worse
+                            // than a lost one, so both halves move together.
+                            for (key, mut edits) in result.fix_diffs {
+                                let mut key_span = crate::token::Span {
+                                    offset: key.0,
+                                    length: key.1,
+                                    line,
+                                    column,
+                                };
+                                crate::span_visitor::shift_interp_span(
+                                    &mut key_span,
+                                    offset,
+                                    line,
+                                    column,
+                                );
+                                for edit in &mut edits {
+                                    let mut edit_span = crate::token::Span {
+                                        offset: edit.offset,
+                                        length: edit.length,
+                                        line,
+                                        column,
+                                    };
+                                    crate::span_visitor::shift_interp_span(
+                                        &mut edit_span,
+                                        offset,
+                                        line,
+                                        column,
+                                    );
+                                    edit.offset = edit_span.offset;
+                                }
+                                self.fix_diffs.insert(
+                                    crate::resolver::SpanKey(key_span.offset, key_span.length),
+                                    edits,
+                                );
+                            }
                             let expr = result.program.items.into_iter().find_map(|item| {
                                 if let crate::ast::Item::Function(f) = item {
                                     f.body.stmts.into_iter().find_map(|s| {
@@ -2366,10 +2405,16 @@ impl super::Parser {
             }
         };
 
+        // The suggested form must PARSE. `{ place = value }` does not:
+        // an assignment is a statement, and a block's final statement needs
+        // its terminator, so dropping the `;` moves the error rather than
+        // fixing it (`Expected Semicolon, found RightBrace`). B-2026-08-13-13
+        // — a diagnostic that prescribes non-compiling code is worse than one
+        // that says nothing, because the reader trusts it.
         self.error_at(
             "assignment is a statement, not an expression, so it cannot be a bare \
-             `match` arm body — wrap it in braces: `pattern => { place = value }`",
-            op_span,
+             `match` arm body — wrap it in braces: `pattern => { place = value; }`",
+            op_span.clone(),
         );
 
         let Some(value) = self.parse_expression() else {
@@ -2380,7 +2425,39 @@ impl super::Parser {
         };
         // Optional `;` — accepted so the braced form's muscle memory
         // (`=> total = total + q;,`) does not produce a second error.
+        let existing_semi = self
+            .check(&Token::Semicolon)
+            .then(|| self.current_span())
+            .map(|s| s.offset + s.length);
         self.eat(&Token::Semicolon);
+
+        // Attach the repair the message describes, so `karac fix` performs it
+        // rather than leaving the author to. A wrap is two insertions and the
+        // parser holds no source text, so it cannot be expressed as one
+        // range-replacement — hence the multi-edit envelope. Both edits are
+        // zero-length inserts at offsets the tokens already carry: `{ ` at the
+        // assignment target's start, and the closer after the value (reusing
+        // the author's own `;` when they wrote one, so `=> x = 1;,` does not
+        // gain a second).
+        let (close_at, close_text) = match existing_semi {
+            Some(after_semi) => (after_semi, " }"),
+            None => (value.span.offset + value.span.length, "; }"),
+        };
+        self.fix_diffs.insert(
+            crate::resolver::SpanKey::from_span(&op_span),
+            vec![
+                crate::resolver::TextEdit {
+                    offset: target_span.offset,
+                    length: 0,
+                    replacement: "{ ".to_string(),
+                },
+                crate::resolver::TextEdit {
+                    offset: close_at,
+                    length: 0,
+                    replacement: close_text.to_string(),
+                },
+            ],
+        );
 
         let span = self.span_from(&target_span);
         let kind = match compound {

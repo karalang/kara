@@ -7357,6 +7357,77 @@ fn test_fix_reports_when_no_fixable_diagnostics() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// B-2026-08-13-13, CLI end of the wire. The bare-assignment-arm-body
+/// diagnostic now carries a two-edit brace wrap in the parse `fix_diffs`
+/// envelope. Two things have to hold at this level and neither is visible
+/// from a unit test: `cmd_fix`'s PARSE-ERROR branch must read the multi-edit
+/// channel (it read only the single-edit map, so the envelope would have been
+/// collected by nothing), and `--output=json` must advertise it so an IDE or
+/// the Mend loop can apply the same repair. Two offending arms, so the
+/// descending-offset apply order is exercised as well.
+#[test]
+fn test_fix_wraps_bare_assignment_match_arm_bodies_in_braces() {
+    let source = "fn main() {\n    \
+                      let mut total = 0;\n    \
+                      let mut other = 0;\n    \
+                      match Some(3) {\n        \
+                          Some(q) => total = total + q,\n        \
+                          None => other = 1,\n    \
+                      }\n    \
+                      println(total.to_string());\n\
+                  }\n";
+    let path = fix_scratch_file("armbrace", source);
+
+    // The JSON surface carries the envelope, not a one-sided `replacement`.
+    let json = karac_bin()
+        .args(["check", "--output=json", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let json_out = String::from_utf8_lossy(&json.stdout);
+    assert!(
+        json_out.contains("\"fix_diff\":["),
+        "parse diagnostic must advertise its multi-edit fix: {json_out}"
+    );
+    assert!(
+        !json_out.contains("\"replacement\":"),
+        "a two-sided wrap must not also appear as a single-edit fix: {json_out}"
+    );
+
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("applied 4 fix"), "got: {stdout}");
+
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("Some(q) => { total = total + q; },"),
+        "first arm not wrapped: {rewritten}"
+    );
+    assert!(
+        rewritten.contains("None => { other = 1; },"),
+        "second arm not wrapped: {rewritten}"
+    );
+
+    // The whole point: the rewritten file compiles.
+    let check = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "fixed file still fails to check:\n{rewritten}\nstderr={}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn test_fix_applies_multiple_corrections_in_one_file() {
     // Two typo'd identifiers in one file. Both should be fixed in a
