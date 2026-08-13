@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 239 | 0 |
-| leak | 171 | 1 |
+| leak | 172 | 1 |
 | double-free | 122 | 0 |
 | codegen-gap | 105 | 1 |
 | run-vs-build | 103 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 823 | 2 |
+| codegen | 824 | 2 |
 | typecheck | 158 | 1 |
 | interp | 138 | 0 |
 | ownership | 46 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1142 surfaced · 3 open · 1127 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1143 surfaced · 3 open · 1128 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -132,7 +132,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1142 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
 | B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
-| B-2026-08-12-31 | 2026-08-12 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS mentions the container through a CALL: `ps[0] = mk(ps[0].n + k)` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 400 B in 40 allocations, one per assign. B-2026-08-12-26 fixed the index-read RHS; this is the same displaced occupant with a different RHS shape. | — |
+| B-2026-08-12-32 | 2026-08-12 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS passes container HEAP into a call: `ps[0] = passthru(ps[0])` and `ps[0] = takes(ps[0].word)` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` each lose 400 B in 40 allocations. B-2026-08-12-31 fixed the scalar-reaching case; these are the two where the argument genuinely carries a buffer out of the container. | — |
 
 ### Wontfix (2)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1142 surfaced
 
 </details>
 
-### Fixed (1127)
+### Fixed (1128)
 
-<details><summary>1127 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1128 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3444,6 +3444,62 @@ inherits B-2026-08-11-35's failure mode. Adding spans to the walk only WIDENS
 `module.rs`'s `max_end`, so the change is additive by construction.
 
 Suite green at 117 targets, 0 failures; clippy and fmt clean. |
+| B-2026-08-12-31 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS mentions the container through a CALL: `ps[0] = mk(ps[0].n + k)` over `Vec[Pair]` with `… | FIXED by 19dbf4a. `asan_index_assign_scalar_reaching_call_rhs_frees_displaced`
+pins it at 800 B in 80 allocations against the pre-fix compiler.
+
+SAME DISPLACED OCCUPANT AS B-2026-08-12-26, declined by a different arm of the
+same guard. -26 relaxed `emit_displaced_index_elem_drop`'s mention guard for an
+RHS that had already been deep-cloned; a CALL gets no such proof, so it kept
+declining and the LHS's old buffer kept leaking.
+
+WHICH OF THE ROW'S TWO CANDIDATE FIXES WAS RIGHT: (a), and (b) was based on a
+misreading of my own. The row proposed "sink the displaced drop below the RHS
+evaluation" as an ordering fix. It is already below it -- `compile_expr(value)`
+runs at the top of the Assign arm and the displaced drop near the bottom -- so
+there was no ordering to fix. Re-ordering could not have helped either: if the
+RHS value aliases the old buffer, freeing it after the store still leaves a
+dangling header. The hazard is ALIASING, not sequence, and only (a) addresses it.
+
+WHAT THE GUARD IS ACTUALLY ASKING is whether the already-computed RHS value
+points INTO the buffer about to be freed. A textual mention of the container is
+a proxy for that, and a coarse one: `ps[0] = mk(ps[0].n + k)` names `ps` solely
+to read an `i64` out of it, and an `i64` cannot carry a buffer anywhere.
+
+`expr_cannot_carry_container_heap` answers by REACHABILITY rather than by
+trusting the callee, which is what lets it stay sound with no escape analysis:
+
+  * an expression that never names the container cannot carry its heap;
+  * a call whose every argument is safe cannot either, because the callee is
+    handed no pointer into the container to hand back;
+  * a scalar FIELD read of an element (`ps[i].n`) is admitted by resolving the
+    field's own type through the element type -- a `String` field is not;
+  * everything unenumerated is UNSAFE, so a false negative is the status-quo
+    leak and a false positive would be a double free.
+
+MEASURED at -O0 with valgrind, 40 iterations, baseline -> fixed:
+
+  ps[0] = mk(ps[0].n + k)             400 B / 40  ->  CLEAN
+  rs[1] = mk(rs[0].n * 2 + rs[1].n)   400 B / 40  ->  CLEAN
+  ps[0] = mk(k + i)   (no mention)       CLEAN    ->  CLEAN   (control)
+  ps[0] = passthru(ps[0])             400 B / 40  ->  unchanged, still declines
+  ps[0] = takes(ps[0].word)           400 B / 40  ->  unchanged, still declines
+
+The `rs` leg is the one that would catch a sloppy version: its RHS reads scalars
+from BOTH elements, including the one being overwritten, so a predicate that
+only checked the assigned index would admit it for the wrong reason.
+
+VERIFIED beyond the local matrix, since this is drop machinery: -O0 leg green
+with an empty quarantine list, and drop-fuzz 0 memory-safety findings / 0
+invariant violations over 200 generated programs (558 valid executions, 2,271
+scheduled drops). Re-measured after rebasing onto B-2026-08-12-27's fix
+(`clone a heap field read out of a Vec element`), which lands in adjacent
+machinery -- the whole matrix is unchanged by the combination.
+
+NOT COVERED, filed separately: the two shapes whose ARGUMENT genuinely carries
+heap out of the container -- `passthru(ps[0])` (the element itself) and
+`takes(ps[0].word)` (a heap field). Both still leak 400 B / 40, unchanged by
+this and by -26. They need the callee's escape behaviour, which nothing at this
+site establishes. |
 
 </details>
 
