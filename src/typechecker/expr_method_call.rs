@@ -11,6 +11,57 @@
 //! Lives in a sibling `impl<'a> super::TypeChecker<'a>` block.
 
 use crate::ast::*;
+
+/// Every method name `infer_str_method` answers — the builtin `String` surface.
+/// B-2026-08-12-32.
+///
+/// Exists so a user trait impl on `String` can be consulted for the names the
+/// builtin surface does NOT have, while every name it DOES have keeps resolving
+/// to the builtin. That ordering is what makes the fix purely additive: a
+/// program compiling today resolves all of its String calls through this
+/// surface and continues to, so a user impl that happens to define `len` cannot
+/// hijack `s.len()`.
+///
+/// `test_string_builtin_surface_still_wins` guards the direction that matters:
+/// every name here must still resolve to the builtin when a user impl defines
+/// the same name. The opposite direction — the dispatcher answering a name
+/// absent from this list — is not mechanically checked, and its cost is only
+/// that such a name becomes shadowable by a user impl.
+pub(super) const STRING_BUILTIN_METHODS: &[&str] = &[
+    "bytes",
+    "char_at",
+    "char_count",
+    "chars",
+    "clone",
+    "cmp",
+    "contains",
+    "ends_with",
+    "find",
+    "is_empty",
+    "len",
+    "lines",
+    "push",
+    "push_str",
+    "repeat",
+    "replace",
+    "replacen",
+    "slice",
+    "sorted",
+    "sorted_by",
+    "split",
+    "split_whitespace",
+    "starts_with",
+    "strip_prefix",
+    "strip_suffix",
+    "substring",
+    "to_cstring",
+    "to_lowercase",
+    "to_string",
+    "to_uppercase",
+    "trim",
+    "trim_end",
+    "trim_start",
+];
 use crate::resolver::{SpanKey, SymbolKind};
 use crate::token::Span;
 use std::collections::HashMap;
@@ -4641,7 +4692,26 @@ impl<'a> super::TypeChecker<'a> {
         // String methods that don't live in an impl block (`sorted`,
         // `sorted_by`, `chars`) — routing a derefed `ref String`
         // here would silently fail `len` lookup on those tests.
-        if obj_ty == Type::Str {
+        // B-2026-08-12-32 — a USER trait impl on `String` gets the method the
+        // builtin surface does not have. The comment above ("String has no user
+        // impl block, so `infer_str_method` is the complete surface for it") was
+        // the assumption this row refutes: `impl Zero for String { .. }` is
+        // accepted, and this unconditional early return is what made the first
+        // call site report `no method 'describe' on type 'String'`.
+        //
+        // BUILTIN METHODS KEEP PRECEDENCE — the impl table is consulted only for
+        // a name `infer_str_method` does not answer, so `s.len()` cannot be
+        // hijacked by a user impl that happens to define `len`. That ordering is
+        // deliberate: it makes this purely additive, since a program that
+        // compiles today resolves every one of its String calls through the
+        // builtin surface and continues to.
+        let str_routes_to_user_impl = matches!(&obj_ty_for_named, Type::Str)
+            && !STRING_BUILTIN_METHODS.contains(&method)
+            && !self
+                .env
+                .find_methods_with_args("String", &[], method)
+                .is_empty();
+        if obj_ty == Type::Str && !str_routes_to_user_impl {
             return self.infer_str_method(method, args, span);
         }
 
@@ -4655,7 +4725,9 @@ impl<'a> super::TypeChecker<'a> {
         // impl block, so `infer_str_method` is the complete surface for it; the
         // impl-style read-methods (`len`/`contains`/`is_empty`) it already
         // enumerates keep working.
-        if matches!(&obj_ty, Type::Ref(i) | Type::MutRef(i) if **i == Type::Str) {
+        if matches!(&obj_ty, Type::Ref(i) | Type::MutRef(i) if **i == Type::Str)
+            && !str_routes_to_user_impl
+        {
             return self.infer_str_method(method, args, span);
         }
 
@@ -6048,6 +6120,33 @@ impl<'a> super::TypeChecker<'a> {
         }
         let (type_name, type_args) = match &receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
+            // B-2026-08-12-32 — a `String` receiver reaching here has already
+            // been declined by the builtin surface (the early return above
+            // routes every name in `STRING_BUILTIN_METHODS`), so the only way
+            // to arrive is a method that surface does not have. Keyed through
+            // `impl_table_key` so this cannot drift from what `env_add_impl`
+            // registers.
+            //
+            // `Str` ONLY. Widening it to `Slice`/`Array`/`Vector` intercepts
+            // those receivers ahead of the branch below that renders the
+            // "iterator adaptors require an explicit `.iter()`" hint, turning a
+            // helpful rejection into a silent `Type::Error`
+            // (`test_absent_fixed_array_methods_rejected_with_iter_hint`).
+            //
+            // Without this arm they fell to the `else` branch below, which
+            // type-checks the arguments and returns `Type::Error` in SILENCE —
+            // the historical fall-through that comment describes. That silence
+            // is why the row's declaration-side symptom looked like a missing
+            // feature rather than a hole: nothing complained anywhere.
+            Type::Str => match super::types::impl_table_key(&receiver_for_lookup) {
+                Some(key) => key,
+                None => {
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+            },
             // A refinement receiver that survived the base-deref above
             // (i.e. it declares this method itself) resolves under its
             // nominal name. Non-generic at v1, so no type args.

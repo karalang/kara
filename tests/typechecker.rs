@@ -37437,3 +37437,86 @@ fn test_type_name_rejection_stays_out_of_path_and_field_bases() {
          fn main() { let _ = go(DiskStore {}); }",
     );
 }
+
+/// B-2026-08-12-32 — a user trait `impl` on `String` resolves at the call site
+/// and satisfies a trait bound.
+///
+/// Both halves failed, for two different reasons, and fixing either alone
+/// leaves a worse state than the bug:
+///
+///   * `env_add_impl` bailed through its `_ => return` for a `Type::Str`
+///     target, so `impl Zero for String` was accepted in complete silence and
+///     never registered — the call site then reported `no method 'describe' on
+///     type 'String'`, phrased as though the method had never been declared,
+///     and bound checking omitted the impl from its "implemented by" list.
+///   * the call site early-returned into the builtin String surface
+///     unconditionally, on the stated assumption that "String has no user impl
+///     block, so `infer_str_method` is the complete surface for it".
+#[test]
+fn test_user_trait_impl_on_string_resolves() {
+    typecheck_ok(
+        "trait Zero { fn describe(ref self) -> String; }\n\
+         impl Zero for String { fn describe(ref self) -> String { return f\"s\"; } }\n\
+         fn main() { let s: String = \"hi\"; println(s.describe()); }",
+    );
+}
+
+#[test]
+fn test_user_trait_impl_on_string_satisfies_bound() {
+    typecheck_ok(
+        "trait Zero { fn describe(ref self) -> String; }\n\
+         impl Zero for String { fn describe(ref self) -> String { return f\"s\"; } }\n\
+         fn show[T: Zero](x: ref T) -> String { return x.describe(); }\n\
+         fn main() { let s: String = \"hi\"; println(show(s)); }",
+    );
+}
+
+/// B-2026-08-12-32 — the builtin String surface keeps precedence over a user
+/// impl that defines the same name.
+///
+/// This is what makes the fix purely additive: a program that compiles today
+/// resolves every String call through the builtin surface, and must continue
+/// to. `len` is the sharp case — a user impl defining it must NOT hijack
+/// `s.len()`, whose builtin returns `i64` while this impl returns `String`.
+#[test]
+fn test_string_builtin_surface_still_wins() {
+    typecheck_ok(
+        "trait Shadow { fn len(ref self) -> String; }\n\
+         impl Shadow for String { fn len(ref self) -> String { return f\"shadowed\"; } }\n\
+         fn main() {\n\
+             let s: String = \"hi\";\n\
+             let n: i64 = s.len();\n\
+             println(n);\n\
+         }",
+    );
+}
+
+/// B-2026-08-12-32 — `Slice[T]` is deliberately NOT covered, and this pins the
+/// boundary rather than leaving it to drift.
+///
+/// Registering `Slice` the same way makes `T: Zero` accept a `Slice` at
+/// `karac check` while both compiled backends still fail to emit the call —
+/// converting a clean compile error into a check-green/backend-dead program,
+/// which is a strictly worse failure than the one this row reports. If this
+/// test ever starts failing, the Slice call-site gate and codegen fallthrough
+/// have landed and the follow-up row should close with it.
+#[test]
+fn test_user_trait_impl_on_slice_still_rejected() {
+    let errors = typecheck_errors(
+        "trait Zero { fn describe(ref self) -> String; }\n\
+         impl Zero for Slice[i64] { fn describe(ref self) -> String { return f\"z\"; } }\n\
+         fn main() {\n\
+             let v: Vec[i64] = Vec.new();\n\
+             let s: Slice[i64] = v[..];\n\
+             println(s.describe());\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'describe'")),
+        "a Slice user-impl call must still be REJECTED at check rather than \
+         accepted and then failing in codegen; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}

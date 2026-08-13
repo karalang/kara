@@ -2279,6 +2279,34 @@ impl<'a> super::TypeChecker<'a> {
                     None => return,
                 }
             }
+            // Trait impls on `String` — the one non-`Named`, non-scalar builtin
+            // whose method dispatch is complete end-to-end. B-2026-08-12-32, and
+            // it is the SAME BUG the primitive arm above was added to fix, one
+            // type family later: without an arm here the impl fell through the
+            // `_ => return` and never registered, so `impl Zero for String` was
+            // accepted in full silence and the first call site reported
+            // `no method 'describe' on type 'String'` — phrased as though the
+            // method had never been declared. It also made the impl invisible to
+            // BOUND checking, so `T: Zero` over a `String` reported "`String`
+            // does not implement `Zero`" with the impl omitted from the
+            // "implemented by" list.
+            //
+            // Registered under `method_callee_type_name`'s canonical name, which
+            // is what the value-receiver call site looks up — the same
+            // correspondence the primitive arm relies on.
+            //
+            // `Slice[T]` / `Array[T, N]` / `Vector[T, N]` are DELIBERATELY NOT
+            // here, and the reason is measured rather than cautious: registering
+            // them makes `T: Zero` accept a `Slice` at `karac check` while both
+            // compiled backends still fail to emit the call, i.e. it converts a
+            // clean compile error into a check-green/backend-dead program. That
+            // is a strictly worse failure than the one this row reports. They
+            // need their own call-site gate and codegen fallthrough first — see
+            // the follow-up row.
+            Type::Str => match method_callee_type_name(&lowered_target) {
+                Some(name) => (name, Vec::new()),
+                None => return,
+            },
             // Non-path target types (`impl Foo for (i32, i32)` etc.) are
             // unsupported in v1; bail without registering. Matches the
             // pre-Theme-4 behavior of the path-only short-circuit.

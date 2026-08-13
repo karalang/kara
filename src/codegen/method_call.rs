@@ -4839,11 +4839,30 @@ impl<'ctx> super::Codegen<'ctx> {
                             // fall through to the generic user-impl dispatch
                             // (`inferred_receiver_type` → `Vec.method`, below) —
                             // otherwise loud-fail with the builtin's error.
+                            // B-2026-08-12-32 — `String.{method}` joins the same
+                            // test. A `String` variable is registered in
+                            // `vec_elem_types` (it shares Vec's
+                            // `{ptr,len,cap}` shape), so an `impl Trait for
+                            // String` method lands in this dispatcher, gets no
+                            // arm, and — before this — loud-failed the build
+                            // with "Vec/String method 'describe' is not yet
+                            // supported in codegen" even though the
+                            // typechecker had resolved it.
+                            //
+                            // That combination is the shape worth naming: the
+                            // typecheck-side half of this row without this line
+                            // is check-green and interp-green with BOTH
+                            // compiled backends dead, which is a strictly worse
+                            // failure than the `no method` it replaced.
                             let has_user_impl =
                                 self.module.get_function(&format!("Vec.{method}")).is_some()
                                     || self
                                         .module
                                         .get_function(&format!("VecDeque.{method}"))
+                                        .is_some()
+                                    || self
+                                        .module
+                                        .get_function(&format!("String.{method}"))
                                         .is_some();
                             if !has_user_impl {
                                 return Err(e);

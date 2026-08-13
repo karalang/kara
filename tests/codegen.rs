@@ -23030,6 +23030,40 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_trait_impl_on_string_dispatches() {
+        // B-2026-08-12-32 — the END-TO-END half. The typecheck fix alone was
+        // measured check-green, interp-green and DEAD on both compiled backends
+        // ("Vec/String method 'describe' is not yet supported in codegen"),
+        // which is a strictly worse failure than the `no method` it replaced —
+        // so this asserts the compiled output, not just that it builds.
+        //
+        // A `String` variable is registered in `vec_elem_types` (it shares Vec's
+        // `{ptr,len,cap}` shape), so the call lands in the builtin Vec/String
+        // dispatcher; the fix lets it fall through to user-impl dispatch when
+        // `String.<method>` was emitted, exactly as the blanket-`Vec` case
+        // already did.
+        //
+        // `s.len()` and the bound call are in the same program on purpose: the
+        // builtin surface must keep working alongside the user impl, and the
+        // generic `show` proves bound dispatch reaches the same function.
+        assert_eq!(
+            run_program(
+                "trait Zero { fn describe(ref self) -> String; }\n\
+                 impl Zero for String { fn describe(ref self) -> String { return f\"s:{self}\"; } }\n\
+                 fn show[T: Zero](x: ref T) -> String { return x.describe(); }\n\
+                 fn main() {\n\
+                     let s: String = \"hi\";\n\
+                     println(s.describe());\n\
+                     println(show(s));\n\
+                     println(s.len());\n\
+                 }"
+            )
+            .as_deref(),
+            Some("s:hi\ns:hi\n2\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_index_assign_elem_to_elem_swaps_correctly() {
         // B-2026-08-12-26's VALUE side. The fix frees the displaced element
         // before the store, which is a free-before-store on a slot the RHS was
