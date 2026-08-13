@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 105 | 0 |
 | run-vs-build | 105 | 0 |
 | missing-feature | 95 | 0 |
-| perf | 64 | 0 |
+| perf | 65 | 1 |
 | false-positive | 61 | 0 |
 | diagnostics | 52 | 0 |
 | crash | 44 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 833 | 0 |
+| codegen | 834 | 1 |
 | typecheck | 161 | 0 |
 | interp | 140 | 0 |
 | ownership | 47 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1154 surfaced · 0 open · 1142 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1155 surfaced · 1 open · 1142 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-13-10 | 2026-08-13 | codegen | medium | kara is 1.58x behind EQUAL-SAFETY rustc and 1.49x behind clang on the min/argmin/second-min reduction of kata #265's O(n*k) DP, because LLVM if-converts and FULLY unrolls that loop for rustc/clang but only partially unrolls it (4x) for kara and leaves a data-dependent branch per element. Measured cmov counts in main: rustc -O 133, rustc -O -C overflow-checks=on 127, clang -O3 129, kara 17. | LLVM unroll-factor and if-conversion decisions on the counted reduction loop karac emits (src/codegen loop lowering + pass pipeline); compare against the fully-unrolled branchless form rustc produces for the same k=32 min/argmin/second-min update |
 
 ### Wontfix (2)
 
