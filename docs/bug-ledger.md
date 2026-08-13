@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 124 | 1 |
 | codegen-gap | 105 | 0 |
 | run-vs-build | 104 | 1 |
-| missing-feature | 93 | 1 |
+| missing-feature | 94 | 1 |
 | perf | 64 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 52 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 827 | 2 |
-| typecheck | 159 | 1 |
+| codegen | 828 | 3 |
+| typecheck | 160 | 1 |
 | interp | 138 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1148 surfaced · 3 open · 1133 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1149 surfaced · 3 open · 1134 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-32 | 2026-08-13 | typecheck | medium | A user trait `impl` on `String` or `Slice[T]` is ACCEPTED but never found at the call site: `impl Zero for String { .. }` then `s.describe()` fails with `no method 'describe' on type 'String'`. The same impl on `i64`, `f64`, `bool` or even `Vec[i64]` resolves fine, so this is a per-builtin hole in method resolution rather than a blanket 'no user traits on builtins' rule. | method resolution for a USER trait impl whose target is a builtin type -- the `impl Zero for String` declaration is accepted, but a `String` receiver never finds the method |
 | B-2026-08-13-2 | 2026-08-13 | codegen | medium | `.to_string()` on a NON-IDENTIFIER scalar receiver is check-green and interp-green but dies under BOTH compiled backends the moment it is used as a receiver for a further method: `'x'.to_string().to_uppercase()`, `7.to_string().len()`, `true.to_string().to_uppercase()`, `(7 + 1).to_string().len()`, `3.5.to_string().len()` -- and one shape, `'x'.to_string().to_string()`, is an outright codegen ICE (`Found IntValue ... but expected the StructValue variant`) | `compile_method_call` / `try_compile_nonident_collection_method` in src/codegen/method_call.rs -- the non-identifier-receiver dispatch for `to_string` |
 | B-2026-08-13-4 | 2026-08-13 | codegen | high | Binding or consuming a NESTED heap field read off a Vec ELEMENT double-frees: `let w = ds[0].inner.word` over `Vec[Deep]` with `struct Deep { inner: Pair, .. }` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string — no call, no index-assign, nothing else in the program | `clone_vec_elem_heap_field_read` (src/codegen/collections.rs) — it handles the ONE-level `ps[0].word` and has no nested sibling |
+| B-2026-08-12-34 | 2026-08-13 | typecheck+codegen | medium | A user trait `impl` on `Slice[T]` / `Map` / `Set` is still not callable, and `Map`'s is check-green with BOTH compiled backends dead. B-2026-08-12-32 fixed `String` end-to-end; these are the receivers whose call-site gate and codegen fallthrough it deliberately did not add. | — |
 
 ### Wontfix (2)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1148 surfaced
 
 </details>
 
-### Fixed (1133)
+### Fixed (1134)
 
-<details><summary>1133 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1134 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3760,6 +3760,72 @@ with no `ref` binding available to hand -- was written around an
 `extend(prefix: ref String, v: i64)` helper that existed solely to turn two
 owned reads into two borrows. Written directly, without the helper, it now
 passes `karac check` silently, runs valgrind-clean and gives the right answer. |
+| B-2026-08-12-32 | typecheck | medium | A user trait `impl` on `String` or `Slice[T]` is ACCEPTED but never found at the call site: `impl Zero for String { . | FIXED by ad9fb73 for `String`, which is the row's headline and its repro.
+`Slice[T]` is deliberately NOT fixed and the reason is measured, not cautious --
+see the boundary section below.
+
+TWO INDEPENDENT CAUSES, and the row's framing ("a per-builtin hole in method
+resolution") is right but under-counts them. Fixing either alone leaves a state
+worse than the bug:
+
+  1. REGISTRATION. `env_add_impl`'s target-name match handles `Named`,
+     `Shared`, `Refinement` and the scalar primitives, then `_ => return`. A
+     `Type::Str` target fell through it, so `impl Zero for String` was never
+     entered into the impl table at all. That is the whole of the row's
+     "declaration is accepted" trap -- there is nothing to warn about, because
+     nothing was recorded. It also explains the row's NOT INVESTIGATED note:
+     bound checking omitted the impl from its "implemented by" list because the
+     list is that same table.
+
+     This is the SAME BUG the primitive arm directly above it was added to fix
+     (B-2026-07-03-5), one type family later; that arm's own comment describes
+     the identical symptom for `u8`.
+
+  2. DISPATCH. The call site early-returned into `infer_str_method`
+     unconditionally, under a comment stating the assumption this row refutes:
+     "String has no user impl block, so `infer_str_method` is the complete
+     surface for it."
+
+  3. And a third, only visible once the first two are fixed: CODEGEN. A
+     `String` variable is registered in `vec_elem_types` (it shares Vec's
+     `{ptr,len,cap}` shape), so the call lands in the builtin Vec/String
+     dispatcher and loud-failed with "Vec/String method 'describe' is not yet
+     supported in codegen". The blanket-`Vec` case already had the fallthrough
+     for exactly this (`impl Trait for Vec[i64]`); `String.<method>` simply was
+     not in its test.
+
+WHY ALL THREE HAD TO LAND TOGETHER, measured at each step: with only the
+typecheck halves, the repro is `karac check`-green, `--interp`-green, and DEAD
+on both compiled backends. That is a run-vs-build divergence -- a strictly
+worse failure than the `no method` it replaced, and the same class as
+B-2026-08-13-2. Shipping the "safe-looking" half alone would have been a
+regression in kind.
+
+BUILTIN METHODS KEEP PRECEDENCE. The impl table is consulted only for a name
+`infer_str_method` does not answer (`STRING_BUILTIN_METHODS`), so a user impl
+defining `len` cannot hijack `s.len()` -- pinned by a test where the builtin
+returns `i64` and the shadowing impl returns `String`. That ordering is what
+makes the change purely additive: every String call in a program that compiles
+today resolves through the builtin surface and continues to.
+
+THE BOUNDARY, and it is the interesting part of this row. `Slice[T]` /
+`Array[T, N]` / `Vector[T, N]` were implemented alongside `String` and then
+REVERTED, because registering them is worse than leaving them broken: it makes
+`T: Zero` accept a `Slice` at `karac check` while both compiled backends still
+fail to emit the call. Measured directly -- with the Slice arms in,
+`bd_slice.kara` went from a clean "does not implement `Zero`" compile error to
+check-green / AOT-dead. They need their own call-site gate and codegen
+fallthrough first, and until then a clean compile error is the better failure.
+`test_user_trait_impl_on_slice_still_rejected` pins that boundary so it cannot
+drift silently.
+
+WIDER THAN THE ROW MEASURED, and one of the extras is already broken today:
+`Map` and `Set` fail direct dispatch exactly as `String` and `Slice` did (the
+row measured only `String` and `Slice`). `Map` additionally has a PRE-EXISTING
+run-vs-build divergence that this row did not touch and neither did I -- its
+impl registers (it is `Type::Named`), so `T: Zero` over a `Map` is check-green
+today while both compiled backends fail. That is a live bug independent of
+anything here. All of it is filed as the follow-up row. |
 | B-2026-08-13-3 | codegen | high | Passing a Vec ELEMENT whose struct has a NESTED STRUCT field to a call and assigning the result back to that same slot DOUBLE-FREES on both compiled… | FIXED by 5e6b6f0. The abort is gone on both compiled backends, output matches the
 interpreter, and the ASAN pin fails without the code change.
 
