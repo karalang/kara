@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 240 | 0 |
+| miscompile | 241 | 1 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 107 | 1 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 836 | 1 |
-| typecheck | 161 | 0 |
+| codegen | 837 | 2 |
+| typecheck | 162 | 1 |
 | interp | 141 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1159 surfaced · 1 open · 1146 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1160 surfaced · 2 open · 1146 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-13-14 | 2026-08-13 | interp+codegen | high | Binding a NESTED STRUCT field (`let mut t = b.a;`) EMPTIES the source under both compiled backends while the interpreter treats it as an ALIAS: codegen prints the copy's contents and `0` for the source, interp prints the same value twice. Neither backend implements the COPY the language's field-read semantics call for, and they disagree with each other | the struct-field binding path — the source-side cap-zeroing that makes `let t = b.a` a MOVE in codegen, against the interpreter's alias |
+| B-2026-08-13-15 | 2026-08-13 | typecheck+codegen | high | SILENT WRONG ANSWER: `Set[i64].contains(x)` called with a NARROWER integer (a `u8` from `String.bytes()`) returns false for an element that IS present, under BOTH compiled backends, while the interpreter answers correctly. The typechecker accepts the width mismatch it rejects in arithmetic, and codegen then stores the narrow value into an elem_ty-sized slot without converting it, so the erased runtime probe hashes the undefined high bytes. | src/codegen/collections.rs Set `contains` arm (~L323-360): `compile_expr(&args[0].value)` then `build_store(elem_slot, elem_val)` into a `create_entry_alloca(.., elem_ty)` slot, with the mono fast path gated on `elem_val.get_type() == elem_ty`. Same alloca-and-store shape in the `insert` arm (~L116). Upstream question is whether typecheck should reject the mismatch at all — see DESIGN CALL in detail. |
 
 ### Wontfix (2)
 
