@@ -2860,8 +2860,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Scalar width coercion at the tail-ret boundary —
                     // mirrors the explicit-`return` site in `exprs.rs`
                     // (`fn f() -> i32 { 0 }` would otherwise emit
-                    // `ret i64 0`). See `coerce_scalar_to_type`.
-                    let val = self.coerce_to_current_ret_type(val);
+                    // `ret i64 0`). See `coerce_scalar_to_type`. The tail
+                    // expression rides along so a widen off an unsigned narrow
+                    // type zero-extends (B-2026-08-13-15).
+                    let val =
+                        self.coerce_to_current_ret_type_from(val, func.body.final_expr.as_deref());
                     self.builder.build_return(Some(&val)).unwrap();
                 }
             } else {

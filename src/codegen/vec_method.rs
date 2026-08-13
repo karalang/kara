@@ -2857,7 +2857,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         return Ok(self.context.i64_type().const_zero().into());
                     }
                 }
-                let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
+                let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
                 self.builder.build_store(elem_ptr, elem_val).unwrap();
                 // A for-loop struct-element binding aliases the SOURCE
                 // container's slot — deep-copy the stored fields so the two
@@ -3026,7 +3026,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_gep(elem_ty, cur_data, &[idx_val], "insert.slot")
                         .unwrap()
                 };
-                let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
+                let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[1].value);
                 self.builder.build_store(slot, elem_val).unwrap();
                 // For-loop struct-element source: copy-depth == drop-depth
                 // (B-2026-08-01-24, same as the push arm).
@@ -3217,7 +3217,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                 };
                 // Narrow to element width — see the `push` store note.
-                let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
+                let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
                 self.builder.build_store(elem_ptr, elem_val).unwrap();
                 // For-loop struct-element source: copy-depth == drop-depth
                 // (B-2026-08-01-24, same as the push arm).
@@ -3401,7 +3401,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_memmove(shifted_dst, 8, cur_data, 8, shift_bytes)
                     .unwrap();
-                let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
+                let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
                 self.builder.build_store(cur_data, elem_val).unwrap();
                 // For-loop struct-element source: copy-depth == drop-depth
                 // (B-2026-08-01-24, same as the push arm).
@@ -3580,7 +3580,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_memmove(shifted_dst, 8, cur_data, 8, shift_bytes)
                     .unwrap();
-                let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
+                let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
                 self.builder.build_store(cur_data, elem_val).unwrap();
                 // For-loop struct-element source: copy-depth == drop-depth
                 // (B-2026-08-01-24, same as the push arm).

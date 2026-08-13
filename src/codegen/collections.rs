@@ -93,6 +93,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("Set.insert requires a value argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // Widen/narrow a scalar element to the Set's declared element
+                // width BEFORE it is staged (B-2026-08-13-15). The element
+                // slot below is `elem_ty`-sized, so storing a narrower value
+                // wrote only its low bytes and left the rest UNDEFINED — which
+                // the erased runtime then hashed, making
+                // `Set[i64].contains(some_u8)` answer differently per backend
+                // and per optimization level. Coercing here also lets the
+                // scalar mono fast path fire, since it is gated on the value's
+                // type matching `elem_ty`. No-op for heap elements
+                // (`Set[String]` / `Set[Vec[T]]`), which are not scalars.
+                let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
                 // Consume-site ownership pair, identical to `Vec.push` /
                 // `Map.insert`: an f-string element (`s.insert(f"…")`) moves
                 // its buffer in — disarm the staged accumulator's scope-exit
@@ -213,6 +224,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let fn_val = self.current_fn.unwrap();
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // Widen/narrow a scalar element to the Set's declared element
+                // width BEFORE it is staged (B-2026-08-13-15). The element
+                // slot below is `elem_ty`-sized, so storing a narrower value
+                // wrote only its low bytes and left the rest UNDEFINED — which
+                // the erased runtime then hashed, making
+                // `Set[i64].contains(some_u8)` answer differently per backend
+                // and per optimization level. Coercing here also lets the
+                // scalar mono fast path fire, since it is gated on the value's
+                // type matching `elem_ty`. No-op for heap elements
+                // (`Set[String]` / `Set[Vec[T]]`), which are not scalars.
+                let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
                 self.suppress_fstr_acc_if_moved_out(&args[0].value);
                 let elem_val = self.maybe_defensive_copy_param_arg(&args[0].value, elem_val);
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
@@ -325,6 +347,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("Set.contains requires a value argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // Widen/narrow a scalar element to the Set's declared element
+                // width BEFORE it is staged (B-2026-08-13-15). The element
+                // slot below is `elem_ty`-sized, so storing a narrower value
+                // wrote only its low bytes and left the rest UNDEFINED — which
+                // the erased runtime then hashed, making
+                // `Set[i64].contains(some_u8)` answer differently per backend
+                // and per optimization level. Coercing here also lets the
+                // scalar mono fast path fire, since it is gated on the value's
+                // type matching `elem_ty`. No-op for heap elements
+                // (`Set[String]` / `Set[Vec[T]]`), which are not scalars.
+                let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
                 let fn_val = self.current_fn.unwrap();
                 let elem_slot = self.create_entry_alloca(fn_val, "set.contains.elem", elem_ty);
                 self.builder.build_store(elem_slot, elem_val).unwrap();
@@ -372,6 +405,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("Set.remove requires a value argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // Widen/narrow a scalar element to the Set's declared element
+                // width BEFORE it is staged (B-2026-08-13-15). The element
+                // slot below is `elem_ty`-sized, so storing a narrower value
+                // wrote only its low bytes and left the rest UNDEFINED — which
+                // the erased runtime then hashed, making
+                // `Set[i64].contains(some_u8)` answer differently per backend
+                // and per optimization level. Coercing here also lets the
+                // scalar mono fast path fire, since it is gated on the value's
+                // type matching `elem_ty`. No-op for heap elements
+                // (`Set[String]` / `Set[Vec[T]]`), which are not scalars.
+                let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
                 let fn_val = self.current_fn.unwrap();
                 let elem_slot = self.create_entry_alloca(fn_val, "set.remove.elem", elem_ty);
                 self.builder.build_store(elem_slot, elem_val).unwrap();
@@ -1188,6 +1232,36 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// [`Self::coerce_literal_elem_to_type`] for an element that is not
+    /// necessarily a literal. A collection literal's items can be arbitrary
+    /// expressions (`let v: Vec[i64] = vec![b, w]` with `b: u8`), and then the
+    /// "unsuffixed literals are signed" premise above does not hold: both the
+    /// widening and the int→float leg have to follow the SOURCE's signedness
+    /// or `200u8` lands in the container as -56 (B-2026-08-13-15).
+    pub(super) fn coerce_literal_elem_to_type_from(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        target: BasicTypeEnum<'ctx>,
+        src: &Expr,
+    ) -> BasicValueEnum<'ctx> {
+        match (val, target) {
+            (BasicValueEnum::IntValue(iv), BasicTypeEnum::FloatType(ft)) => {
+                if self.expr_is_unsigned_int(src) {
+                    self.builder
+                        .build_unsigned_int_to_float(iv, ft, "lit.uitofp")
+                        .unwrap()
+                        .into()
+                } else {
+                    self.builder
+                        .build_signed_int_to_float(iv, ft, "lit.sitofp")
+                        .unwrap()
+                        .into()
+                }
+            }
+            _ => self.coerce_scalar_to_type_from(val, target, src),
+        }
+    }
+
     pub(super) fn compile_array_literal(
         &mut self,
         elems: &[Expr],
@@ -1202,7 +1276,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let v = self.compile_expr(e)?;
                 // B-2026-07-02-6 — see `literal_pending_elem_hint`.
                 Ok(match elem_hint {
-                    Some(h) => self.coerce_literal_elem_to_type(v, h),
+                    Some(h) => self.coerce_literal_elem_to_type_from(v, h, e),
                     None => v,
                 })
             })
@@ -1312,7 +1386,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // B-2026-07-02-6 — see `literal_pending_elem_hint`.
             vals.push(match elem_hint {
-                Some(h) => self.coerce_literal_elem_to_type(v, h),
+                Some(h) => self.coerce_literal_elem_to_type_from(v, h, e),
                 None => v,
             });
         }
@@ -4798,6 +4872,7 @@ impl<'ctx> super::Codegen<'ctx> {
         index: &Expr,
         val: BasicValueEnum<'ctx>,
         rhs_is_fresh: bool,
+        rhs_src: Option<&Expr>,
     ) -> Result<(), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let vec_ty = self.vec_struct_type();
@@ -4871,7 +4946,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // are `{ptr,len,cap}` vec-structs, mutually exclusive with the ptr /
         // 4-word-Option slots handled here.
         let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
-        self.emit_elem_store_releasing_displaced(elem_ptr, elem_ty, elem_te, val, rhs_is_fresh)
+        self.emit_elem_store_releasing_displaced(
+            elem_ptr,
+            elem_ty,
+            elem_te,
+            val,
+            rhs_is_fresh,
+            rhs_src,
+        )
     }
 
     /// Store `val` into an already-computed Vec ELEMENT slot, first releasing
@@ -4899,6 +4981,7 @@ impl<'ctx> super::Codegen<'ctx> {
         elem_te: Option<TypeExpr>,
         val: BasicValueEnum<'ctx>,
         rhs_is_fresh: bool,
+        rhs_src: Option<&Expr>,
     ) -> Result<(), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let is_opt_shared = elem_te
@@ -4975,7 +5058,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // sub-word element (`v[i] = b'a' + (k as u8)` into `Vec[u8]`) compiles
         // to i64 and would write 8 bytes over a 1-byte slot. Same fix as the
         // `push` element store and `coerce_to_struct_field_ty`.
-        let val = self.coerce_scalar_to_type(val, elem_ty);
+        // Source-aware so an unsigned narrow RHS zero-extends into a wider
+        // element (B-2026-08-13-15); the narrowing leg is unchanged.
+        let val = self.coerce_scalar_to_type_src(val, elem_ty, rhs_src);
         self.builder.build_store(elem_ptr, val).unwrap();
         Ok(())
     }
@@ -4999,6 +5084,7 @@ impl<'ctx> super::Codegen<'ctx> {
         inner_index: &Expr,
         val: BasicValueEnum<'ctx>,
         rhs_is_fresh: bool,
+        rhs_src: Option<&Expr>,
     ) -> Result<(), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let vec_ty = self.vec_struct_type();
@@ -5104,6 +5190,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(inner_elem_te),
             val,
             rhs_is_fresh,
+            rhs_src,
         )
     }
 
@@ -5112,6 +5199,7 @@ impl<'ctx> super::Codegen<'ctx> {
         var_name: &str,
         index: &Expr,
         val: BasicValueEnum<'ctx>,
+        rhs_src: Option<&Expr>,
     ) -> Result<(), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let slice_ty = self.slice_struct_type();
@@ -5159,7 +5247,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // Narrow to element width before storing into a sub-word slice element
         // — same fix as the Vec push / index-store paths.
-        let val = self.coerce_scalar_to_type(val, elem_ty);
+        let val = self.coerce_scalar_to_type_src(val, elem_ty, rhs_src);
         let store = self.builder.build_store(elem_ptr, val).unwrap();
         // Scoped-alias metadata for an exclusive/shared slice PARAM (no-op for
         // any local slice — alias-metadata slice 4).
@@ -5232,6 +5320,7 @@ impl<'ctx> super::Codegen<'ctx> {
         index: &Expr,
         val: BasicValueEnum<'ctx>,
         rhs_is_fresh: bool,
+        rhs_src: Option<&Expr>,
     ) -> Result<(), String> {
         // Tensor element store: `t[i, j] = v` — same layout helpers as
         // the read path (`src/codegen/tensor.rs`).
@@ -5263,7 +5352,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // read-only Slice[T] — codegen treats the write path uniformly.
         if let ExprKind::Identifier(name) = &object.kind {
             if self.slice_elem_types.contains_key(name.as_str()) {
-                return self.compile_slice_index_store(name, index, val);
+                return self.compile_slice_index_store(name, index, val, rhs_src);
             }
         }
 
@@ -5290,7 +5379,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(name.as_str())
                     .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
                 if !slot_is_array {
-                    return self.compile_vec_index_store(name, index, val, rhs_is_fresh);
+                    return self.compile_vec_index_store(name, index, val, rhs_is_fresh, rhs_src);
                 }
             }
         }
@@ -5318,6 +5407,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         index,
                         val,
                         rhs_is_fresh,
+                        rhs_src,
                     );
                 }
             }
@@ -5381,7 +5471,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         },
                         span: object.span.clone(),
                     };
-                    let result = self.compile_index_store(&nested_obj, index, val, rhs_is_fresh);
+                    let result =
+                        self.compile_index_store(&nested_obj, index, val, rhs_is_fresh, rhs_src);
                     self.variables.remove(&synth);
                     self.vec_elem_types.remove(&synth);
                     self.slice_elem_types.remove(&synth);
@@ -5439,7 +5530,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     kind: ExprKind::Identifier(synth.clone()),
                     span: object.span.clone(),
                 };
-                let result = self.compile_index_store(&synth_expr, index, val, rhs_is_fresh);
+                let result =
+                    self.compile_index_store(&synth_expr, index, val, rhs_is_fresh, rhs_src);
 
                 // Clean up synth registrations (same set as the FR slice).
                 self.variables.remove(&synth);
@@ -5506,8 +5598,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             kind: ExprKind::Identifier(synth.clone()),
                             span: object.span.clone(),
                         };
-                        let result =
-                            self.compile_index_store(&synth_expr, index, val, rhs_is_fresh);
+                        let result = self.compile_index_store(
+                            &synth_expr,
+                            index,
+                            val,
+                            rhs_is_fresh,
+                            rhs_src,
+                        );
                         self.variables.remove(&synth);
                         self.vec_elem_types.remove(&synth);
                         self.slice_elem_types.remove(&synth);

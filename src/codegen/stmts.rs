@@ -4889,6 +4889,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // re-registration). Reset before the `?` so an error can't
                     // leak the flag into later compilation.
                     self.suppress_shadow_metadata_purge = shadow_name.is_some();
+                    // Size the slot from the ANNOTATION, not from whatever
+                    // width the RHS compiled at — `bind_pattern` allocas at
+                    // `val.get_type()`, so `let x: i64 = b` with `b: u8` got a
+                    // one-byte slot under an i64-typed binding
+                    // (B-2026-08-13-15). Widening only; see the helper.
+                    let val = self.widen_let_value_to_annotation(val, ty.as_ref(), value);
                     let bind_res = self.bind_pattern(pattern, val);
                     self.suppress_shadow_metadata_purge = false;
                     bind_res?;
@@ -8554,7 +8560,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.suppress_user_drop_for_var(&base);
                         }
                     }
-                    self.compile_field_store(object, field, val, rhs_is_fresh)?;
+                    self.compile_field_store(object, field, val, rhs_is_fresh, Some(value))?;
                     // B-2026-07-15-25: `compile_field_store` now drops the OLD
                     // heap field value before overwriting it, so a moved-binding
                     // RHS (`h.v = v2`, `h.s = heap_str`, `h.m = m2`) leaves the
@@ -8648,7 +8654,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         rhs_index_deep_cloned,
                         clone_log_mark,
                     );
-                    self.compile_index_store(object, index, val, rhs_is_fresh)?;
+                    self.compile_index_store(object, index, val, rhs_is_fresh, Some(value))?;
                     // B-2026-07-11-32: an f-string RHS stored into a Vec element
                     // slot (`v[i] = f"…"`). `compile_vec_index_store` already
                     // dropped the old element and MOVED the acc's {ptr,len,cap}
@@ -9012,7 +9018,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 let result = self.compile_binop(&binop, current, rhs)?;
                 match &target.kind {
                     ExprKind::FieldAccess { object, field } => {
-                        self.compile_field_store(object, field, result, false)?;
+                        // Compound assign: the stored value is the computed result, whose
+                        // type is the FIELD's — no source expression to consult.
+                        self.compile_field_store(object, field, result, false, None)?;
                     }
                     ExprKind::Index { object, index } => {
                         // A compound-assign result (`v[i] OP= rhs`) is a freshly
@@ -9020,7 +9028,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `rhs_is_fresh = true`. A `shared` element can't be an
                         // `OP=` operand (typecheck-rejected), so the refcount-
                         // aware overwrite arm is unreachable here regardless.
-                        self.compile_index_store(object, index, result, true)?;
+                        // Compound assign: the value stored is the computed result, whose
+                        // type is the ELEMENT's — no source expression to consult.
+                        self.compile_index_store(object, index, result, true, None)?;
                     }
                     // `*x OP= rhs` for a value-represented `mut ref` (a closure
                     // `and_modify` param or a CICO fn `mut ref` param): the

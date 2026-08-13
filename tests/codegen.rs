@@ -12869,6 +12869,185 @@ fn main() {
         assert_eq!(got[8], "0", "Set[String].contains found an absent key");
     }
 
+    /// B-2026-08-13-15 — an IMPLICIT WIDENING COERCION must widen the way the
+    /// SOURCE type says, and must actually reach the slot it is widening into.
+    ///
+    /// The typechecker deliberately admits `u8` where `i64` is declared:
+    /// `check_int_widening_coercion` rejects only narrowing, and its own
+    /// diagnostic advertises the rule ("widening coercions such as i32 -> i64
+    /// remain implicit"). Codegen did not implement what that authorizes, in
+    /// two separate ways, and the interpreter implemented it correctly — so
+    /// every case below was a silent wrong ANSWER, not a crash:
+    ///
+    ///   * the boundary coercion sign-extended unconditionally, so any
+    ///     unsigned source with its high bit set went negative (`200u8` into
+    ///     an `i64` param arrived as -56);
+    ///   * the container element/key paths did not coerce AT ALL — they stored
+    ///     the narrow value into an `elem_ty`-sized slot, leaving the high
+    ///     bytes undefined for the erased runtime to hash. That one is the
+    ///     nastiest shape a miscompile takes: the answer varied by BACKEND and
+    ///     by OPTIMIZATION LEVEL (`Set[i64].contains(u8)` returned true under
+    ///     the JIT, false at -O0, false at -O2).
+    ///
+    /// The interpreter is the oracle: every line must match it exactly. The
+    /// values are chosen with the high bit SET (200, 60000, 4000000000)
+    /// because that is the only region where sext and zext differ — the
+    /// original report probed with 97, where they agree, which is why its
+    /// scope table recorded several of these lines as working.
+    #[test]
+    fn test_e2e_implicit_unsigned_widening_matches_interpreter() {
+        let src = r#"
+struct W { mut a: i64 }
+
+fn t64(v: i64) -> i64 { v }
+fn t32(v: i32) -> i32 { v }
+fn ret64(b: u8) -> i64 { b }
+
+fn main() {
+    let b: u8 = 200u8;
+    let w: u16 = 60000u16;
+    let d: u32 = 4000000000u32;
+
+    println(f"01 {t64(b)}");
+    println(f"02 {t64(w)}");
+    println(f"03 {t64(d)}");
+    println(f"04 {t32(b)}");
+    println(f"05 {ret64(b)}");
+
+    let x: i64 = b;
+    println(f"06 {x}");
+
+    let s = W { a: b };
+    println(f"07 {s.a}");
+
+    let mut v: Vec[i64] = vec![];
+    v.push(b);
+    println(f"08 {v[0]}");
+
+    let mut st: Set[i64] = Set.new();
+    st.insert(b);
+    println(f"09 {st.contains(200i64)}");
+    println(f"10 {st.contains(b)}");
+    st.remove(b);
+    println(f"11 {st.len()}");
+
+    let mut m: Map[i64, i64] = Map.new();
+    let _ = m.insert(b, 7i64);
+    println(f"12 {m.get_or(200i64, 0i64)}");
+    println(f"13 {m.contains_key(b)}");
+
+    let arr: Vec[i64] = vec![b, w];
+    println(f"14 {arr[0]} {arr[1]}");
+
+    // Place-expression writes: the same coercion, reached through an
+    // assignment rather than a constructor.
+    let mut ws = W { a: 0i64 };
+    ws.a = b;
+    println(f"15 {ws.a}");
+    v[0] = d;
+    println(f"16 {v[0]}");
+    m[b] = 5i64;
+    println(f"17 {m[200i64]} {m[b]}");
+
+    // int -> float is a widening too, and `sitofp` on a u8 is just as wrong.
+    let fl: f64 = b;
+    println(f"18 {fl}");
+
+    // A tuple's LLVM type comes from its element VALUES, so the bytes are
+    // right and the READ is what has to know the element is unsigned.
+    let t = (b, d);
+    println(f"19 {t.0} {t.1}");
+
+    // Ordered container, separate lowering from the hashed one.
+    let mut ss: SortedSet[i64] = SortedSet.new();
+    ss.insert(b);
+    println(f"20 {ss.contains(b)} {ss.contains(200i64)}");
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // Anti-vacuity: the oracle itself must carry the widened values. If the
+        // interpreter ever regressed to sext, this test would happily assert
+        // agreement on two wrong answers.
+        assert!(
+            expected.contains("01 200") && expected.contains("03 4000000000"),
+            "interpreter oracle is not producing widened values: {expected:?}"
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "compiled output must match the interpreter on every implicit \
+             unsigned widening",
+        );
+    }
+
+    /// B-2026-08-13-15, the shape that found it: a parity set over a string's
+    /// bytes, which is the natural spelling of kata #266's toggle solver.
+    ///
+    /// `s.bytes()` yields `u8`, the set is `Set[i64]`, and `contains` never
+    /// reported true — so the `remove` branch was dead and `insert` was a
+    /// no-op on an existing key. The set silently became the DISTINCT-character
+    /// set instead of the odd-parity one, which is why it hid so well: "aa",
+    /// "zzzzzzzz" and "code" all give the right answer under the wrong set. The
+    /// cases here are chosen so that the two sets DISAGREE.
+    ///
+    /// WHAT THIS TEST IS AND IS NOT, measured rather than assumed: at the
+    /// harness's DEFAULT opt level this shape was GREEN pre-fix, and it went
+    /// red only at `KARAC_OPT_LEVEL=0` (`aab -> false`, exactly as reported) —
+    /// because the defect was undefined slot bytes, and at -O2 the insert and
+    /// the lookup happened to fold to the same residue while at -O0 they did
+    /// not. So this is the real-world SHAPE on the interpreter oracle, not the
+    /// regression guard; the deterministic guard is the sibling test above,
+    /// which fails pre-fix on all 14 of its lines. Keeping both is the same
+    /// call the String-consume-site test makes a few thousand lines up: when
+    /// opt level changes what a defect looks like, say so next to the
+    /// assertion instead of trusting one level's verdict.
+    #[test]
+    fn test_e2e_byte_parity_set_matches_interpreter() {
+        let src = r#"
+fn can_permute_palindrome(s: String) -> bool {
+    let mut odd: Set[i64] = Set.new();
+    for b in s.bytes() {
+        if odd.contains(b) {
+            odd.remove(b);
+        } else {
+            odd.insert(b);
+        }
+    }
+    odd.len() <= 1
+}
+
+fn main() {
+    let cases = vec!["aab", "aabb", "carerac", "aaabbb", "abc"];
+    for c in cases {
+        println(f"{c} {can_permute_palindrome(c)}");
+    }
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // The distinct-character set answers `false` for "aab" and "aabb";
+        // the odd-parity set answers `true`. Pin that the oracle is the
+        // latter, so agreement cannot be reached on the wrong set.
+        assert!(
+            expected.contains("aab true") && expected.contains("aabb true"),
+            "oracle is not computing the odd-parity set: {expected:?}"
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "compiled byte-parity set must match the interpreter"
+        );
+    }
+
     /// B-2026-07-28-6: assigning through a `shared struct` FIELD of a plain
     /// struct must write through the RC handle, so the mutation is visible to
     /// every other holder of that cell.

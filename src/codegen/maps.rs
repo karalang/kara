@@ -503,6 +503,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or(i64_t.into());
 
         let key_val = self.compile_expr(index)?;
+        // Declared-key-width coercion before the `key_ty`-sized slot is
+        // written (B-2026-08-13-15): a narrower key left the high bytes
+        // undefined for the erased runtime to hash, so `m[some_u8]` missed
+        // a key `m[200i64]` had just stored.
+        let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, index);
         let fn_val = self.current_fn.unwrap();
         let key_slot = self.create_entry_alloca(fn_val, "map.idxst.key", key_ty);
         let val_slot = self.create_entry_alloca(fn_val, "map.idxst.val", val_ty);
@@ -566,6 +571,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or(i64_t.into());
 
         let key_val = self.compile_expr(index)?;
+        // Declared-key-width coercion before the `key_ty`-sized slot is
+        // written (B-2026-08-13-15): a narrower key left the high bytes
+        // undefined for the erased runtime to hash, so `m[some_u8]` missed
+        // a key `m[200i64]` had just stored.
+        let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, index);
         let fn_val = self.current_fn.unwrap();
         let key_slot = self.create_entry_alloca(fn_val, "map.idx.key", key_ty);
         let val_slot = self.create_entry_alloca(fn_val, "map.idx.val", val_ty);
@@ -1540,6 +1550,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 let key_val = self.compile_expr(&args[0].value)?;
                 self.suppress_fstr_acc_if_moved_out(&args[0].value);
                 let key_val = self.maybe_defensive_copy_param_arg(&args[0].value, key_val);
+                // Declared-key-width coercion, same reason as the `insert`
+                // arm (B-2026-08-13-15).
+                let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, &args[0].value);
                 let val_val = self.compile_expr(&args[1].value)?;
                 self.suppress_fstr_acc_if_moved_out(&args[1].value);
                 let val_val = self.maybe_defensive_copy_param_arg(&args[1].value, val_val);
@@ -1812,6 +1825,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .into_int_value()
                 } else {
                     let key_val = key_val.unwrap();
+                    // Coerce a scalar key to the declared key width first
+                    // (B-2026-08-13-15): the erased path below stores it into a
+                    // `key_ty`-sized slot, so a narrower key would leave the
+                    // high bytes undefined, and the mono gate right after is
+                    // keyed on the value type matching — a mismatched width
+                    // fell through to precisely the erased path that is
+                    // sensitive to those bytes.
+                    let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, &args[0].value);
                     // Slice 1b.2a — Map[i64, i64] inserts route through
                     // the mono `karac_map_i64_i64_insert_old` symbol (value
                     // calling convention: i64 key + i64 val rather than
@@ -1979,6 +2000,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some(v) => v,
                     None => self.compile_expr(&args[0].value)?,
                 };
+                // Coerce a scalar key to the Map's declared key width before it
+                // is staged (B-2026-08-13-15). The `key_ty`-sized slot below is
+                // written by value, so a narrower key left the high bytes
+                // UNDEFINED and the erased runtime hashed them — the lookup then
+                // missed a key that is present, differently per backend and per
+                // optimization level. No-op for a String/Vec key (not a scalar)
+                // and for a key already at the declared width.
+                let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, &args[0].value);
                 let fn_val = self.current_fn.unwrap();
                 // Slice 1b.3 — Map[i64, i64].get routes through the
                 // mono `karac_map_i64_i64_get` symbol (value calling
@@ -2173,6 +2202,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some(v) => v,
                     None => self.compile_expr(&args[0].value)?,
                 };
+                // Coerce a scalar key to the Map's declared key width before it
+                // is staged (B-2026-08-13-15). The `key_ty`-sized slot below is
+                // written by value, so a narrower key left the high bytes
+                // UNDEFINED and the erased runtime hashed them — the lookup then
+                // missed a key that is present, differently per backend and per
+                // optimization level. No-op for a String/Vec key (not a scalar)
+                // and for a key already at the declared width.
+                let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, &args[0].value);
                 let fn_val = self.current_fn.unwrap();
                 let key_slot = self.create_entry_alloca(fn_val, "map.getor.key", key_ty);
                 let val_slot = self.create_entry_alloca(fn_val, "map.getor.val", val_ty);
@@ -2283,6 +2320,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some(v) => v,
                     None => self.compile_expr(&args[0].value)?,
                 };
+                // Coerce a scalar key to the Map's declared key width before it
+                // is staged (B-2026-08-13-15). The `key_ty`-sized slot below is
+                // written by value, so a narrower key left the high bytes
+                // UNDEFINED and the erased runtime hashed them — the lookup then
+                // missed a key that is present, differently per backend and per
+                // optimization level. No-op for a String/Vec key (not a scalar)
+                // and for a key already at the declared width.
+                let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, &args[0].value);
                 let fn_val = self.current_fn.unwrap();
                 let key_slot = self.create_entry_alloca(fn_val, "map.remove.key", key_ty);
                 let old_slot = self.create_entry_alloca(fn_val, "map.remove.old", val_ty);
@@ -2383,6 +2428,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some(v) => v,
                     None => self.compile_expr(&args[0].value)?,
                 };
+                // Coerce a scalar key to the Map's declared key width before it
+                // is staged (B-2026-08-13-15). The `key_ty`-sized slot below is
+                // written by value, so a narrower key left the high bytes
+                // UNDEFINED and the erased runtime hashed them — the lookup then
+                // missed a key that is present, differently per backend and per
+                // optimization level. No-op for a String/Vec key (not a scalar)
+                // and for a key already at the declared width.
+                let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, &args[0].value);
                 let fn_val = self.current_fn.unwrap();
                 let key_slot = self.create_entry_alloca(fn_val, "map.contains.key", key_ty);
                 self.builder.build_store(key_slot, key_val).unwrap();

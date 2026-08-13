@@ -1591,6 +1591,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or(i64_t.into());
 
         let key_val = self.compile_expr(index)?;
+        // Declared-key-width coercion before the `key_ty`-sized slot is
+        // written (B-2026-08-13-15): a narrower key left the high bytes
+        // undefined for the erased runtime to hash, so `m[some_u8]` missed
+        // a key `m[200i64]` had just stored.
+        let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, index);
         let fn_val = self.current_fn.unwrap();
         let key_slot = self.create_entry_alloca(fn_val, "m.mr.key", key_ty);
         self.builder.build_store(key_slot, key_val).unwrap();

@@ -1524,6 +1524,7 @@ impl<'ctx> super::Codegen<'ctx> {
         field: &str,
         new_val: BasicValueEnum<'ctx>,
         rhs_is_fresh: bool,
+        rhs_src: Option<&Expr>,
     ) -> Result<(), String> {
         // FFI union field store (phase 5 line 569 slice 4). Detect a
         // union-typed receiver and lower as an untyped store at the
@@ -1672,10 +1673,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                             }
                                             // Field-store width coercion —
                                             // see `coerce_to_struct_field_ty`.
-                                            let new_val = self.coerce_to_struct_field_ty(
+                                            let new_val = self.coerce_to_struct_field_ty_src(
                                                 gep_ty,
                                                 idx as u32 + base,
                                                 new_val,
+                                                rhs_src,
                                             );
                                             self.builder.build_store(field_ptr, new_val).unwrap();
                                         }
@@ -1727,10 +1729,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .unwrap();
                                 // Field-store width coercion — see
                                 // `coerce_to_struct_field_ty`.
-                                let new_val = self.coerce_to_struct_field_ty(
+                                let new_val = self.coerce_to_struct_field_ty_src(
                                     gep_ty,
                                     idx as u32 + base,
                                     new_val,
+                                    rhs_src,
                                 );
                                 self.builder.build_store(field_ptr, new_val).unwrap();
                                 return Ok(());
@@ -1837,8 +1840,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap();
                     // Field-store width coercion — see
                     // `coerce_to_struct_field_ty`.
-                    let new_val =
-                        self.coerce_to_struct_field_ty(gep_ty, idx as u32 + base, new_val);
+                    let new_val = self.coerce_to_struct_field_ty_src(
+                        gep_ty,
+                        idx as u32 + base,
+                        new_val,
+                        rhs_src,
+                    );
                     self.builder.build_store(field_ptr, new_val).unwrap();
                     return Ok(());
                 }
@@ -1950,10 +1957,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                     }
                                     // Field-store width coercion — see
                                     // `coerce_to_struct_field_ty`.
-                                    let new_val = self.coerce_to_struct_field_ty(
+                                    let new_val = self.coerce_to_struct_field_ty_src(
                                         gep_ty,
                                         idx as u32 + base,
                                         new_val,
+                                        rhs_src,
                                     );
                                     self.builder.build_store(field_ptr, new_val).unwrap();
                                 }
@@ -2011,7 +2019,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap();
                         // Field-store width coercion — see
                         // `coerce_to_struct_field_ty`.
-                        let new_val = self.coerce_to_struct_field_ty(struct_ty, idx, new_val);
+                        let new_val =
+                            self.coerce_to_struct_field_ty_src(struct_ty, idx, new_val, rhs_src);
                         self.builder.build_store(field_ptr, new_val).unwrap();
                         return Ok(());
                     }
@@ -2067,7 +2076,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         );
                         // Field-store width coercion — see
                         // `coerce_to_struct_field_ty`.
-                        let new_val = self.coerce_to_struct_field_ty(sv.get_type(), idx, new_val);
+                        let new_val = self.coerce_to_struct_field_ty_src(
+                            sv.get_type(),
+                            idx,
+                            new_val,
+                            rhs_src,
+                        );
                         let updated = self
                             .builder
                             .build_insert_value(sv, new_val, idx, field)
@@ -4006,6 +4020,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     .last()
                     .map(|s| is_uint_name(s.as_str()))
                     .unwrap_or(false)),
+            // `t.0` where the tuple element is unsigned. A tuple's LLVM type
+            // is built from its ELEMENT VALUES, so `(b, d)` with `b: u8` is a
+            // `{i8, i32}` — the bytes stored are right, and it is the READ that
+            // was wrong: without this arm the widening on the way out
+            // sign-extended, printing 200 as -56 and 4000000000 as -294967296
+            // on both compiled backends while the interpreter printed the
+            // values (B-2026-08-13-15). Same shape, and same fix, as the
+            // field-held-container arm above.
+            ExprKind::TupleIndex { object, index } => self
+                .tuple_index_elem_type_expr(object, *index)
+                .is_some_and(|te| match &te.kind {
+                    TypeKind::Path(p) => p
+                        .segments
+                        .last()
+                        .map(|s| is_uint_name(s.as_str()))
+                        .unwrap_or(false),
+                    _ => false,
+                }),
             // Struct-field read — the declared field TypeExpr carries
             // the signedness (`println(s.b)` for a `u8` field).
             ExprKind::FieldAccess { object, field } => {
@@ -6826,13 +6858,67 @@ impl<'ctx> super::Codegen<'ctx> {
     /// non-scalar shape pass through untouched, so this is safe to
     /// apply unconditionally at the boundary (it never converts across
     /// classes — the verifier still catches genuinely-wrong IR).
-    /// Widening uses sext (Kāra's default int literal type is signed;
-    /// legal programs only widen via explicit `as`, which carries its
-    /// own signedness — see `compile_cast`).
+    /// Widening defaults to sext, which is right only when the SOURCE is
+    /// signed — use [`Self::coerce_scalar_to_type_from`] wherever the
+    /// source expression is in hand.
+    ///
+    /// The original note here claimed "legal programs only widen via
+    /// explicit `as`, which carries its own signedness". That premise was
+    /// FALSE (B-2026-08-13-15). The typechecker deliberately allows an
+    /// IMPLICIT widening coercion at a typed boundary — `check_int_widening_
+    /// coercion` (typechecker/exprs.rs) rejects only narrowing, and its own
+    /// diagnostic advertises the rule: "widening coercions such as i32 -> i64
+    /// remain implicit". So `fn f(v: i64)` called with a `u8` is a legal
+    /// program that reaches this boundary needing a widen, with no `as` to
+    /// carry the signedness — and sext turned `200u8` into `-56`.
     pub(super) fn coerce_scalar_to_type(
         &self,
         val: BasicValueEnum<'ctx>,
         target: BasicTypeEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        self.coerce_scalar_to_type_unsigned(val, target, false)
+    }
+
+    /// [`Self::coerce_scalar_to_type`] with the source expression's
+    /// signedness taken from the Kāra type rather than assumed.
+    ///
+    /// This is the form to use at any boundary that coerces a compiled
+    /// ARGUMENT / element / field value, because the LLVM value alone cannot
+    /// answer the question: `u8` and `i8` are both `i8`, and only the source
+    /// expression's Kāra type says which extension is correct.
+    /// `expr_is_unsigned_int` returns `false` for anything it cannot resolve,
+    /// so an unknown source keeps the historical sext — the change is confined
+    /// to sources positively known to be unsigned.
+    pub(super) fn coerce_scalar_to_type_from(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        target: BasicTypeEnum<'ctx>,
+        src: &Expr,
+    ) -> BasicValueEnum<'ctx> {
+        self.coerce_scalar_to_type_unsigned(val, target, self.expr_is_unsigned_int(src))
+    }
+
+    /// [`Self::coerce_scalar_to_type_from`] for a caller that may not have the
+    /// source expression; `None` keeps the signedness-blind behaviour.
+    pub(super) fn coerce_scalar_to_type_src(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        target: BasicTypeEnum<'ctx>,
+        src: Option<&Expr>,
+    ) -> BasicValueEnum<'ctx> {
+        match src {
+            Some(e) => self.coerce_scalar_to_type_from(val, target, e),
+            None => self.coerce_scalar_to_type(val, target),
+        }
+    }
+
+    /// Shared core of the two above. `src_unsigned` selects zext over sext on
+    /// the WIDENING leg only; truncation and same-width are signedness-blind.
+    pub(super) fn coerce_scalar_to_type_unsigned(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        target: BasicTypeEnum<'ctx>,
+        src_unsigned: bool,
     ) -> BasicValueEnum<'ctx> {
         match (val, target) {
             (BasicValueEnum::IntValue(iv), BasicTypeEnum::IntType(tt)) => {
@@ -6844,10 +6930,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into()
                 } else if dst_w > src_w {
-                    self.builder
-                        .build_int_s_extend(iv, tt, "bnd.sx")
-                        .unwrap()
-                        .into()
+                    if src_unsigned {
+                        self.builder
+                            .build_int_z_extend(iv, tt, "bnd.zx")
+                            .unwrap()
+                            .into()
+                    } else {
+                        self.builder
+                            .build_int_s_extend(iv, tt, "bnd.sx")
+                            .unwrap()
+                            .into()
+                    }
                 } else {
                     val
                 }
@@ -6856,6 +6949,58 @@ impl<'ctx> super::Codegen<'ctx> {
                 if fv.get_type() != ft =>
             {
                 self.build_float_cast_bf16_safe(fv, ft, "bnd.fcast").into()
+            }
+            _ => val,
+        }
+    }
+
+    /// Widen a `let` initializer to the binding's ANNOTATED width, so the
+    /// slot is the size the annotation declares rather than the size the RHS
+    /// happened to compile at.
+    ///
+    /// `bind_pattern` allocas at `val.get_type()`, which is the right default
+    /// — but `let x: i64 = b` with `b: u8` is a legal implicit widening
+    /// (`check_int_widening_coercion`), and it produced an `alloca i8` holding
+    /// one byte under a binding every later use treats as `i64`. Reading it
+    /// back sign-extended: 200 printed as -56 (B-2026-08-13-15).
+    ///
+    /// WIDENING ONLY, on purpose. Narrowing at a `let` is already handled (an
+    /// out-of-range literal is a typecheck error, and an in-range one is
+    /// range-checked and packed by the literal path), so restricting this to
+    /// the growing direction leaves every existing path bit-identical and
+    /// touches only the shape that was broken.
+    pub(super) fn widen_let_value_to_annotation(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        ty: Option<&TypeExpr>,
+        src: &Expr,
+    ) -> BasicValueEnum<'ctx> {
+        let Some(te) = ty else { return val };
+        let BasicValueEnum::IntValue(iv) = val else {
+            return val;
+        };
+        match self.llvm_type_for_type_expr(te) {
+            BasicTypeEnum::IntType(tt) => {
+                if tt.get_bit_width() <= iv.get_type().get_bit_width() {
+                    return val;
+                }
+                self.coerce_scalar_to_type_from(val, tt.into(), src)
+            }
+            // `let f: f64 = b` — an int-to-float conversion is a widening too,
+            // and it has the same signedness question: `sitofp` on a `u8` 200
+            // yields -56.0.
+            BasicTypeEnum::FloatType(ft) => {
+                if self.expr_is_unsigned_int(src) {
+                    self.builder
+                        .build_unsigned_int_to_float(iv, ft, "let.uitofp")
+                        .unwrap()
+                        .into()
+                } else {
+                    self.builder
+                        .build_signed_int_to_float(iv, ft, "let.sitofp")
+                        .unwrap()
+                        .into()
+                }
             }
             _ => val,
         }
@@ -6903,6 +7048,41 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> BasicValueEnum<'ctx> {
         match agg_ty.get_field_type_at_index(field_index) {
             Some(ft) => self.coerce_scalar_to_type(val, ft),
+            None => val,
+        }
+    }
+
+    /// [`Self::coerce_to_struct_field_ty_from`] for a caller that may or may
+    /// not have the source expression — `None` keeps the signedness-blind
+    /// behaviour. A compound field assign (`s.a += b`) passes `None` on
+    /// purpose: its RHS is the computed result, whose type is the FIELD's, so
+    /// there is nothing for the source expression to say.
+    pub(super) fn coerce_to_struct_field_ty_src(
+        &self,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        field_index: u32,
+        val: BasicValueEnum<'ctx>,
+        src: Option<&Expr>,
+    ) -> BasicValueEnum<'ctx> {
+        match src {
+            Some(e) => self.coerce_to_struct_field_ty_from(agg_ty, field_index, val, e),
+            None => self.coerce_to_struct_field_ty(agg_ty, field_index, val),
+        }
+    }
+
+    /// [`Self::coerce_to_struct_field_ty`] with the initializer expression in
+    /// hand, so a WIDENING into a wider field follows the source's signedness
+    /// (B-2026-08-13-15: `W { a: b }` for `a: i64`, `b: u8` = 200 stored -56).
+    /// The narrowing leg this helper was originally written for is unaffected.
+    pub(super) fn coerce_to_struct_field_ty_from(
+        &self,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        field_index: u32,
+        val: BasicValueEnum<'ctx>,
+        src: &Expr,
+    ) -> BasicValueEnum<'ctx> {
+        match agg_ty.get_field_type_at_index(field_index) {
+            Some(ft) => self.coerce_scalar_to_type_from(val, ft, src),
             None => val,
         }
     }
@@ -6999,10 +7179,59 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         val: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
+        self.coerce_to_current_ret_type_from(val, None)
+    }
+
+    /// [`Self::coerce_to_current_ret_type`] with the returned expression in
+    /// hand, so a widen from an unsigned narrow type zero-extends
+    /// (B-2026-08-13-15: `fn f(b: u8) -> i64 { b }` returned -56 for 200).
+    /// `None` keeps the signedness-blind behaviour.
+    pub(super) fn coerce_to_current_ret_type_from(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        src: Option<&Expr>,
+    ) -> BasicValueEnum<'ctx> {
         match self.current_fn.and_then(|f| f.get_type().get_return_type()) {
-            Some(ret_ty) => self.coerce_scalar_to_type(val, ret_ty),
+            Some(ret_ty) => match src {
+                Some(e) => self.coerce_scalar_to_type_from(val, ret_ty, e),
+                None => self.coerce_scalar_to_type(val, ret_ty),
+            },
             None => val,
         }
+    }
+
+    /// Signedness-correct coercion of ONE call argument, applied where the
+    /// value is produced rather than at the boundary sweep below.
+    ///
+    /// `idx` is the position the value is about to occupy in `compiled_args`,
+    /// so callers pass `compiled_args.len()` immediately before pushing — that
+    /// keeps the value and its source expression together with no parallel
+    /// array to fall out of step. Coerces only int→int widenings of a
+    /// positively-unsigned source; everything else is left for
+    /// [`Self::coerce_args_to_fn_params`], whose behaviour is unchanged.
+    ///
+    /// B-2026-08-13-15: without this, `fn f(v: i64)` called with a `u8` 200 —
+    /// a legal implicit widening — sign-extended to -56 on both compiled
+    /// backends while the interpreter said 200.
+    pub(super) fn coerce_call_arg_scalar(
+        &self,
+        func: inkwell::values::FunctionValue<'ctx>,
+        idx: usize,
+        val: BasicValueEnum<'ctx>,
+        src: &Expr,
+    ) -> BasicValueEnum<'ctx> {
+        let BasicValueEnum::IntValue(iv) = val else {
+            return val;
+        };
+        let Some(inkwell::types::BasicMetadataTypeEnum::IntType(pt)) =
+            func.get_type().get_param_types().get(idx).copied()
+        else {
+            return val;
+        };
+        if pt.get_bit_width() <= iv.get_type().get_bit_width() {
+            return val;
+        }
+        self.coerce_scalar_to_type_from(val, pt.into(), src)
     }
 
     /// Boundary coercion for call args: coerce each scalar arg to the
@@ -7010,6 +7239,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `call i8 @f(i8 5)`). Walks only the zip of declared params ×
     /// supplied args, so variadic tails and arity mismatches (the
     /// verifier's problem, not ours) pass through.
+    ///
+    /// WIDENING here is signedness-blind (sext) because the source
+    /// expressions are long gone by this point. The signedness-carrying
+    /// widen happens earlier, per argument, in
+    /// [`Self::coerce_call_arg_scalar`]; by the time this sweep runs those
+    /// args are already at the declared width, so it no-ops on them.
     pub(super) fn coerce_args_to_fn_params(
         &self,
         func: inkwell::values::FunctionValue<'ctx>,

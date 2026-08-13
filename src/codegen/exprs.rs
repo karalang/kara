@@ -1135,8 +1135,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         // signature declares the real width; without
                         // the trunc, `fn f() -> i32 { return 0; }`
                         // emits `ret i64 0` and fails verification.
-                        // See `coerce_scalar_to_type`.
-                        let v = self.coerce_to_current_ret_type(v);
+                        // See `coerce_scalar_to_type`. The returned expression
+                        // rides along so a widen off an unsigned narrow type
+                        // zero-extends (B-2026-08-13-15).
+                        let v = self.coerce_to_current_ret_type_from(v, val.as_deref());
                         self.builder.build_return(Some(&v)).unwrap();
                     }
                 } else {
@@ -2592,7 +2594,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         // declared field would store 8 bytes over the
                         // narrow slot, corrupting neighboring fields.
                         // See `coerce_to_struct_field_ty`.
-                        let val = self.coerce_to_struct_field_ty(gep_ty, idx as u32 + base, val);
+                        let val = self.coerce_to_struct_field_ty_from(
+                            gep_ty,
+                            idx as u32 + base,
+                            val,
+                            &field_init.value,
+                        );
                         // Niche→conventional boundary (same as the non-shared
                         // insertvalue branch): a niche-ABI `Option[shared T]`
                         // value into this conventional field slot is widened
@@ -2789,7 +2796,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // a default-width literal into a narrower member builds
                 // a malformed aggregate that reads back as garbage. See
                 // `coerce_to_struct_field_ty`.
-                let val = self.coerce_to_struct_field_ty(st, idx as u32, val);
+                let val =
+                    self.coerce_to_struct_field_ty_from(st, idx as u32, val, &field_init.value);
                 // Niche→conventional boundary: a niche-ABI `Option[shared T]`
                 // value (bare `ptr`) into this conventional (non-`shared` struct)
                 // 4-word slot must be widened, else the `ptr` is `insertvalue`'d

@@ -1735,6 +1735,13 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.clone_shared_view_optres_field_arg(&a.value, val)
             };
+            // Widen a narrow scalar to the callee's declared param width HERE,
+            // where the argument expression is still in hand to say whether the
+            // extension is signed or zero (B-2026-08-13-15). The boundary sweep
+            // after the loop only sees LLVM values, and `u8` and `i8` are both
+            // `i8` there. `compiled_args.len()` is the slot this value is about
+            // to take, so the two never drift.
+            let val = self.coerce_call_arg_scalar(func, compiled_args.len(), val, &a.value);
             compiled_args.push(BasicMetadataValueEnum::from(val));
             // B-2026-06-11-5: a block-construct call argument
             // (`take({ f"…" })`) had its tail acc suppressed by
