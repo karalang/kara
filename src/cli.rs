@@ -937,6 +937,15 @@ struct Pipeline {
     /// skip rather than slice into a stand-in string.
     source: Option<String>,
     parsed: ParseResult,
+    /// B-2026-08-13-12 — will this program's checks be followed by CODEGEN?
+    ///
+    /// `false` only for `karac run --interp`, whose backend is the tree-walk
+    /// interpreter. The `chained_field_receiver` lint reports a codegen
+    /// deferral, and the interpreter accepts that shape — erroring there would
+    /// take away a working execution path to warn about one that was never
+    /// used. Every other entry point (check, build, `run` on the JIT) is
+    /// codegen-bound and keeps the gate.
+    codegen_bound: bool,
     resolved: Option<ResolveResult>,
     typed: Option<TypeCheckResult>,
     effects: Option<EffectCheckResult>,
@@ -996,6 +1005,7 @@ impl Pipeline {
             target_skipped: std::collections::HashMap::new(),
             source: Some(source.to_string()),
             parsed,
+            codegen_bound: true,
             resolved: None,
             typed: None,
             effects: None,
@@ -1013,6 +1023,13 @@ impl Pipeline {
 
     fn with_lint_overrides(mut self, overrides: crate::lints::CliLintOverrides) -> Self {
         self.lint_overrides = overrides;
+        self
+    }
+
+    /// Mark this run as interpreter-bound (`karac run --interp`), so
+    /// codegen-deferral diagnostics stay quiet — see `codegen_bound`.
+    fn interpreter_bound(mut self) -> Self {
+        self.codegen_bound = false;
         self
     }
 
@@ -1126,6 +1143,21 @@ impl Pipeline {
                 &self.lint_overrides,
             );
             typed.warnings.extend(extra);
+        }
+        // B-2026-08-13-12 — surface codegen's FR4 chained-field-receiver
+        // deferral at CHECK time. Runs off the parsed program alone (the shape
+        // is syntactic), so unlike the lint above it does not need the source
+        // text and is not sidelined in project mode.
+        if let (true, Some(typed)) = (self.codegen_bound, self.typed.as_mut()) {
+            let (extra, deny) = crate::chained_receiver_lint::check_chained_field_receivers(
+                &self.parsed.program,
+                &self.lint_overrides,
+            );
+            if deny {
+                typed.errors.extend(extra);
+            } else {
+                typed.warnings.extend(extra);
+            }
         }
     }
 
@@ -4966,7 +4998,16 @@ fn cmd_run(
     if let Some(ref m) = discovered_manifest {
         lint_overrides.apply_manifest_lints(&m.lints);
     }
-    let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
+    // B-2026-08-13-12 — `--interp` runs the tree-walk backend, which accepts the
+    // chained-field-receiver shape codegen defers; the gate would otherwise take
+    // away a working execution path over a deferral that run never reaches.
+    let mut pipeline = if interp {
+        Pipeline::new(filename, &source)
+            .with_lint_overrides(lint_overrides)
+            .interpreter_bound()
+    } else {
+        Pipeline::new(filename, &source).with_lint_overrides(lint_overrides)
+    };
     if let Some(ref m) = discovered_manifest {
         pipeline.profile = m.profile;
         pipeline.profile_config = m.profile_config.clone();
@@ -8580,6 +8621,10 @@ fn run_multi_file_codegen(
         // never be read from disk (B-2026-08-04-7).
         source: None,
         parsed,
+        // Project mode reaches this only for codegen-bound commands
+        // (`build`/`run` on a package); the interpreter-bound single-file path
+        // sets it through `Pipeline::interpreter_bound`.
+        codegen_bound: true,
         resolved: None,
         typed: None,
         effects: None,

@@ -262,6 +262,15 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              disambiguate with explicit parentheses.",
     },
     LintInfo {
+        name: "chained_field_receiver",
+        default_level: LintLevel::Deny,
+        description:
+            "A method call or index whose receiver is a field chain of depth >= 2 \
+             (`e.doc.lines.len()`) — codegen defers this shape (FR4), so the program \
+             checks clean and fails `karac build`; bind the inner field to a temporary. \
+             Deny by default because the program cannot compile; `-A` it for interp-only code.",
+    },
+    LintInfo {
         name: "ffi_float_eq",
         default_level: LintLevel::Warn,
         description:

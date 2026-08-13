@@ -949,6 +949,103 @@ fn test_run_rejects_provider_escape() {
     );
 }
 
+/// B-2026-08-13-12 — codegen's FR4 chained-field-receiver deferral is visible
+/// at CHECK time, in JSON, and can be opted out of; `--interp` is unaffected.
+///
+/// Before this, `karac check` said `All checks passed.` and `--output=json`
+/// returned `"diagnostics":[]` for a program `karac build` then refused. The
+/// Mend loop reads that array and applies `karac fix`, so an empty one is not
+/// a cosmetic gap — it is an author (human or LLM) with nothing to act on,
+/// handing back a program that checks clean and does not build.
+///
+/// The four assertions are the four surfaces the row measured: text check,
+/// JSON check, the `-A` escape (the shape is legal under the interpreter, so
+/// an interp-only program must be able to opt out), and `run --interp`, which
+/// must keep WORKING — the gate is about codegen, and taking away a working
+/// execution path to warn about one that was never used would be a worse
+/// trade than the silence it replaced.
+#[test]
+fn test_chained_field_receiver_surfaces_at_check_time() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-chained-receiver-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("chained.kara");
+    let src = r#"
+struct Doc { lines: Vec[String] }
+struct Editor { doc: Doc }
+fn main() {
+    let mut l: Vec[String] = Vec.new();
+    l.push("a");
+    let e = Editor { doc: Doc { lines: l } };
+    println(e.doc.lines.len());
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+    let file = path.to_str().unwrap();
+
+    // 1. Text check REPORTS it, where it used to say "All checks passed."
+    let out = karac_bin().args(["check", file]).output().unwrap();
+    assert!(
+        !out.status.success(),
+        "check must fail on a program `build` refuses; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("chained field receivers"),
+        "check must name the deferral; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("bind the inner field to a temporary"),
+        "check must carry the remedy, as codegen's own message does; stderr={stderr}",
+    );
+
+    // 2. JSON carries it with the lint name, which is what the Mend loop reads.
+    let out = karac_bin()
+        .args(["check", file, "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("\"diagnostics\":[]"),
+        "the empty diagnostics array IS the bug; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("chained_field_receiver"),
+        "the JSON diagnostic must name the lint so `-A` is discoverable; stdout={stdout}",
+    );
+
+    // 3. `-A` opts out — for a program that only ever runs under `--interp`.
+    let out = karac_bin()
+        .args(["check", file, "-A", "chained_field_receiver"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "-A chained_field_receiver must suppress; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    // 4. `--interp` still RUNS it. The interpreter accepts this shape, and the
+    //    gate must not take that away.
+    let out = karac_bin()
+        .args(["run", "--interp", file])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "`run --interp` must still execute the program; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "1");
+}
+
 // ── JSON Output Snapshots ───────────────────────────────────────
 
 #[test]
