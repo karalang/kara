@@ -5361,7 +5361,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // are both handled by the same runtime call.
         if let ExprKind::Identifier(name) = &object.kind {
             if self.map_key_types.contains_key(name.as_str()) {
-                return self.compile_map_index_store(name, index, val);
+                return self.compile_map_index_store(name, index, val, rhs_src);
             }
         }
 

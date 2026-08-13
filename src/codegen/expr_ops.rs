@@ -5969,6 +5969,49 @@ impl<'ctx> super::Codegen<'ctx> {
             })
     }
 
+    /// Coerce one enum-variant payload argument to the width and CLASS the
+    /// variant declares, before it is packed into the payload words.
+    ///
+    /// B-2026-08-13-18. `coerce_to_payload_words` bit-casts whatever it is
+    /// handed into `i64` slots, so a payload that arrives in the wrong class
+    /// is not a verifier error — it is a silent bit reinterpretation. `E.F(b)`
+    /// with `F(f64)` and `b: u8` packed the INTEGER 200 and the match arm's
+    /// `rebuild_value_from_payload_words` read those bits back as a `double`,
+    /// printing a denormal near zero. That is why this position is absent from
+    /// the row's boundary table: it fails quietly rather than at the verifier.
+    ///
+    /// A no-op unless the declared field type is scalar and differs from the
+    /// compiled value's — every aggregate payload (String / Vec / nested
+    /// struct / boxed) returns unchanged, so the decompose-and-box path below
+    /// is untouched.
+    pub(super) fn coerce_enum_payload_scalar(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        idx: usize,
+        val: BasicValueEnum<'ctx>,
+        src: &Expr,
+    ) -> BasicValueEnum<'ctx> {
+        if !(val.is_int_value() || val.is_float_value()) {
+            return val;
+        }
+        let Some((_, _, tys)) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, v, _)| v == variant)
+        else {
+            return val;
+        };
+        let Some(te) = tys.get(idx) else {
+            return val;
+        };
+        let target = self.llvm_type_for_type_expr(te);
+        if !(target.is_int_type() || target.is_float_type()) {
+            return val;
+        }
+        self.coerce_scalar_to_type_from(val, target, src)
+    }
+
     pub(super) fn enum_variant_field_type_exprs(
         &self,
         enum_name: &str,
@@ -6950,6 +6993,41 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.build_float_cast_bf16_safe(fv, ft, "bnd.fcast").into()
             }
+            // INT → FLOAT (B-2026-08-13-18). The typechecker admits this as a
+            // widening coercion (`types_compatible`'s int/float arms), so a
+            // legal program reaches every boundary that routes through here
+            // with an `iN` bound for a `double` slot. Falling through to
+            // `_ => val` handed the slot an integer verbatim, and the module
+            // verifier rejected the function: `Invalid InsertValueInst
+            // operands!` at a struct-literal field and at a field assignment,
+            // `Call parameter type does not match function signature!` at a
+            // call argument. `struct W { mut f: f64 }` with `W { f: some_u8 }`
+            // did not compile at all, while the same conversion through an
+            // annotated `let` or a `Vec[f64]` element was fine — those two
+            // positions have their own `sitofp` leg
+            // (`widen_let_value_to_annotation`, `coerce_literal_elem_to_type`),
+            // which is what kept the gap to three boundaries.
+            //
+            // The signedness half matters on its own: `sitofp` on a `u8` 200
+            // yields -56.0, so an unconditional signed conversion would trade
+            // a build failure for a silent wrong answer — strictly worse.
+            // `src_unsigned` is the same flag the widening leg above uses, and
+            // the `_from` family resolves it from the source expression's Kāra
+            // type; a caller with no source keeps `false`/`sitofp`, which is
+            // the historical behaviour of the two positions that already work.
+            (BasicValueEnum::IntValue(iv), BasicTypeEnum::FloatType(ft)) => {
+                if src_unsigned {
+                    self.builder
+                        .build_unsigned_int_to_float(iv, ft, "bnd.uitofp")
+                        .unwrap()
+                        .into()
+                } else {
+                    self.builder
+                        .build_signed_int_to_float(iv, ft, "bnd.sitofp")
+                        .unwrap()
+                        .into()
+                }
+            }
             _ => val,
         }
     }
@@ -7206,13 +7284,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `idx` is the position the value is about to occupy in `compiled_args`,
     /// so callers pass `compiled_args.len()` immediately before pushing — that
     /// keeps the value and its source expression together with no parallel
-    /// array to fall out of step. Coerces only int→int widenings of a
-    /// positively-unsigned source; everything else is left for
-    /// [`Self::coerce_args_to_fn_params`], whose behaviour is unchanged.
+    /// array to fall out of step. Coerces int→int widenings and int→float
+    /// conversions of a positively-unsigned source; everything else is left
+    /// for [`Self::coerce_args_to_fn_params`], whose behaviour is unchanged.
     ///
     /// B-2026-08-13-15: without this, `fn f(v: i64)` called with a `u8` 200 —
     /// a legal implicit widening — sign-extended to -56 on both compiled
     /// backends while the interpreter said 200.
+    ///
+    /// B-2026-08-13-18 added the FLOAT param arm, and it is not optional
+    /// garnish on that fix. `fn f(x: f64)` called with a `u8` used to fail
+    /// module verification outright (`Call parameter type does not match
+    /// function signature!`); teaching the shared helper the int→float leg
+    /// makes it compile, but this function bailed on a non-`IntType` param, so
+    /// the conversion fell through to the signedness-BLIND boundary sweep and
+    /// `200u8` arrived as -56.0. Adding the leg without this arm would have
+    /// traded a build failure for a silent wrong answer — measured, not
+    /// reasoned about: the struct-literal and field-assignment boundaries in
+    /// the same program printed 200 while the call argument printed -56.
     pub(super) fn coerce_call_arg_scalar(
         &self,
         func: inkwell::values::FunctionValue<'ctx>,
@@ -7223,15 +7312,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicValueEnum::IntValue(iv) = val else {
             return val;
         };
-        let Some(inkwell::types::BasicMetadataTypeEnum::IntType(pt)) =
-            func.get_type().get_param_types().get(idx).copied()
-        else {
-            return val;
-        };
-        if pt.get_bit_width() <= iv.get_type().get_bit_width() {
-            return val;
+        match func.get_type().get_param_types().get(idx).copied() {
+            Some(inkwell::types::BasicMetadataTypeEnum::IntType(pt)) => {
+                if pt.get_bit_width() <= iv.get_type().get_bit_width() {
+                    return val;
+                }
+                self.coerce_scalar_to_type_from(val, pt.into(), src)
+            }
+            Some(inkwell::types::BasicMetadataTypeEnum::FloatType(pt)) => {
+                self.coerce_scalar_to_type_from(val, pt.into(), src)
+            }
+            _ => val,
         }
-        self.coerce_scalar_to_type_from(val, pt.into(), src)
     }
 
     /// Boundary coercion for call args: coerce each scalar arg to the

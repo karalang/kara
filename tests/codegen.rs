@@ -23348,6 +23348,75 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_implicit_int_to_float_widening_at_every_boundary() {
+        // B-2026-08-13-18. The typechecker admits int→float as an implicit
+        // widening, so a legal program reaches these boundaries with an `iN`
+        // bound for a `double`. Two distinct failure modes were in play, which
+        // is why the row's table found only one of them:
+        //
+        //   * boundaries that route through `coerce_scalar_to_type` FAILED
+        //     MODULE VERIFICATION — `Invalid InsertValueInst operands!` at a
+        //     struct-literal field and a field assignment, `Call parameter type
+        //     does not match function signature!` at a call argument. Loud.
+        //   * boundaries that pack into i64 words — an ENUM PAYLOAD, a MAP
+        //     VALUE — reinterpreted the integer's bits as a double and printed
+        //     a denormal near zero. Silent, no verifier complaint, and absent
+        //     from the row's table for exactly that reason.
+        //
+        // The signedness half is asserted, not incidental: every `200u8` here
+        // must print 200, and `sitofp` on it yields -56. The two `-5i8` lines
+        // at the end are the control that the unsigned leg did not simply
+        // replace one wrong extension with another.
+        //
+        // `m.setn(b)` is the int→int method argument. It is in this fixture
+        // because the missing method-boundary coercion this row had to add is
+        // the same call for both classes: B-2026-08-13-15 fixed the free-fn
+        // spelling and never reached the method one, so `200u8` into
+        // `fn setn(mut ref self, x: i64)` printed -56 with no float involved.
+        assert_eq!(
+            run_program(
+                "struct W { mut a: i64, mut f: f64 }\n\
+                 enum E { F(f64) }\n\
+                 struct M { mut f: f64, mut n: i64 }\n\
+                 impl M {\n\
+                     fn setf(mut ref self, x: f64) { self.f = x; }\n\
+                     fn setn(mut ref self, x: i64) { self.n = x; }\n\
+                 }\n\
+                 fn takesf(x: f64) -> f64 { x }\n\
+                 fn retf(b: u8) -> f64 { return b; }\n\
+                 fn main() {\n\
+                     let b: u8 = 200u8;\n\
+                     let s: i8 = -5i8;\n\
+                     let w = W { a: 0i64, f: b };\n\
+                     println(w.f);\n\
+                     println(takesf(b));\n\
+                     println(retf(b));\n\
+                     let mut q = W { a: 0i64, f: 0.0 };\n\
+                     q.f = b;\n\
+                     println(q.f);\n\
+                     let mut m = M { f: 0.0, n: 0 };\n\
+                     m.setf(b);\n\
+                     m.setn(b);\n\
+                     println(m.f);\n\
+                     println(m.n);\n\
+                     let e = E.F(b);\n\
+                     match e { F(x) => { println(x); } }\n\
+                     let mut mp: Map[i64, f64] = Map.new();\n\
+                     let _ = mp.insert(1, b);\n\
+                     mp[2] = b;\n\
+                     match mp.get(1) { Some(x) => { println(x); } None => { println(0.0); } }\n\
+                     match mp.get(2) { Some(x) => { println(x); } None => { println(0.0); } }\n\
+                     println(takesf(s));\n\
+                     let ws = W { a: 0i64, f: s };\n\
+                     println(ws.f);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("200\n200\n200\n200\n200\n200\n200\n200\n200\n-5\n-5\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_field_bound_out_of_local_is_a_copy() {
         // B-2026-08-13-14's VALUE side, and the oracle is the interpreter twin
         // (`tests/interpreter.rs::test_field_bound_out_of_local_is_a_copy`),

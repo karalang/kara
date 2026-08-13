@@ -28388,6 +28388,57 @@ fn test_user_trait_bound_call_over_builtin_containers() {
     );
 }
 
+/// B-2026-08-13-18 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_implicit_int_to_float_widening_at_every_boundary`, same source
+/// and expected string.
+///
+/// The interpreter is the oracle here: it ran all of these correctly the whole
+/// time, which is what made the compiled behaviour a divergence rather than a
+/// language question. Pinning the twin keeps the two surfaces from drifting —
+/// three of these positions failed `karac build` outright and two more were
+/// silent bit reinterpretations.
+#[test]
+fn test_implicit_int_to_float_widening_at_every_boundary() {
+    assert_eq!(
+        run("struct W { mut a: i64, mut f: f64 }\n\
+             enum E { F(f64) }\n\
+             struct M { mut f: f64, mut n: i64 }\n\
+             impl M {\n\
+                 fn setf(mut ref self, x: f64) { self.f = x; }\n\
+                 fn setn(mut ref self, x: i64) { self.n = x; }\n\
+             }\n\
+             fn takesf(x: f64) -> f64 { x }\n\
+             fn retf(b: u8) -> f64 { return b; }\n\
+             fn main() {\n\
+                 let b: u8 = 200u8;\n\
+                 let s: i8 = -5i8;\n\
+                 let w = W { a: 0i64, f: b };\n\
+                 println(w.f);\n\
+                 println(takesf(b));\n\
+                 println(retf(b));\n\
+                 let mut q = W { a: 0i64, f: 0.0 };\n\
+                 q.f = b;\n\
+                 println(q.f);\n\
+                 let mut m = M { f: 0.0, n: 0 };\n\
+                 m.setf(b);\n\
+                 m.setn(b);\n\
+                 println(m.f);\n\
+                 println(m.n);\n\
+                 let e = E.F(b);\n\
+                 match e { F(x) => { println(x); } }\n\
+                 let mut mp: Map[i64, f64] = Map.new();\n\
+                 let _ = mp.insert(1, b);\n\
+                 mp[2] = b;\n\
+                 match mp.get(1) { Some(x) => { println(x); } None => { println(0.0); } }\n\
+                 match mp.get(2) { Some(x) => { println(x); } None => { println(0.0); } }\n\
+                 println(takesf(s));\n\
+                 let ws = W { a: 0i64, f: s };\n\
+                 println(ws.f);\n\
+             }"),
+        "200\n200\n200\n200\n200\n200\n200\n200\n200\n-5\n-5\n"
+    );
+}
+
 /// B-2026-08-13-14 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_field_bound_out_of_local_is_a_copy`, same source and expected
 /// string.

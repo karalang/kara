@@ -5972,6 +5972,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.track_optres_arg_temp(val, &param_te, own_payload, own_envelope);
                         }
                     }
+                    // Signedness-carrying scalar coercion at the METHOD arg
+                    // boundary, the twin of the free-fn site in
+                    // `call_dispatch.rs`. The boundary sweep below sees only
+                    // LLVM values, where `u8` and `i8` are both `i8` and an
+                    // int bound for a `double` has no source to ask, so both
+                    // conversions have to happen here while `a.value` is in
+                    // hand. `compiled_args.len()` is the slot this value is
+                    // about to take, so the two never drift.
+                    //
+                    // B-2026-08-13-18 wired this. Two pre-existing miscompiles
+                    // ended at this one missing call, both `karac check`-clean:
+                    // `m.set(b)` against `fn set(mut ref self, x: i64)` with
+                    // `b: u8` 200 sign-extended to -56 (B-2026-08-13-15 fixed
+                    // the free-fn spelling of exactly this and did not reach
+                    // the method one), and the same call against `x: f64`
+                    // failed module verification outright until the shared
+                    // helper learned int→float — after which it would have
+                    // printed -56.0 instead, which is why this landed with it
+                    // rather than after it.
+                    let val =
+                        self.coerce_call_arg_scalar(fn_val, compiled_args.len(), val, &a.value);
                     compiled_args.push(val.into());
                 }
                 // Niche-ABI pack/unpack at the `obj.method(...)` boundary

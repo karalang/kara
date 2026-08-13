@@ -471,6 +471,7 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
         index: &Expr,
         val: BasicValueEnum<'ctx>,
+        rhs_src: Option<&Expr>,
     ) -> Result<(), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
@@ -508,6 +509,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // undefined for the erased runtime to hash, so `m[some_u8]` missed
         // a key `m[200i64]` had just stored.
         let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, index);
+        // Declared-VALUE-width coercion, the twin of the key one above
+        // (B-2026-08-13-18). `m[k] = b` with a `Map[i64, f64]` and `b: u8`
+        // stored the integer's BITS into the `f64`-sized slot and read back a
+        // denormal near zero — silent, since the store is typed by the value
+        // rather than the slot and the verifier sees nothing wrong. `rhs_src`
+        // is what makes the unsigned case land as 200.0 rather than -56.0; it
+        // is already threaded to this call site for the slice sibling.
+        let val = self.coerce_scalar_to_type_src(val, val_ty, rhs_src);
         let fn_val = self.current_fn.unwrap();
         let key_slot = self.create_entry_alloca(fn_val, "map.idxst.key", key_ty);
         let val_slot = self.create_entry_alloca(fn_val, "map.idxst.val", val_ty);
@@ -1556,6 +1565,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 let val_val = self.compile_expr(&args[1].value)?;
                 self.suppress_fstr_acc_if_moved_out(&args[1].value);
                 let val_val = self.maybe_defensive_copy_param_arg(&args[1].value, val_val);
+                // Declared-value-width coercion, same reason as the `insert`
+                // arm (B-2026-08-13-18).
+                let val_val = self.coerce_scalar_to_type_from(val_val, val_ty, &args[1].value);
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
                 self.suppress_source_vec_cleanup_for_arg(&args[1].value);
                 // Container-bodies twin of the cap-zeros above.
@@ -1728,6 +1740,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Same consume-site pair for the value argument.
                 self.suppress_fstr_acc_if_moved_out(&args[1].value);
                 let val_val = self.maybe_defensive_copy_param_arg(&args[1].value, val_val);
+                // Declared-VALUE-width coercion, the twin of the key one above
+                // (B-2026-08-13-18). The key side got this from
+                // B-2026-08-13-15; the value side never had it, and the gap
+                // shows in the int→float direction: `Map[i64, f64].insert(k, b)`
+                // with `b: u8` stored the integer's BITS into the `f64`-sized
+                // slot, so the read came back as a denormal near zero. Silent —
+                // no verifier error, because the store is typed by the value
+                // rather than the slot, which is why this position was missed
+                // by the row's own three-boundary table.
+                let val_val = self.coerce_scalar_to_type_from(val_val, val_ty, &args[1].value);
                 // B-2026-08-08-29 — a `weak V` value takes NO STRONG COUNT.
                 // Computed before the suppression block below because the
                 // shared-transfer inc fires there, and leaving it in place is a

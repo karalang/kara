@@ -4490,6 +4490,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // bare-`shared` Vec element is aliased, not moved — inc so the
                 // new enum owns its own ref (else freed when the Vec drops).
                 self.share_bare_shared_ctor_payload(&arg.value, val);
+                // Shared-enum twin of the coercion in the non-shared arm below
+                // (B-2026-08-13-18) — same packer, same silent failure mode.
+                let val = self.coerce_enum_payload_scalar(&enum_name, name, i, val, &arg.value);
                 let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
                 let words = self.coerce_to_payload_words(val, num_words)?;
                 for (j, w) in words.into_iter().enumerate() {
@@ -4589,6 +4592,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // element read is aliased, not moved; inc so the Option owns its
             // own ref (else freed when the source Vec drops).
             self.share_bare_shared_ctor_payload(&arg.value, val);
+            // Declared-payload class/width coercion before the bit-level pack
+            // (B-2026-08-13-18). See `coerce_enum_payload_scalar`: the packer
+            // reinterprets rather than converts, so an int reaching an `f64`
+            // payload is a silent wrong value, not a verifier error.
+            let val = self.coerce_enum_payload_scalar(&enum_name, name, i, val, &arg.value);
             let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1)); // legacy fallback if layout missing
             let words = self.coerce_to_payload_words(val, num_words)?;
             for (j, w) in words.into_iter().enumerate() {
