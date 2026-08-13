@@ -20832,6 +20832,69 @@ fn main() {
         );
     }
 
+    /// B-2026-08-12-31 — the displaced element is freed when an index-assign's
+    /// RHS reaches the container only through SCALAR reads.
+    ///
+    /// `ps[0] = mk(ps[0].n + k)` leaked 400 B in 40 allocations for the same
+    /// reason B-2026-08-12-26 did — `emit_displaced_index_elem_drop`'s guard
+    /// declined — but for a different arm of it. -26 relaxed the guard for an
+    /// RHS that had already been deep-cloned; a call gets no such proof, so it
+    /// kept declining.
+    ///
+    /// WHAT THE GUARD IS ACTUALLY ASKING is whether the already-computed RHS
+    /// value points INTO the buffer about to be freed. A textual mention of the
+    /// container is a proxy for that, and a coarse one: this RHS names `ps`
+    /// solely to read an `i64` out of it, which cannot carry a buffer anywhere.
+    /// The predicate now answers by REACHABILITY — an expression that never
+    /// names the container cannot carry its heap, and a call whose every
+    /// argument is safe cannot either, because the callee is handed no pointer
+    /// into the container to hand back. That is what makes it sound without any
+    /// escape analysis of the callee.
+    ///
+    /// THE `rs` LEG IS THE ONE THAT WOULD CATCH A SLOPPY VERSION: the RHS reads
+    /// scalars from BOTH elements, including the one being overwritten, so a
+    /// predicate that only checked the assigned index would wave it through for
+    /// the wrong reason.
+    ///
+    /// STILL DECLINING, deliberately, and each is a leak rather than corruption:
+    /// `ps[0] = passthru(ps[0])` hands the callee the element's own buffer, and
+    /// `ps[0] = takes(ps[0].word)` hands it a heap FIELD. Both are measured at
+    /// 400 B / 40 and are filed as their own row — they need the callee's escape
+    /// behaviour, which nothing here establishes.
+    #[test]
+    fn asan_index_assign_scalar_reaching_call_rhs_frees_displaced() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { word: String, n: i64 }
+fn mk(n: i64) -> Pair { Pair { word: f"m{n}", n: n } }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 40 {
+        let mut ps: Vec[Pair] = Vec.new();
+        ps.push(Pair { word: f"alpha{k + i}", n: 1 });
+        ps[0] = mk(ps[0].n + k);
+        acc = acc + ps[0].word.len();
+        let mut qs: Vec[Pair] = Vec.new();
+        qs.push(Pair { word: f"beta{k + i}", n: 2 });
+        qs[0] = mk(k + i);
+        acc = acc + qs[0].word.len();
+        let mut rs: Vec[Pair] = Vec.new();
+        rs.push(Pair { word: f"gamma{k + i}", n: 3 });
+        rs.push(Pair { word: f"delta{k + i}", n: 4 });
+        rs[1] = mk(rs[0].n * 2 + rs[1].n);
+        acc = acc + rs[1].word.len();
+        i = i + 1;
+    }
+    println(acc > 0);
+}
+"#,
+            &["true"],
+            "index_assign_scalar_reaching_call_rhs_frees_displaced",
+        );
+    }
+
     /// B-2026-08-12-26 — `ps[0] = ps[1]` over a struct element with a heap
     /// field leaked one buffer per assignment (400 B in 40 allocations). Filed
     /// deferred alongside B-2026-08-12-22 and `#[ignore]`d; now live.

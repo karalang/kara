@@ -11041,6 +11041,82 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-12-31 — can `e` produce a value carrying a HEAP POINTER that
+    /// came out of `container`?
+    ///
+    /// This is the question `emit_displaced_index_elem_drop`'s mention guard is
+    /// really asking. That guard frees the LHS slot's current occupant, and the
+    /// hazard is that the already-computed RHS value points INTO the buffer
+    /// about to be freed — after which the store writes a dangling header. A
+    /// mere textual mention of the container is a proxy for that, and a coarse
+    /// one: `ps[0] = mk(ps[0].n + k)` mentions `ps` only to read an `i64` out of
+    /// it, which cannot carry a buffer anywhere.
+    ///
+    /// Answered by REACHABILITY, not by trusting the callee. An expression that
+    /// never names the container cannot carry its heap; a call whose every
+    /// argument is itself safe cannot either, because the callee is handed no
+    /// pointer into the container to hand back. That is what makes the `Call`
+    /// arm sound without any escape analysis of the callee.
+    ///
+    /// Everything unenumerated is UNSAFE, which keeps the failure direction the
+    /// one this family wants: a false negative is the status-quo leak, a false
+    /// positive is a double free. In particular a whole-element read
+    /// (`passthru(ps[0])`) and a method call on the container (`ps.first()`)
+    /// both decline — the first hands the callee the element's own buffer, and
+    /// the second can return one.
+    fn expr_cannot_carry_container_heap(&self, e: &Expr, container: &str) -> bool {
+        if !crate::deque_head::expr_mentions_name_deep(e, container) {
+            return true;
+        }
+        match &e.kind {
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::Bool(..)
+            | ExprKind::CharLit(..)
+            | ExprKind::ByteLit(..) => true,
+            ExprKind::Binary { left, right, .. } => {
+                self.expr_cannot_carry_container_heap(left, container)
+                    && self.expr_cannot_carry_container_heap(right, container)
+            }
+            ExprKind::Unary { operand, .. } => {
+                self.expr_cannot_carry_container_heap(operand, container)
+            }
+            ExprKind::Cast { expr, .. } => self.expr_cannot_carry_container_heap(expr, container),
+            ExprKind::Call { args, .. } => args
+                .iter()
+                .all(|a| self.expr_cannot_carry_container_heap(&a.value, container)),
+            // `ps[i].f` — safe exactly when `f`'s own type carries no heap.
+            // A scalar field read copies a word out of the element and leaves
+            // every buffer behind; a `String`/`Vec` field read does not.
+            ExprKind::FieldAccess { object, field } => {
+                let ExprKind::Index { object: base, .. } = &object.kind else {
+                    return false;
+                };
+                let Some(elem_te) = self.vec_index_elem_type_expr(base) else {
+                    return false;
+                };
+                let TypeKind::Path(p) = &elem_te.kind else {
+                    return false;
+                };
+                let Some(sname) = p.segments.last() else {
+                    return false;
+                };
+                let (Some(names), Some(tes)) = (
+                    self.struct_field_names.get(sname.as_str()),
+                    self.struct_field_type_exprs.get(sname.as_str()),
+                ) else {
+                    return false;
+                };
+                names
+                    .iter()
+                    .position(|n| n == field)
+                    .and_then(|i| tes.get(i))
+                    .is_some_and(super::vec_method::is_trivially_copyable_te)
+            }
+            _ => false,
+        }
+    }
+
     fn emit_displaced_index_elem_drop(
         &mut self,
         object: &Expr,
@@ -11062,7 +11138,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let ExprKind::Identifier(root) = &inner.kind else {
                 return;
             };
-            if !rhs_index_deep_cloned && crate::deque_head::expr_mentions_name_deep(rhs, root) {
+            if !rhs_index_deep_cloned && !self.expr_cannot_carry_container_heap(rhs, root) {
                 return;
             }
             let Ok(Some((field_ptr, field_ll_ty, field_te))) =
@@ -11113,7 +11189,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // the store. Declining there is what leaked one element buffer per
         // `ps[0] = ps[1]` — including the self-assign, which no aliasing
         // argument can justify keeping.
-        if !rhs_index_deep_cloned && crate::deque_head::expr_mentions_name_deep(rhs, container) {
+        // B-2026-08-12-31 widens the second escape: the guard's real question is
+        // whether the already-computed RHS points INTO the buffer about to be
+        // freed, and a textual mention is only a proxy for it. An RHS that
+        // reaches the container solely through scalar reads
+        // (`ps[0] = mk(ps[0].n + k)`) provably carries nothing out of it.
+        if !rhs_index_deep_cloned && !self.expr_cannot_carry_container_heap(rhs, container) {
             return;
         }
         if self.slice_elem_types.contains_key(container.as_str())
