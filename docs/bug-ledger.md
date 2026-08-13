@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 243 | 1 |
+| miscompile | 243 | 0 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 108 | 0 |
-| codegen-gap | 106 | 0 |
+| codegen-gap | 107 | 1 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 841 | 1 |
+| codegen | 842 | 1 |
 | typecheck | 162 | 0 |
 | interp | 142 | 0 |
 | ownership | 47 | 0 |
@@ -124,13 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1165 surfaced · 1 open · 1152 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1166 surfaced · 1 open · 1153 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-17 | 2026-08-13 | codegen | medium | An ANNOTATED tuple binding ignores its annotation: `let t: (i64, i64) = (b, d)` with `b: u8` / `d: u32` lays the aggregate out from the element VALUES (`{i8, i32}`) while every read trusts the annotation, so `t.0` sign-extends and prints 200 as -56 on both compiled backends. The UNANNOTATED form of the same tuple is correct. | src/codegen/expr_ops.rs `compile_tuple` (~L22): the struct type is built from `vals.iter().map(|v| v.get_type())`, ignoring any annotated tuple TypeExpr; the read side resolves element types via `place_chain_tuple_tes`, which uses the annotation. |
+| B-2026-08-13-21 | 2026-08-13 | codegen | medium | A tuple literal in RETURN / ARGUMENT / STRUCT-FIELD position is still laid out from its element values, so a narrow element under a wider declared type fails module verification: `fn give() -> (i64, i64) { return (b, d); }` with `b: u8` emits `ret { i8, i32 }` against a `{ i64, i64 }` signature. `--interp` runs all three correctly. B-2026-08-13-17 fixed the LET position and left the consuming machinery in place; only the per-position staging is missing. | — |
 
 ### Wontfix (2)
 
@@ -143,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1165 surfaced
 
 </details>
 
-### Fixed (1152)
+### Fixed (1153)
 
-<details><summary>1152 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1153 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4832,6 +4832,23 @@ are guards.
 
 Suite green with `--features llvm` (13570 passed, 0 failed); clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-13-17 | codegen | medium | An ANNOTATED tuple binding ignores its annotation: `let t: (i64, i64) = (b, d)` with `b: u8` / `d: u32` lays the aggregate out from the element VALUE… | FIXED by 35fb7aec. The row's preferred fix shape, taken as written: the annotated tuple `TypeExpr` is carried into `compile_tuple`, the aggregate is laid out at the DECLARED element widths, and each element is coerced into its slot with `coerce_literal_elem_to_type_from`. The alternative the row offered -- making the READ authoritative off the value layout -- was not taken, for the reason the row itself gives: it silences this repro while leaving the aggregate's bytes contradicting its declared type.
+
+THREE PIECES, mirroring the `pending_let_elem_type` precedent the row names:
+- `src/codegen.rs` -- `pending_let_tuple_te: Option<TypeExpr>`, the tuple sibling of `pending_let_elem_type_expr`.
+- `src/codegen/stmts.rs` -- the let site stages it from the ANNOTATION (not from a per-variable registry: it must fire on the binding being compiled, and only an explicit annotation can disagree with the RHS values at all), saved/restored around the RHS like its siblings so a nested `let` cannot see it.
+- `src/codegen/expr_ops.rs` -- `compile_tuple` TAKES the hint (so a nested tuple inside an element expression cannot inherit the outer annotation), re-stages the element's own annotation for a NESTED tuple element, clears it after each element, and lays the struct out at the declared widths.
+
+SCALARS ONLY, ON BOTH SIDES, and this is the boundary that keeps the change safe. The annotated width is authoritative for an int/float element -- the entire miscompile class is a narrow value in a wider declared slot. A heap or aggregate element (`String`, `Vec[T]`, a struct) keeps the compiled value's own type verbatim: that value already carries the exact layout every downstream consumer expects, and substituting a separately-lowered type would risk a mismatch in a place where nothing was wrong.
+
+THE COERCION IS PASSED THE ELEMENT EXPRESSION, not just the value. `coerce_literal_elem_to_type_from` picks zext over sext from the SOURCE's signedness; without the expression a `u8` would sign-extend and reproduce the bug one level down -- which is precisely what B-2026-08-13-15 was about.
+
+MEASURED against the interpreter as oracle on all four surfaces (check / --interp / run JIT / build) AND at both optimization levels, since the row reports the bug at every level. Nine shapes: the row's own repro; the UNANNOTATED control (already correct, and a fix that made the aggregate follow the annotation could plausibly have disturbed it); a NESTED annotated tuple (inner gets its own declared widths, not the outer's); a `(u8, u8)` annotation where no coercion is owed; a `String` beside a widened scalar; an int->float element; an annotated destructure; a same-width annotation that must be a no-op; and a 3-tuple.
+
+
+ONE PLACEMENT DETAIL WORTH KEEPING: the staging sits OUTSIDE the binding-pattern arm its siblings live in. Those key off a per-variable registry and so need a variable name; a tuple's declared layout is a property of the ANNOTATION alone, and a direct destructure (`let (x, y): (i64, i64) = (b, d)`) has a Tuple pattern with no such name while needing the declared widths just as much -- the bindings it produces are read at them.
+
+FOUND WHILE SWEEPING, NOT FIXED HERE: the same value-derived layout is still used for a tuple literal in RETURN, ARGUMENT and STRUCT-FIELD position, where the mismatch surfaces as a LOUD module-verification failure rather than a silent wrong answer. Confirmed pre-existing by rebuilding the unmodified compiler on the identical programs. Different severity class (the build stops; nothing computes a wrong number), and each needs its own staging site while the consuming machinery added here is shared -- so filed as B-2026-08-13-21 rather than folded in, the same way this row was split out of B-2026-08-13-15. |
 | B-2026-08-13-18 | codegen | medium | An implicit int-to-FLOAT widening emits INVALID IR and fails module verification at three boundaries -- a struct-literal field, a field assignment, a… | FIXED by aea7671. The row's repro builds and prints 200 on all three surfaces,
 and the codegen pin fails against the stashed compiler.
 
