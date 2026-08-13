@@ -7386,6 +7386,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `Match` / `IfLet` / `Block` equivalents.
                 let rhs_is_fresh = self.rhs_yields_fresh_ref(value);
                 let rhs_is_fstring = self.rhs_stages_fstr_acc(value);
+                // B-2026-08-12-33 — where the element-field clone log stands
+                // BEFORE the RHS is compiled. An `Index` target's displaced
+                // drop clears an argument that this RHS deep-cloned, and only
+                // clones emitted past this mark are this statement's own.
+                let clone_log_mark = self.vec_elem_field_clone_log.len();
                 let val = self.compile_expr(value)?;
                 // B-2026-08-11-25 — the ASSIGNMENT twin of the field-move-out
                 // cap-zeroing the Let arm does (see the `vec_elem_types` block
@@ -8621,6 +8626,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         index,
                         value,
                         rhs_index_deep_cloned,
+                        clone_log_mark,
                     );
                     self.compile_index_store(object, index, val, rhs_is_fresh)?;
                     // B-2026-07-11-32: an f-string RHS stored into a Vec element
@@ -11060,11 +11066,23 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Everything unenumerated is UNSAFE, which keeps the failure direction the
     /// one this family wants: a false negative is the status-quo leak, a false
-    /// positive is a double free. In particular a whole-element read
-    /// (`passthru(ps[0])`) and a method call on the container (`ps.first()`)
-    /// both decline — the first hands the callee the element's own buffer, and
-    /// the second can return one.
-    fn expr_cannot_carry_container_heap(&self, e: &Expr, container: &str) -> bool {
+    /// positive is a double free. In particular a method call on the container
+    /// (`ps.first()`) declines — it can hand back the element's own buffer.
+    ///
+    /// B-2026-08-12-33 adds the two ways an argument that DOES carry container
+    /// heap can still be safe, both resting on the same principle as the
+    /// reachability arm rather than on trusting the callee: the callee is not
+    /// handed a pointer into the container, because something copied it first.
+    /// See `arg_deep_cloned_since` (the caller cloned, observed in the emitted
+    /// code) and `call_param_entry_copies_element` (the callee copies at
+    /// entry, read off the same predicate the callee's own entry-copy is
+    /// gated on).
+    fn expr_cannot_carry_container_heap(
+        &self,
+        e: &Expr,
+        container: &str,
+        clone_log_mark: usize,
+    ) -> bool {
         if !crate::deque_head::expr_mentions_name_deep(e, container) {
             return true;
         }
@@ -11075,16 +11093,20 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::CharLit(..)
             | ExprKind::ByteLit(..) => true,
             ExprKind::Binary { left, right, .. } => {
-                self.expr_cannot_carry_container_heap(left, container)
-                    && self.expr_cannot_carry_container_heap(right, container)
+                self.expr_cannot_carry_container_heap(left, container, clone_log_mark)
+                    && self.expr_cannot_carry_container_heap(right, container, clone_log_mark)
             }
             ExprKind::Unary { operand, .. } => {
-                self.expr_cannot_carry_container_heap(operand, container)
+                self.expr_cannot_carry_container_heap(operand, container, clone_log_mark)
             }
-            ExprKind::Cast { expr, .. } => self.expr_cannot_carry_container_heap(expr, container),
-            ExprKind::Call { args, .. } => args
-                .iter()
-                .all(|a| self.expr_cannot_carry_container_heap(&a.value, container)),
+            ExprKind::Cast { expr, .. } => {
+                self.expr_cannot_carry_container_heap(expr, container, clone_log_mark)
+            }
+            ExprKind::Call { callee, args } => args.iter().enumerate().all(|(i, a)| {
+                self.expr_cannot_carry_container_heap(&a.value, container, clone_log_mark)
+                    || self.arg_deep_cloned_since(&a.value, clone_log_mark)
+                    || self.call_param_entry_copies_element(callee, i, &a.value, container)
+            }),
             // `ps[i].f` — safe exactly when `f`'s own type carries no heap.
             // A scalar field read copies a word out of the element and leaves
             // every buffer behind; a `String`/`Vec` field read does not.
@@ -11117,12 +11139,175 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-12-33 — did the emitted code DEEP-CLONE `arg` while compiling
+    /// the RHS this displaced-drop belongs to?
+    ///
+    /// `takes(ps[0].word)` hands a callee a `{ptr,len,cap}` read out of a Vec
+    /// element, which is why the reachability arm refuses it: on the face of
+    /// it the callee is holding the container's buffer and could hand it back.
+    /// But B-2026-08-12-27 already clones that read at the READ — the element
+    /// keeps its buffer, the consumer gets an independent one — so the callee
+    /// never sees the container's pointer and the displaced occupant is free
+    /// to go.
+    ///
+    /// Asked of the emitted code rather than re-derived, exactly as
+    /// B-2026-08-12-26 asks its question by value identity: the clone's own
+    /// admission test is eight conditions deep (owning Vec, non-shared struct
+    /// element, `{ptr,len,cap}` field type, matching LLVM width, …), and a
+    /// second copy of it here would drift from the real one the first time
+    /// either is tuned — with a double free as the failure mode. The clone
+    /// records its span when it fires; this reads that record.
+    ///
+    /// Scoped to clones emitted SINCE `mark` (taken just before the RHS was
+    /// compiled) so the evidence is this statement's own. See the
+    /// `vec_elem_field_clone_log` field doc for why the span-keyed map cannot
+    /// answer this on its own.
+    fn arg_deep_cloned_since(&self, arg: &Expr, mark: usize) -> bool {
+        self.vec_elem_field_clone_log
+            .get(mark..)
+            .is_some_and(|recent| recent.contains(&(arg.span.offset, arg.span.length)))
+    }
+
+    /// B-2026-08-12-33 — are `struct_name`'s fields all either scalars or a
+    /// DIRECT `{ptr,len,cap}` buffer (`String`, `Vec[scalar]`, `Vec[String]`)?
+    ///
+    /// A second, narrower gate on top of `aggregate_param_copy_supported_struct`
+    /// for the entry-copy arm, and it is here because of a measurement rather
+    /// than a hunch. A NESTED STRUCT field (`Deep { inner: Pair, … }`) passes
+    /// the copy-support check, but the whole shape it would admit —
+    /// `ds[0] = bump(ds[0])` over such an element — already double-frees on
+    /// both compiled backends BEFORE this row's change (filed as its own row;
+    /// `ds[0] = mk(ds[0].tag + 1)` and `ds[0] = ds[1]` over the same element
+    /// are clean, so it is specific to handing the element itself to a call).
+    /// Whatever that bug is, it contradicts the premise this arm rests on —
+    /// that the callee's entry copy leaves the caller's element sole owner —
+    /// so admitting the shape would be reasoning from a property the target
+    /// program demonstrably does not have.
+    ///
+    /// Restricting to the field shapes actually measured leak-clean keeps the
+    /// arm inside its evidence. When the nested-struct double free is fixed,
+    /// re-measure and widen — this is a deliberate boundary, not a permanent
+    /// one.
+    fn elem_fields_are_scalar_or_direct_heap(&self, struct_name: &str) -> bool {
+        let Some(ftes) = self.struct_field_type_exprs.get(struct_name) else {
+            return false;
+        };
+        ftes.iter().all(|fte| {
+            if super::vec_method::is_trivially_copyable_te(fte) || self.is_string_type_expr(fte) {
+                return true;
+            }
+            // `Vec[T]` for a scalar or `String` element — one buffer plus, at
+            // most, one level of buffers under it, which is the deepest shape
+            // this arm was measured on.
+            let TypeKind::Path(p) = &fte.kind else {
+                return false;
+            };
+            if p.segments.last().map(String::as_str) != Some("Vec") {
+                return false;
+            }
+            let Some(args) = p.generic_args.as_ref() else {
+                return false;
+            };
+            let [crate::ast::GenericArg::Type(inner)] = args.as_slice() else {
+                return false;
+            };
+            super::vec_method::is_trivially_copyable_te(inner) || self.is_string_type_expr(inner)
+        })
+    }
+
+    /// B-2026-08-12-33 — is `arg` a whole-element read (`ps[i]`) handed to a
+    /// parameter the CALLEE deep-copies at entry?
+    ///
+    /// The other half of the same principle. `passthru(ps[0])` passes the
+    /// element's `{ptr,len,cap}` header by value, and nothing on the caller
+    /// side copies it — but an owned, bare-`Path` aggregate param is
+    /// callee-owned by ENTRY COPY (`make_aggregate_param_callee_owned_inst`,
+    /// param_own.rs): the callee duplicates the heap fields into its own frame
+    /// before the body runs, so what it can return is its copy, never the
+    /// container's buffer. The displaced occupant therefore still has exactly
+    /// one owner — the container — and freeing it is the missing free, not a
+    /// second one.
+    ///
+    /// Gated on `aggregate_param_copy_supported_struct`, which is the SAME
+    /// predicate the callee's entry copy is gated on, not a restatement of it
+    /// — the one place where two copies of the rule would drift. The callee's
+    /// other two arms are deliberately excluded: the generic-monomorph arm
+    /// needs an active subst that does not exist here, and OWN-BY-TRANSFER
+    /// (B-2026-08-05-33) copies NOTHING — it hands the callee the original
+    /// buffers, so the callee's scope-exit drop already frees what this would
+    /// free again. Excluding it is the whole reason this asks for the copy
+    /// arm specifically rather than for "is the param callee-owned".
+    ///
+    /// Free functions only, and the param's declared type must name the
+    /// container's element struct exactly. A method would have to resolve the
+    /// receiver and offset `self`; a `ref`/`mut ref` param takes no ownership
+    /// and copies nothing. Both decline into the status-quo leak.
+    fn call_param_entry_copies_element(
+        &self,
+        callee: &Expr,
+        arg_index: usize,
+        arg: &Expr,
+        container: &str,
+    ) -> bool {
+        // The argument must be a plain element read off THIS container — the
+        // one shape whose value is the element header itself, so that the
+        // callee's entry copy is a copy of exactly the buffer at risk.
+        let ExprKind::Index { object, index } = &arg.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(name) = &object.kind else {
+            return false;
+        };
+        if name != container || !Self::index_expr_is_pure_scalar(index) {
+            return false;
+        }
+        let Some(elem_te) = self.vec_index_elem_type_expr(object) else {
+            return false;
+        };
+        let TypeKind::Path(ep) = &elem_te.kind else {
+            return false;
+        };
+        let Some(elem_name) = ep.segments.last() else {
+            return false;
+        };
+        if !self.struct_types.contains_key(elem_name.as_str())
+            || self.shared_types.contains_key(elem_name.as_str())
+            || !self.aggregate_param_copy_supported_struct(elem_name, &mut Vec::new())
+            || !self.elem_fields_are_scalar_or_direct_heap(elem_name)
+        {
+            return false;
+        }
+        let ExprKind::Identifier(fname) = &callee.kind else {
+            return false;
+        };
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        program.items.iter().any(|item| {
+            let crate::ast::Item::Function(f) = item else {
+                return false;
+            };
+            // A generic fn is compiled per monomorph, where the param's
+            // declared spelling is a type PARAM rather than the struct — the
+            // entry copy resolves it through the active subst, which is not
+            // available here. Decline rather than guess.
+            if f.name != *fname || f.generic_params.is_some() {
+                return false;
+            }
+            f.params.get(arg_index).is_some_and(|p| {
+                matches!(&p.ty.kind, TypeKind::Path(pp)
+                    if pp.segments.last() == Some(elem_name))
+            })
+        })
+    }
+
     fn emit_displaced_index_elem_drop(
         &mut self,
         object: &Expr,
         index: &Expr,
         rhs: &Expr,
         rhs_index_deep_cloned: bool,
+        clone_log_mark: usize,
     ) {
         // Field-rooted container (`h.xs[i] = <new>`, B-2026-08-01-22 leg a):
         // resolve the field's storage pointer exactly like the store arm
@@ -11138,7 +11323,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let ExprKind::Identifier(root) = &inner.kind else {
                 return;
             };
-            if !rhs_index_deep_cloned && !self.expr_cannot_carry_container_heap(rhs, root) {
+            if !rhs_index_deep_cloned
+                && !self.expr_cannot_carry_container_heap(rhs, root, clone_log_mark)
+            {
                 return;
             }
             let Ok(Some((field_ptr, field_ll_ty, field_te))) =
@@ -11160,7 +11347,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: ExprKind::Identifier(synth.clone()),
                 span: object.span.clone(),
             };
-            self.emit_displaced_index_elem_drop(&synth_expr, index, rhs, rhs_index_deep_cloned);
+            self.emit_displaced_index_elem_drop(
+                &synth_expr,
+                index,
+                rhs,
+                rhs_index_deep_cloned,
+                clone_log_mark,
+            );
             self.variables.remove(&synth);
             self.vec_elem_types.remove(&synth);
             self.slice_elem_types.remove(&synth);
@@ -11194,7 +11387,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // freed, and a textual mention is only a proxy for it. An RHS that
         // reaches the container solely through scalar reads
         // (`ps[0] = mk(ps[0].n + k)`) provably carries nothing out of it.
-        if !rhs_index_deep_cloned && !self.expr_cannot_carry_container_heap(rhs, container) {
+        if !rhs_index_deep_cloned
+            && !self.expr_cannot_carry_container_heap(rhs, container, clone_log_mark)
+        {
             return;
         }
         if self.slice_elem_types.contains_key(container.as_str())

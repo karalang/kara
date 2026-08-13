@@ -20895,6 +20895,73 @@ fn main() {
         );
     }
 
+    /// B-2026-08-12-33 — the displaced element is freed when an index-assign's
+    /// RHS passes container HEAP into a call, the case B-2026-08-12-31 left
+    /// open because a call "gets no proof" that its argument is not the
+    /// container's own buffer.
+    ///
+    /// There are two proofs, and neither trusts the callee. `takes(ps[0].word)`
+    /// hands over a heap FIELD read, which B-2026-08-12-27 already deep-clones
+    /// AT THE READ — so the callee holds an independent buffer and the element
+    /// keeps its own. That clone records its span when it fires and the guard
+    /// reads the record, rather than restating the clone's eight admission
+    /// conditions and drifting from them. `passthru(ps[0])` hands over the
+    /// whole element, which nothing clones caller-side — but an owned bare
+    /// `Path` aggregate param is callee-owned by ENTRY COPY, so again what the
+    /// callee can hand back is its copy. That arm asks
+    /// `aggregate_param_copy_supported_struct`, the same predicate the entry
+    /// copy is gated on, and deliberately excludes own-by-transfer
+    /// (B-2026-08-05-33), which copies nothing and whose callee drop would
+    /// then collide with this free.
+    ///
+    /// EVERY SHAPE HERE LEAKED 200 B IN 40 BLOCKS before the fix, measured
+    /// under valgrind, and the `bs` leg is the one that proves the arm is not
+    /// String-shaped luck: its element carries a `Vec[String]`, so the freed
+    /// occupant owns a buffer of buffers.
+    ///
+    /// THE ORDERING IS THE RISK, not the arithmetic: the drop runs after the
+    /// call and before the store, i.e. it frees a buffer the RHS was computed
+    /// from. If either proof were wrong this fixture would abort with a double
+    /// free or a use-after-free rather than merely leak, which is why the
+    /// values are asserted alongside the clean run.
+    #[test]
+    fn asan_index_assign_call_rhs_carrying_container_heap_frees_displaced() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { word: String, n: i64 }
+struct Bag { tags: Vec[String], n: i64 }
+fn passthru(p: Pair) -> Pair { p }
+fn takes(s: String) -> Pair { Pair { word: s, n: 1 } }
+fn join(a: String, b: String) -> Pair { Pair { word: a + b, n: 2 } }
+fn grow(b: Bag) -> Bag { Bag { tags: b.tags, n: b.n + 1 } }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 40 {
+        let mut ps: Vec[Pair] = Vec.new();
+        ps.push(Pair { word: f"alpha{k + i}", n: 1 });
+        ps.push(Pair { word: f"beta{k + i}", n: 2 });
+        ps[0] = passthru(ps[0]);
+        ps[0] = takes(ps[0].word);
+        ps[0] = join(ps[0].word, ps[1].word);
+        acc = acc + ps[0].word.len() + ps[0].n;
+        let mut bs: Vec[Bag] = Vec.new();
+        let mut t: Vec[String] = Vec.new();
+        t.push(f"tag{k + i}");
+        bs.push(Bag { tags: t, n: 0 });
+        bs[0] = grow(bs[0]);
+        acc = acc + bs[0].n + bs[0].tags[0].len();
+        i = i + 1;
+    }
+    println(acc > 0);
+}
+"#,
+            &["true"],
+            "index_assign_call_rhs_carrying_container_heap_frees_displaced",
+        );
+    }
+
     /// B-2026-08-12-26 — `ps[0] = ps[1]` over a struct element with a heap
     /// field leaked one buffer per assignment (400 B in 40 allocations). Filed
     /// deferred alongside B-2026-08-12-22 and `#[ignore]`d; now live.

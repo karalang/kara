@@ -28229,6 +28229,43 @@ fn test_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-08-12-33 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_index_assign_call_rhs_carrying_container_heap_values_survive`,
+/// same source and expected string.
+///
+/// The codegen leg is where the row lives: it frees the displaced element
+/// between the call and the store, so the values it prints are evidence that
+/// what got stored was the callee's own copy. The interpreter has no such
+/// ordering to get wrong (values are copied and memory is GC'd), which is
+/// exactly why it belongs here — it fixes the ORACLE those values are checked
+/// against, so a future widening of the guard that quietly changed a result
+/// would have to disagree with this file to land.
+#[test]
+fn test_index_assign_call_rhs_carrying_container_heap_values() {
+    assert_eq!(
+        run("struct Pair { word: String, n: i64 }\n\
+             fn passthru(p: Pair) -> Pair { p }\n\
+             fn takes(s: String) -> Pair { Pair { word: s + \"!\", n: 1 } }\n\
+             fn join(a: String, b: String) -> Pair { Pair { word: a + b, n: 2 } }\n\
+             fn peek(p: ref Pair) -> String { p.word }\n\
+             fn main() {\n\
+                 let k = 1;\n\
+                 let mut ps: Vec[Pair] = Vec.new();\n\
+                 ps.push(Pair { word: f\"a{k}\", n: 7 });\n\
+                 ps.push(Pair { word: f\"b{k}\", n: 8 });\n\
+                 ps[0] = passthru(ps[0]);\n\
+                 println(f\"{ps[0].word} {ps[0].n}\");\n\
+                 ps[0] = takes(ps[0].word);\n\
+                 println(f\"{ps[0].word} {ps[0].n}\");\n\
+                 ps[0] = join(ps[0].word, ps[1].word);\n\
+                 println(f\"{ps[0].word} {ps[1].word}\");\n\
+                 ps[0] = Pair { word: peek(ps[0]), n: 9 };\n\
+                 println(f\"{ps[0].word} {ps[0].n}\");\n\
+             }\n"),
+        "a1 7\na1! 1\na1!b1 b1\na1!b1 9\n"
+    );
+}
+
 /// B-2026-08-01-20 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_field_assign_displaced_bodies`, same source and expected string.
 #[test]

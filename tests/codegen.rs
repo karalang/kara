@@ -22936,6 +22936,53 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_index_assign_call_rhs_carrying_container_heap_values_survive() {
+        // B-2026-08-12-33's VALUE side. The displaced-element drop now fires for
+        // an RHS that passes container heap into a call, which means a buffer
+        // the call READ FROM is freed between the call and the store. What has
+        // to hold is that the value stored is the callee's independent copy —
+        // so this asserts the results, and its asan twin asserts the run is
+        // clean.
+        //
+        // `passthru(ps[0])` is the sharpest: the element makes a full round
+        // trip through the callee and back into the slot it came from, so a
+        // fix that freed the wrong side prints garbage here rather than in a
+        // leak report. `join(ps[0].word, ps[1].word)` mixes the two proofs in
+        // one call — a cloned field read from the slot being overwritten and
+        // one from a slot that must be left alone, which is what `ps[1]`
+        // printing unchanged pins.
+        //
+        // The `ref`-param leg is a DECLINE that must stay correct: `peek` takes
+        // a borrow, so no copy happens anywhere and the guard keeps refusing.
+        // It still leaks (its own row); what it must not do is change value.
+        assert_eq!(
+            run_program(
+                "struct Pair { word: String, n: i64 }\n\
+                 fn passthru(p: Pair) -> Pair { p }\n\
+                 fn takes(s: String) -> Pair { Pair { word: s + \"!\", n: 1 } }\n\
+                 fn join(a: String, b: String) -> Pair { Pair { word: a + b, n: 2 } }\n\
+                 fn peek(p: ref Pair) -> String { p.word }\n\
+                 fn main() {\n\
+                     let k = 1;\n\
+                     let mut ps: Vec[Pair] = Vec.new();\n\
+                     ps.push(Pair { word: f\"a{k}\", n: 7 });\n\
+                     ps.push(Pair { word: f\"b{k}\", n: 8 });\n\
+                     ps[0] = passthru(ps[0]);\n\
+                     println(f\"{ps[0].word} {ps[0].n}\");\n\
+                     ps[0] = takes(ps[0].word);\n\
+                     println(f\"{ps[0].word} {ps[0].n}\");\n\
+                     ps[0] = join(ps[0].word, ps[1].word);\n\
+                     println(f\"{ps[0].word} {ps[1].word}\");\n\
+                     ps[0] = Pair { word: peek(ps[0]), n: 9 };\n\
+                     println(f\"{ps[0].word} {ps[0].n}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("a1 7\na1! 1\na1!b1 b1\na1!b1 9\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_index_assign_elem_to_elem_swaps_correctly() {
         // B-2026-08-12-26's VALUE side. The fix frees the displaced element
         // before the store, which is a free-before-store on a slot the RHS was

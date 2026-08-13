@@ -1309,6 +1309,25 @@ pub(super) struct Codegen<'ctx> {
     /// binding to look up.
     pub(crate) vec_elem_field_clone_slots:
         std::collections::HashMap<(usize, usize), PointerValue<'ctx>>,
+    /// B-2026-08-12-33 — the same clones as `vec_elem_field_clone_slots`, in
+    /// EMISSION ORDER, so a later consumer can ask "was this span cloned
+    /// *during this evaluation*" rather than "has it ever been cloned".
+    ///
+    /// The displaced-element drop needs the ordered form, and the map cannot
+    /// answer it. An index-assign's guard clears an RHS that reaches the
+    /// container only through values the emitted code actually deep-cloned; a
+    /// map hit proves a clone happened at that SPAN at some point in the
+    /// module, which is a different claim once the same source expression
+    /// compiles twice (two monomorphs of one generic body) and the clone's
+    /// type-driven gates decide differently in each. The stale hit would
+    /// authorize freeing a buffer the second context still aliases — a double
+    /// free, which is the one direction this family refuses to trade for a
+    /// leak. Marking the log's length before the RHS is compiled and looking
+    /// only past that mark makes the evidence local to the statement.
+    ///
+    /// Append-only for the life of the module; entries are never removed, and
+    /// the log is read by index, so it costs one `usize` at each read site.
+    pub(crate) vec_elem_field_clone_log: Vec<(usize, usize)>,
     /// B-2026-08-06-32 — result binding of a passthrough call → the binding
     /// that actually owns its nested box (`let back = id(b)` ⇒ `back → b`).
     ///
@@ -8009,6 +8028,7 @@ impl<'ctx> Codegen<'ctx> {
             nested_boxed_payload_vars: std::collections::HashSet::new(),
             struct_field_boxed_payload_vars: std::collections::HashSet::new(),
             vec_elem_field_clone_slots: std::collections::HashMap::new(),
+            vec_elem_field_clone_log: Vec::new(),
             nested_boxed_passthrough_owner_alias: std::collections::HashMap::new(),
             refinement_bases: HashMap::new(),
             refinement_generic_params: HashMap::new(),

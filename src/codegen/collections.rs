@@ -3090,6 +3090,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.track_vec_var(dst, elem_ty);
         self.vec_elem_field_clone_slots
             .insert((expr.span.offset, expr.span.length), dst);
+        // B-2026-08-12-33 — record the clone in emission order too, so an
+        // index-assign's displaced-element drop can tell a clone emitted
+        // *while compiling its own RHS* from one emitted anywhere else.
+        self.vec_elem_field_clone_log
+            .push((expr.span.offset, expr.span.length));
         Ok(self
             .builder
             .build_load(vec_ty, dst, "vfld.read.cloned")
