@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 103 | 0 |
 | missing-feature | 92 | 1 |
 | perf | 64 | 0 |
-| false-positive | 60 | 0 |
+| false-positive | 61 | 1 |
 | diagnostics | 52 | 0 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 824 | 2 |
 | typecheck | 158 | 1 |
 | interp | 138 | 0 |
-| ownership | 46 | 0 |
+| ownership | 47 | 1 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
 | cli | 29 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1143 surfaced · 3 open · 1128 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1144 surfaced · 4 open · 1128 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
 | B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
 | B-2026-08-12-32 | 2026-08-12 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS passes container HEAP into a call: `ps[0] = passthru(ps[0])` and `ps[0] = takes(ps[0].word)` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` each lose 400 B in 40 allocations. B-2026-08-12-31 fixed the scalar-reaching case; these are the two where the argument genuinely carries a buffer out of the container. | — |
+| B-2026-08-13-1 | 2026-08-13 | ownership | low | The ownership checker treats an OWNED String passed as the ARGUMENT of a read-only String method as a MOVE, and does so INCONSISTENTLY across the three methods the compiler itself documents as read-only. `a.push_str(s)` twice on the same owned `s` reports `warning[ownership]: value 's' moved here, used again here`; `s.starts_with(t)` twice on the same owned `t` reports the same; `s.contains(t)` twice on the same owned `t` is CLEAN. All three are named together in `is_str_like`'s doc comment (src/typechecker/stdlib_seq.rs) as "String methods that read their argument's bytes (push_str, contains, starts_with) ... the callee only copies/scans the bytes, so there is no ownership reason to demand a move" -- the TYPECHECKER was deliberately widened to accept a borrow there, but the OWNERSHIP checker still classifies the owned-argument case as a consume for two of the three. NOT A CORRECTNESS BUG: the diagnostic is a warning, and the value really is still readable afterwards -- the same program prints `abc|abc` identically under `karac run --interp` and `karac build`. So this is a spurious move report plus, in the harder shapes, an unnecessary RC fallback. BOUNDARY (probed): argument `push_str` MOVED; argument `starts_with` MOVED; argument `contains` clean; RECEIVER reuse (`s.contains(lit)` twice) clean; argument reached through a `ref String` PARAMETER clean. COST: the only way to write the natural code without the diagnostic is to route the argument through a `ref`-parameter helper function, which is what kata #257's iterative builder had to do -- `extend(prefix: ref String, v: i64)` exists solely to turn two owned reads into two borrows. In a `Vec[Frame]`-style worklist, where the prefix is a field of an owned popped struct, there is no `ref` binding to hand and the helper is the ONLY spelling that avoids an RC. FIX DIRECTION: classify the argument of a read-only String method as a BORROW use in ownership.rs, matching what the typechecker already assumes and what `contains` already does. REPRO (1 line): `fn main(){ let s: String = "abc"; let mut a: String=""; a.push_str(s); let mut b: String=""; b.push_str(s); println(f"{a}{b}"); }` | ownership use-classification for read-only String stdlib arguments; cf. is_str_like in src/typechecker/stdlib_seq.rs |
 
 ### Wontfix (2)
 
