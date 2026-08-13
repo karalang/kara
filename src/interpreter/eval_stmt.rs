@@ -2764,9 +2764,48 @@ impl<'a> super::Interpreter<'a> {
                 // excluded: a slice rebind copies the VIEW (both windows
                 // alias one buffer) on every backend, and materializing an
                 // owned Array here would change its shape.
+                // B-2026-08-13-16 widens that rule on BOTH of its axes, because
+                // the aliasing it describes was never specific to `Value::Array`
+                // or to an identifier RHS — those were just the two coordinates
+                // the reported shape happened to sit at. `Value::Struct` holds
+                // its fields by value, so a struct whose field is a `Vec` copies
+                // the HashMap and Arc-BUMPS the field: `let mut t = a;
+                // t.lines.push(x)` was visible through `a`. Measured across the
+                // whole grid, interpreter vs AOT, with the compiled backend on
+                // the design-correct answer every time (design.md classes
+                // `let y = v` as a CONSUME, so the reuse must read an
+                // independent copy):
+                //
+                //   struct <- identifier     interp 2 2   build 2 1
+                //   Vec    <- struct field   interp 2 2   build 2 1
+                //   struct <- struct field   interp 2 2   build 2 1
+                //   struct <- Vec index      interp 2 2   build 2 1
+                //   Map[K, Vec] <- ident     interp 2 2   build 2 1
+                //
+                // So: any PLACE-rooted RHS (the value keeps living where it was
+                // read from), any value kind `deep_clone_value` materializes.
+                // Everything else is untouched by construction — a non-place RHS
+                // is a fresh temp with nothing to alias, and for every value
+                // kind `deep_clone_value` does not handle it falls through to
+                // the same `.clone()` this code already took.
+                //
+                // The two exclusions are deliberate and both predate this. A
+                // SLICE is a VIEW: rebinding one copies the window on every
+                // backend, and `deep_clone_value` would materialize an owned
+                // Array instead, changing its shape — so it stays out, as the
+                // note above says. Reference-semantics values (`shared struct`,
+                // channel ends, `SharedCell`, `Atomic`) are shared BY DESIGN and
+                // keep aliasing for free: `deep_clone_value` Arc-bumps them.
+                let rhs_is_place = matches!(
+                    &value.kind,
+                    ExprKind::Identifier(_)
+                        | ExprKind::FieldAccess { .. }
+                        | ExprKind::Index { .. }
+                        | ExprKind::TupleIndex { .. }
+                );
                 let val = if matches!(&pattern.kind, crate::ast::PatternKind::Binding(_))
-                    && matches!(&value.kind, ExprKind::Identifier(_))
-                    && matches!(&val, Value::Array(_))
+                    && rhs_is_place
+                    && !matches!(&val, Value::Slice { .. })
                 {
                     super::exec::deep_clone_value(&val)
                 } else {

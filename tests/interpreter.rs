@@ -28432,6 +28432,116 @@ fn test_field_bound_out_of_local_is_a_copy() {
     );
 }
 
+/// B-2026-08-13-16 — the MUTATION half of the pair above. Its sibling pinned
+/// that a field READ leaves the source intact; this pins that a WRITE through
+/// the new binding is not visible through the old one.
+///
+/// The interpreter used to alias: `Value::Struct` holds its fields by value, so
+/// cloning a struct copies the field map and Arc-BUMPS a `Vec` field — `let mut
+/// t = a; t.lines.push("y")` was then visible through `a`. B-2026-08-01-27 had
+/// already fixed exactly this for a bare `Vec` rebinding, but its guard was
+/// pinned to `Value::Array` and an identifier RHS, which were the coordinates of
+/// the shape reported at the time rather than the boundary of the behaviour.
+///
+/// design.md classes `let y = v` as a CONSUME, so the reuse must read an
+/// independent copy — and the compiled backends were already on that answer,
+/// which is the unusual part: the run-vs-build divergence here had the
+/// INTERPRETER wrong. Every line below is 2 then 1; pre-fix each printed 2
+/// then 2.
+///
+/// Seven positions, because the widening moved on two axes at once (value kind
+/// and RHS shape) and one probe per axis would not have covered the corners.
+/// The last two are pinned HERE only: `t.0`-rooted sources and a whole-tuple
+/// rebind have their own, separate codegen defects, so they have no compiled
+/// twin to compare against yet.
+#[test]
+fn test_let_rebinding_is_a_copy_not_an_alias() {
+    assert_eq!(
+        run("struct A { mut lines: Vec[String] }\n\
+             struct B { mut a: A }\n\
+             fn main() {\n\
+                 let mut a1 = A { lines: Vec.new() };\n\
+                 a1.lines.push(f\"x\");\n\
+                 let mut r1 = a1;\n\
+                 r1.lines.push(f\"y\");\n\
+                 println(f\"{r1.lines.len()} {a1.lines.len()}\");\n\
+                 let mut a2 = A { lines: Vec.new() };\n\
+                 a2.lines.push(f\"x\");\n\
+                 let mut r2 = a2.lines;\n\
+                 r2.push(f\"y\");\n\
+                 println(f\"{r2.len()} {a2.lines.len()}\");\n\
+                 let mut inner = A { lines: Vec.new() };\n\
+                 inner.lines.push(f\"x\");\n\
+                 let mut b3 = B { a: inner };\n\
+                 let mut r3 = b3.a;\n\
+                 r3.lines.push(f\"y\");\n\
+                 let chk3 = b3.a;\n\
+                 println(f\"{r3.lines.len()} {chk3.lines.len()}\");\n\
+                 let mut v4: Vec[A] = Vec.new();\n\
+                 v4.push(A { lines: Vec.new() });\n\
+                 v4[0].lines.push(f\"x\");\n\
+                 let mut r4 = v4[0];\n\
+                 r4.lines.push(f\"y\");\n\
+                 println(f\"{r4.lines.len()} {v4[0].lines.len()}\");\n\
+                 let mut m6: Map[i64, Vec[i64]] = Map.new();\n\
+                 let _ = m6.insert(1, Vec.new());\n\
+                 m6[1].push(1);\n\
+                 let mut r6 = m6;\n\
+                 r6[1].push(2);\n\
+                 println(f\"{r6[1].len()} {m6[1].len()}\");\n\
+                 let mut seed = A { lines: Vec.new() };\n\
+                 seed.lines.push(f\"x\");\n\
+                 let t5: (A, i64) = (seed, 1);\n\
+                 let mut r5 = t5.0;\n\
+                 r5.lines.push(f\"y\");\n\
+                 let chk5 = t5.0;\n\
+                 println(f\"{r5.lines.len()} {chk5.lines.len()}\");\n\
+                 let mut v7: Vec[i64] = Vec.new();\n\
+                 v7.push(1);\n\
+                 let t7: (Vec[i64], i64) = (v7, 0);\n\
+                 let mut r7 = t7;\n\
+                 r7.0.push(2);\n\
+                 println(f\"{r7.0.len()} {t7.0.len()}\");\n\
+             }"),
+        "2 1\n2 1\n2 1\n2 1\n2 1\n2 1\n2 1\n"
+    );
+}
+
+/// B-2026-08-13-16, the other direction: the widening must NOT reach the two
+/// things that are shared on purpose.
+///
+/// A `shared struct` has reference semantics by design, so a mutation through a
+/// rebinding IS visible through the original — `deep_clone_value` Arc-bumps it,
+/// and this asserts that stays true. A `Slice` is a VIEW, and rebinding one
+/// copies the window rather than materializing an owned buffer on every
+/// backend; the guard excludes it explicitly, and a deep clone there would
+/// change the value's shape, not just its identity.
+///
+/// This one passes BEFORE the fix as well, and is meant to — it is an
+/// over-reach guard, not a regression guard. The regression guard is the test
+/// above, which fails on all seven of its lines against the pre-fix
+/// interpreter.
+#[test]
+fn test_let_rebinding_preserves_shared_and_slice_aliasing() {
+    assert_eq!(
+        run("shared struct Counter { mut n: i64 }\n\
+             fn main() {\n\
+                 let c = Counter { n: 0 };\n\
+                 let d = c;\n\
+                 d.n = 5;\n\
+                 println(c.n);\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(1);\n\
+                 v.push(2);\n\
+                 let s = v.as_slice_mut();\n\
+                 let s2 = s;\n\
+                 s2[0] = 9;\n\
+                 println(v[0]);\n\
+             }"),
+        "5\n9\n"
+    );
+}
+
 /// B-2026-08-13-6 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_shared_struct_heap_field_read_is_a_copy`, same source and expected
 /// string.

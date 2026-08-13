@@ -23167,6 +23167,67 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-16 — the MUTATION half of `test_e2e_field_bound_out_of_
+    /// local_is_a_copy`, asserted as a three-surface differential.
+    ///
+    /// That test pinned that a field READ leaves the source intact. This pins
+    /// that a WRITE through a rebinding is not visible through the source, and
+    /// it is here rather than only in the interpreter suite because the two
+    /// surfaces DISAGREED — with the interpreter, unusually, the wrong one. It
+    /// aliased (`Value::Struct` copies its field map but Arc-bumps a `Vec`
+    /// field), while codegen already produced the copy design.md's CONSUME
+    /// classification of `let y = v` requires.
+    ///
+    /// Five positions, all the ones where the compiled backends can express the
+    /// shape today. The `t.0`-rooted and whole-tuple rebinds from the
+    /// interpreter twin are absent on purpose: the first still EMPTIES its
+    /// source under codegen (the tuple-element analogue of B-2026-08-13-14's
+    /// field-source defect) and the second does not compile at all
+    /// (B-2026-08-02-10's tuple-element receiver gap), so neither has a
+    /// meaningful compiled answer to compare against yet.
+    #[test]
+    fn test_e2e_let_rebinding_is_a_copy_not_an_alias() {
+        assert_eq!(
+            run_program(
+                "struct A { mut lines: Vec[String] }\n\
+                 struct B { mut a: A }\n\
+                 fn main() {\n\
+                     let mut a1 = A { lines: Vec.new() };\n\
+                     a1.lines.push(f\"x\");\n\
+                     let mut r1 = a1;\n\
+                     r1.lines.push(f\"y\");\n\
+                     println(f\"{r1.lines.len()} {a1.lines.len()}\");\n\
+                     let mut a2 = A { lines: Vec.new() };\n\
+                     a2.lines.push(f\"x\");\n\
+                     let mut r2 = a2.lines;\n\
+                     r2.push(f\"y\");\n\
+                     println(f\"{r2.len()} {a2.lines.len()}\");\n\
+                     let mut inner = A { lines: Vec.new() };\n\
+                     inner.lines.push(f\"x\");\n\
+                     let mut b3 = B { a: inner };\n\
+                     let mut r3 = b3.a;\n\
+                     r3.lines.push(f\"y\");\n\
+                     let chk3 = b3.a;\n\
+                     println(f\"{r3.lines.len()} {chk3.lines.len()}\");\n\
+                     let mut v4: Vec[A] = Vec.new();\n\
+                     v4.push(A { lines: Vec.new() });\n\
+                     v4[0].lines.push(f\"x\");\n\
+                     let mut r4 = v4[0];\n\
+                     r4.lines.push(f\"y\");\n\
+                     println(f\"{r4.lines.len()} {v4[0].lines.len()}\");\n\
+                     let mut m6: Map[i64, Vec[i64]] = Map.new();\n\
+                     let _ = m6.insert(1, Vec.new());\n\
+                     m6[1].push(1);\n\
+                     let mut r6 = m6;\n\
+                     r6[1].push(2);\n\
+                     println(f\"{r6[1].len()} {m6[1].len()}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("2 1\n2 1\n2 1\n2 1\n2 1\n"),
+        );
+    }
+
     #[test]
     fn test_e2e_field_bound_out_of_local_is_a_copy() {
         // B-2026-08-13-14's VALUE side, and the oracle is the interpreter twin
