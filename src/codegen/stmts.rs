@@ -3861,6 +3861,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // for the no-annotation path). Cleared after compile.
                 let saved_pending_let_elem = self.pending_let_elem_type.take();
                 let saved_pending_let_elem_te = self.pending_let_elem_type_expr.take();
+                // B-2026-08-13-17 — tuple sibling: stage the binding's declared
+                // TUPLE type so a tuple literal in the RHS lays itself out at
+                // the declared element widths. Taken/restored like the others,
+                // so a nested `let` inside the RHS cannot see this one's.
+                let saved_pending_let_tuple_te = self.pending_let_tuple_te.take();
                 // Sibling threading for `Tensor.zeros/ones/full` in the
                 // RHS — those constructors can't recover the element
                 // type or rank from their `dims: Vec[i64]` argument;
@@ -3905,6 +3910,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.pending_let_column_info = Some(*info);
                     }
                 }
+                // B-2026-08-13-17 — read from the ANNOTATION, and read it
+                // OUTSIDE the `Binding`-pattern arm above: the siblings there
+                // key off a per-variable registry and so need a variable name,
+                // but a tuple's declared layout is a property of the ANNOTATION
+                // alone. A direct destructure (`let (x, y): (i64, i64) = (b, d)`)
+                // has a Tuple pattern and no such name, yet needs the aggregate
+                // laid out at the declared widths just as much — the bindings it
+                // produces are read at those widths.
+                //
+                // Only an explicit annotation can disagree with the RHS values in
+                // the first place, so an unannotated `let t = (b, d)` stages
+                // nothing and keeps its existing (correct) value-derived layout.
+                if let Some(te) = ty.as_ref() {
+                    if matches!(te.kind, TypeKind::Tuple(_)) {
+                        self.pending_let_tuple_te = Some(te.clone());
+                    }
+                }
                 // Type-changing shadow dance (step 2 of 3 — old tags for the
                 // RHS). The pending-let derivation above has already read the
                 // NEW binding's element/tensor info from the maps into locals;
@@ -3946,6 +3968,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 self.pending_let_elem_type = saved_pending_let_elem;
                 self.pending_let_elem_type_expr = saved_pending_let_elem_te;
+                self.pending_let_tuple_te = saved_pending_let_tuple_te;
                 self.pending_let_tensor_info = saved_pending_let_tensor;
                 self.pending_let_column_info = saved_pending_let_column;
                 // B-2026-07-31-17: a `let` whose RHS TERMINATES the current

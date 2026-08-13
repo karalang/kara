@@ -20,6 +20,37 @@ use inkwell::{FloatPredicate, IntPredicate};
 
 impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compile_tuple(&mut self, elems: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-08-13-17 — the ANNOTATED binding's declared element types, when
+        // the enclosing `let` staged them. The aggregate is laid out at these
+        // widths rather than at the compiled values' own widths.
+        //
+        // Without this there were TWO sources of truth for one aggregate: this
+        // function built the struct type from `vals.iter().map(|v| v.get_type())`
+        // while every READ resolved its element types from the ANNOTATION
+        // (`place_chain_tuple_tes`). For `let t: (i64, i64) = (b, d)` with
+        // `b: u8` / `d: u32` that laid out `{i8, i32}` and then read it as
+        // `{i64, i64}` — so `t.0` sign-extended the i8 it actually found and
+        // printed 200 as -56 on both compiled backends. The UNANNOTATED form was
+        // correct precisely because nothing downstream disagreed with the values.
+        //
+        // Making the WRITE follow the annotation is the direction that removes
+        // the disagreement. Making the read authoritative off the value layout
+        // would also silence this repro, but would leave the aggregate's bytes
+        // contradicting its declared type for the next consumer to trip over.
+        //
+        // Taken (not read) so a nested tuple inside an element expression cannot
+        // inherit the outer annotation; the per-element re-stage below hands each
+        // nested tuple its own.
+        let ann_elems: Option<Vec<TypeExpr>> = match self.pending_let_tuple_te.take() {
+            Some(te) => match te.kind {
+                // Arity mismatch means the annotation does not describe THIS
+                // tuple (a shape the typechecker would already have rejected);
+                // decline rather than index into it.
+                TypeKind::Tuple(es) if es.len() == elems.len() => Some(es),
+                _ => None,
+            },
+            None => None,
+        };
         // Move-aware: tuple construction takes ownership of each
         // element. Two element shapes register an independent scope-exit
         // cleanup that must be suppressed once the tuple owns the buffer,
@@ -53,8 +84,22 @@ impl<'ctx> super::Codegen<'ctx> {
         //     (heap-use-after-free in `karac_string_clone` / on read —
         //     B-2026-06-10-5, the inline-f-string-in-tuple case).
         let mut vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(elems.len());
-        for elem_expr in elems {
+        for (idx, elem_expr) in elems.iter().enumerate() {
+            // Re-stage the hint for a NESTED annotated tuple element
+            // (`let t: ((u8, u32), i64) = ((b, d), n)`), so the inner tuple lays
+            // itself out from its own declared element types rather than from
+            // its values. Only a tuple annotation is staged; anything else would
+            // be consumed by an unrelated construct downstream.
+            if let Some(aes) = &ann_elems {
+                if matches!(aes[idx].kind, TypeKind::Tuple(_)) {
+                    self.pending_let_tuple_te = Some(aes[idx].clone());
+                }
+            }
             let v = self.compile_expr(elem_expr)?;
+            // Clear whatever survived: the element may not have been a tuple
+            // literal at all (a call returning one, say), and a hint left
+            // standing would be picked up by the NEXT element.
+            self.pending_let_tuple_te = None;
             self.suppress_fstr_acc_if_moved_out(elem_expr);
             // (d) B-2026-07-04-3 — a heap element that is a RETAINING source (an
             //     owned String/Vec param, or a `for`-loop element BORROW, which
@@ -85,6 +130,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_map_cleanup_for_tail_identifier(name);
             }
             vals.push(v);
+        }
+        // Lay the aggregate out at the ANNOTATED element widths where an
+        // annotation is available, coercing each value into its slot.
+        //
+        // SCALARS ONLY, on both sides. The annotated width is authoritative for
+        // an int/float element, which is the whole miscompile class here — a
+        // narrow value in a wider declared slot. For a heap or aggregate element
+        // (`String`, `Vec[T]`, a struct) the compiled value already carries the
+        // exact layout every downstream consumer expects, and substituting a
+        // separately-lowered type risks a mismatch in a place where nothing was
+        // wrong; those slots keep the value's own type verbatim.
+        //
+        // `coerce_literal_elem_to_type_from` is passed the ELEMENT EXPRESSION so
+        // the widening leg picks zext over sext from the source's signedness —
+        // the same call the collection-literal path uses for exactly this
+        // question. Without the source expression a `u8` would sign-extend and
+        // reproduce the bug one level down.
+        if let Some(aes) = &ann_elems {
+            for (idx, val) in vals.iter_mut().enumerate() {
+                let target = self.llvm_type_for_type_expr(&aes[idx]);
+                let scalar_pair = matches!(
+                    (*val, target),
+                    (BasicValueEnum::IntValue(_), BasicTypeEnum::IntType(_))
+                        | (BasicValueEnum::IntValue(_), BasicTypeEnum::FloatType(_))
+                        | (BasicValueEnum::FloatValue(_), BasicTypeEnum::FloatType(_))
+                );
+                if scalar_pair && val.get_type() != target {
+                    *val = self.coerce_literal_elem_to_type_from(*val, target, &elems[idx]);
+                }
+            }
         }
         let types: Vec<BasicTypeEnum<'ctx>> = vals.iter().map(|v| v.get_type()).collect();
         let st = self.context.struct_type(&types, false);

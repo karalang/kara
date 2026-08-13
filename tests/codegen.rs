@@ -12869,6 +12869,97 @@ fn main() {
         assert_eq!(got[8], "0", "Set[String].contains found an absent key");
     }
 
+    /// B-2026-08-13-17 — an ANNOTATED tuple binding must lay its aggregate out
+    /// at the DECLARED element widths, not at the compiled values' widths.
+    ///
+    /// There were two sources of truth for one aggregate: `compile_tuple` built
+    /// the struct type from the element VALUES while every read resolved element
+    /// types from the ANNOTATION. So `let t: (i64, i64) = (b, d)` with `b: u8`
+    /// laid out `{i8, i32}`, and the read — trusting `{i64, i64}` — sign-extended
+    /// the i8 it actually found and printed 200 as -56 on both compiled
+    /// backends, at every optimization level.
+    ///
+    /// The UNANNOTATED line is the control and must stay right: it was already
+    /// correct precisely because nothing downstream disagreed with the values,
+    /// and B-2026-08-13-15 fixed its read side. A fix that made the aggregate
+    /// follow the annotation could plausibly have disturbed it.
+    ///
+    /// The other lines pin the boundaries the fix must NOT cross. `narrow`
+    /// declares slots at the source width (no coercion owed). `mixed` puts a
+    /// `String` beside a widened scalar — heap elements keep the compiled
+    /// value's own layout verbatim, since substituting a separately-lowered
+    /// type there would risk a mismatch where nothing was wrong. `float` pins
+    /// the int→float leg. `nested` pins that an inner annotated tuple gets its
+    /// OWN declared widths rather than inheriting the outer annotation.
+    ///
+    /// Line 10 is a DIRECT destructure, whose pattern is a tuple rather than a
+    /// binding. Its declared layout has to come from the annotation alone —
+    /// there is no variable name to key a per-variable registry off — which is
+    /// why the staging sits outside the binding-pattern arm that its siblings
+    /// live in.
+    ///
+    /// Values carry the high bit (200, 4000000000) because that is the only
+    /// region where sext and zext differ — the same reason B-2026-08-13-15 uses
+    /// them, and the reason a probe with 97 would report this as working.
+    #[test]
+    fn test_e2e_annotated_tuple_uses_declared_element_widths() {
+        let src = r#"
+fn main() {
+    let b: u8 = 200u8;
+    let d: u32 = 4000000000u32;
+    let n: i64 = 7;
+
+    let t: (i64, i64) = (b, d);
+    println(f"01 {t.0} {t.1}");
+
+    let un = (b, d);
+    println(f"02 {un.0} {un.1}");
+
+    let nest: ((i64, i64), i64) = ((b, d), n);
+    println(f"03 {nest.0.0} {nest.0.1} {nest.1}");
+
+    let narrow: (u8, u8) = (200u8, 7u8);
+    println(f"04 {narrow.0} {narrow.1}");
+
+    let s: String = "hi";
+    let mixed: (String, i64) = (s, b);
+    println(f"05 {mixed.0} {mixed.1}");
+
+    let f: f64 = 1.5;
+    let fl: (f64, i64) = (f, b);
+    println(f"06 {fl.0} {fl.1}");
+
+    let pair: (i64, i64) = (b, d);
+    let (x, y) = pair;
+    println(f"07 {x} {y}");
+
+    let same: (i64, i64) = (n, n);
+    println(f"08 {same.0} {same.1}");
+
+    let three: (i64, i64, i64) = (b, d, n);
+    println(f"09 {three.0} {three.1} {three.2}");
+
+    let (p, q): (i64, i64) = (b, d);
+    println(f"10 {p} {q}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 200 4000000000\n\
+                 02 200 4000000000\n\
+                 03 200 4000000000 7\n\
+                 04 200 7\n\
+                 05 hi 200\n\
+                 06 1.5 200\n\
+                 07 200 4000000000\n\
+                 08 7 7\n\
+                 09 200 4000000000 7\n\
+                 10 200 4000000000\n"
+            ),
+        );
+    }
+
     /// B-2026-08-13-15 — an IMPLICIT WIDENING COERCION must widen the way the
     /// SOURCE type says, and must actually reach the slot it is widening into.
     ///

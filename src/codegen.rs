@@ -2298,6 +2298,19 @@ pub(super) struct Codegen<'ctx> {
     /// — before the fill argument is compiled — so a nested inner
     /// `Vec.filled(...)` does not inherit the outer binding's stale element type.
     pub(crate) pending_let_elem_type_expr: Option<TypeExpr>,
+    /// B-2026-08-13-17 — the annotated TUPLE type of the `let` binding whose RHS
+    /// is being compiled, staged so `compile_tuple` can lay the aggregate out at
+    /// the DECLARED element widths instead of at the compiled values' own.
+    ///
+    /// The tuple sibling of `pending_let_elem_type_expr`, and it exists for the
+    /// same reason: a tuple literal cannot recover its declared widths from its
+    /// elements. Without it, `let t: (i64, i64) = (b, d)` with `b: u8` laid out
+    /// `{i8, i32}` while every read resolved `{i64, i64}` from the annotation,
+    /// so `t.0` sign-extended and printed 200 as -56 on both compiled backends.
+    ///
+    /// Set only for a `TypeKind::Tuple` annotation, consumed (taken) by
+    /// `compile_tuple`, and saved/restored around the RHS like its siblings.
+    pub(crate) pending_let_tuple_te: Option<TypeExpr>,
     /// Per-variable Slice element type tracking (variable name → element LLVM type).
     /// Entries only exist for values whose LLVM representation is the
     /// 2-field slice struct `{ptr, i64}`; used to dispatch indexing and
@@ -8187,6 +8200,7 @@ impl<'ctx> Codegen<'ctx> {
             vec_elem_types: HashMap::new(),
             pending_let_elem_type: None,
             pending_let_elem_type_expr: None,
+            pending_let_tuple_te: None,
             slice_elem_types: HashMap::new(),
             slice_alias_md: HashMap::new(),
             fn_param_slice_elem: HashMap::new(),
