@@ -3091,6 +3091,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
             return;
         };
+        // B-2026-08-13-14 — the disarm half of the `UseAfterMove` defensive
+        // copy, for the field-bind site. `uam_defensive_copy_field` handed the
+        // destination an independent buffer, so the SOURCE still owns (and must
+        // still free) its own; cap-zeroing it here would orphan that buffer.
+        // Keyed on `uam_copied_sites` — "a copy really happened" — for the same
+        // reason `suppress_source_vec_cleanup_for_arg_ex` is: skipping the
+        // disarm where no copy was made leaves two owners of one buffer.
+        if self
+            .uam_copied_sites
+            .contains(&(value.span.offset, value.span.length))
+        {
+            return;
+        }
         // The source root is either a named binding (`obj.field`) or the method
         // receiver (`self.field`) — `self` is bound as an ordinary local named
         // "self" by `compile_function`. The std.tracing builder bodies move

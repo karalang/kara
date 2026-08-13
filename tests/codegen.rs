@@ -22989,6 +22989,59 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_field_bound_out_of_local_is_a_copy() {
+        // B-2026-08-13-14's VALUE side, and the oracle is the interpreter twin
+        // (`tests/interpreter.rs::test_field_bound_out_of_local_is_a_copy`),
+        // which reads the source's ORIGINAL contents on every line here.
+        //
+        // Three depths, because the unfixed compiler failed each differently:
+        //   * `s.name` — a direct String field: the source kept a live
+        //     `{ptr,len}` into a buffer the binding owned (cap-only zeroing), so
+        //     the second read was a stale alias, and a realloc made it a
+        //     use-after-free (pinned in `tests/memory_sanitizer.rs`);
+        //   * `b.a` — a nested STRUCT field: `zero_struct_move_caps_mono` zeroes
+        //     `len` too, so the source read back EMPTY — `0` and `""`, plausible
+        //     values, no crash;
+        //   * `d.lines` — a direct Vec field, the depth-1 sibling of the second.
+        //
+        // The scalar `b.n` read last is the control that must NOT change: the
+        // disarm skip is per-field, so a sibling field of a moved-from struct
+        // stays exactly as it was.
+        assert_eq!(
+            run_program(
+                "struct S { name: String }\n\
+                 struct A { lines: Vec[String] }\n\
+                 struct B { a: A, n: i64 }\n\
+                 fn main() {\n\
+                     let k = 1;\n\
+                     let s = S { name: f\"hi{k}\" };\n\
+                     let n1 = s.name;\n\
+                     println(n1);\n\
+                     println(s.name);\n\
+                     let mut v: Vec[String] = Vec.new();\n\
+                     v.push(f\"x{k}\");\n\
+                     let d = A { lines: v };\n\
+                     let t = d.lines;\n\
+                     println(t.len());\n\
+                     println(d.lines.len());\n\
+                     println(d.lines[0]);\n\
+                     let mut v2: Vec[String] = Vec.new();\n\
+                     v2.push(f\"y{k}\");\n\
+                     let b = B { a: A { lines: v2 }, n: 7 };\n\
+                     let u = b.a;\n\
+                     println(u.lines.len());\n\
+                     let w = b.a;\n\
+                     println(w.lines.len());\n\
+                     println(w.lines[0]);\n\
+                     println(b.n);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi1\nhi1\n1\n1\nx1\n1\n1\ny1\n7\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_shared_struct_heap_field_read_is_a_copy() {
         // B-2026-08-13-6's VALUE side, and the leg that decides between the two
         // candidate fixes. Cap-zeroing the source — the move model that

@@ -4387,6 +4387,23 @@ impl<'ctx> super::Codegen<'ctx> {
         expr: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
+        // B-2026-08-13-14 — the FIELD-ACCESS consume site (`let t = b.a`).
+        //
+        // The parser gives a `FieldAccess` its OBJECT's span verbatim, so a
+        // flagged `b` and the `b.a` that reads it share one span key and land
+        // in `uam_consume_sites` together. Only the `Identifier` arm below ever
+        // consulted it, so a field bind fell through uncopied while the source
+        // disarm ran anyway — leaving one buffer with two readers and one
+        // owner. Measured, all `karac check`-clean and all silently wrong:
+        // a nested-struct field bind zeroes the source's `len` (its drop's
+        // per-element rc-dec walk is len-driven and not under the `cap` guard,
+        // B-2026-07-10-1), so the source reads back EMPTY; a depth-1 Vec field
+        // bind zeroes only `cap`, so the source keeps a live `{ptr,len}` into a
+        // buffer the new binding owns and may realloc away — valgrind
+        // `Invalid read of size 8 … free'd by realloc` on `a.lines[0]`.
+        if let Some(v) = self.uam_defensive_copy_field(expr, val) {
+            return v;
+        }
         let ExprKind::Identifier(name) = &expr.kind else {
             return val;
         };
@@ -4458,6 +4475,129 @@ impl<'ctx> super::Codegen<'ctx> {
         self.uam_copied_sites
             .insert((expr.span.offset, expr.span.length));
         copied
+    }
+
+    /// B-2026-08-13-14 — the field-bind half of [`Self::uam_defensive_copy`].
+    ///
+    /// `Some(copy)` when `expr` is `<local>.<field>` at a flagged consume site
+    /// AND the field's declared type is one this can copy independently;
+    /// `None` for every other expression, so the caller falls through to the
+    /// identifier arm untouched.
+    ///
+    /// Scoped exactly like its sibling, and for the same reason: the coverage
+    /// is deliberately partial and must stay MONOTONE. A `Map`/`Set` handle
+    /// field, a `shared` field, an `Option`/`Result` field and an enum field
+    /// are left alone — they keep the source-disarm behaviour they have today
+    /// rather than gaining a half-copy that would turn a wrong read into a
+    /// double free. `uam_copied_sites` records only what was really copied, and
+    /// the disarm skip keys on that set, so widening this can never get out of
+    /// step with the disarm.
+    fn uam_defensive_copy_field(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ExprKind::FieldAccess { object, field } = &expr.kind else {
+            return None;
+        };
+        if !self
+            .uam_consume_sites
+            .contains(&(expr.span.offset, expr.span.length))
+        {
+            return None;
+        }
+        // Root at a named local or `self` — the same two spellings the source
+        // disarm (`suppress_struct_field_move_into_literal`) resolves, so the
+        // copy and the disarm skip see the same set of shapes.
+        let obj_name = match &object.kind {
+            ExprKind::Identifier(o) => o.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return None,
+        };
+        // Roots that ALREADY get an independent buffer from
+        // `deep_copy_owned_struct_param_field_move` are excluded, or the two
+        // copies stack and the first one leaks. Same four sets that helper
+        // dispatches on: a caller-retains by-value struct param, a heap
+        // for-loop aggregate element, a borrowed enum-payload struct, and a
+        // shared-enum-payload view. The first of those is also exactly what the
+        // disarm sites gate on (`!owned_struct_params.contains(obj)`), so the
+        // copy and the disarm skip stay defined over the same roots.
+        if self.owned_struct_params.contains(obj_name.as_str())
+            || self.for_loop_owned_agg_vars.contains(obj_name.as_str())
+            || self
+                .borrowed_agg_payload_struct_vars
+                .contains(obj_name.as_str())
+            || self
+                .shared_enum_payload_view_vars
+                .contains_key(obj_name.as_str())
+        {
+            return None;
+        }
+        let sname = self.var_type_names.get(obj_name.as_str())?.clone();
+        let idx = self
+            .struct_field_names
+            .get(sname.as_str())?
+            .iter()
+            .position(|n| n == field)?;
+        let fte = self
+            .struct_field_type_exprs
+            .get(sname.as_str())?
+            .get(idx)?
+            .clone();
+        let fn_val = self.current_fn?;
+        // A nested non-shared STRUCT field: its own words are already bit-copied
+        // into `val`; what aliases is the heap ITS fields point at. Recursing in
+        // place is the same duplication the identifier arm performs for a
+        // whole-struct move.
+        if let TypeKind::Path(p) = &fte.kind {
+            if let Some(head) = p.segments.last().map(|s| s.as_str()) {
+                if self.struct_types.contains_key(head)
+                    && !self.shared_types.contains_key(head)
+                    && val.is_struct_value()
+                    && val.get_type() != self.vec_struct_type().into()
+                {
+                    let head = head.to_string();
+                    let slot = self.create_entry_alloca(fn_val, "uam.fld.struct", val.get_type());
+                    self.builder.build_store(slot, val).ok()?;
+                    self.deep_copy_struct_heap_fields_in_place(slot, &head);
+                    let cloned = self
+                        .builder
+                        .build_load(val.get_type(), slot, "uam.fld.struct.clone")
+                        .ok()?;
+                    self.uam_copied_sites
+                        .insert((expr.span.offset, expr.span.length));
+                    return Some(cloned);
+                }
+            }
+        }
+        // A direct `{ptr,len,cap}` field — `String`, `Vec[T]`, `VecDeque[T]`.
+        // The element type comes off the field's own declared type rather than
+        // the destination binding's tables, which are not populated yet at the
+        // point the RHS is compiled.
+        if val.get_type() != self.vec_struct_type().into() {
+            return None;
+        }
+        let elem_te = match &fte.kind {
+            TypeKind::Path(p)
+                if matches!(
+                    p.segments.last().map(|s| s.as_str()),
+                    Some("Vec") | Some("VecDeque")
+                ) =>
+            {
+                p.generic_args.as_ref().and_then(|a| match a.first() {
+                    Some(crate::ast::GenericArg::Type(t)) => Some(t.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        };
+        let elem_ty = self
+            .extract_vec_elem_type(&fte)
+            .unwrap_or_else(|| self.context.i8_type().into());
+        let copied = self.emit_vecstr_defensive_copy(val, elem_ty, elem_te.as_ref());
+        self.uam_copied_sites
+            .insert((expr.span.offset, expr.span.length));
+        Some(copied)
     }
 
     /// B-2026-08-10-21 — the deep-clone fn for a `Map`/`Set` variable, or

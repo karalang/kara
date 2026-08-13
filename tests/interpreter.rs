@@ -28388,6 +28388,50 @@ fn test_user_trait_bound_call_over_builtin_containers() {
     );
 }
 
+/// B-2026-08-13-14 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_field_bound_out_of_local_is_a_copy`, same source and expected
+/// string.
+///
+/// The interpreter is the ORACLE for this pair: binding a field out of a local
+/// leaves the source's contents intact, which is what the language's field-read
+/// rule calls for and what the compiled backends did not do. Pinning the twin
+/// keeps the two surfaces from drifting apart again — the whole failure was
+/// that they disagreed silently, with `karac check` reporting the mismatch only
+/// as an advisory `UseAfterMove` whose "codegen defensive-copies the reuse"
+/// promise did not hold at a field-access consume site.
+#[test]
+fn test_field_bound_out_of_local_is_a_copy() {
+    assert_eq!(
+        run("struct S { name: String }\n\
+             struct A { lines: Vec[String] }\n\
+             struct B { a: A, n: i64 }\n\
+             fn main() {\n\
+                 let k = 1;\n\
+                 let s = S { name: f\"hi{k}\" };\n\
+                 let n1 = s.name;\n\
+                 println(n1);\n\
+                 println(s.name);\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 v.push(f\"x{k}\");\n\
+                 let d = A { lines: v };\n\
+                 let t = d.lines;\n\
+                 println(t.len());\n\
+                 println(d.lines.len());\n\
+                 println(d.lines[0]);\n\
+                 let mut v2: Vec[String] = Vec.new();\n\
+                 v2.push(f\"y{k}\");\n\
+                 let b = B { a: A { lines: v2 }, n: 7 };\n\
+                 let u = b.a;\n\
+                 println(u.lines.len());\n\
+                 let w = b.a;\n\
+                 println(w.lines.len());\n\
+                 println(w.lines[0]);\n\
+                 println(b.n);\n\
+             }"),
+        "hi1\nhi1\n1\n1\nx1\n1\n1\ny1\n7\n"
+    );
+}
+
 /// B-2026-08-13-6 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_shared_struct_heap_field_read_is_a_copy`, same source and expected
 /// string.

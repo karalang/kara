@@ -20975,6 +20975,85 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-14 — a heap field BOUND OUT of a local that is read again
+    /// (`let t = a.lines; … a.lines[0]`) gets an independent buffer, so the
+    /// source's own `{ptr,len}` no longer dangles.
+    ///
+    /// The ownership pass already reports this as `UseAfterMove`, and that
+    /// diagnostic is advisory on the documented promise that "codegen
+    /// defensive-copies the reuse, so the binary is memory-safe"
+    /// (B-2026-08-10-21). The promise was false at a FIELD-ACCESS consume site:
+    /// `uam_defensive_copy` matched only `ExprKind::Identifier`, so the bind
+    /// copied nothing while the source disarm ran anyway.
+    ///
+    /// The realloc is what makes it a use-after-free rather than a stale read.
+    /// A depth-1 Vec field bind zeroes only the source's `cap`, so the source
+    /// keeps a live `{ptr,len}` into the buffer the new binding owns; growing
+    /// that binding past its capacity hands the allocation to
+    /// `karac_realloc_or_panic`, which frees it. Under the unfixed compiler
+    /// this reports `heap-use-after-free` on `a.lines[0]` — valgrind names it
+    /// `Invalid read of size 8 … free'd by realloc`. The loop must run enough
+    /// iterations to force a MOVING realloc: at one push the allocator grew the
+    /// block in place and the program was accidentally clean, which is exactly
+    /// how this stayed invisible.
+    ///
+    /// The nested-struct sibling in the same program covers the other half. It
+    /// routes through `zero_struct_move_caps_mono`, which zeroes `len` as well
+    /// as `cap` (it must — B-2026-07-10-1), so its failure mode was silent data
+    /// LOSS rather than a dangling read: `b.a.lines` read back empty. Both are
+    /// one missing copy.
+    #[test]
+    fn asan_field_bound_out_of_local_then_reread_is_copied() {
+        assert_clean_asan_run(
+            r#"
+struct A { lines: Vec[String] }
+struct B { a: A }
+struct S { name: String }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut s = String.new(); s.push_str("alpha"); s.push_str(k.to_string());
+    let mut v: Vec[String] = Vec.new(); v.push(s);
+    let a = A { lines: v };
+    let mut t = a.lines;
+    let mut i = 0i64;
+    while i < 2000 {
+        let mut q = String.new(); q.push_str("y"); q.push_str(k.to_string());
+        t.push(q);
+        i = i + 1;
+    }
+    let mut acc = t.len() as i64;
+    acc = acc + a.lines.len() as i64;
+    acc = acc + a.lines[0].len();
+
+    let mut s2 = String.new(); s2.push_str("beta"); s2.push_str(k.to_string());
+    let mut v2: Vec[String] = Vec.new(); v2.push(s2);
+    let b = B { a: A { lines: v2 } };
+    let u = b.a;
+    acc = acc + u.lines.len() as i64;
+    let w = b.a;
+    acc = acc + w.lines.len() as i64;
+    acc = acc + w.lines[0].len();
+
+    let mut s3 = String.new(); s3.push_str("gamma"); s3.push_str(k.to_string());
+    let st = S { name: s3 };
+    let n1 = st.name;
+    let n2 = st.name;
+    acc = acc + n1.len() + n2.len();
+    println(acc);
+}
+"#,
+            // 2001 (`t`) + 1 + 6 (`a.lines`, which the unfixed build read
+            // through a dangling pointer) + 1 + 1 + 5 (`b.a` twice, which the
+            // unfixed build read back EMPTY) + 12 (`st.name` twice, likewise).
+            // `k` is a stable 1 — the binary runs with no args — so the string
+            // lengths are fixed; it exists only to defeat literal folding,
+            // since a string LITERAL is static with `cap == 0` and hides every
+            // move-out failure in this family.
+            &["2027"],
+            "field_bound_out_of_local_then_reread_is_copied",
+        );
+    }
+
     /// B-2026-08-13-6 — a heap field read off a `shared struct` is deep-cloned,
     /// so it no longer double-frees.
     ///

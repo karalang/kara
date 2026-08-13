@@ -7070,6 +7070,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
             return;
         };
+        // B-2026-08-13-14 — the bodies half of the same disarm skip. See
+        // `suppress_struct_field_move_into_literal`: at a site where
+        // `uam_defensive_copy_field` produced an independent buffer the source
+        // is still the owner of its own and its cleanup must stay armed.
+        if self
+            .uam_copied_sites
+            .contains(&(value.span.offset, value.span.length))
+        {
+            return;
+        }
         let obj = match &object.kind {
             ExprKind::Identifier(o) => o.clone(),
             ExprKind::SelfValue => "self".to_string(),
