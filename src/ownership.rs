@@ -2708,6 +2708,45 @@ pub(crate) fn collect_method_param_modes(program: &Program) -> HashMap<String, V
             vec![OwnershipMode::Ref, OwnershipMode::Own],
         );
     }
+    // B-2026-08-13-1 — the rest of the READ-ONLY String surface. `String.contains`
+    // was already in the lookup list above, and the omission of its siblings was
+    // an inconsistency rather than a decision: the typechecker had ALREADY been
+    // widened to accept a borrow in exactly these positions, and says so —
+    // `is_str_like`'s doc (src/typechecker/stdlib_seq.rs) names `push_str`,
+    // `contains` and `starts_with` together as methods where "the callee only
+    // copies/scans the bytes, so there is no ownership reason to demand a move".
+    // The ownership phase still classified two of those three as a consume, so
+    // `a.push_str(s)` twice on one owned `s` drew `value 's' moved here, used
+    // again here` while the identical `contains` shape was silent.
+    //
+    // THE CRITERION IS BYTES-NOT-HEADER: every method here copies or scans the
+    // argument's UTF-8 bytes and never stores its `{ptr,len,cap}` header, so the
+    // caller keeps the buffer and the callee frees nothing. Verified at runtime
+    // rather than assumed — a probe reusing one owned `String` as the argument of
+    // all six, then reading it again, is valgrind-clean at -O0 and agrees with
+    // the interpreter. `Vec.push` / `Map.insert` are the contrast and stay OWN:
+    // they store the argument itself.
+    //
+    // `insert_str` is deliberately absent. It appears in the RECEIVER-mode table
+    // below, but there is no such method on `String` — the typechecker rejects
+    // `b.insert_str(0, t)` with "no method 'insert_str' on type 'String'" — so
+    // giving it an argument mode would be inventing a signature for a method that
+    // does not exist.
+    for key in [
+        "String.push_str",
+        "String.starts_with",
+        "String.ends_with",
+        "String.find",
+        "String.split",
+    ] {
+        map.insert(key.to_string(), vec![OwnershipMode::Ref]);
+    }
+    // `replace(from: ref String, to: ref String) -> String` — BOTH arguments are
+    // scanned/copied into a freshly built result, neither is stored.
+    map.insert(
+        "String.replace".to_string(),
+        vec![OwnershipMode::Ref, OwnershipMode::Ref],
+    );
     // Baked-stdlib instance methods next — the `MethodCall` twin of the
     // stdlib walk in `collect_callee_param_modes` (B-2026-07-01-10); user
     // entries override below.

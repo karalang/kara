@@ -249,6 +249,103 @@ fn test_basic_move_ok() {
     );
 }
 
+/// B-2026-08-13-1 — an owned `String` passed as the ARGUMENT of a read-only
+/// String method is a BORROW, not a move.
+///
+/// The typechecker had already been widened to accept a borrow in exactly these
+/// positions and says so: `is_str_like`'s doc names `push_str`, `contains` and
+/// `starts_with` together as methods where "the callee only copies/scans the
+/// bytes, so there is no ownership reason to demand a move". The ownership
+/// phase still classified two of those three as a consume, because only
+/// `String.contains` had ever been added to `collect_method_param_modes`'
+/// builtin table — so the split was an omission, not a decision.
+///
+/// EVERY METHOD IN THE LOOP is one the false positive was measured on, and
+/// `contains` is carried along as the control that was already clean. The
+/// criterion is bytes-not-header: each copies or scans the argument's UTF-8
+/// bytes and never stores its `{ptr,len,cap}`, so the caller keeps the buffer.
+#[test]
+fn test_readonly_string_method_argument_is_a_borrow_not_a_move() {
+    for (label, prog) in [
+        (
+            "push_str",
+            "fn main(){ let s: String=\"ab\"; let mut a: String=\"\"; a.push_str(s); \
+             let mut b: String=\"\"; b.push_str(s); println(f\"{a}{b}\"); }",
+        ),
+        (
+            "starts_with",
+            "fn main(){ let t: String=\"ab\"; let s: String=\"abcd\"; \
+             let p=s.starts_with(t); let q=s.starts_with(t); println(f\"{p}{q}\"); }",
+        ),
+        (
+            "ends_with",
+            "fn main(){ let t: String=\"cd\"; let s: String=\"abcd\"; \
+             let p=s.ends_with(t); let q=s.ends_with(t); println(f\"{p}{q}\"); }",
+        ),
+        (
+            "contains (control — already clean)",
+            "fn main(){ let t: String=\"ab\"; let s: String=\"abcd\"; \
+             let p=s.contains(t); let q=s.contains(t); println(f\"{p}{q}\"); }",
+        ),
+        (
+            "find",
+            "fn main(){ let t: String=\"ab\"; let s: String=\"abcd\"; \
+             let p=s.find(t); let q=s.find(t); println(f\"{p.is_some()}{q.is_some()}\"); }",
+        ),
+        (
+            "split",
+            "fn main(){ let t: String=\",\"; let s: String=\"a,b\"; \
+             let p=s.split(t); let q=s.split(t); println(f\"{p.len()}{q.len()}\"); }",
+        ),
+        (
+            "replace (both arguments)",
+            "fn main(){ let t: String=\"a\"; let s: String=\"aaa\"; \
+             let p=s.replace(t, t); let q=s.replace(t, t); println(f\"{p}{q}\"); }",
+        ),
+    ] {
+        let result = ownership_ok(prog);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+            "reusing an owned String argument of `{label}` must not report a move"
+        );
+    }
+}
+
+/// B-2026-08-13-1's negative control — the widening must NOT reach a method
+/// that STORES its argument.
+///
+/// `Vec.push` and `Map.insert` take the value itself into the container, so
+/// their argument is genuinely consumed and reusing it afterwards is a real
+/// use-after-move. If either ever stops reporting, the byte-copying criterion
+/// has been applied to a method that keeps the header and the next symptom is
+/// a double free, not a diagnostic regression.
+#[test]
+fn test_storing_method_argument_is_still_a_move() {
+    for (label, prog) in [
+        (
+            "Vec.push",
+            "fn main(){ let s: String=\"ab\"; let mut v: Vec[String]=Vec.new(); \
+             v.push(s); v.push(s); println(v.len()); }",
+        ),
+        (
+            "Map.insert",
+            "fn main(){ let s: String=\"ab\"; let mut m: Map[String, i64]=Map.new(); \
+             m.insert(s, 1); m.insert(s, 2); println(m.len()); }",
+        ),
+    ] {
+        let errors = ownership_errors(prog);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+            "`{label}` stores its argument, so reusing it must still report a move"
+        );
+    }
+}
+
 #[test]
 fn test_use_after_move_error() {
     let errors = ownership_errors(
