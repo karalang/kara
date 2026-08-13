@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 243 | 0 |
+| miscompile | 244 | 1 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 108 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 842 | 1 |
+| codegen | 843 | 2 |
 | typecheck | 162 | 0 |
 | interp | 142 | 0 |
 | ownership | 47 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1166 surfaced · 1 open · 1153 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1167 surfaced · 2 open · 1153 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-13-21 | 2026-08-13 | codegen | medium | A tuple literal in RETURN / ARGUMENT / STRUCT-FIELD position is still laid out from its element values, so a narrow element under a wider declared type fails module verification: `fn give() -> (i64, i64) { return (b, d); }` with `b: u8` emits `ret { i8, i32 }` against a `{ i64, i64 }` signature. `--interp` runs all three correctly. B-2026-08-13-17 fixed the LET position and left the consuming machinery in place; only the per-position staging is missing. | — |
+| B-2026-08-13-22 | 2026-08-13 | codegen | high | An ANNOTATED ARRAY literal ignores its annotation the way B-2026-08-13-17's tuple did: `let a: Array[i64, 2] = [v, v]` with `v: u8 = 200` lays the aggregate out at the ELEMENT's width and sign-extends on read, printing -56 on all three compiled surfaces while `--interp` prints 200. Unsigned sources only (u8/u16/u32); signed sources are correct, because sign-extension is what they wanted. | src/codegen/collections.rs `compile_array_literal` (~L1265): it consults `literal_pending_elem_hint()` and would coerce via `coerce_literal_elem_to_type_from`, but the hint is None for an `Array[T, N]` annotation — the staging in src/codegen/stmts.rs (~L3880) keys off `vec_elem_types` / `var_elem_type_exprs`, which an Array binding does not populate. With no hint the function falls through to `let elem_ty = vals[0].get_type()`, i.e. layout from the VALUES rather than the annotation — the same shape B-2026-08-13-17 fixed for tuples via `pending_let_tuple_te`. |
 
 ### Wontfix (2)
 
