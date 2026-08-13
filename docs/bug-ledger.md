@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 239 | 0 |
 | leak | 172 | 0 |
-| double-free | 123 | 1 |
+| double-free | 124 | 1 |
 | codegen-gap | 105 | 0 |
 | run-vs-build | 104 | 1 |
 | missing-feature | 93 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 826 | 2 |
+| codegen | 827 | 2 |
 | typecheck | 159 | 1 |
 | interp | 138 | 0 |
 | ownership | 47 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1147 surfaced · 3 open · 1132 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1148 surfaced · 3 open · 1133 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -132,7 +132,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1147 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-12-32 | 2026-08-13 | typecheck | medium | A user trait `impl` on `String` or `Slice[T]` is ACCEPTED but never found at the call site: `impl Zero for String { .. }` then `s.describe()` fails with `no method 'describe' on type 'String'`. The same impl on `i64`, `f64`, `bool` or even `Vec[i64]` resolves fine, so this is a per-builtin hole in method resolution rather than a blanket 'no user traits on builtins' rule. | method resolution for a USER trait impl whose target is a builtin type -- the `impl Zero for String` declaration is accepted, but a `String` receiver never finds the method |
 | B-2026-08-13-2 | 2026-08-13 | codegen | medium | `.to_string()` on a NON-IDENTIFIER scalar receiver is check-green and interp-green but dies under BOTH compiled backends the moment it is used as a receiver for a further method: `'x'.to_string().to_uppercase()`, `7.to_string().len()`, `true.to_string().to_uppercase()`, `(7 + 1).to_string().len()`, `3.5.to_string().len()` -- and one shape, `'x'.to_string().to_string()`, is an outright codegen ICE (`Found IntValue ... but expected the StructValue variant`) | `compile_method_call` / `try_compile_nonident_collection_method` in src/codegen/method_call.rs -- the non-identifier-receiver dispatch for `to_string` |
-| B-2026-08-13-3 | 2026-08-13 | codegen | high | Passing a Vec ELEMENT whose struct has a NESTED STRUCT field to a call and assigning the result back to that same slot DOUBLE-FREES on both compiled backends, on a SINGLE assignment: `ds[0] = bump(ds[0])` over `struct Deep { inner: Pair, tag: i64 }` aborts with `free(): double free detected in tcache 2` where the interpreter prints the right answer | the by-value aggregate param entry copy — `make_aggregate_param_callee_owned_inst` / `aggregate_param_copy_supported_struct` (src/codegen/param_own.rs) against the index-store element drop (src/codegen/stmts.rs) |
+| B-2026-08-13-4 | 2026-08-13 | codegen | high | Binding or consuming a NESTED heap field read off a Vec ELEMENT double-frees: `let w = ds[0].inner.word` over `Vec[Deep]` with `struct Deep { inner: Pair, .. }` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string — no call, no index-assign, nothing else in the program | `clone_vec_elem_heap_field_read` (src/codegen/collections.rs) — it handles the ONE-level `ps[0].word` and has no nested sibling |
 
 ### Wontfix (2)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1147 surfaced
 
 </details>
 
-### Fixed (1132)
+### Fixed (1133)
 
-<details><summary>1132 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1133 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3760,6 +3760,77 @@ with no `ref` binding available to hand -- was written around an
 `extend(prefix: ref String, v: i64)` helper that existed solely to turn two
 owned reads into two borrows. Written directly, without the helper, it now
 passes `karac check` silently, runs valgrind-clean and gives the right answer. |
+| B-2026-08-13-3 | codegen | high | Passing a Vec ELEMENT whose struct has a NESTED STRUCT field to a call and assigning the result back to that same slot DOUBLE-FREES on both compiled… | FIXED by 5e6b6f0. The abort is gone on both compiled backends, output matches the
+interpreter, and the ASAN pin fails without the code change.
+
+THE ROW'S PREMISE WAS WRONG, and correcting it is most of the finding. It was
+filed as an index-assign bug -- "passing a Vec ELEMENT to a call and assigning
+the result back to that same slot" -- because that is the shape the adversarial
+probe happened to use. Bisecting it took the container, the index-assign and the
+call-argument position away one at a time, and the abort survived all three:
+
+    struct Pair { word: String, n: i64 }
+    struct Deep { inner: Pair, tag: i64 }
+    fn take(d: Deep) -> String { d.inner.word }     // <- the whole bug
+    fn main() { let d = Deep { .. }; println(take(d)); }
+
+No `Vec`, no index-assign, no element. The real subject is a NESTED heap field
+moved out of an OWNED BY-VALUE aggregate param.
+
+WHY IT DOUBLE-FREES. An owned bare-`Path` aggregate param is callee-owned: it is
+entry-copied and its scope-exit struct drop frees its heap. Moving a heap field
+out of it therefore has to zero that field's `cap` in the source, or the drop
+frees the buffer the caller was just handed. That cap-zeroing exists and is
+shared by all ~87 consume sites -- but it resolved the owner by matching the
+RECEIVER against an `Identifier`/`SelfValue`. `d.word` matches. `d.inner.word`
+does not: its receiver is itself a place expression, so the arm fell through and
+nothing was zeroed. The one-level twin has always worked, which is what makes
+this a gap in REACH rather than a disagreement about ownership -- and it is now
+pinned beside the nested form so a refactor cannot fix one and lose the other.
+
+THE FIX WALKS THE CHAIN to its root and GEPs down the same path the drop walks,
+then hands the innermost struct to the EXISTING helper -- so the zeroing rule
+itself is unchanged and still lives in one place. Guarded for the property the
+one-level arm is guarded for, not by analogy: the root slot must hold its struct
+INLINE (a `ref Struct` param's slot is a pointer into the CALLER's frame, and
+GEP-ing a `cap` off it writes past the alloca -- the B-2026-07-07-4 class), every
+hop must be a non-shared user struct held inline in its parent, and each hop's
+LLVM field type must match the registered struct type (inside a monomorph a
+bare-`T` field is erased in the base layout, so a mismatch means the offsets
+cannot be trusted). Every decline is the status-quo double free, never a new
+failure mode.
+
+WHAT THE BISECTION ALSO SHOWED, and what the fixtures had to be rebuilt around:
+the abort is invisible unless the moved-out String is actually PRINTED.
+`let r = take(d); println(r.len());` is clean, and so is the same call inside a
+`while` loop accumulating lengths -- the first fixture written for this row was
+green against the UNFIXED compiler for exactly that reason. A pin for this class
+has to consume the value as a string, and this one is asserted to fail without
+the fix.
+
+MEASURED across all four consuming positions the suppression serves, each
+reaching it by a different route: bare tail RETURN, struct LITERAL field, call
+ARGUMENT, and a `let` binding (the last was already clean -- its own site
+handles the chain -- so it is the control saying the fix did not double up on a
+working position). Two hops deep (`o.mid.inner.word`) as well as one, since the
+walk is a loop. Interp / JIT / AOT / `KARAC_AUTO_PAR=0` byte-identical.
+
+AND IT RETIRED THE GATE IT WAS BLOCKING. B-2026-08-12-33's entry-copy arm
+shipped with a narrower gate (`elem_fields_are_scalar_or_direct_heap`) that
+excluded elements with a nested struct field, because this abort made it
+impossible to reason from the entry-copy property in that shape. With the abort
+fixed, the shape re-measures clean and the gate is REMOVED rather than left as
+scar tissue: `ds[0] = bump(ds[0])` over `Deep { inner: Pair, tag: i64 }` leaked
+60 B in 20 blocks with the gate and is fully clean without it, which is its own
+ASAN pin. That is the widening the row asked for, done on measurement.
+
+ONE MORE BUG FELL OUT and is filed separately rather than folded in: binding a
+nested heap field off a Vec ELEMENT (`let w = ds[0].inner.word`) double-frees on
+its own, with no call and no index-assign -- B-2026-08-12-27 clones the
+one-level `ps[0].word` and has no nested sibling. It reproduces identically
+before this change, so the two are independent; the index-assign fixture here
+reads only scalars back out of the element to keep from asserting that bug in
+this row's name. |
 
 </details>
 
