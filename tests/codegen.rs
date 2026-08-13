@@ -23191,6 +23191,127 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_same_head_impls_dispatch_to_their_own_target() {
+        // B-2026-08-13-8 — two impls of one trait on two instantiations of one
+        // type. Both wanted the symbol `Vec.describe`; LLVM renamed the second,
+        // so `get_function` handed the FIRST to every receiver and the compiled
+        // program printed `VEC-I64` twice. The interpreter, keying the same
+        // erased name into its env, kept the LAST and printed `VEC-STR` twice —
+        // so this was a miscompile AND a run-vs-build divergence at once, with
+        // `karac check` accepting the program because the typechecker's impl
+        // table is keyed on `(name, args)` and had resolved both correctly.
+        //
+        // The receivers are interleaved rather than grouped, and `a.len()` sits
+        // between them, so a fix that merely made the LAST call correct would
+        // still fail here.
+        //
+        // The `Box` pair earns its lines: the scope is EVERY generic type, not
+        // just the builtin containers the row was found on. A user struct
+        // reproduces it identically, which is what rules out a
+        // container-dispatcher explanation.
+        assert_eq!(
+            run_program(
+                "struct Box[T] { v: T }\n\
+                 trait Zero { fn describe(ref self) -> String; }\n\
+                 impl Zero for Vec[i64] { fn describe(ref self) -> String { return f\"VEC-I64\"; } }\n\
+                 impl Zero for Vec[String] { fn describe(ref self) -> String { return f\"VEC-STR\"; } }\n\
+                 impl Zero for Box[i64] { fn describe(ref self) -> String { return f\"BOX-I64\"; } }\n\
+                 impl Zero for Box[String] { fn describe(ref self) -> String { return f\"BOX-STR\"; } }\n\
+                 fn main() {\n\
+                     let mut a: Vec[i64] = Vec.new();\n\
+                     a.push(1);\n\
+                     let mut b: Vec[String] = Vec.new();\n\
+                     b.push(\"x\");\n\
+                     println(a.describe());\n\
+                     println(a.len());\n\
+                     println(b.describe());\n\
+                     println(a.describe());\n\
+                     let p: Box[i64] = Box { v: 1 };\n\
+                     let q: Box[String] = Box { v: \"s\" };\n\
+                     println(p.describe());\n\
+                     println(q.describe());\n\
+                 }"
+            )
+            .as_deref(),
+            Some("VEC-I64\n1\nVEC-STR\nVEC-I64\nBOX-I64\nBOX-STR\n"),
+        );
+    }
+
+    #[test]
+    fn test_e2e_same_head_impls_dispatch_through_a_chain() {
+        // B-2026-08-13-8 — the chained-receiver case, which is where a
+        // span-keyed side table normally goes wrong: the parser sets
+        // `MethodCall.span == receiver.span`, so `a.describe().len()` gives the
+        // inner and outer calls ONE span. Every sibling table lives with that by
+        // re-checking the method segment afterwards; this one carries the method
+        // name in the key instead, so the inner link cannot read the outer
+        // call's entry at all. Pinned here because a table that got this wrong
+        // would still pass the direct-call test above.
+        assert_eq!(
+            run_program(
+                "trait Zero { fn describe(ref self) -> String; }\n\
+                 impl Zero for Vec[i64] { fn describe(ref self) -> String { return f\"I64\"; } }\n\
+                 impl Zero for Vec[String] { fn describe(ref self) -> String { return f\"STRING\"; } }\n\
+                 fn main() {\n\
+                     let mut a: Vec[i64] = Vec.new();\n\
+                     a.push(1);\n\
+                     let mut b: Vec[String] = Vec.new();\n\
+                     b.push(\"x\");\n\
+                     println(a.describe().len());\n\
+                     println(b.describe().to_uppercase());\n\
+                 }"
+            )
+            .as_deref(),
+            Some("3\nSTRING\n"),
+        );
+    }
+
+    #[test]
+    fn test_e2e_generic_impl_on_builtin_container_dispatches() {
+        // B-2026-08-13-8 half A — `impl[T] Zero for Vec[T]` was check-green and
+        // interp-green with the build dead ("Vec/String method 'describe' is not
+        // yet supported in codegen"). The generic machinery was never the
+        // problem: the identical impl on a USER struct worked on every surface,
+        // because no builtin dispatcher intercepts that receiver first.
+        //
+        // A generic impl method is routed to the monomorphizer and mangled per
+        // instantiation, so it owns NO unmangled `Vec.describe` symbol. The four
+        // builtin container dispatchers each decided whether to loud-fail or
+        // fall through by asking `module.get_function("Vec.describe")` alone,
+        // which is always None for such a method — so they all loud-failed just
+        // before the generic dispatch that reads exactly that key. All four now
+        // ask one shared helper that consults `generic_fns` too.
+        //
+        // Map and Set are here because they had the same hole; the row was only
+        // ever reported against Vec.
+        assert_eq!(
+            run_program(
+                "trait Zero { fn describe(ref self) -> String; }\n\
+                 impl[T] Zero for Vec[T] { fn describe(ref self) -> String { return f\"VEC\"; } }\n\
+                 impl[K, V] Zero for Map[K, V] { fn describe(ref self) -> String { return f\"MAP\"; } }\n\
+                 impl[T] Zero for Set[T] { fn describe(ref self) -> String { return f\"SET\"; } }\n\
+                 fn main() {\n\
+                     let mut v: Vec[i64] = Vec.new();\n\
+                     v.push(1);\n\
+                     let mut w: Vec[String] = Vec.new();\n\
+                     w.push(\"x\");\n\
+                     let mut m: Map[String, i64] = Map.new();\n\
+                     m.insert(\"k\", 1);\n\
+                     let mut s: Set[i64] = Set.new();\n\
+                     s.insert(7);\n\
+                     println(v.describe());\n\
+                     println(w.describe());\n\
+                     println(m.describe());\n\
+                     println(s.describe());\n\
+                     println(v.len());\n\
+                 }"
+            )
+            .as_deref(),
+            Some("VEC\nVEC\nMAP\nSET\n1\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_user_trait_impl_on_slice_dispatches() {
         // B-2026-08-13-7 — DIRECT dispatch of a user trait impl on `Slice[T]`,
         // end to end. This one was reverted TWICE before landing, and the order

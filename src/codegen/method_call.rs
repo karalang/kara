@@ -293,6 +293,71 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Does a USER impl block define `<type_head>.<method>`?
+    ///
+    /// The builtin container dispatchers (Vec/String, Slice, Map, Set) each need
+    /// this to decide whether an unrecognized method name should loud-fail with
+    /// their own "not yet implemented" error or fall through to the generic
+    /// user-impl dispatch further down. Two tables have to be consulted, and
+    /// each of those dispatchers previously checked only the first:
+    ///
+    ///  - `module`, for a NON-GENERIC impl method, emitted eagerly under the
+    ///    unmangled `Type.method` name;
+    ///  - `generic_fns`, for a GENERIC one (`impl[T] Zero for Vec[T]`), which
+    ///    `make_generic_impl_method_function` routes through the monomorphizer
+    ///    so its bodies are mangled per instantiation and NO unmangled symbol
+    ///    ever exists.
+    ///
+    /// B-2026-08-13-8 half A: consulting only `module` made every generic impl
+    /// on a builtin container check-green and interp-green with the build dead,
+    /// even though the generic dispatch reads exactly this key and would have
+    /// handled it. The same impl on a USER struct always worked, because no
+    /// builtin dispatcher intercepts that receiver first — an asymmetry that
+    /// made a gate look like a missing feature. One helper rather than four
+    /// open-coded lookups, so the dispatchers cannot drift apart again.
+    pub(super) fn user_impl_method_exists(
+        &self,
+        call_span: &crate::token::Span,
+        type_head: &str,
+        method: &str,
+    ) -> bool {
+        // B-2026-08-13-8 — ask about the name this call site will actually
+        // dispatch to. When the program has two impls on one head, neither of
+        // them owns the unqualified `Vec.describe` symbol any more, so a gate
+        // asking for that name would decline and loud-fail the build on a
+        // program the typechecker resolved fine.
+        let head = self.impl_dispatch_segment_at(call_span, method, type_head);
+        let qualified = format!("{head}.{method}");
+        self.module.get_function(&qualified).is_some() || self.generic_fns.contains_key(&qualified)
+    }
+
+    /// The dispatch type segment for a method call — the receiver's head name,
+    /// or the QUALIFIED segment (`Vec[i64]`) when this call resolved to one of
+    /// several impls that share a head.
+    ///
+    /// B-2026-08-13-8. Codegen cannot work this out for itself:
+    /// `inferred_receiver_type` reads `var_type_names`, which holds head names,
+    /// so `Vec[i64]` and `Vec[String]` receivers are indistinguishable here.
+    /// The typechecker compared the impls' `target_args` vector-wise at check
+    /// time and recorded the winner for this exact call site; this reads it.
+    ///
+    /// The lookup is keyed by `(span, method)`. Every sibling table keyed by
+    /// span alone has to re-check its method segment afterwards, because the
+    /// parser sets `MethodCall.span == receiver.span` and a chain shares one
+    /// span; carrying the method name in the key makes that class of mistake
+    /// unrepresentable rather than merely guarded.
+    pub(super) fn impl_dispatch_segment_at(
+        &self,
+        call_span: &crate::token::Span,
+        method: &str,
+        head: &str,
+    ) -> String {
+        self.method_impl_dispatch
+            .get(&((call_span.offset, call_span.length), method.to_string()))
+            .cloned()
+            .unwrap_or_else(|| head.to_string())
+    }
+
     /// Recover the receiver's declared integer width + signedness for a
     /// width-dependent scalar method (`pow`, the bit intrinsics). Codegen widens
     /// narrow integers to i64 in value flow, so the LLVM value type is unreliable;
@@ -4899,16 +4964,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             // is check-green and interp-green with BOTH
                             // compiled backends dead, which is a strictly worse
                             // failure than the `no method` it replaced.
-                            let has_user_impl =
-                                self.module.get_function(&format!("Vec.{method}")).is_some()
-                                    || self
-                                        .module
-                                        .get_function(&format!("VecDeque.{method}"))
-                                        .is_some()
-                                    || self
-                                        .module
-                                        .get_function(&format!("String.{method}"))
-                                        .is_some();
+                            let has_user_impl = ["Vec", "VecDeque", "String"]
+                                .iter()
+                                .any(|t| self.user_impl_method_exists(call_span, t, method));
 
                             // B-2026-08-13-7 — a `Slice[T]` variable is
                             // registered in `vec_elem_types` TOO (it is built
@@ -4924,10 +4982,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // dispatch a Vec to it.
                             let slice_has_user_impl =
                                 self.slice_elem_types.contains_key(name.as_str())
-                                    && self
-                                        .module
-                                        .get_function(&format!("Slice.{method}"))
-                                        .is_some();
+                                    && self.user_impl_method_exists(call_span, "Slice", method);
 
                             if !has_user_impl && !slice_has_user_impl {
                                 return Err(e);
@@ -5072,10 +5127,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // half of this row is check-green and interp-green with
                         // BOTH compiled backends dead — strictly worse than the
                         // `no method` error it replaced.
-                        _ if self
-                            .module
-                            .get_function(&format!("Slice.{method}"))
-                            .is_some() => {}
+                        _ if self.user_impl_method_exists(call_span, "Slice", method) => {}
                         _ => {
                             return Err(format!(
                                 "codegen: no handler for slice method '{}' on '{}'",
@@ -5096,7 +5148,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     match self.compile_map_method(&name, method, args) {
                         Ok(v) => return Ok(v),
                         Err(e) => {
-                            if self.module.get_function(&format!("Map.{method}")).is_none() {
+                            if !self.user_impl_method_exists(call_span, "Map", method) {
                                 return Err(e);
                             }
                             // fall through to user-impl dispatch
@@ -5111,7 +5163,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     match self.compile_set_method(&name, method, args) {
                         Ok(v) => return Ok(v),
                         Err(e) => {
-                            if self.module.get_function(&format!("Set.{method}")).is_none() {
+                            if !self.user_impl_method_exists(call_span, "Set", method) {
                                 return Err(e);
                             }
                             // fall through to user-impl dispatch
@@ -5573,6 +5625,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // Requires knowing the object's declared type; the typechecker stashes
         // it via `var_type_names` for struct-kind locals.
         if let Some(receiver_type) = self.inferred_receiver_type(object) {
+            // B-2026-08-13-8 — `receiver_type` is a head name, which stops being
+            // an identity once two impls target two instantiations of one type.
+            // `impl_dispatch_segment_at` swaps in the qualified segment the
+            // typechecker resolved for THIS call site; a no-op (returns the
+            // head) for every program with no colliding impl group.
+            let receiver_type = self.impl_dispatch_segment_at(call_span, method, &receiver_type);
             let qualified = format!("{}.{}", receiver_type, method);
             // B-2026-08-06-20 — never dispatch a GENERIC impl method through the
             // unmangled `Type.method` symbol, even when one exists in the module.

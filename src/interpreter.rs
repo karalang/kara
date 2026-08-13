@@ -77,6 +77,13 @@ pub(crate) enum ContractOutcome {
 
 pub struct Interpreter<'a> {
     pub(crate) program: &'a Program,
+    /// B-2026-08-13-8 — qualified dispatch segments for impls whose head name is
+    /// not a unique identity (`impl Zero for Vec[i64]` alongside `impl Zero for
+    /// Vec[String]`). Computed once here from the same AST codegen walks, via
+    /// the same shared helper, so the env key this interpreter BINDS and the key
+    /// codegen EMITS can never disagree. Empty for every program that has no
+    /// colliding impl group, which is nearly all of them.
+    pub(crate) impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames,
     #[allow(dead_code)]
     pub(crate) typecheck_result: &'a TypeCheckResult,
     pub(crate) env: Env,
@@ -714,6 +721,7 @@ impl<'a> Interpreter<'a> {
         type_order::install(typecheck_result);
         Interpreter {
             program,
+            impl_dispatch_names: crate::impl_dispatch::collect_impl_dispatch_names(program),
             typecheck_result,
             env: Env::new(),
             captured_output: None,
@@ -1757,9 +1765,20 @@ impl<'a> Interpreter<'a> {
     /// placeholder body would still work — the real path-string match
     /// shadows it — but skipping is cleaner.
     fn register_impl_methods(&mut self, imp: &ImplBlock, skip_compiler_builtin: bool) {
-        let type_name = match &imp.target_type.kind {
-            TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
-            _ => return,
+        // B-2026-08-13-8 — normally the head name (`Vec`), but the QUALIFIED
+        // segment (`Vec[i64]`) when another impl in this program defines the
+        // same method on another instantiation of the same head. Binding both
+        // under `Vec.describe` meant the env kept whichever was registered LAST
+        // and handed it to every receiver — while codegen, resolving the same
+        // collision by LLVM symbol renaming, handed out the FIRST. Same erased
+        // key, opposite resolution orders, so the backends disagreed rather
+        // than merely both being wrong.
+        let type_name = match crate::impl_dispatch::impl_dispatch_segment(
+            &imp.target_type,
+            &self.impl_dispatch_names,
+        ) {
+            Some(n) => n,
+            None => return,
         };
         for item in &imp.items {
             let ImplItem::Method(method) = item else {

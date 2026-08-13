@@ -6589,6 +6589,33 @@ impl<'a> super::TypeChecker<'a> {
 
         match method_pick {
             Some((imp, sig)) => {
+                // B-2026-08-13-8 — name the WINNER for the backends. This is
+                // the one point in the compiler that knows which of several
+                // same-head impls a call resolved to: `find_methods_with_args`
+                // has just compared `target_args` vector-wise, so `imp` is the
+                // right impl even when `Vec[i64]` and `Vec[String]` both define
+                // `describe`. Neither runtime can redo that — codegen's
+                // `inferred_receiver_type` yields a bare head name and the
+                // interpreter's `value_type_name` reads a type-erased runtime
+                // value — so both used to rebuild `Vec.describe` and get
+                // whichever impl their own lookup order happened to surface
+                // (LLVM's first, the env's last). Recording the resolved impl's
+                // qualified segment here is what lets them agree with each
+                // other AND with check.
+                //
+                // Nothing is recorded unless the impl is in a colliding group,
+                // so this table is empty for almost every program.
+                if let Some(target_span) = imp.target_span.as_ref() {
+                    if let Some(qualified) = self
+                        .impl_dispatch_names
+                        .get(&SpanKey::from_span(target_span))
+                    {
+                        self.method_impl_dispatch.insert(
+                            (SpanKey::from_span(span), method.to_string()),
+                            qualified.clone(),
+                        );
+                    }
+                }
                 // Validate labels against method parameter names
                 self.validate_labels(args, &sig.param_names, span);
                 // Pre-bind the impl's generic params to the receiver's

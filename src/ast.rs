@@ -255,6 +255,22 @@ pub type StateStructLayoutTable = std::collections::HashMap<String, StateStructL
 /// calls.
 pub type MethodCalleeTypesTable = std::collections::HashMap<(usize, usize), String>;
 
+/// B-2026-08-13-8. For a method call whose `(type-head, method)` pair has more
+/// than one non-generic impl, the RESOLVED impl's qualified dispatch type
+/// segment (`Vec[i64]`, `Map[String, i64]`) — the string that replaces the head
+/// name in that call's `Type.method` dispatch key.
+///
+/// Keyed by `(MethodCall span, method name)` rather than by span alone. The
+/// parser sets `MethodCall.span == receiver.span`, so in `recv.inner().outer()`
+/// both links share one span; the sibling tables live with that by re-checking
+/// the method segment after the fact, but this one carries the method name IN
+/// the key so an inner link can never be read as the outer call's answer.
+///
+/// Empty for every program with no colliding impl group, which is nearly all of
+/// them — the qualified name is minted only where the head name has stopped
+/// being an identity.
+pub type MethodImplDispatchTable = std::collections::HashMap<((usize, usize), String), String>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `method_unwrap_inner_types` map. Maps each `unwrap`/`expect`/`is_*`
 /// `MethodCall` expression's span to the inner `T` (for `Option[T]`) or
@@ -668,6 +684,9 @@ pub struct Program {
     pub state_struct_layouts: StateStructLayoutTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`; empty otherwise.
     pub method_callee_types: MethodCalleeTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.method_impl_dispatch`;
+    /// empty otherwise. See [`MethodImplDispatchTable`].
+    pub method_impl_dispatch: MethodImplDispatchTable,
     /// Set by the lowering pass from
     /// `TypeCheckResult.method_unwrap_inner_types`; empty otherwise.
     pub method_unwrap_inner_types: MethodUnwrapInnerTypesTable,

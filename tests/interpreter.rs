@@ -24637,6 +24637,45 @@ fn main() {
 }
 
 #[test]
+fn same_head_impls_dispatch_to_their_own_target() {
+    // B-2026-08-13-8 — the INTERPRETER half. `register_impl_methods` bound both
+    // impls under the env key `Vec.describe`, so the LAST registration won and
+    // answered every receiver — the mirror image of codegen, which took the
+    // FIRST. A type-erased runtime value cannot break the tie on its own (a
+    // `Value::Array` of ints knows nothing about its static element type), so
+    // the env key now carries the impl's target args and the typechecker hands
+    // over the winner for each call site.
+    //
+    // The `Box` pair pins that the scope is every generic type, not just the
+    // builtin containers the row was reported against.
+    let out = run_no_errors(
+        r#"
+struct Box[T] { v: T }
+trait Zero { fn describe(ref self) -> String; }
+impl Zero for Vec[i64] { fn describe(ref self) -> String { return f"VEC-I64"; } }
+impl Zero for Vec[String] { fn describe(ref self) -> String { return f"VEC-STR"; } }
+impl Zero for Box[i64] { fn describe(ref self) -> String { return f"BOX-I64"; } }
+impl Zero for Box[String] { fn describe(ref self) -> String { return f"BOX-STR"; } }
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    let mut b: Vec[String] = Vec.new();
+    b.push("x");
+    println(a.describe());
+    println(a.len());
+    println(b.describe());
+    println(a.describe());
+    let p: Box[i64] = Box { v: 1 };
+    let q: Box[String] = Box { v: "s" };
+    println(p.describe());
+    println(q.describe());
+}
+"#,
+    );
+    assert_eq!(out, "VEC-I64\n1\nVEC-STR\nVEC-I64\nBOX-I64\nBOX-STR\n");
+}
+
+#[test]
 fn user_trait_impl_over_slice_dispatches() {
     // B-2026-08-13-7 — the INTERPRETER half, which is the piece that had to land
     // before the typecheck and codegen halves could. A `Value::Slice` receiver is

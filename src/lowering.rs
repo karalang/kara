@@ -110,6 +110,16 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // B-2026-08-13-8 — the resolved impl's qualified dispatch segment for each
+    // call site whose head name is not a unique identity. Keyed by
+    // `((span), method)` rather than by span alone, so the chained-call span
+    // aliasing that forces the sibling tables above to re-check their method
+    // segment cannot cross-talk here at all.
+    program.method_impl_dispatch = tc
+        .method_impl_dispatch
+        .iter()
+        .map(|((k, m), v)| (((k.0, k.1), m.clone()), v.clone()))
+        .collect();
     // Forward the Option/Result unwrap-family inner-type table so codegen's
     // `compile_method_call` arm for `unwrap`/`expect`/`is_*` knows the
     // LLVM shape of the value to reconstitute from the Option/Result

@@ -264,6 +264,26 @@ impl<'a> super::Interpreter<'a> {
     ) -> Option<Value> {
         let mut type_name = self.value_type_name(obj);
         let mut method_key = format!("{}.{}", type_name, method);
+        // B-2026-08-13-8 — when two impls target two instantiations of one type
+        // (`Vec[i64]` and `Vec[String]`), the head name this key is built from
+        // is not an identity, and a type-ERASED runtime value cannot recover the
+        // missing half: a `Value::Array` of ints knows nothing about its static
+        // element type. So the typechecker, which resolved the call correctly at
+        // check time, hands over the winning impl's qualified segment for this
+        // exact call site and it is used verbatim. Without it the env kept
+        // whichever impl was registered LAST and answered every receiver with
+        // it — while codegen answered every receiver with the FIRST.
+        //
+        // The table is keyed by (span, method) so the chained-call span
+        // aliasing (`recv.inner().outer()` share one span) cannot let an inner
+        // link read the outer call's entry.
+        if let Some(qualified) = self.typecheck_result.method_impl_dispatch.get(&(
+            crate::resolver::SpanKey::from_span(span),
+            method.to_string(),
+        )) {
+            type_name = qualified.clone();
+            method_key = format!("{}.{}", qualified, method);
+        }
         // Width-erased primitive receiver: `Value::Int` reports "i64" and
         // `Value::Float` reports "f64" regardless of the declared width, so a
         // user `impl Dbl for u8` (registered under "u8.dbl") is NOT reachable

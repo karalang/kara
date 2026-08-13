@@ -1177,6 +1177,14 @@ pub struct TypeCheckResult {
     /// `expr_types` for this purpose — a separate map avoids the
     /// return-type-overwrites-receiver-type race).
     pub method_callee_types: HashMap<SpanKey, String>,
+    /// B-2026-08-13-8. For a method call whose `(type-head, method)` pair has
+    /// more than one non-generic impl, the RESOLVED impl's qualified dispatch
+    /// segment. Both backends key their `Type.method` lookup off this instead of
+    /// the receiver's head name, which is not an identity once two impls target
+    /// two instantiations of one type. Resolution here already distinguished
+    /// them (`impl_args_match` compares the args vector) — the only thing
+    /// missing was a way to NAME the winner for the runtimes.
+    pub method_impl_dispatch: HashMap<(SpanKey, String), String>,
     /// Call sites of a DIRECT iterator terminal on an iterable collection
     /// receiver (`v.sum()` / `.product()` / `.max()` / `.min()` with no
     /// `.iter()` hop), which `src/lowering.rs` rewrites into the canonical
@@ -1717,6 +1725,12 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → `Type.method` canonical callee key. See the
     /// matching field on `TypeCheckResult` for the full rationale.
     pub(super) method_callee_types: HashMap<SpanKey, String>,
+    /// Working half of `TypeCheckResult::method_impl_dispatch`.
+    pub(super) method_impl_dispatch: HashMap<(SpanKey, String), String>,
+    /// B-2026-08-13-8 — qualified dispatch segments for impls whose head name is
+    /// not a unique identity, computed once from the program AST via the same
+    /// shared helper codegen and the interpreter use. Keyed by impl-target span.
+    pub(super) impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames,
     /// See [`TypeCheckResult::direct_iter_terminals`].
     pub(super) direct_iter_terminals: std::collections::HashSet<SpanKey>,
     /// MethodCall span → receiver type-parameter name. See the matching field
@@ -2031,6 +2045,8 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: HashMap::new(),
             display_snake_case_enums: HashSet::new(),
             method_callee_types: HashMap::new(),
+            method_impl_dispatch: HashMap::new(),
+            impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::new(),
             direct_iter_terminals: std::collections::HashSet::new(),
             method_typeparam_receiver: HashMap::new(),
             method_typeparam_trait_key: HashMap::new(),
@@ -2166,6 +2182,12 @@ impl<'a> TypeChecker<'a> {
         // each enum's own `lint_overrides` pushed as the innermost
         // frame before `type_lint_warning` consults the stack.
         self.emit_missing_non_exhaustive_warnings();
+        // B-2026-08-13-8 — must be computed BEFORE `check_items`, which is
+        // where method calls resolve and where the winning impl's qualified
+        // name is recorded. Reads the program AST through the same shared
+        // helper codegen and the interpreter call, so all three agree on which
+        // impls need more than a head name and on what that name is.
+        self.impl_dispatch_names = crate::impl_dispatch::collect_impl_dispatch_names(self.program);
         self.check_items();
         self.finalize_pattern_binding_inner_types();
         self.finalize_closure_expr_types();
@@ -2232,6 +2254,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: self.try_into_conversions,
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,
+            method_impl_dispatch: self.method_impl_dispatch,
             direct_iter_terminals: self.direct_iter_terminals,
             method_typeparam_receiver: self.method_typeparam_receiver,
             method_typeparam_trait_key: self.method_typeparam_trait_key,

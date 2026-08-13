@@ -3052,6 +3052,19 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_method_call` apply the same narrowing that `compile_call`
     /// applies to free-function and `Type.assoc` calls.
     pub(crate) method_callee_types: HashMap<(usize, usize), String>,
+    /// B-2026-08-13-8 — qualified dispatch segments for impls whose head name is
+    /// not a unique identity (`impl Zero for Vec[i64]` alongside `impl Zero for
+    /// Vec[String]`), keyed by the impl target's span. Computed here from the
+    /// program AST via the same shared helper the interpreter and the
+    /// typechecker call, so the symbol this module EMITS and the key those
+    /// phases expect cannot drift. Drives emission only.
+    pub(crate) impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames,
+    /// The dispatch half of the same row, snapshotted from
+    /// `Program.method_impl_dispatch`: per call site, the resolved impl's
+    /// qualified segment. Codegen cannot recompute it — `inferred_receiver_type`
+    /// only ever yields a head name — so the typechecker, which compared
+    /// `target_args` vector-wise at check time, supplies the winner.
+    pub(crate) method_impl_dispatch: HashMap<((usize, usize), String), String>,
     /// Phase 6 line 26 slice 8ab: per-call-site effect-variable
     /// substitutions, snapshotted from `Program.call_effect_subs`
     /// (which `cli.rs::Pipeline` populates from
@@ -8222,6 +8235,8 @@ impl<'ctx> Codegen<'ctx> {
             wp_result_types: HashMap::new(),
             callee_effectful: HashMap::new(),
             method_callee_types: HashMap::new(),
+            impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::new(),
+            method_impl_dispatch: HashMap::new(),
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
             method_unwrap_err_types: HashMap::new(),
@@ -9559,6 +9574,8 @@ impl<'ctx> Codegen<'ctx> {
         // narrowing applies to instance methods, not just free-function
         // and `Type.assoc` calls.
         self.method_callee_types = program.method_callee_types.clone();
+        self.impl_dispatch_names = crate::impl_dispatch::collect_impl_dispatch_names(program);
+        self.method_impl_dispatch = program.method_impl_dispatch.clone();
 
         // Side-table set by `lowering::lower_program` from
         // `TypeCheckResult.expr_types`: the spans of every `Type::Str`
@@ -9921,6 +9938,24 @@ impl<'ctx> Codegen<'ctx> {
             for item in &program.items {
                 if let Item::ImplBlock(imp) = item {
                     if let Some(type_name) = impl_target_name(&imp.target_type) {
+                        // B-2026-08-13-8 — the name this method's SYMBOL
+                        // takes. Normally the head (`Vec`); the qualified
+                        // segment (`Vec[i64]`) when another impl in this program
+                        // defines the same method on another instantiation of
+                        // the same head. Emitting both as `Vec.describe` made
+                        // LLVM rename the second and `get_function` hand the
+                        // FIRST to every receiver — while the interpreter, over
+                        // the same erased key, handed out the LAST.
+                        //
+                        // Only the SYMBOL moves. `type_name` stays the head
+                        // below, because it also types the synthesized `self`
+                        // param and resolves `-> Self`; a qualified string in
+                        // either position would be a path segment naming no type.
+                        let dispatch_head = crate::impl_dispatch::impl_dispatch_segment(
+                            &imp.target_type,
+                            &self.impl_dispatch_names,
+                        )
+                        .unwrap_or_else(|| type_name.clone());
                         // A method is monomorphized on demand (registered in
                         // `generic_fns`, NOT eagerly `declare_function`'d) when
                         // it is generic via its OWN params (B-2026-07-03-15) OR
@@ -9975,12 +10010,16 @@ impl<'ctx> Codegen<'ctx> {
                                 if method_self_is_value(method) != value_self_pass {
                                     continue;
                                 }
-                                let qualified = format!("{}.{}", type_name, method.name);
-                                if !declared_impl_methods.insert(qualified) {
+                                let qualified = format!("{}.{}", dispatch_head, method.name);
+                                if !declared_impl_methods.insert(qualified.clone()) {
                                     continue;
                                 }
-                                let synth =
+                                let mut synth =
                                     make_impl_method_function(&type_name, method, &imp.target_type);
+                                // Carry the disambiguated symbol (see
+                                // `dispatch_head`); a no-op unless this impl is
+                                // in a colliding group.
+                                synth.name.clone_from(&qualified);
                                 self.declare_function(&synth)?;
                             }
                         }
@@ -10129,6 +10168,24 @@ impl<'ctx> Codegen<'ctx> {
             for item in &program.items {
                 if let Item::ImplBlock(imp) = item {
                     if let Some(type_name) = impl_target_name(&imp.target_type) {
+                        // B-2026-08-13-8 — the name this method's SYMBOL
+                        // takes. Normally the head (`Vec`); the qualified
+                        // segment (`Vec[i64]`) when another impl in this program
+                        // defines the same method on another instantiation of
+                        // the same head. Emitting both as `Vec.describe` made
+                        // LLVM rename the second and `get_function` hand the
+                        // FIRST to every receiver — while the interpreter, over
+                        // the same erased key, handed out the LAST.
+                        //
+                        // Only the SYMBOL moves. `type_name` stays the head
+                        // below, because it also types the synthesized `self`
+                        // param and resolves `-> Self`; a qualified string in
+                        // either position would be a path segment naming no type.
+                        let dispatch_head = crate::impl_dispatch::impl_dispatch_segment(
+                            &imp.target_type,
+                            &self.impl_dispatch_names,
+                        )
+                        .unwrap_or_else(|| type_name.clone());
                         // A method that is generic via its own params OR via the
                         // impl's params is compiled on demand by the mono
                         // pipeline (`compile_generic_call`), not eagerly here —
@@ -10144,7 +10201,7 @@ impl<'ctx> Codegen<'ctx> {
                                 if method_self_is_value(method) != value_self_pass {
                                     continue;
                                 }
-                                let qualified = format!("{}.{}", type_name, method.name);
+                                let qualified = format!("{}.{}", dispatch_head, method.name);
                                 if !compiled_impl_methods.insert(qualified.clone()) {
                                     continue;
                                 }
@@ -10167,8 +10224,9 @@ impl<'ctx> Codegen<'ctx> {
                                 if self.declare_only_fns.contains(&qualified) {
                                     continue;
                                 }
-                                let synth =
+                                let mut synth =
                                     make_impl_method_function(&type_name, method, &imp.target_type);
+                                synth.name.clone_from(&qualified);
                                 self.compile_function(&synth)?;
                             }
                         }

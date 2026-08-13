@@ -2699,6 +2699,7 @@ impl<'a> super::TypeChecker<'a> {
             methods,
             generic_params: imp.generic_params.clone(),
             where_clause: imp.where_clause.clone(),
+            target_span: Some(imp.target_type.span.clone()),
         });
     }
 
@@ -2794,6 +2795,9 @@ impl<'a> super::TypeChecker<'a> {
             // primitive operator dispatch isn't generic over a bound.
             generic_params: None,
             where_clause: None,
+            // Compiler-internal: no source impl block, so nothing to
+            // disambiguate and no span to key it by.
+            target_span: None,
         });
     }
 
@@ -2948,6 +2952,8 @@ impl<'a> super::TypeChecker<'a> {
                         methods,
                         generic_params: None,
                         where_clause: None,
+                        // Synthesized `TryFrom` impl — no source impl block.
+                        target_span: None,
                     });
                     ty = refined;
                 }
@@ -3033,6 +3039,8 @@ impl<'a> super::TypeChecker<'a> {
                         methods,
                         generic_params: None,
                         where_clause: None,
+                        // Synthesized `TryFrom` impl — no source impl block.
+                        target_span: None,
                     });
                 }
                 Err((msg, span)) => {

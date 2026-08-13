@@ -164,6 +164,20 @@ pub struct ImplInfo {
     /// two compose additively (every predicate must discharge for the
     /// impl to apply).
     pub where_clause: Option<WhereClause>,
+    /// Span of the impl block's TARGET TYPE expression, or `None` for a
+    /// compiler-internal impl that has no source form.
+    ///
+    /// B-2026-08-13-8 — the identity handle for
+    /// `impl_dispatch::ImplDispatchNames`. When two impls of one trait target
+    /// two instantiations of one type (`Vec[i64]` and `Vec[String]`), the head
+    /// name `Vec` stops being a dispatch identity and the runtime key has to
+    /// carry the args. Resolution here already tells them apart — `target_args`
+    /// vector-equality does it — so the only missing piece was a way to NAME the
+    /// winner for the backends. The span is that name: codegen, the interpreter
+    /// and this table all key the shared rendering off the same span, so no
+    /// phase re-derives it and they cannot drift into emitting one symbol and
+    /// looking up another.
+    pub target_span: Option<crate::token::Span>,
 }
 
 /// Structurally bind an impl's type params by matching its target args (`decl`,
