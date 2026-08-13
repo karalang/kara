@@ -2962,6 +2962,140 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap())
     }
 
+    /// B-2026-08-12-27 — the FIELD-read sibling of
+    /// [`Self::clone_owned_vec_index_element`]. `ps[0].word` over
+    /// `Vec[Pair]` / `struct Pair { word: String, … }` handed back a SHALLOW
+    /// alias of the container's buffer, so every owning destination shared one
+    /// pointer with the element and both freed it — eight measured double
+    /// frees (struct-literal field, `Vec.push`, field assign, index assign,
+    /// `Map.insert`, `return`, tuple construction, enum payload).
+    ///
+    /// THE SEMANTICS IS A COPY, which is what makes cloning the fix rather
+    /// than one option among several: `karac check` accepts reading
+    /// `ps[0].word` after binding it, and the interpreter still has the value.
+    /// The whole-element read already clones — after `let b = ps[0]`, mutating
+    /// `b.word` leaves `ps[0].word` untouched on both backends — so this only
+    /// brings the field read under the rule its sibling already follows.
+    ///
+    /// The alternative, mirroring the `let` site's source cap-zeroing at the
+    /// other seven destinations, was rejected on measurement: it silences all
+    /// eight aborts by spreading a MOVE model, trading the double frees for
+    /// silent use-after-frees — `let mut w = ps[0].word; w = w + "X";` then
+    /// reading `ps[0].word` printed garbage where the interpreter printed the
+    /// value.
+    ///
+    /// THE CLONE GETS ITS OWN SCOPE CLEANUP, registered here, because a
+    /// NON-consuming read must not leak — `ps[0].word.len()` and
+    /// `ps[0].word + "!"` are common and were clean before. A CONSUMING
+    /// destination takes the clone over instead by zeroing its `cap` through
+    /// `vec_elem_field_clone_slots` (see that field, and the early arm in
+    /// `suppress_source_vec_cleanup_for_arg_ex`).
+    ///
+    /// Gated to what was measured: a plain element index into a NAMED owning
+    /// Vec (not a slice, map, or range), a `{ptr,len,cap}` field type, and a
+    /// value whose LLVM type really is that struct — the same defensive width
+    /// check the sibling makes, for the same mis-resolved-monomorph reason.
+    pub(super) fn clone_vec_elem_heap_field_read(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ExprKind::FieldAccess { object, field } = &expr.kind else {
+            return Ok(val);
+        };
+        let ExprKind::Index {
+            object: container,
+            index,
+        } = &object.kind
+        else {
+            return Ok(val);
+        };
+        if matches!(&index.kind, ExprKind::Range { .. }) {
+            return Ok(val);
+        }
+        let ExprKind::Identifier(cname) = &container.kind else {
+            return Ok(val);
+        };
+        // Owning Vec only. A slice element is borrowed and a map value is
+        // side-table owned; cloning either would hand back a buffer whose
+        // original still has its own owner, i.e. a leak rather than a fix.
+        if self.slice_elem_types.contains_key(cname.as_str())
+            || self.map_key_types.contains_key(cname.as_str())
+            || !self.vec_elem_types.contains_key(cname.as_str())
+        {
+            return Ok(val);
+        }
+        // The element must be a non-shared user struct, and the field a direct
+        // `{ptr,len,cap}` heap value — the shape whose alias was measured.
+        let Some(elem_te) = self.vec_index_elem_type_expr(container) else {
+            return Ok(val);
+        };
+        let TypeKind::Path(ep) = &elem_te.kind else {
+            return Ok(val);
+        };
+        let Some(sname) = ep.segments.last().cloned() else {
+            return Ok(val);
+        };
+        if !self.struct_types.contains_key(sname.as_str())
+            || self.shared_types.contains_key(sname.as_str())
+        {
+            return Ok(val);
+        }
+        let Some(idx) = self
+            .struct_field_names
+            .get(sname.as_str())
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return Ok(val);
+        };
+        let Some(fte) = self
+            .struct_field_type_exprs
+            .get(sname.as_str())
+            .and_then(|tes| tes.get(idx))
+            .cloned()
+        else {
+            return Ok(val);
+        };
+        if !(self.is_string_type_expr(&fte) || self.extract_vec_elem_type(&fte).is_some()) {
+            return Ok(val);
+        }
+        let vec_ty = self.vec_struct_type();
+        if val.get_type() != vec_ty.into() {
+            return Ok(val);
+        }
+        let Some(cur_fn) = self.current_fn else {
+            return Ok(val);
+        };
+        let src = self.create_entry_alloca(cur_fn, "vfld.read.src", vec_ty.into());
+        if self.builder.build_store(src, val).is_err() {
+            return Ok(val);
+        }
+        let dst = self.create_entry_alloca(cur_fn, "vfld.read.clone", vec_ty.into());
+        let clone_fn = self.emit_clone_fn_for_type_expr(&fte);
+        if self
+            .builder
+            .build_call(clone_fn, &[src.into(), dst.into()], "")
+            .is_err()
+        {
+            return Ok(val);
+        }
+        // Element type for the clone's own cleanup: `i8` for a String, the
+        // inner type's LLVM shape for a `Vec[U]` — so a nested-heap element
+        // (`Vec[String]`) is drained rather than losing its inner buffers.
+        let elem_ty = if self.is_string_type_expr(&fte) {
+            Some(self.context.i8_type().into())
+        } else {
+            self.extract_vec_elem_type(&fte)
+        };
+        self.track_vec_var(dst, elem_ty);
+        self.vec_elem_field_clone_slots
+            .insert((expr.span.offset, expr.span.length), dst);
+        Ok(self
+            .builder
+            .build_load(vec_ty, dst, "vfld.read.cloned")
+            .unwrap())
+    }
+
     /// #38 — deep-clone a `match <self.field[i]>.enumfield { … }` scrutinee
     /// value. The indexed object is itself a place (FieldAccess/`self`), e.g. the
     /// parser's `self.tokens[self.pos].token`. The #15/#18 source-suppression

@@ -1170,7 +1170,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     None => Ok(self.context.i64_type().const_int(0, false).into()),
                 }
             }
-            ExprKind::FieldAccess { object, field } => self.compile_field_access(object, field),
+            ExprKind::FieldAccess { object, field } => {
+                // B-2026-08-12-27 — a heap FIELD read off a Vec element
+                // (`ps[0].word`) is a SHALLOW alias of the container's buffer.
+                // Clone it here so the read is a COPY, which is what the
+                // checker and the interpreter both say it is, and what the
+                // WHOLE-element read has always done. No-op for every other
+                // receiver / field shape.
+                let v = self.compile_field_access(object, field)?;
+                self.clone_vec_elem_heap_field_read(expr, v)
+            }
             ExprKind::StructLiteral { path, fields, .. } => {
                 let name = path.last().map(|s| s.as_str()).unwrap_or("");
                 // Enum struct-variant construction `Enum.Variant { ... }`: the

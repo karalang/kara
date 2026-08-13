@@ -1287,6 +1287,28 @@ pub(super) struct Codegen<'ctx> {
     /// asymmetry: a STRUCT payload has a callee-side move-out mirror and a bare
     /// enum payload does not.
     pub(crate) struct_field_boxed_payload_vars: std::collections::HashSet<String>,
+    /// B-2026-08-12-27 — span of a heap FIELD read off a Vec element
+    /// (`ps[0].word`) → the alloca holding the deep CLONE emitted for it.
+    ///
+    /// The read used to hand back a shallow alias of the container's buffer, so
+    /// every owning destination ended up sharing one pointer with the element
+    /// and both freed it (eight measured double frees), while the `let` shape
+    /// papered over it by cap-zeroing the SOURCE — a move, which `karac check`
+    /// and the interpreter both contradict. `clone_vec_elem_heap_field_read`
+    /// now clones at the read, so the destination and the element own separate
+    /// buffers, exactly as the WHOLE-element read has always done
+    /// (`clone_owned_vec_index_element`).
+    ///
+    /// The clone gets its own scope cleanup so a NON-consuming read
+    /// (`ps[0].word.len()`, `ps[0].word + "!"`) does not leak — those are
+    /// common and were clean before. This map is how a CONSUMING destination
+    /// takes it over instead: keyed by the read's span, so
+    /// `suppress_source_vec_cleanup_for_arg_ex` (and the `let` site) can zero
+    /// the clone's `cap` and leave the destination sole owner. Span-keyed
+    /// rather than name-keyed because the clone is anonymous — there is no
+    /// binding to look up.
+    pub(crate) vec_elem_field_clone_slots:
+        std::collections::HashMap<(usize, usize), PointerValue<'ctx>>,
     /// B-2026-08-06-32 — result binding of a passthrough call → the binding
     /// that actually owns its nested box (`let back = id(b)` ⇒ `back → b`).
     ///
@@ -7972,6 +7994,7 @@ impl<'ctx> Codegen<'ctx> {
             boxed_struct_payload_vars: std::collections::HashSet::new(),
             nested_boxed_payload_vars: std::collections::HashSet::new(),
             struct_field_boxed_payload_vars: std::collections::HashSet::new(),
+            vec_elem_field_clone_slots: std::collections::HashMap::new(),
             nested_boxed_passthrough_owner_alias: std::collections::HashMap::new(),
             refinement_bases: HashMap::new(),
             refinement_generic_params: HashMap::new(),

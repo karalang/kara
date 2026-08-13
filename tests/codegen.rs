@@ -11221,25 +11221,24 @@ fn main() {
         assert_eq!(out, "beta1 alpha1\ngamma1 alpha1\n");
     }
 
-    /// B-2026-08-12-27 — the SILENT half, and the reason that row is not
-    /// simply "eight destinations abort". A heap field read out of a Vec
-    /// element (`let w = ps[0].word`) cap-zeroes the SOURCE, i.e. treats the
-    /// read as a MOVE. `karac check` accepts reading `ps[0].word` afterwards
-    /// and the interpreter still has the value, so the language semantics is a
-    /// COPY — the compiled backends alias, and the element is left pointing at
-    /// a buffer it no longer owns.
+    /// B-2026-08-12-27 — the SILENT half, and the reason the fix had to be a
+    /// clone rather than a move. A heap field read out of a Vec element used
+    /// to cap-zero the SOURCE, i.e. treat `let w = ps[0].word` as a MOVE.
+    /// `karac check` accepts reading `ps[0].word` afterwards and the
+    /// interpreter still has the value, so the semantics is a COPY — and the
+    /// element was left pointing at a buffer it no longer owned.
     ///
-    /// Mutating the binding is what makes it visible: the reassignment frees
-    /// the buffer the element still references, and the element's own field
-    /// then reads back garbage. Measured on this program — interpreter prints
-    /// `a1`, `karac build` prints `~`. No abort, no sanitizer trip in a plain
-    /// run: WRONG OUTPUT.
+    /// Mutating the binding is what made it visible: the reassignment freed
+    /// the buffer the element still referenced, and the element's own field
+    /// then read back garbage. Measured pre-fix on this exact program —
+    /// interpreter `a1`, `karac build` `~`. No abort and no sanitizer trip in
+    /// a plain run: WRONG OUTPUT, which is why the memory fixture alone would
+    /// not have caught it.
     ///
-    /// The whole-element read is already a copy — `let b = ps[0]` then
-    /// `b.word = ..` leaves `ps[0].word` intact on both backends — so this pins
-    /// the field read to the same rule its sibling already follows.
+    /// The whole-element read was already a copy — `let b = ps[0]` then
+    /// `b.word = ..` leaves `ps[0].word` intact on both backends — so this
+    /// pins the field read to the rule its sibling already followed.
     #[test]
-    #[ignore = "B-2026-08-12-27: a heap field read off a Vec element is compiled as a move (source cap-zeroed) though the checker and interpreter treat it as a copy; mutating the binding dangles the element's field"]
     fn e2e_vec_elem_field_read_is_a_copy() {
         let Some(out) = run_program(
             "struct Pair { word: String, n: i64 }\n\

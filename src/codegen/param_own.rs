@@ -3318,11 +3318,42 @@ impl<'ctx> super::Codegen<'ctx> {
     /// TE can carry bare params — the B-2026-07-15-24 base-layout caution).
     /// A direct Vec/String field cap-zeroes. Shared / Option / Map / Set
     /// fields keep their existing paths.
+    /// Does this place chain bottom out at a Vec INDEX (`ps[0].word`,
+    /// `ps[0].inner.word`) rather than at a plain binding / `self`?
+    /// B-2026-08-12-27 — such a chain reads out of a CONTAINER ELEMENT, whose
+    /// heap the container still owns, so the move-out suppressions must decline
+    /// it: the read is cloned instead.
+    fn place_chain_is_index_rooted(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Index { .. } => true,
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                Self::place_chain_is_index_rooted(object)
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn suppress_place_field_struct_move_source(&mut self, value: &Expr) {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
             return;
         };
         if matches!(object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return;
+        }
+        // B-2026-08-12-27 — an INDEX-rooted chain (`ps[0].word`) is no longer a
+        // move. The read is deep-cloned (`clone_vec_elem_heap_field_read`), so
+        // the binding owns the clone and the container's element still owns its
+        // own buffer; cap-zeroing the element here would orphan that buffer —
+        // trading the old double free for a leak.
+        //
+        // This suppression was the reason the `let` shape looked clean while
+        // the other seven owning destinations aborted: it made ONE position a
+        // move, silently, against what `karac check` and the interpreter say.
+        // Its cost was visible on mutation — `let mut w = ps[0].word;
+        // w = w + "X";` then reading `ps[0].word` printed garbage. Struct-rooted
+        // chains (`o.h.name`, B-2026-08-01-31) keep the move; they have no
+        // container element behind them and nothing clones them.
+        if Self::place_chain_is_index_rooted(value) {
             return;
         }
         match Self::place_root_ident(value) {

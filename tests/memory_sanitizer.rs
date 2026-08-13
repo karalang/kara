@@ -20905,55 +20905,37 @@ fn main() {
     }
 
     /// B-2026-08-12-27 — a heap FIELD read out of a Vec element
-    /// (`ps[0].word`) is a shallow alias of the container's buffer. Consumed
-    /// into any owning destination, the destination and the container both
-    /// free it: `free(): double free detected in tcache 2`. The interpreter
-    /// copies, and `karac check` accepts every program here — so the language
-    /// semantics is a COPY and the compiled backends alias.
+    /// (`ps[0].word`) used to hand back a SHALLOW ALIAS of the container's
+    /// buffer. Consumed into any owning destination, the destination and the
+    /// container both freed it. The read is now deep-cloned, so each owns its
+    /// own buffer — the rule the WHOLE-element read has always followed.
     ///
-    /// THE WHOLE-ELEMENT READ IS ALREADY CLONED and this is its missing
-    /// sibling. Verified directly: after `let b = ps[0]`, mutating `b.word`
-    /// leaves `ps[0].word` untouched on both backends
-    /// (`clone_owned_vec_index_element`). The FIELD read gets no such clone.
+    /// EIGHT DESTINATIONS, which is why this is one program rather than a
+    /// smoke test: the filing named only the struct literal, and every one of
+    /// these aborted with `free(): double free detected in tcache 2` on a
+    /// default `karac build` while the interpreter printed the right answer.
     ///
-    /// EIGHT DESTINATIONS MEASURED BROKEN, which is the finding that decides
-    /// the fix shape — the filing named only the struct literal:
+    ///   struct-literal field   `Pair { word: ps[0].word, .. }`
+    ///   `Vec.push`             `ws.push(ps[0].word)`
+    ///   field assign           `o.word = ps[0].word`
+    ///   index assign           `ws[0] = ps[0].word`
+    ///   map insert             `m.insert(ps[0].word, 5)`
+    ///   return                 `return ps[0].word`
+    ///   tuple construction     `(ps[0].word, 1)`
+    ///   enum payload           `Wrap.Has(ps[0].word)`
     ///
-    ///   struct-literal field   `Pair { word: ps[0].word, .. }`   ABORTS
-    ///   `Vec.push`             `ws.push(ps[0].word)`             ABORTS
-    ///   field assign           `o.word = ps[0].word`             ABORTS
-    ///   index assign           `ws[0] = ps[0].word`              ABORTS
-    ///   map insert             `m.insert(ps[0].word, 5)`         ABORTS
-    ///   return                 `return ps[0].word`               ABORTS
-    ///   tuple construction     `(ps[0].word, 1)`                 ABORTS
-    ///   enum payload           `Wrap.Has(ps[0].word)`            ABORTS
+    /// THE LAST LINE OF THE LOOP IS THE OTHER HALF OF THE ASSERTION: after all
+    /// eight consumptions the container's own field is read again. Cloning is
+    /// only correct if the ELEMENT still owns its buffer, so a fix that
+    /// disowned the source instead — the tempting one, and the one the `let`
+    /// site used to do — would leave this read dangling rather than fix it.
     ///
-    /// TWO SHAPES ARE CLEAN, and each for its own reason rather than because
-    /// the read is sound: a by-value fn argument (`take(ps[0].word)`) is
-    /// caller-retains, so the callee never frees; and a plain `let w =
-    /// ps[0].word` cap-zeroes the SOURCE — which is a move, and the checker
-    /// says this is a copy. That divergence has its own symptom, pinned by
-    /// `e2e_vec_elem_field_read_is_a_copy` in tests/codegen.rs: mutate `w` and
-    /// the element's own field reads back as garbage.
-    ///
-    /// WHY THIS IS NOT A PER-DESTINATION PATCH, recorded so the next attempt
-    /// does not start there. Mirroring the let site's suppression at the other
-    /// destinations would silence all eight aborts, and it would be spreading
-    /// a move model the checker contradicts — trading eight double frees for
-    /// eight silent use-after-frees. The correct fix is to CLONE the field
-    /// read, as the whole-element read already does, and to stop suppressing
-    /// at the let site.
-    ///
-    /// WHY THE CLONE IS NOT A ONE-LINER EITHER: cloning at the read leaks in
-    /// every NON-consuming position, and those are common and currently clean
-    /// — `ps[0].word.len()` and `ps[0].word + "!"` both work today. The read
-    /// site cannot see whether its parent consumes, so the clone has to go
-    /// through the fresh-owned-temp channel
-    /// (`expr_yields_fresh_owned_temp`, the route
-    /// `compile_inline_temp_vec_index` already uses for `make()[i]`), which is
-    /// a change to what every consumer frees. That is the work this row wants.
+    /// It also guards the leak direction. The clone carries its own scope
+    /// cleanup so a NON-consuming read cannot leak, and a consuming
+    /// destination takes it over by zeroing the clone's cap; if that takeover
+    /// stopped firing, every leg here would double-free, and if it fired for a
+    /// non-consuming read, LSan would report the orphan.
     #[test]
-    #[ignore = "B-2026-08-12-27: a heap field read off a Vec element aliases the container; eight owning destinations double-free. Fix is clone-at-read via the fresh-temp channel, not per-destination suppression — see the doc above."]
     fn asan_vec_elem_heap_field_read_freed_once() {
         assert_clean_asan_run(
             r#"

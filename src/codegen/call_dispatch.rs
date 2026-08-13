@@ -6705,6 +6705,31 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
+        // B-2026-08-12-27 — a heap FIELD read off a Vec element
+        // (`ps[0].word`) was deep-cloned at the read, and the clone carries
+        // its own scope cleanup so a NON-consuming read does not leak. This is
+        // a CONSUMING position, so the destination takes the clone over: zero
+        // the clone's `cap` and leave it sole owner.
+        //
+        // Zeroing rather than retracting keeps this `&self`, which matters —
+        // all ~87 call sites funnel here, so the takeover is one edit instead
+        // of eight. The container's element is NOT touched: it still owns its
+        // own buffer, which is the whole point of cloning rather than
+        // spreading the `let` site's source cap-zeroing.
+        if let Some(slot) = self
+            .vec_elem_field_clone_slots
+            .get(&(arg_expr.span.offset, arg_expr.span.length))
+        {
+            if let Ok(cap_ptr) =
+                self.builder
+                    .build_struct_gep(self.vec_struct_type(), *slot, 2, "vfld.clone.cap")
+            {
+                let _ = self
+                    .builder
+                    .build_store(cap_ptr, self.context.i64_type().const_int(0, false));
+            }
+            return;
+        }
         // Tuple field move-out (`let s = t.N`, `f(t.N)`, `return t.N`): the
         // heap field is moved into the consumer, but the tuple `t` still carries
         // its `track_tuple_var` drop (B-2026-06-11-4 part a), which would free
