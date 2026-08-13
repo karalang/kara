@@ -2740,8 +2740,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(())
             }
             StmtKind::Let {
-                pattern, value, ty, ..
+                pattern,
+                value,
+                ty,
+                is_mut,
+                ..
             } => {
+                // B-2026-08-13-10 — track an IMMUTABLE integer-literal local
+                // so the full-unroll guard can read a bound written as a name
+                // (`let k = 32i64; … while j < k`) and not just as a literal.
+                // Any other binding of the same name clears the entry, so the
+                // map never describes a name it no longer owns. See
+                // `Codegen::int_const_locals`.
+                if let PatternKind::Binding(bind_name) = &pattern.kind {
+                    match (&value.kind, is_mut) {
+                        (ExprKind::Integer(k, _), false) => {
+                            self.int_const_locals.insert(bind_name.clone(), *k);
+                        }
+                        _ => {
+                            self.int_const_locals.remove(bind_name.as_str());
+                        }
+                    }
+                }
                 // Whole-value move of a container binding (`let b = a;`,
                 // `Box2 { s: d }`, `(h, 1)`): retract the SOURCE's
                 // `__karac_dropelems_*` bodies action before the destination

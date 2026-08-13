@@ -34415,6 +34415,173 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-10 — the bound may be a NAME bound to an immutable integer
+    /// literal, not only a literal written in the guard. `let k = 32i64; …
+    /// while j < k` is the commoner spelling of a counted loop, and requiring
+    /// a literal meant the very shape this hint exists for usually missed it:
+    /// LLVM had already constant-propagated the bound (`cmp $0x20` in the
+    /// disassembly) but unrolled by only 4 and kept a data-dependent branch
+    /// per element, where rustc and clang unroll the same loop whole and
+    /// branchlessly. Measured 2.33x on kata #265's O(n*k) DP once hinted
+    /// (605 -> 260 ms), which took kara from 1.5x behind equal-safety rustc to
+    /// ahead of it.
+    ///
+    /// The three negatives are the gate, and each fails for its own reason:
+    /// a `mut` bound could be reassigned, a non-literal initializer is not a
+    /// compile-time constant, and a name over the cap is the same
+    /// bloat-refusal the literal path already makes.
+    #[test]
+    fn test_ir_full_unroll_metadata_accepts_a_const_local_bound() {
+        let named = ir_for(
+            "fn main() { let k = 32i64; let mut j = 0i64; let mut s = 0i64; \
+             while j < k { s = s + j; j = j + 1i64; } println(s); }",
+        );
+        assert!(
+            named.contains("llvm.loop.unroll.full"),
+            "`let k = 32i64; while j < k` should carry the full-unroll hint; IR:\n{named}"
+        );
+
+        // `mut` bound: reassignable, so the name is not a constant.
+        let mutable = ir_for(
+            "fn main() { let mut k = 32i64; let mut j = 0i64; let mut s = 0i64; \
+             while j < k { s = s + j; j = j + 1i64; } k = k + 1i64; println(s + k); }",
+        );
+        assert!(
+            !mutable.contains("llvm.loop.unroll.full"),
+            "`let mut k` bound must NOT be treated as a constant; IR:\n{mutable}"
+        );
+
+        // Non-literal initializer: not known at compile time.
+        let computed = ir_for(
+            "fn main() { let n = env.args().len() as i64; let k = n + 8i64; \
+             let mut j = 0i64; let mut s = 0i64; \
+             while j < k { s = s + j; j = j + 1i64; } println(s); }",
+        );
+        assert!(
+            !computed.contains("llvm.loop.unroll.full"),
+            "a computed bound must NOT carry the full-unroll hint; IR:\n{computed}"
+        );
+
+        // Over the cap: same refusal the literal path makes at 100000.
+        let too_big = ir_for(
+            "fn main() { let k = 100000i64; let mut j = 0i64; let mut s = 0i64; \
+             while j < k { s = s + j; j = j + 1i64; } println(s); }",
+        );
+        assert!(
+            !too_big.contains("llvm.loop.unroll.full"),
+            "a const-local bound over the cap must NOT carry the hint; IR:\n{too_big}"
+        );
+    }
+
+    /// B-2026-08-13-10 — the REPLICATION-COST gates, one per regression the
+    /// widening in the test above actually caused. Each of these was measured
+    /// slower on a kata bench lane before its gate existed, so each is a pin on
+    /// a loss, not a hypothetical:
+    ///
+    ///   nested loop  — #259's `while r < rounds` is a benchmark's OUTER loop;
+    ///                  26x-ing the kernel cost 25% (562 -> 704 ms)
+    ///   calls        — #134's 8-iteration setup loop does `push(lcg(..))`;
+    ///                  replicating the calls cost 40% (484 -> 677 ms)
+    ///   heap operands— #291's inner loop does `sj = sj + alpha[..]` over a
+    ///                  `String` and a `Vec[String]`; 30 allocating concats
+    ///                  cost 1.9x (224 -> 425 ms)
+    ///
+    /// The heap case is why the cost check is TYPE-AWARE and not pure AST:
+    /// `a + b` and `v[i]` look identical whether they are `i64` or `String`,
+    /// and the pure-AST version passed #291 straight through. The scalar
+    /// control at the end is the same shape with `Vec[i64]` and must still be
+    /// hinted — otherwise the gate would have thrown away #265's win with it.
+    #[test]
+    fn test_ir_full_unroll_declines_bodies_too_costly_to_replicate() {
+        let nested = ir_for(
+            // The inner bound is over the cap so the INNER loop is not itself
+            // hintable — otherwise this module-wide grep would match its hint
+            // and say nothing about the outer one.
+            "fn main() { let k = 8i64; let mut j = 0i64; let mut s = 0i64; \
+             while j < k { let mut q = 0i64; while q < 100000i64 { s = s + q; q = q + 1i64; } \
+             j = j + 1i64; } println(s); }",
+        );
+        assert!(
+            !nested.contains("llvm.loop.unroll.full"),
+            "a body containing a nested loop must NOT be hinted; IR:\n{nested}"
+        );
+
+        let calls = ir_for(
+            "fn f(x: i64) -> i64 { x * 3i64 } \
+             fn main() { let k = 8i64; let mut j = 0i64; let mut s = 0i64; \
+             while j < k { s = s + f(j); j = j + 1i64; } println(s); }",
+        );
+        assert!(
+            !calls.contains("llvm.loop.unroll.full"),
+            "a body containing a call must NOT be hinted; IR:\n{calls}"
+        );
+
+        let heap = ir_for(
+            "fn main() { let k = 8i64; let mut acc = String.new(); \
+             let mut xs: Vec[String] = Vec.new(); xs.push(\"a\"); \
+             let mut j = 0i64; \
+             while j < k { acc = acc + xs[0]; j = j + 1i64; } println(acc.len()); }",
+        );
+        assert!(
+            !heap.contains("llvm.loop.unroll.full"),
+            "a body with HEAP operands must NOT be hinted — `a + b` over Strings \
+             is indistinguishable from integer addition in the AST alone; IR:\n{heap}"
+        );
+
+        // Scalar control: the same indexed shape over `Vec[i64]` IS the loop
+        // this hint exists for and must survive every gate above.
+        let scalar_index = ir_for(
+            "fn main() { let k = 8i64; let mut v: Vec[i64] = Vec.filled(8i64, 3i64); \
+             let mut j = 0i64; let mut s = 0i64; \
+             while j < k { if v[j] < s { s = v[j]; } j = j + 1i64; } println(s); }",
+        );
+        assert!(
+            scalar_index.contains("llvm.loop.unroll.full"),
+            "a scalar-element indexed reduction SHOULD still be hinted; IR:\n{scalar_index}"
+        );
+    }
+
+    /// B-2026-08-13-10 — soundness twin of the IR gate above. The hint is
+    /// advisory, but an unrolled loop must still compute exactly what the
+    /// rolled one did, so this asserts the VALUE rather than the shape: a
+    /// name-bounded reduction over a runtime-opaque array, whose result would
+    /// change if the unroll dropped or duplicated an iteration.
+    ///
+    /// Shaped after kata #265's kernel — a three-way carried reduction
+    /// (min, its index, second-min), which is the loop that motivated the
+    /// row and the one whose branch LLVM only if-converts once fully
+    /// unrolled.
+    #[test]
+    fn test_e2e_const_local_bound_unroll_is_sound() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let k = 32i64;\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   let mut state = 7i64;\n\
+             \x20   let mut z = 0i64;\n\
+             \x20   while z < k {\n\
+             \x20       state = (state * 1103515245i64 + 12345i64) & 2147483647i64;\n\
+             \x20       v.push((state / 65536i64) % 40i64 + 1i64);\n\
+             \x20       z = z + 1i64;\n\
+             \x20   }\n\
+             \x20   let mut min1 = 1000000000i64;\n\
+             \x20   let mut idx1 = -1i64;\n\
+             \x20   let mut min2 = 1000000000i64;\n\
+             \x20   let mut j = 0i64;\n\
+             \x20   while j < k {\n\
+             \x20       if v[j] < min1 { min2 = min1; min1 = v[j]; idx1 = j; }\n\
+             \x20       else { if v[j] < min2 { min2 = v[j]; } }\n\
+             \x20       j = j + 1i64;\n\
+             \x20   }\n\
+             \x20   println(f\"{min1} {idx1} {min2}\");\n\
+             }",
+        ) else {
+            return;
+        };
+        // Matches `karac run --interp` on the identical source.
+        assert_eq!(out, "3 15 4\n");
+    }
+
     #[test]
     fn test_ir_partial_unroll_metadata_gated_on_scalar_recurrence_body() {
         // A runtime-trip counted loop whose body is pure-scalar (the

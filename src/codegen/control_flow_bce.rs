@@ -1277,17 +1277,293 @@ fn body_is_scalar_only(body: &Block) -> bool {
     })
 }
 
+/// Statement budget for the full-unroll hint: a body over this many
+/// statements is not worth replicating up to `UNROLL_FULL_MAX_BOUND` times.
+///
+/// B-2026-08-13-10 — CALIBRATED, not guessed, on the two kata bench kernels
+/// that sit either side of it. #265's k=32 min/argmin/second-min reduction is
+/// 7 statements and wants the unroll (2.45x). #259's `while r < rounds` is the
+/// benchmark's OUTER repetition loop at 34 statements, and unrolling it 26x
+/// replicates the whole kernel: measured 562 -> 704 ms, a 25% LOSS, on the
+/// first sweep before this gate existed. 16 separates them with room either
+/// side.
+const UNROLL_FULL_MAX_BODY_STMTS: usize = 16;
+
+/// Is `e` cheap enough to REPLICATE up to `UNROLL_FULL_MAX_BOUND` times?
+///
+/// Scalars, identifiers, arithmetic, and array/field reads qualify; a CALL
+/// does not. Deliberately looser than `expr_is_scalar_only` (which the partial
+/// unroll uses) in one direction and identical in the other: memory reads are
+/// fine — #265's reduction indexes `prev[j]` and is exactly the loop this hint
+/// exists for — but a call is not, because unrolling multiplies it and drags
+/// its inlining with it.
+///
+/// B-2026-08-13-10 — measured, not assumed. #134's 8-iteration SETUP loop has
+/// `gases.push(lcg(...))` in its body; unrolling it cost 40% (484 -> 677 ms)
+/// even though the loop runs once, since the replicated calls change what gets
+/// inlined around the hot path. That is the same reason `body_is_scalar_only`
+/// exists on the partial-unroll gate.
+fn expr_is_unroll_cheap_free(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::Bool(_)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::SelfValue => true,
+        ExprKind::Binary { left, right, .. } => {
+            expr_is_unroll_cheap_free(left) && expr_is_unroll_cheap_free(right)
+        }
+        ExprKind::Unary { operand, .. } => expr_is_unroll_cheap_free(operand),
+        ExprKind::Index { object, index } => {
+            expr_is_unroll_cheap_free(object) && expr_is_unroll_cheap_free(index)
+        }
+        ExprKind::FieldAccess { object, .. } => expr_is_unroll_cheap_free(object),
+        ExprKind::Cast { expr, .. } => expr_is_unroll_cheap_free(expr),
+        // Only the operator-to-trait-method lowering, never a real call.
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if segments.len() == 2 && is_scalar_op_method(&segments[1]) {
+                    return args.iter().all(|a| expr_is_unroll_cheap_free(&a.value));
+                }
+            }
+            false
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            expr_is_unroll_cheap_free(condition)
+                && body_is_unroll_cheap_free(then_block)
+                && else_branch
+                    .as_ref()
+                    .is_none_or(|b| expr_is_unroll_cheap_free(b))
+        }
+        ExprKind::Block(b) | ExprKind::Seq(b) => body_is_unroll_cheap_free(b),
+        _ => false,
+    }
+}
+
+/// Fail-closed "is every statement of `body` cheap to replicate" — see
+/// [`expr_is_unroll_cheap`]. Recurses into nested blocks so a call buried in
+/// an `if` arm declines just as a top-level one does.
+fn body_is_unroll_cheap_free(body: &Block) -> bool {
+    body.stmts.iter().all(|stmt| match &stmt.kind {
+        StmtKind::Let { value, .. } => expr_is_unroll_cheap_free(value),
+        StmtKind::Assign { target, value } => {
+            expr_is_unroll_cheap_free(target) && expr_is_unroll_cheap_free(value)
+        }
+        StmtKind::CompoundAssign { target, value, .. } => {
+            expr_is_unroll_cheap_free(target) && expr_is_unroll_cheap_free(value)
+        }
+        StmtKind::Expr(e) => expr_is_unroll_cheap_free(e),
+        _ => false,
+    })
+}
+
+/// Recursive statement count for a loop body — every nested block counts, so
+/// an outer loop wrapping a whole kernel is measured as the kernel and not as
+/// its handful of top-level statements.
+fn body_stmt_count(body: &Block) -> usize {
+    fn expr_stmts(e: &Expr) -> usize {
+        match &e.kind {
+            ExprKind::Block(b) | ExprKind::Seq(b) => body_stmt_count(b),
+            // Loops are EXPRESSIONS in this AST, so a nested loop arrives here
+            // rather than as a statement variant.
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. } => body_stmt_count(body),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => body_stmt_count(then_block) + else_branch.as_ref().map_or(0, |e| expr_stmts(e)),
+            ExprKind::Match { arms, .. } => arms.iter().map(|a| expr_stmts(&a.body)).sum(),
+            _ => 0,
+        }
+    }
+    body.stmts
+        .iter()
+        .map(|stmt| {
+            1 + match &stmt.kind {
+                StmtKind::Expr(e) => expr_stmts(e),
+                StmtKind::Let { value, .. } => expr_stmts(value),
+                _ => 0,
+            }
+        })
+        .sum()
+}
+
+/// Does `body` contain a nested loop? A fully-unrolled body that itself loops
+/// multiplies code by the unroll factor times the inner trip count, which is
+/// the shape that regressed #259. Checked separately from the statement budget
+/// because a short body with one inner loop is cheap to COUNT and expensive to
+/// REPLICATE.
+fn body_contains_loop(body: &Block) -> bool {
+    fn expr_has_loop(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::While { .. }
+            | ExprKind::WhileLet { .. }
+            | ExprKind::For { .. }
+            | ExprKind::Loop { .. } => true,
+            ExprKind::Block(b) | ExprKind::Seq(b) => body_contains_loop(b),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                body_contains_loop(then_block)
+                    || else_branch.as_ref().is_some_and(|e| expr_has_loop(e))
+            }
+            ExprKind::Match { arms, .. } => arms.iter().any(|a| expr_has_loop(&a.body)),
+            _ => false,
+        }
+    }
+    body.stmts.iter().any(|stmt| match &stmt.kind {
+        StmtKind::Expr(e) => expr_has_loop(e),
+        StmtKind::Let { value, .. } => expr_has_loop(value),
+        _ => false,
+    })
+}
+
+/// `(var, bound_name)` when `cond` upper-bounds a bare induction identifier
+/// by ANOTHER IDENTIFIER rather than a literal: `while j < k`. Shape-for-shape
+/// identical to [`guard_upper_bounded_counter`], which only accepts a literal;
+/// the caller resolves `bound_name` through `Codegen::int_const_locals` and
+/// declines when it is not a known immutable integer constant.
+///
+/// B-2026-08-13-10 — the natural spelling of a counted loop names its bound
+/// (`let k = 32i64; … while j < k`), and requiring a literal meant the commonest
+/// form of the very shape the full-unroll hint exists for never got one.
+fn guard_upper_bounded_counter_named(cond: &Expr) -> Option<(String, String)> {
+    if let ExprKind::Binary { op, left, right } = &cond.kind {
+        return match (op, &left.kind, &right.kind) {
+            (BinOp::Lt | BinOp::LtEq, ExprKind::Identifier(v), ExprKind::Identifier(b)) => {
+                Some((v.clone(), b.clone()))
+            }
+            (BinOp::Gt | BinOp::GtEq, ExprKind::Identifier(b), ExprKind::Identifier(v)) => {
+                Some((v.clone(), b.clone()))
+            }
+            _ => None,
+        };
+    }
+    if let ExprKind::Call { callee, args } = &cond.kind {
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return None;
+        };
+        if segments.len() != 2 || args.len() != 2 {
+            return None;
+        }
+        let (a, b) = (&args[0].value.kind, &args[1].value.kind);
+        return match (segments[1].as_str(), a, b) {
+            ("lt" | "le", ExprKind::Identifier(v), ExprKind::Identifier(k)) => {
+                Some((v.clone(), k.clone()))
+            }
+            ("gt" | "ge", ExprKind::Identifier(k), ExprKind::Identifier(v)) => {
+                Some((v.clone(), k.clone()))
+            }
+            _ => None,
+        };
+    }
+    None
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     /// Whether this `while` loop should carry `llvm.loop.unroll.full`
     /// metadata: a small, constant-upper-bounded counted loop whose
     /// induction variable advances by a constant step every iteration.
     /// See the section comment for the kata:37 motivation and the safety
     /// argument (advisory-only hint, LLVM is the trip-count backstop).
+    /// Type-aware half of the replication-cost gate: does `body` touch a HEAP
+    /// value anywhere? `expr_is_unroll_cheap_free` is a pure-AST check and
+    /// therefore type-blind — `a + b` looks identical whether it is `i64` or
+    /// `String` addition, and a `Vec[String]` index looks identical to a
+    /// `Vec[i64]` one. Both spellings appear in #291's inner loop
+    /// (`sj = sj + alpha[..]` over a `String` accumulator and a `Vec[String]`),
+    /// and unrolling it 30x replicated 30 ALLOCATING concatenations: measured
+    /// 224 -> 425 ms, a 1.9x LOSS.
+    ///
+    /// So the AST check says "no calls, no loops, small" and this one says "and
+    /// nothing here is heap-typed", using the binding tables codegen has
+    /// already populated for every `let` compiled ahead of this loop.
+    /// Fail-closed: an index whose container type is unknown declines.
+    fn body_touches_heap(&self, body: &Block) -> bool {
+        fn walk(cg: &super::Codegen<'_>, e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Identifier(n) => cg.string_vars.contains(n.as_str()),
+                ExprKind::Index { object, index } => {
+                    // A scalar-element Vec read is the shape #265's reduction
+                    // needs; anything else (unknown container, aggregate
+                    // element) declines.
+                    let elem_is_scalar = match &object.kind {
+                        ExprKind::Identifier(c) => cg
+                            .vec_elem_types
+                            .get(c.as_str())
+                            .is_some_and(|t| t.is_int_type() || t.is_float_type()),
+                        _ => false,
+                    };
+                    !elem_is_scalar || walk(cg, index)
+                }
+                ExprKind::Binary { left, right, .. } => walk(cg, left) || walk(cg, right),
+                ExprKind::Unary { operand, .. } => walk(cg, operand),
+                ExprKind::Cast { expr, .. } => walk(cg, expr),
+                ExprKind::FieldAccess { object, .. } => walk(cg, object),
+                ExprKind::Call { args, .. } => args.iter().any(|a| walk(cg, &a.value)),
+                ExprKind::If {
+                    condition,
+                    then_block,
+                    else_branch,
+                } => {
+                    walk(cg, condition)
+                        || cg.body_touches_heap(then_block)
+                        || else_branch.as_ref().is_some_and(|b| walk(cg, b))
+                }
+                ExprKind::Block(b) | ExprKind::Seq(b) => cg.body_touches_heap(b),
+                ExprKind::StringLit(_) | ExprKind::InterpolatedStringLit(_) => true,
+                _ => false,
+            }
+        }
+        body.stmts.iter().any(|stmt| match &stmt.kind {
+            StmtKind::Let { value, .. } => walk(self, value),
+            StmtKind::Assign { target, value } => walk(self, target) || walk(self, value),
+            StmtKind::CompoundAssign { target, value, .. } => {
+                walk(self, target) || walk(self, value)
+            }
+            StmtKind::Expr(e) => walk(self, e),
+            _ => true,
+        })
+    }
+
     pub(super) fn while_loop_wants_full_unroll(&self, cond: &Expr, body: &Block) -> bool {
-        let Some((var, bound)) = guard_upper_bounded_counter(cond) else {
+        // A literal bound (`while j < 32`), or a NAME bound to an immutable
+        // integer literal (`let k = 32i64; … while j < k`) — B-2026-08-13-10.
+        // The second is the commoner spelling and used to fall straight
+        // through, so a k=32 reduction got no hint, unrolled 4x, and kept a
+        // data-dependent branch per element where rustc/clang unroll it whole
+        // and branchlessly (measured 2.0x on kata #265's DP once hinted).
+        let Some((var, bound)) = guard_upper_bounded_counter(cond).or_else(|| {
+            let (v, bound_name) = guard_upper_bounded_counter_named(cond)?;
+            Some((v, *self.int_const_locals.get(&bound_name)?))
+        }) else {
             return false;
         };
         if !(0..=UNROLL_FULL_MAX_BOUND).contains(&bound) {
+            return false;
+        }
+        // B-2026-08-13-10 — replication cost. The hint asks LLVM to copy this
+        // body up to `bound` times, which is a win for a tight reduction and a
+        // loss for anything large: measured on #259, whose `while r < rounds`
+        // is a benchmark's OUTER loop, 26x-ing the whole kernel cost 25%
+        // (562 -> 704 ms). Both gates earn their place — a body can be short
+        // to COUNT and expensive to REPLICATE if it loops.
+        if body_contains_loop(body)
+            || body_stmt_count(body) > UNROLL_FULL_MAX_BODY_STMTS
+            || !body_is_unroll_cheap_free(body)
+            || self.body_touches_heap(body)
+        {
             return false;
         }
         body_top_level_constant_step(body, &var)

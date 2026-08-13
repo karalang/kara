@@ -1309,6 +1309,29 @@ pub(super) struct Codegen<'ctx> {
     /// binding to look up.
     pub(crate) vec_elem_field_clone_slots:
         std::collections::HashMap<(usize, usize), PointerValue<'ctx>>,
+    /// B-2026-08-13-10 — IMMUTABLE locals bound to an integer literal
+    /// (`let k = 32i64;`), name -> value, for the full-unroll guard.
+    ///
+    /// `while_loop_wants_full_unroll` reads the loop bound off the SOURCE
+    /// guard and only accepted an integer LITERAL (`while j < 32`). The
+    /// natural spelling of a counted loop names a constant instead
+    /// (`let k = 32i64; … while j < k`), which took the literal-only path's
+    /// `None` and got no hint — even though LLVM had already
+    /// constant-propagated the bound and was emitting `cmp $0x20`. It then
+    /// unrolled by 4 and left a data-dependent branch per element where
+    /// rustc and clang fully unroll the same loop branchlessly.
+    ///
+    /// Only `let` WITHOUT `mut` lands here, so "never reassigned" is
+    /// structural rather than an analysis: an assignment to the name would
+    /// not have typechecked. Any other binding of the same name (a `mut`
+    /// let, a non-literal let, a pattern bind) REMOVES the entry, so the map
+    /// never outlives the constant it describes.
+    ///
+    /// Staleness is bounded to a missed or spurious HINT, never a
+    /// miscompile: `llvm.loop.unroll.full` carries no count and LLVM still
+    /// has to prove the trip count itself before it unrolls anything — the
+    /// same advisory-only argument the literal path already rests on.
+    pub(crate) int_const_locals: std::collections::HashMap<String, i64>,
     /// B-2026-08-12-33 — the same clones as `vec_elem_field_clone_slots`, in
     /// EMISSION ORDER, so a later consumer can ask "was this span cloned
     /// *during this evaluation*" rather than "has it ever been cloned".
@@ -8053,6 +8076,7 @@ impl<'ctx> Codegen<'ctx> {
             nested_boxed_payload_vars: std::collections::HashSet::new(),
             struct_field_boxed_payload_vars: std::collections::HashSet::new(),
             vec_elem_field_clone_slots: std::collections::HashMap::new(),
+            int_const_locals: std::collections::HashMap::new(),
             vec_elem_field_clone_log: Vec::new(),
             in_return_defensive_copy: false,
             nested_boxed_passthrough_owner_alias: std::collections::HashMap::new(),

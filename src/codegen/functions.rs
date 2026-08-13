@@ -1160,6 +1160,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // (so its captures outlive the frame). Record its span for
         // `compile_closure`, and reset the per-function heap-env-binding set.
         self.current_fn_heap_closure_spans.clear();
+        // B-2026-08-13-10 — per-function map; a constant local from the
+        // previous function must not leak into this one's unroll guard.
+        self.int_const_locals.clear();
         if let Some(span) = self.func_tail_heap_closure_span(func) {
             self.current_fn_heap_closure_spans.insert(span);
         }
