@@ -588,6 +588,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_char_is_whitespace,
         karac_runtime_char_is_uppercase,
         karac_runtime_char_is_lowercase,
+        karac_runtime_char_to_lowercase,
+        karac_runtime_char_to_uppercase,
         karac_runtime_string_char_count,
         karac_runtime_string_char_at,
     );
@@ -4846,6 +4848,56 @@ pub extern "C" fn karac_runtime_char_is_uppercase(cp: u32) -> u8 {
 #[no_mangle]
 pub extern "C" fn karac_runtime_char_is_lowercase(cp: u32) -> u8 {
     char::from_u32(cp).is_some_and(|c| c.is_lowercase()) as u8
+}
+
+/// The single scalar of a Unicode case mapping, or `None` when the mapping
+/// expands. Rust models full case mapping as an ITERATOR because a scalar can
+/// map to several (`ß` → `SS`), and a `char → char` signature cannot express
+/// that; see [`karac_runtime_char_to_lowercase`] for the rule this implements.
+fn single_scalar(mut it: impl Iterator<Item = char>) -> Option<char> {
+    let first = it.next()?;
+    it.next().is_none().then_some(first)
+}
+
+/// Unicode case mapping backing `char.to_lowercase()` / `char.to_uppercase()`
+/// (B-2026-08-12-25) — the Unicode-aware companions of the inlined ASCII
+/// `to_ascii_*case`, taking and returning the codepoint bits of a Kāra `char`
+/// (lowered to `i32`).
+///
+/// THE RULE, identical in the interpreter (`interpreter/method_call.rs`) so the
+/// two backends never diverge: apply Rust's full mapping when it yields exactly
+/// one scalar, and return `self` unchanged when it expands to several. That is
+/// the only rule a `char → char` signature can implement, and it is what Go's
+/// `unicode.ToLower` and Java's `Character.toLowerCase(char)` do. `String` is
+/// where full mapping lives — `s.to_uppercase()` is a `String → String`
+/// transform (`karac_string_to_uppercase`) and renders `ß` as `SS` correctly, so
+/// `c.to_string().to_uppercase()` is the full-fidelity route for a single char.
+///
+/// HOW MUCH THIS GIVES UP, counted rather than guessed: across the whole
+/// codespace exactly 102 scalars expand under uppercase (`ß`, `ŉ`, `ǰ`, the
+/// Greek iota-subscript block, the `ﬁ` ligatures) and exactly ONE under
+/// lowercase — `İ` U+0130, whose full lowercase is `i` + a combining dot. Every
+/// other scalar folds 1:1 and is exact here.
+///
+/// A codepoint that is not a valid `char` (out of range or a surrogate) is
+/// returned unchanged, matching how the `is_*` predicates classify it as false.
+#[no_mangle]
+pub extern "C" fn karac_runtime_char_to_lowercase(cp: u32) -> u32 {
+    match char::from_u32(cp) {
+        Some(c) => single_scalar(c.to_lowercase()).map_or(cp, |m| m as u32),
+        None => cp,
+    }
+}
+
+/// See [`karac_runtime_char_to_lowercase`]. Backs `char.to_uppercase()`, where
+/// the expanding cases are the common ones (`ß` → `SS`, the `ﬁ` ligature, the
+/// Greek iota-subscript block) and all of them return `self` here.
+#[no_mangle]
+pub extern "C" fn karac_runtime_char_to_uppercase(cp: u32) -> u32 {
+    match char::from_u32(cp) {
+        Some(c) => single_scalar(c.to_uppercase()).map_or(cp, |m| m as u32),
+        None => cp,
+    }
 }
 
 /// O(n) count of Unicode scalar values in a UTF-8 String. Backs

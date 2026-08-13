@@ -5867,6 +5867,31 @@ impl<'a> super::TypeChecker<'a> {
         {
             return Type::Char;
         }
+        // Unicode case folding on a `char` — `to_lowercase` / `to_uppercase`
+        // -> char (B-2026-08-12-25). These are the names a writer reaches for
+        // first (`to_ascii_lowercase` reads as the narrowing special case), so
+        // their absence sent case-folding code hunting a surface that had only
+        // the qualified spelling.
+        //
+        // THE SPEC DECISION the row flagged: a scalar can case-fold to SEVERAL
+        // scalars (`ß` → `SS`), which is why Rust's `char::to_uppercase` returns
+        // an iterator. Kāra returns `char` and applies the full mapping only
+        // when it yields exactly one scalar, leaving `self` unchanged when it
+        // expands — the same rule as Go's `unicode.ToLower` and Java's
+        // `Character.toLowerCase(char)`. Full mapping is not lost: it is what
+        // `String.to_uppercase()` already does, so `c.to_string().to_uppercase()`
+        // renders `SS`. Backed by the `karac_runtime_char_to_*case` externs in
+        // codegen and Rust's own iterator in interp, collapsed identically.
+        //
+        // Char-only: the `String` receiver's `to_lowercase`/`to_uppercase` are
+        // the String→String transforms typed in `stdlib_seq.rs`, and they keep
+        // that path because this arm requires `Type::Char`.
+        if args.is_empty()
+            && matches!(&receiver_for_lookup, Type::Char)
+            && matches!(method, "to_uppercase" | "to_lowercase")
+        {
+            return Type::Char;
+        }
         // `char.to_digit(radix) -> Option[u32]` (Rust's `char::to_digit`): the
         // numeric value of `self` as a digit in `radix`, `None` if `self` is not
         // a digit in that radix. `radix` is `u32` (a suffix-free literal
@@ -5878,13 +5903,27 @@ impl<'a> super::TypeChecker<'a> {
         // "codegen emits a not-yet-supported error" note here outlived the
         // lowering that landed it; corrected while wiring B-2026-08-11-2, whose
         // `is_digit` diagnostic points authors at this method.
-        if method == "to_digit" && matches!(&receiver_for_lookup, Type::Char) {
+        //
+        // `char.is_digit(radix) -> bool` (B-2026-08-12-25) rides the same arm:
+        // identical receiver, identical radix rules, identical trap — it is
+        // `to_digit(radix).is_some()`, and Rust spells it the same way. Sharing
+        // the arm is what keeps the two from drifting apart on the radix.
+        if matches!(method, "to_digit" | "is_digit") && matches!(&receiver_for_lookup, Type::Char) {
             if args.len() != 1 {
-                self.type_error(
-                    format!("to_digit expects 1 argument, got {}", args.len()),
-                    span.clone(),
-                    TypeErrorKind::WrongNumberOfArgs,
-                );
+                let mut msg = format!("{method} expects 1 argument, got {}", args.len());
+                // The bare `c.is_digit()` is the spelling a writer reaches for
+                // (Rust's radix argument is the surprise, not the method), so
+                // name both routes rather than leaving an arity count to be
+                // decoded. This replaces the `no method 'is_digit'` hint added
+                // by B-2026-08-11-2 — the method exists now, so the miss is an
+                // arity miss and lands here instead.
+                if method == "is_digit" && args.is_empty() {
+                    msg.push_str(
+                        ": write `is_digit(10)` for decimal, or `is_numeric()` \
+                         for the Unicode predicate",
+                    );
+                }
+                self.type_error(msg, span.clone(), TypeErrorKind::WrongNumberOfArgs);
                 return Type::Error;
             }
             let u32_ty = Type::UInt(UIntSize::U32);
@@ -5895,13 +5934,16 @@ impl<'a> super::TypeChecker<'a> {
             } else if arg_ty != Type::Error && arg_ty != u32_ty {
                 self.type_error(
                     format!(
-                        "to_digit expects a radix of type `u32`, got `{}` (cast with `as u32`)",
+                        "{method} expects a radix of type `u32`, got `{}` (cast with `as u32`)",
                         type_display(&arg_ty)
                     ),
                     arg.span.clone(),
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
+            }
+            if method == "is_digit" {
+                return Type::Bool;
             }
             return Type::Named {
                 name: "Option".to_string(),
@@ -6180,8 +6222,8 @@ impl<'a> super::TypeChecker<'a> {
                                 // (`c.to_i64()`), so name the replacement rather
                                 // than leaving the author to search a surface
                                 // that does not have one.
-                                if matches!(&receiver_for_lookup, Type::Char) {
-                                    if matches!(
+                                if matches!(&receiver_for_lookup, Type::Char)
+                                    && matches!(
                                         method,
                                         "to_i64"
                                             | "as_i64"
@@ -6190,18 +6232,18 @@ impl<'a> super::TypeChecker<'a> {
                                             | "as_u32"
                                             | "code_point"
                                             | "ord"
-                                    ) {
-                                        msg.push_str(
-                                            ": a `char`'s numeric value comes from the cast — \
-                                             write `c as i64` (or `as u32`)",
-                                        );
-                                    } else if method == "is_digit" {
-                                        msg.push_str(
-                                            ": write `is_numeric()` for the Unicode predicate, \
-                                             or `to_digit(radix)` for the digit's value",
-                                        );
-                                    }
+                                    )
+                                {
+                                    msg.push_str(
+                                        ": a `char`'s numeric value comes from the cast — \
+                                         write `c as i64` (or `as u32`)",
+                                    );
                                 }
+                                // The `is_digit` hint that sat here (B-2026-08-11-2)
+                                // is gone because the method is no longer missing
+                                // (B-2026-08-12-25). A bare `c.is_digit()` now lands
+                                // on the radix arm's arity error, which carries the
+                                // same two routes.
                                 self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
                             }
                             return Type::Error;

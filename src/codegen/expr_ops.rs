@@ -3546,16 +3546,19 @@ impl<'ctx> super::Codegen<'ctx> {
             // (`Vec.sorted` returns a Vec), so flagging them string-like would
             // misroute a Vec receiver's `.to_string()` through the String-copy
             // path.
-            ExprKind::MethodCall { method, .. }
+            //
+            // `to_lowercase`/`to_uppercase` STOPPED being String-only when
+            // B-2026-08-12-25 put them on `char` (char → char), so the name
+            // alone no longer settles it and the receiver is checked. Without
+            // that check `c.to_lowercase().to_string()` — the exact line the
+            // row was filed from — sends an i32 codepoint into the String-copy
+            // path, which unwraps it as a `{ptr,len,cap}` struct.
+            ExprKind::MethodCall { method, object, .. }
                 if matches!(
                     method.as_str(),
-                    "trim"
-                        | "trim_start"
-                        | "trim_end"
-                        | "to_lowercase"
-                        | "to_uppercase"
-                        | "to_string"
-                ) =>
+                    "trim" | "trim_start" | "trim_end" | "to_string"
+                ) || (matches!(method.as_str(), "to_lowercase" | "to_uppercase")
+                    && !self.expr_is_char(object)) =>
             {
                 true
             }
@@ -3696,13 +3699,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 if method == "clone" && args.is_empty() {
                     return self.expr_is_char(object);
                 }
-                // Builtin ASCII case-fold methods (`to_ascii_uppercase` /
-                // `to_ascii_lowercase`) are char→char on a char receiver, so
-                // their result renders as a glyph too. Typed in
-                // `typechecker/expr_method_call.rs`; lowered inline in
-                // `compile_method_call`.
-                if matches!(method.as_str(), "to_ascii_uppercase" | "to_ascii_lowercase")
-                    && args.is_empty()
+                // Builtin case-fold methods are char→char ON A CHAR RECEIVER, so
+                // their result renders as a glyph too. The ASCII pair
+                // (`to_ascii_uppercase` / `to_ascii_lowercase`) is char-only and
+                // lowered inline; the Unicode pair (`to_lowercase` /
+                // `to_uppercase`, B-2026-08-12-25) also names the String→String
+                // transforms, which is why the receiver check below is what
+                // separates them — a String receiver must stay non-char here or
+                // `println(s.to_uppercase())` would render as a codepoint.
+                // Typed in `typechecker/expr_method_call.rs`.
+                if matches!(
+                    method.as_str(),
+                    "to_ascii_uppercase" | "to_ascii_lowercase" | "to_uppercase" | "to_lowercase"
+                ) && args.is_empty()
                     && self.expr_is_char(object)
                 {
                     return true;

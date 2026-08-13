@@ -14467,7 +14467,8 @@ fn test_char_and_bool_builtin_method_surface_still_typechecks() {
              let _ = c.is_uppercase(); let _ = c.is_lowercase();
              let _ = c.is_ascii();
              let _ = c.to_ascii_uppercase(); let _ = c.to_ascii_lowercase();
-             let _ = c.to_digit(10);
+             let _ = c.to_lowercase(); let _ = c.to_uppercase();
+             let _ = c.to_digit(10); let _ = c.is_digit(10);
              let _ = c.eq('7'); let _ = c.ne('7'); let _ = c.lt('8');
              let _ = c.le('8'); let _ = c.gt('1'); let _ = c.ge('1');
              let _ = c.cmp('7');
@@ -14530,8 +14531,9 @@ fn test_char_numeric_conversion_typo_names_the_cast() {
     // `c.to_i64()` is the exact spelling the dogfood that filed B-2026-08-11-2
     // guessed. `char` has no numeric-value method at all, so a bare "no method"
     // sends the author hunting a surface that does not have one; the diagnostic
-    // names the cast instead. `is_digit` gets the same treatment (Rust has it;
-    // Kāra spells it `is_numeric()` / `to_digit(radix)`).
+    // names the cast instead. (`is_digit` was hinted here too until
+    // B-2026-08-12-25 gave `char` the method for real; its miss is now an arity
+    // one, pinned in `test_char_is_digit_arity_hint_names_both_routes`.)
     for m in ["to_i64()", "as_i64()", "to_int()", "code_point()", "ord()"] {
         let errors = typecheck_errors(&format!(
             "fn main() {{ let c: char = '7'; let n: i64 = c.{m}; let _ = n; }}"
@@ -14544,14 +14546,79 @@ fn test_char_numeric_conversion_typo_names_the_cast() {
             errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
     }
-    let errors = typecheck_errors("fn main() { let c: char = '7'; let _ = c.is_digit(10); }");
+}
+
+#[test]
+fn test_char_unicode_case_fold_types_as_char_not_string() {
+    // B-2026-08-12-25 — `to_lowercase`/`to_uppercase` on a `char` are char→char
+    // (the fold applies only when Unicode maps the scalar 1:1). The annotation
+    // is the assertion: a `String` binding must be REJECTED, because the two
+    // names also spell the String→String transforms and typing the char form as
+    // String is the plausible wrong answer.
+    typecheck_ok("fn main() { let c: char = 'A'; let d: char = c.to_lowercase(); let _ = d; }");
+    let errors = typecheck_errors(
+        "fn main() { let c: char = 'A'; let s: String = c.to_uppercase(); let _ = s; }",
+    );
     assert!(
         errors
             .iter()
-            .any(|e| e.message.contains("no method 'is_digit'")
-                && e.message.contains("is_numeric()")
-                && e.message.contains("to_digit(radix)")),
-        "expected the is_digit hint, got: {:?}",
+            .any(|e| e.message.contains("expected 'String'") && e.message.contains("found 'char'")),
+        "expected char/String mismatch, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // The other direction, and the reason the char arm is receiver-gated rather
+    // than name-keyed: a String receiver keeps the allocating String→String
+    // transform (full Unicode, `ß` → `SS`), so IT must not type as char.
+    typecheck_ok("fn main() { let s: String = \"Mi\".to_string(); let t: String = s.to_uppercase(); let _ = t; }");
+    let errors = typecheck_errors(
+        "fn main() { let s: String = \"Mi\".to_string(); let c: char = s.to_lowercase(); let _ = c; }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'char'") && e.message.contains("found 'String'")),
+        "expected String/char mismatch, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_char_is_digit_arity_hint_names_both_routes() {
+    // `is_digit` exists now (B-2026-08-12-25), so B-2026-08-11-2's
+    // `no method 'is_digit'` hint is gone and the miss a writer actually makes
+    // is the ARITY one: Rust's radix argument is the surprise, not the method.
+    // The bare call must still name both routes rather than leaving an argument
+    // count to be decoded.
+    let errors = typecheck_errors("fn main() { let c: char = '7'; let _ = c.is_digit(); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("is_digit expects 1 argument, got 0")
+                && e.message.contains("is_digit(10)")
+                && e.message.contains("is_numeric()")),
+        "expected the is_digit arity hint, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // `is_digit` shares `to_digit`'s arm, so it shares the radix TYPE rule too
+    // — and the message must name the method that was called.
+    let errors = typecheck_errors(
+        "fn main() { let c: char = '7'; let r: i64 = 10; let _ = c.is_digit(r); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("is_digit expects a radix of type `u32`")),
+        "expected the is_digit radix-type error, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // And a `char` typo that is NOT one of the named spellings still gets the
+    // plain rejection — the hint set did not widen.
+    let errors = typecheck_errors("fn main() { let c: char = '7'; let _ = c.is_alpha(); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'is_alpha' on type 'char'")),
+        "expected a plain no-method rejection, got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }

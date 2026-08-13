@@ -6006,6 +6006,20 @@ impl<'ctx> Codegen<'ctx> {
         ] {
             module.add_function(name, char_pred_type, Some(Linkage::External));
         }
+        // Unicode case folding (B-2026-08-12-25): `char.to_lowercase()` /
+        // `to_uppercase()` — codepoint in, codepoint out (i32 → i32, unlike the
+        // i8-returning predicates above). Needs the runtime's Unicode tables for
+        // the same reason the predicates do; the inlined `to_ascii_*case`
+        // arithmetic covers only `a`..`z` / `A`..`Z`.
+        let char_fold_type = context
+            .i32_type()
+            .fn_type(&[context.i32_type().into()], false);
+        for name in [
+            "karac_runtime_char_to_lowercase",
+            "karac_runtime_char_to_uppercase",
+        ] {
+            module.add_function(name, char_fold_type, Some(Linkage::External));
+        }
         // `i64 karac_runtime_string_char_count(*const u8 ptr, i64 len)` — O(n)
         // Unicode scalar count, backing `s.char_count()`. And
         // `i8 karac_runtime_string_char_at(*const u8 ptr, i64 len, i64 idx,

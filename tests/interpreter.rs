@@ -14301,6 +14301,73 @@ fn test_char_unicode_predicates_interpreter() {
 }
 
 #[test]
+fn test_char_unicode_case_fold_and_is_digit_interpreter() {
+    // B-2026-08-12-25 — `char.to_lowercase()` / `to_uppercase()` / `is_digit()`,
+    // the spellings a writer reaches for before the `ascii`-qualified ones. The
+    // codegen twin is `test_e2e_char_unicode_case_fold_and_is_digit`, asserting
+    // the identical bytes.
+    //
+    // THE EXPANDING CASES ARE THE SPEC, not an edge case: a scalar can fold to
+    // several (`ß` → `SS`), which a `char → char` signature cannot express, so
+    // the mapping applies only when it yields exactly one scalar and returns
+    // `self` otherwise — Go's and Java's rule. `ß`, the `ﬁ` ligature (U+FB01)
+    // and `İ` (U+0130, whose full LOWERcase is `i` + a combining dot) are all
+    // pinned here as unchanged, and the full-fidelity route
+    // (`c.to_string().to_uppercase()` → `SS`) is pinned beside them so the
+    // deferral stays visibly a routing choice rather than a missing capability.
+    // (`sharp.to_string().to_uppercase()` is bound to a name because the same
+    // chain on a bare literal hits a pre-existing, unrelated codegen gap —
+    // filed separately; interp takes either form.)
+    let output = run(r#"fn main() {
+            println(f"{'A'.to_lowercase()} {'a'.to_uppercase()} {'7'.to_uppercase()}");
+            println(f"{'é'.to_uppercase()} {'É'.to_lowercase()} {'ß'.to_uppercase()}");
+            match char.try_from(64257) {
+                Ok(l) => { println(f"{l.to_uppercase()} {l.to_lowercase()}"); }
+                Err(e) => { println("err"); }
+            }
+            match char.try_from(304) {
+                Ok(i) => { println(f"{i.to_lowercase()}"); }
+                Err(e) => { println("err"); }
+            }
+            let sharp = 'ß';
+            println(sharp.to_string().to_uppercase());
+            println(f"{'7'.is_digit(10)} {'f'.is_digit(16)} {'f'.is_digit(10)}");
+            println(f"{'z'.is_digit(36)} {' '.is_digit(10)} {'0'.is_digit(2)}");
+            let mut out = "".to_string();
+            for ch in "HeLLo Wörld".chars() {
+                out = out + ch.to_lowercase().to_string();
+            }
+            println(out);
+        }"#);
+    assert_eq!(
+        output,
+        "a A 7\n\
+         É é ß\n\
+         ﬁ ﬁ\n\
+         İ\n\
+         SS\n\
+         true true false\n\
+         true false true\n\
+         hello wörld\n"
+    );
+}
+
+#[test]
+fn test_char_case_fold_is_digit_radix_trap_interpreter() {
+    // The radix trap is `to_digit`'s, shared verbatim (same arm in interp, same
+    // arm in codegen) so the two methods cannot drift apart on it. The message
+    // names the method that was called, not the one that owns the arm.
+    let errors = runtime_errors("fn main() { println(f\"{'z'.is_digit(37)}\"); }");
+    assert!(
+        errors.iter().any(|e| e.message.contains("is_digit")
+            && e.message.contains("radix must be in 2..=36")
+            && e.message.contains("37")),
+        "expected the is_digit radix trap, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_char_case_predicates_interpreter() {
     // B-2026-06-18-4 — `char.is_uppercase()` / `is_lowercase()`, the case
     // siblings of the classification predicates above. The interpreter must

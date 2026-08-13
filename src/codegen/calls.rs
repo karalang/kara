@@ -1645,24 +1645,46 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The `self`-free half of [`Self::expr_is_char`]: the receiver shapes that
+    /// are decidably `char` from syntax alone. Used by the static walkers, which
+    /// have no access to the codegen type tables.
+    fn expr_is_syntactically_char(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::CharLit(_) => true,
+            ExprKind::Cast { ty, .. } => matches!(
+                &ty.kind,
+                crate::ast::TypeKind::Path(p)
+                    if p.segments.last().map(|s| s == "char").unwrap_or(false)
+            ),
+            _ => false,
+        }
+    }
+
     #[allow(dead_code)]
     fn closure_body_produces_heap_string(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::InterpolatedStringLit(_) => true,
-            ExprKind::MethodCall { method, .. } => matches!(
-                method.as_str(),
-                "trim"
-                    | "trim_start"
-                    | "trim_end"
-                    | "to_lowercase"
-                    | "to_uppercase"
-                    | "to_string"
-                    | "repeat"
-                    | "replace"
-                    | "replacen"
-            ),
+            // `to_lowercase`/`to_uppercase` are String→String only when the
+            // receiver is not a `char` — B-2026-08-12-25 put a char→char fold
+            // under the same names, and a folded char is a scalar, not a heap
+            // string. This walker is static (no `self`), so it recognises the
+            // char receiver by the shapes that are decidable without the
+            // codegen tables: a char literal and a cast to `char`.
+            ExprKind::MethodCall { method, object, .. } => {
+                matches!(
+                    method.as_str(),
+                    "trim"
+                        | "trim_start"
+                        | "trim_end"
+                        | "to_string"
+                        | "repeat"
+                        | "replace"
+                        | "replacen"
+                ) || (matches!(method.as_str(), "to_lowercase" | "to_uppercase")
+                    && !Self::expr_is_syntactically_char(object))
+            }
             ExprKind::Block(b) | ExprKind::Seq(b) => b
                 .final_expr
                 .as_ref()

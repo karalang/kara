@@ -49569,6 +49569,74 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_char_unicode_case_fold_and_is_digit() {
+        // B-2026-08-12-25 — the codegen twin of
+        // `test_char_unicode_case_fold_and_is_digit_interpreter`, asserting the
+        // identical bytes. `to_lowercase`/`to_uppercase` route through the
+        // `karac_runtime_char_to_*case` externs (the Unicode tables can't be
+        // inlined like `to_ascii_*case`); `is_digit` shares `to_digit`'s inlined
+        // classification, returning the predicate the Option wrap consumes.
+        //
+        // THREE LINES HERE ARE ABOUT THE NAME COLLISION, not the folding.
+        // `to_lowercase`/`to_uppercase` were String-only before this, and four
+        // codegen sites keyed String-ness on the method NAME alone (one of them
+        // saying so: "a non-String receiver here would already have failed the
+        // typechecker, which is what makes the name sufficient"). The
+        // `.to_string()` chain is the exact line the row was filed from and the
+        // one that reached `expr_is_string_like` — pre-fix it sent an i32
+        // codepoint into the String-copy path. The two String-receiver calls on
+        // the last line pin the other direction: the String→String transforms
+        // must NOT be captured by the new char arm.
+        // The `sharp` binding is deliberate: `'ß'.to_string().to_uppercase()`
+        // with the LITERAL inline fails codegen ("Vec/String method 'to_string'
+        // is not yet supported"), which is a PRE-EXISTING gap unrelated to this
+        // row — measured identical on `7`/`true`/`(7 + 1)` receivers at the
+        // commit before this one, and filed separately. Bound to a name, the
+        // same chain compiles.
+        let out = run_program(
+            r#"
+fn main() {
+    println(f"{'A'.to_lowercase()} {'a'.to_uppercase()} {'7'.to_uppercase()}");
+    println(f"{'é'.to_uppercase()} {'É'.to_lowercase()} {'ß'.to_uppercase()}");
+    match char.try_from(64257) {
+        Ok(l) => { println(f"{l.to_uppercase()} {l.to_lowercase()}"); }
+        Err(e) => { println("err"); }
+    }
+    match char.try_from(304) {
+        Ok(i) => { println(f"{i.to_lowercase()}"); }
+        Err(e) => { println("err"); }
+    }
+    let sharp = 'ß';
+    println(sharp.to_string().to_uppercase());
+    println(f"{'7'.is_digit(10)} {'f'.is_digit(16)} {'f'.is_digit(10)}");
+    println(f"{'z'.is_digit(36)} {' '.is_digit(10)} {'0'.is_digit(2)}");
+    let mut out = "".to_string();
+    for ch in "HeLLo Wörld".chars() {
+        out = out + ch.to_lowercase().to_string();
+    }
+    println(out);
+    let s = "MiXeD".to_string();
+    println(f"{s.to_lowercase()} {s.to_uppercase()}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "a A 7\n\
+                 É é ß\n\
+                 ﬁ ﬁ\n\
+                 İ\n\
+                 SS\n\
+                 true true false\n\
+                 true false true\n\
+                 hello wörld\n\
+                 mixed MIXED\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_char_case_predicates() {
         // B-2026-06-18-4: `char.is_uppercase()` / `is_lowercase()` — the case
         // siblings of the `is_alphabetic` / … predicates above. They were wired

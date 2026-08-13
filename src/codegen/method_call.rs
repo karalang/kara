@@ -4017,7 +4017,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // codepoint's digit value in that radix wraps as `Some(v)` / `None` via
         // the shared `build_checked_to_int_option` Option constructor. Gated on
         // a `char` receiver so a user `to_digit` on another type is unaffected.
-        if method == "to_digit" && args.len() == 1 && self.expr_is_char(object) {
+        // `char.is_digit(radix) -> bool` (B-2026-08-12-25) shares every line of
+        // this arm except the final wrap: it is the `in_range` predicate the
+        // Option constructor would have consumed, returned as a bare i1. The
+        // `td.` value names below are shared with it.
+        if matches!(method, "to_digit" | "is_digit") && args.len() == 1 && self.expr_is_char(object)
+        {
             let i32_t = self.context.i32_type();
             // Codepoint as i32 (char lowers to i32; narrow receivers z-extend).
             let cp_raw = self.compile_expr(object)?.into_int_value();
@@ -4074,7 +4079,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(bad, trap_bb, ok_bb)
                 .unwrap();
             self.builder.position_at_end(trap_bb);
-            self.emit_panic("to_digit: radix must be in 2..=36");
+            self.emit_panic(&format!("{method}: radix must be in 2..=36"));
             self.builder.build_unreachable().unwrap();
             self.builder.position_at_end(ok_bb);
 
@@ -4172,6 +4177,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_and(has_digit, lt_radix, "td.valid")
                 .unwrap();
+            if method == "is_digit" {
+                return Ok(in_range.into());
+            }
             return self.build_checked_to_int_option(in_range, val);
         }
 
@@ -4238,6 +4246,51 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 return Ok(b.into());
             }
+        }
+
+        // Unicode case folding on a `char` (B-2026-08-12-25): `to_lowercase` /
+        // `to_uppercase` → char, through the `karac_runtime_char_to_*case`
+        // externs (i32 codepoint in, i32 codepoint out). The runtime owns the
+        // "full mapping when it is 1:1, else self" collapse so it is computed in
+        // exactly one place for both backends — see the extern's doc comment.
+        //
+        // GATED ON A CHAR RECEIVER, unlike the predicate arm above, because
+        // these two names are NOT char-only: `String.to_lowercase()` is the
+        // allocating String→String transform, and it must keep reaching
+        // `compile_vec_method`'s `karac_string_to_lowercase`.
+        if args.is_empty()
+            && matches!(method, "to_lowercase" | "to_uppercase")
+            && self.expr_is_char(object)
+        {
+            let i32_t = self.context.i32_type();
+            let cp_raw = self.compile_expr(object)?.into_int_value();
+            let cp = match cp_raw.get_type().get_bit_width() {
+                32 => cp_raw,
+                w if w < 32 => self
+                    .builder
+                    .build_int_z_extend(cp_raw, i32_t, "char.cp.z")
+                    .unwrap(),
+                _ => self
+                    .builder
+                    .build_int_truncate(cp_raw, i32_t, "char.cp.t")
+                    .unwrap(),
+            };
+            let fname = if method == "to_lowercase" {
+                "karac_runtime_char_to_lowercase"
+            } else {
+                "karac_runtime_char_to_uppercase"
+            };
+            let f = self
+                .module
+                .get_function(fname)
+                .expect("char case-fold extern declared in Codegen::new");
+            let folded = self
+                .builder
+                .build_call(f, &[cp.into()], "char.fold")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic();
+            return Ok(folded);
         }
 
         // ASCII `char` methods (typed in expr_method_call.rs, char receiver
@@ -13928,7 +13981,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // and are deliberately absent. A non-String receiver here would
             // already have failed the typechecker, which is what makes the
             // name sufficient.
-            || matches!(
+            //
+            // One exception since B-2026-08-12-25: `to_uppercase`/`to_lowercase`
+            // now also name the char→char folds, so a char receiver is excluded
+            // explicitly. `compile_method_call`'s char arm runs long before this
+            // fallback, so this is the belt to that braces — but the premise
+            // above ("only on String") is no longer true for those two names,
+            // and a signal keyed on an untrue premise is how the next receiver
+            // type gets misrouted into the String path.
+            || (matches!(
                 method,
                 "to_uppercase"
                     | "to_lowercase"
@@ -13943,7 +14004,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "split"
                     | "split_whitespace"
                     | "lines"
-            );
+            ) && !self.expr_is_char(object));
         if !recv_is_string {
             return Ok(None);
         }

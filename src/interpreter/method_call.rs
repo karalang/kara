@@ -166,6 +166,14 @@ pub(super) fn numeric_try_from_value(n: i64, target: &str) -> Value {
 }
 
 /// `true` iff `name` is an integer type that carries a numeric `try_from`.
+/// The single scalar of a Unicode case mapping, or `None` when it expands to
+/// several. The twin of the runtime's `single_scalar` (`runtime/src/lib.rs`),
+/// which backs the same two methods under codegen — keep the two in step.
+fn single_scalar_case_map(mut it: impl Iterator<Item = char>) -> Option<char> {
+    let first = it.next()?;
+    it.next().is_none().then_some(first)
+}
+
 pub(super) fn is_numeric_try_from_target(name: &str) -> bool {
     matches!(
         name,
@@ -2380,17 +2388,24 @@ impl<'a> super::Interpreter<'a> {
         // Rust's `char::to_digit`. An out-of-range radix (< 2 or > 36) traps,
         // matching Rust's panic; otherwise `Some(value)` when `self` is a digit
         // in that radix, `None` when it isn't.
-        if method == "to_digit" && args.len() == 1 {
+        // `char.is_digit(radix) -> bool` (B-2026-08-12-25) shares this arm: same
+        // receiver, same radix trap, and `is_some()` of the same lookup — see
+        // the typechecker, where the two also share one arm.
+        if matches!(method, "to_digit" | "is_digit") && args.len() == 1 {
             if let Value::Char(c) = &obj {
                 let c = *c;
                 if let Value::Int(radix) = self.eval_expr_inner(&args[0].value) {
                     if !(2..=36).contains(&radix) {
                         return self.record_runtime_error(
-                            format!("to_digit: radix must be in 2..=36, got {radix}"),
+                            format!("{method}: radix must be in 2..=36, got {radix}"),
                             span,
                         );
                     }
-                    return match c.to_digit(radix as u32) {
+                    let digit = c.to_digit(radix as u32);
+                    if method == "is_digit" {
+                        return Value::Bool(digit.is_some());
+                    }
+                    return match digit {
                         Some(d) => some_int(d as i64),
                         None => none_value(),
                     };
@@ -2433,6 +2448,27 @@ impl<'a> super::Interpreter<'a> {
                 };
                 if let Some(r) = r {
                     return Value::Char(r);
+                }
+            }
+        }
+
+        // Unicode case folding on a `char` (B-2026-08-12-25): `to_lowercase` /
+        // `to_uppercase` → char. Rust's mapping is an ITERATOR because a scalar
+        // can fold to several (`ß` → `SS`); a `char → char` signature takes the
+        // mapping only when it yields exactly one scalar and returns `self`
+        // unchanged when it expands. Codegen computes the identical collapse in
+        // `karac_runtime_char_to_*case`, so the backends cannot diverge. A
+        // String receiver never reaches here — it is a different `Value` and is
+        // handled by the full-Unicode String→String arm in method_call_seq.rs.
+        if args.is_empty() {
+            if let Value::Char(c) = &obj {
+                let folded = match method {
+                    "to_lowercase" => Some(single_scalar_case_map(c.to_lowercase())),
+                    "to_uppercase" => Some(single_scalar_case_map(c.to_uppercase())),
+                    _ => None,
+                };
+                if let Some(folded) = folded {
+                    return Value::Char(folded.unwrap_or(*c));
                 }
             }
         }
