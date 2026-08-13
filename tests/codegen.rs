@@ -23167,6 +23167,67 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-20 — a Vec whose `cap` has been zeroed must not walk its
+    /// ELEMENTS either, not just skip the buffer free.
+    ///
+    /// `cap == 0` is codegen's "this slot no longer owns its buffer" marker:
+    /// every move suppression disarms a source by zeroing cap and leaving
+    /// `{ptr, len}` alone. The emitted `karac_drop_Vec_<E>` guarded only the
+    /// free on it and walked `0..len` regardless, so a disarmed slot ran the
+    /// element drop over memory its new owner had already released.
+    ///
+    /// The element type is what made it visible: `Vec[i64]` has a no-op
+    /// element drop, so the unguarded walk did nothing and the shape looked
+    /// fine. `Vec[String]` frees each element, and the second pass over the
+    /// same pointers SEGFAULTED in libc `free` — with `karac check` clean and
+    /// the interpreter printing the right answer, so `--interp` hid it
+    /// completely and only a build found it.
+    ///
+    /// Fixed in the emitted drop fn rather than by also zeroing `len` at the
+    /// move site: that closes the class for every suppression path at once,
+    /// and leaves `len` readable, which is what the defensive-copy rows
+    /// (B-2026-08-13-14 / -19) rely on to keep a moved-from source's contents
+    /// observable instead of empty. The inline `FreeVecBuffer` cleanup had
+    /// always guarded both halves this way — the two implementations of one
+    /// operation simply disagreed.
+    #[test]
+    fn test_e2e_disarmed_vec_does_not_walk_its_elements() {
+        assert_eq!(
+            run_program(
+                "struct A { mut lines: Vec[String] }\n\
+                 fn main() {\n\
+                     let mut v: Vec[String] = Vec.new();\n\
+                     v.push(f\"beta\");\n\
+                     let t: (Vec[String], i64) = (v, 2);\n\
+                     let r = t.0;\n\
+                     println(r.len());\n\
+                     let mut v2: Vec[String] = Vec.new();\n\
+                     v2.push(f\"one\");\n\
+                     v2.push(f\"two\");\n\
+                     let t2: (Vec[String], i64) = (v2, 3);\n\
+                     let mut r2 = t2.0;\n\
+                     r2.push(f\"three\");\n\
+                     let chk = t2.0;\n\
+                     println(f\"{r2.len()} {chk.len()} {chk[0]}\");\n\
+                     let mut iv: Vec[i64] = Vec.new();\n\
+                     iv.push(1);\n\
+                     let mut vv: Vec[Vec[i64]] = Vec.new();\n\
+                     vv.push(iv);\n\
+                     let t3: (Vec[Vec[i64]], i64) = (vv, 4);\n\
+                     let r3 = t3.0;\n\
+                     println(f\"{r3.len()} {r3[0].len()}\");\n\
+                     let mut v4: Vec[String] = Vec.new();\n\
+                     v4.push(f\"x\");\n\
+                     let a = A { lines: v4 };\n\
+                     let b = a;\n\
+                     println(b.lines.len());\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1\n3 2 one\n1 1\n1\n"),
+        );
+    }
+
     /// B-2026-08-13-19 — the TUPLE-ELEMENT sibling of
     /// `test_e2e_field_bound_out_of_local_is_a_copy`, and the interpreter is
     /// the oracle here too: it read `2 1` on every line while both compiled

@@ -2618,8 +2618,31 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_store(counter, i64_t.const_zero())
             .unwrap();
+        // B-2026-08-13-20 — the ELEMENT WALK is under the same ownership guard
+        // as the buffer free, not just the free.
+        //
+        // `cap == 0` is codegen's "this slot no longer owns its buffer" marker:
+        // every move suppression in the compiler disarms a source by zeroing
+        // its cap and leaving `{ptr, len}` alone. So a cap-0 Vec with a
+        // non-zero len is, by construction, a slot whose buffer somebody ELSE
+        // now owns — and walking `0..len` over it calls the element drop on
+        // memory the new owner may already have freed. `let r = t.0` on a
+        // `(Vec[String], i64)` did exactly that: `r`'s cleanup freed the
+        // buffer and its elements, then the tuple's drop walked the same
+        // pointer again and free()d each inner String a second time. SEGV in
+        // libc `free`, with `karac check` clean and the interpreter correct.
+        //
+        // The INLINE `FreeVecBuffer` cleanup has always guarded both halves
+        // this way — it puts the walk and the free inside one `cap > 0` block.
+        // This emitted twin guarded only the free, so the two implementations
+        // of one operation disagreed. Fixing it here rather than by ALSO
+        // zeroing `len` at the move site keeps the class closed for every
+        // suppression path, and leaves `len` readable — which is what the
+        // defensive-copy rows (B-2026-08-13-14/-19) rely on to keep a
+        // moved-from source's contents observable instead of empty.
+        let owns_at_entry = self.sso_string_is_owned_heap(cap);
         self.builder
-            .build_unconditional_branch(loop_cond_bb)
+            .build_conditional_branch(owns_at_entry, loop_cond_bb, exit_bb)
             .unwrap();
 
         // Loop: for i in 0..len { drop(data[i]); }

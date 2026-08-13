@@ -21054,6 +21054,69 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-20 — a cap-zeroed (disarmed) Vec must not walk its
+    /// elements, so the buffer's real owner frees each element exactly once.
+    ///
+    /// The E2E twin asserts the program does not crash. This asserts the thing
+    /// a crash-free run still cannot: that the counts are right in BOTH
+    /// directions. The unfixed compiler double-freed — the emitted
+    /// `karac_drop_Vec_<E>` walked `0..len` on a slot whose cap said it owned
+    /// nothing, over a buffer the new owner had already released. Guarding the
+    /// walk could equally have gone wrong the other way, skipping a walk that
+    /// was owed, and LeakSanitizer is the only thing that would say so.
+    ///
+    /// `Vec[String]` throughout, because a `Vec[i64]` element drop is a no-op
+    /// and the whole defect is invisible on it — that is exactly why this went
+    /// unnoticed. The realloc loop makes the freed-then-rewalked buffer MOVE,
+    /// so the second walk reads memory the allocator has really handed back.
+    #[test]
+    fn asan_disarmed_vec_skips_its_element_walk() {
+        assert_clean_asan_run(
+            r#"
+struct A { mut lines: Vec[String] }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 600 {
+        let mut q = String.new(); q.push_str("alpha"); q.push_str(k.to_string());
+        v.push(q);
+        i = i + 1;
+    }
+    let t: (Vec[String], i64) = (v, 2);
+    let mut r = t.0;
+    let mut j = 0i64;
+    while j < 600 {
+        let mut q = String.new(); q.push_str("beta"); q.push_str(k.to_string());
+        r.push(q);
+        j = j + 1;
+    }
+    let mut acc = r.len() as i64;
+    acc = acc + r[0].len();
+
+    let mut v2: Vec[String] = Vec.new();
+    let mut m = 0i64;
+    while m < 300 {
+        let mut q = String.new(); q.push_str("gamma"); q.push_str(k.to_string());
+        v2.push(q);
+        m = m + 1;
+    }
+    let a = A { lines: v2 };
+    let b = a;
+    acc = acc + b.lines.len() as i64;
+    acc = acc + b.lines[0].len();
+    println(acc);
+}
+"#,
+            // 1200 + 6 ("alpha1") + 300 + 6 ("gamma1") = 1512.
+            // `k` is a stable 1 (the binary runs with no args); it exists only
+            // to defeat literal folding, since a string LITERAL is static with
+            // `cap == 0` — which in this family is the very marker under test.
+            &["1512"],
+            "disarmed_vec_skips_its_element_walk",
+        );
+    }
+
     /// B-2026-08-13-19 — the TUPLE-ELEMENT sibling of the fixture above.
     ///
     /// Same advisory-`UseAfterMove` promise, same reach gap, one place-
