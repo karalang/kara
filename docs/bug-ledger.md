@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 108 | 0 |
-| codegen-gap | 107 | 1 |
+| codegen-gap | 107 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 843 | 2 |
+| codegen | 843 | 1 |
 | typecheck | 162 | 0 |
 | interp | 142 | 0 |
 | ownership | 47 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1167 surfaced · 2 open · 1153 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1167 surfaced · 1 open · 1154 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-21 | 2026-08-13 | codegen | medium | A tuple literal in RETURN / ARGUMENT / STRUCT-FIELD position is still laid out from its element values, so a narrow element under a wider declared type fails module verification: `fn give() -> (i64, i64) { return (b, d); }` with `b: u8` emits `ret { i8, i32 }` against a `{ i64, i64 }` signature. `--interp` runs all three correctly. B-2026-08-13-17 fixed the LET position and left the consuming machinery in place; only the per-position staging is missing. | — |
 | B-2026-08-13-22 | 2026-08-13 | codegen | high | An ANNOTATED ARRAY literal ignores its annotation the way B-2026-08-13-17's tuple did: `let a: Array[i64, 2] = [v, v]` with `v: u8 = 200` lays the aggregate out at the ELEMENT's width and sign-extends on read, printing -56 on all three compiled surfaces while `--interp` prints 200. Unsigned sources only (u8/u16/u32); signed sources are correct, because sign-extension is what they wanted. | src/codegen/collections.rs `compile_array_literal` (~L1265): it consults `literal_pending_elem_hint()` and would coerce via `coerce_literal_elem_to_type_from`, but the hint is None for an `Array[T, N]` annotation — the staging in src/codegen/stmts.rs (~L3880) keys off `vec_elem_types` / `var_elem_type_exprs`, which an Array binding does not populate. With no hint the function falls through to `let elem_ty = vals[0].get_type()`, i.e. layout from the VALUES rather than the annotation — the same shape B-2026-08-13-17 fixed for tuples via `pending_let_tuple_te`. |
 
 ### Wontfix (2)
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1167 surfaced
 
 </details>
 
-### Fixed (1153)
+### Fixed (1154)
 
-<details><summary>1153 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1154 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5050,6 +5049,25 @@ Suite green with `--features llvm` (13574 passed, 0 failed); the ASAN -O0 leg
 run too (1066 passed, 0 failed, quarantine list matched exactly), since -O2
 deletes many of the allocations this class is about. Clippy `--all --all-targets
 --features llvm` and fmt clean. |
+| B-2026-08-13-21 | codegen | medium | A tuple literal in RETURN / ARGUMENT / STRUCT-FIELD position is still laid out from its element values, so a narrow element under a wider declared ty… | FIXED by cf30e6ba. All four positions fixed -- FOUR, not the three this row names. The tail-expression return (`fn give() -> (i64, i64) { (b, d) }`) is a distinct codegen path from the explicit `return` and fails identically; the row's repro used `return` and so did not surface it.
+
+THE ROW'S DIAGNOSIS HELD EXACTLY: the consuming machinery from B-2026-08-13-17 was already shared and only the per-position STAGING was missing. Nothing about `compile_tuple` changed. What the row did not anticipate is how many distinct paths a tuple literal reaches codegen through, and that the declared type arrives differently at each -- the work was four small stagings, not one.
+
+ONE SHARED HELPER, `stage_declared_tuple_te(expr, declared)` (src/codegen/types_lowering.rs), so the four sites cannot drift: it stages only when BOTH the expression is a tuple literal AND the declared type is a tuple, and returns the previous hint for the caller to restore (these positions nest -- a tuple argument inside a returned tuple).
+
+THE FOUR SITES, and why each is where it is:
+- FUNCTION BODY TAIL (`src/codegen/functions.rs`) -- staged from `func.return_type` around `compile_function_body`. NOT inside `compile_tail_final_expr`, even though that is where the value is compiled: that helper also serves nested block tails and match-arm tails, where the function's return type is the wrong answer and would overwrite an inner `let`'s own annotation. Pinned by `test_e2e_nested_block_tail_keeps_its_own_tuple_annotation`, which declares `let inner: (u8, u32)` inside a `-> (i64, i64)` fn.
+- EXPLICIT `return` (`src/codegen/exprs.rs`) -- staged from `fn_return_type_exprs` for the function currently being compiled, via a new `current_fn_return_te()`.
+- CALL ARGUMENT (`src/codegen/call_dispatch.rs`) -- staged from the callee's AST param (`fn_asts`) on the BY-VALUE path. The first attempt put it in the `ref`-param branch a few lines up, which passes a pointer to caller-side storage and returns early; a tuple argument never reaches it, and the fix silently did nothing until the debug print showed the loop was entered but that line was not.
+- STRUCT FIELD (`src/codegen/exprs.rs`) -- staged from `struct_field_type_exprs` in BOTH struct-literal builders. There are two: the plain one builds its aggregate with `insertvalue`, the shared/par one GEPs and stores. `P { t: (b, d) }` takes the former, and patching only the latter (found first, because it reads the same per-field table for `Option[shared]`) again did nothing.
+
+The two false starts are worth recording because they share a signature: the staging compiles, every gate stays green, and the repro is BYTE-IDENTICAL because the hint is simply never consumed. There is no failure mode that says "you staged in the wrong branch" -- only the unchanged verifier error.
+
+DECLARED TYPES COME FROM THE AST, not from the LLVM signature, at every site. `compile_tuple` lowers each slot from a `TypeExpr`, and the READ side resolves TypeExprs too; deriving the layout from the one source both ends already agree on is the property that makes this correct rather than coincidentally matching.
+
+MEASURED against the interpreter as oracle on all four surfaces AND both optimization levels, twelve shapes in one program: both return spellings; a NESTED tuple return (inner gets its own declared widths); a `(String, i64)` return (heap element keeps the compiled value's layout); an already-matching `(1, 2)` return (must be untouched); a tuple argument alone and between two scalar args; a plain struct field; a SHARED struct field (the GEP+store builder); the `let` position from the parent row; a `ref (i64, i64)` parameter (must keep taking the pointer path); and the unannotated control.
+
+Values carry the high bit (200, 4000000000) throughout, for the reason B-2026-08-13-15 and -17 both give: sext and zext agree below 128, so a small-value probe reports every one of these as working. |
 
 </details>
 
