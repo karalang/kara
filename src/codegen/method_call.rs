@@ -4909,6 +4909,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .module
                                         .get_function(&format!("String.{method}"))
                                         .is_some();
+
                             if !has_user_impl {
                                 return Err(e);
                             }
@@ -5052,12 +5053,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Map methods
                 if self.map_key_types.contains_key(name.as_str()) {
                     let name = name.clone();
-                    return self.compile_map_method(&name, method, args);
+                    // B-2026-08-12-34 — the `Map` peer of the blanket-`Vec`
+                    // fallthrough above: when the builtin dispatcher has no arm
+                    // for `method` but `impl Trait for Map[..]` emitted a
+                    // `Map.<method>` fn, fall through to the generic user-impl
+                    // dispatch instead of loud-failing with
+                    // "codegen: Map.<m> not yet implemented".
+                    match self.compile_map_method(&name, method, args) {
+                        Ok(v) => return Ok(v),
+                        Err(e) => {
+                            if self.module.get_function(&format!("Map.{method}")).is_none() {
+                                return Err(e);
+                            }
+                            // fall through to user-impl dispatch
+                        }
+                    }
                 }
                 // Set methods
                 if self.set_elem_types.contains_key(name.as_str()) {
                     let name = name.clone();
-                    return self.compile_set_method(&name, method, args);
+                    // B-2026-08-12-34 — the `Set` peer of the `Map` fallthrough
+                    // above; see it for the reasoning.
+                    match self.compile_set_method(&name, method, args) {
+                        Ok(v) => return Ok(v),
+                        Err(e) => {
+                            if self.module.get_function(&format!("Set.{method}")).is_none() {
+                                return Err(e);
+                            }
+                            // fall through to user-impl dispatch
+                        }
+                    }
                 }
                 // HTTP handler ABI trampoline (2026-05-09): `Request.path()`
                 // and `Request.method()`. Request is an opaque-ptr value

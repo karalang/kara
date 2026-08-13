@@ -37520,3 +37520,80 @@ fn test_user_trait_impl_on_slice_still_rejected() {
         errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
     );
 }
+
+/// B-2026-08-12-34 — a user trait `impl` on `Map` / `Set` resolves at the call
+/// site and satisfies a trait bound.
+///
+/// Unlike `String` (B-2026-08-12-32) these are `Type::Named`, so REGISTRATION
+/// always worked — `T: Zero` over a `Map` was already accepted. Only dispatch
+/// was missing, which is precisely what made `Map` the dangerous one: it was
+/// check-green with both compiled backends dead, rather than rejected.
+#[test]
+fn test_user_trait_impl_on_map_and_set_resolves() {
+    for (label, recv, init) in [
+        ("Map", "Map[String, i64]", "Map.new()"),
+        ("Set", "Set[i64]", "Set.new()"),
+    ] {
+        typecheck_ok(&format!(
+            "trait Zero {{ fn describe(ref self) -> String; }}\n\
+             impl Zero for {recv} {{ fn describe(ref self) -> String {{ return f\"z\"; }} }}\n\
+             fn main() {{ let s: {recv} = {init}; println(s.describe()); }}",
+        ));
+        let _ = label;
+    }
+}
+
+/// B-2026-08-12-34 — the builtin `Map` / `Set` surfaces keep precedence over a
+/// user impl of the same name, exactly as `String`'s does. `len` is the sharp
+/// case: the builtin returns `i64` and the shadowing impl returns `String`, so
+/// a hijack would fail to typecheck here.
+#[test]
+fn test_map_set_builtin_surface_still_wins() {
+    for (recv, init, seed) in [
+        ("Map[String, i64]", "Map.new()", "m.insert(\"a\", 1);"),
+        ("Set[i64]", "Set.new()", "m.insert(1);"),
+    ] {
+        typecheck_ok(&format!(
+            "trait Shadow {{ fn len(ref self) -> String; }}\n\
+             impl Shadow for {recv} {{ fn len(ref self) -> String {{ return f\"shadowed\"; }} }}\n\
+             fn main() {{\n\
+                 let mut m: {recv} = {init};\n\
+                 {seed}\n\
+                 let n: i64 = m.len();\n\
+                 println(n);\n\
+             }}",
+        ));
+    }
+}
+
+/// B-2026-08-12-34 — `Slice[T]` is still NOT covered, and this pins that
+/// boundary for the second time (the first is
+/// `test_user_trait_impl_on_slice_still_rejected`, from B-2026-08-12-32).
+///
+/// The blocker found here is new and is why it stayed out: the typecheck and
+/// codegen halves were implemented and worked, but the INTERPRETER names a
+/// slice receiver `Vec` (it models `v[..]` as an array value), so the impl —
+/// registered under `Slice` — is not found and `--interp` fails on a program
+/// both compiled backends run. That is a divergence in the opposite direction
+/// from the one this family usually produces, and a consistent compile error
+/// is better than either.
+#[test]
+fn test_user_trait_impl_on_slice_still_rejected_second_guard() {
+    let errors = typecheck_errors(
+        "trait Zero { fn describe(ref self) -> String; }\n\
+         impl Zero for Slice[i64] { fn describe(ref self) -> String { return f\"z\"; } }\n\
+         fn main() {\n\
+             let v: Vec[i64] = Vec.new();\n\
+             let s: Slice[i64] = v[..];\n\
+             println(s.describe());\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'describe'")),
+        "a Slice user-impl call must stay REJECTED until the interpreter can name \
+         a slice receiver; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}

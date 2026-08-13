@@ -2014,6 +2014,13 @@ impl<'a> Interpreter<'a> {
             Value::TotalBFloat16(_) => "Bf16".to_string(),
             Value::Atomic(_) => "Atomic".to_string(),
             Value::Set(_) => "Set".to_string(),
+            // B-2026-08-12-34 — `Map` was the one builtin container still
+            // unnamed here, so a user-defined `impl Trait for Map[K, V]` fell
+            // to the "type 'unknown'" no-dispatch-arm error while the identical
+            // impl on `Set` (named directly above) dispatched fine. Same reason
+            // and same one-line shape as the `Column`/`Tensor`/`Vec` entries
+            // below; it is simply the entry nobody added.
+            Value::Map(_) => "Map".to_string(),
             // S6c-12: name the handle-backed containers so a user-defined
             // `impl Trait for Column[T]` / `Tensor[T,S]` method dispatches
             // through `try_eval_impl_method` (keyed `Column.method`) instead

@@ -27,6 +27,43 @@ use crate::ast::*;
 /// the same name. The opposite direction — the dispatcher answering a name
 /// absent from this list — is not mechanically checked, and its cost is only
 /// that such a name becomes shadowable by a user impl.
+/// Every method name `infer_map_method` answers — the builtin `Map` surface.
+/// B-2026-08-12-34, the `Map` peer of `STRING_BUILTIN_METHODS` and used the
+/// same way: the impl table is consulted only for a name this list does not
+/// contain, so a user impl cannot shadow `get`/`insert`/`len`.
+/// Every method name `infer_set_method` answers — the builtin `Set` surface.
+/// B-2026-08-12-34, the `Set` peer of `MAP_BUILTIN_METHODS`.
+pub(super) const SET_BUILTIN_METHODS: &[&str] = &[
+    "clear",
+    "contains",
+    "difference",
+    "insert",
+    "intersection",
+    "is_empty",
+    "iter",
+    "len",
+    "remove",
+    "to_string",
+    "union",
+];
+
+pub(super) const MAP_BUILTIN_METHODS: &[&str] = &[
+    "clear",
+    "contains_key",
+    "entries",
+    "entry",
+    "get",
+    "get_or",
+    "insert",
+    "is_empty",
+    "keys",
+    "len",
+    "merge",
+    "remove",
+    "to_string",
+    "values",
+];
+
 pub(super) const STRING_BUILTIN_METHODS: &[&str] = &[
     "bytes",
     "char_at",
@@ -4764,9 +4801,26 @@ impl<'a> super::TypeChecker<'a> {
         } = &obj_ty_for_named
         {
             if name == "Map" {
-                let key = type_args.first().cloned().unwrap_or(Type::Error);
-                let val = type_args.get(1).cloned().unwrap_or(Type::Error);
-                return self.infer_map_method(&key, &val, method, args, span);
+                // B-2026-08-12-34 — a USER trait impl on `Map` gets the names
+                // the builtin surface does not have, exactly as the `String`
+                // gate above does, and with the same precedence: builtin first,
+                // so `m.get(k)` cannot be hijacked. Without this the early
+                // return below is unconditional and the call reports
+                // `no method '<m>' on type 'Map'` even though the impl
+                // registered (a `Map` is `Type::Named`, so unlike `String` it
+                // was never the REGISTRATION that failed — only dispatch).
+                if !MAP_BUILTIN_METHODS.contains(&method)
+                    && !self
+                        .env
+                        .find_methods_with_args(name, type_args, method)
+                        .is_empty()
+                {
+                    // fall through to the impl-table dispatch below
+                } else {
+                    let key = type_args.first().cloned().unwrap_or(Type::Error);
+                    let val = type_args.get(1).cloned().unwrap_or(Type::Error);
+                    return self.infer_map_method(&key, &val, method, args, span);
+                }
             }
         }
 
@@ -4801,8 +4855,20 @@ impl<'a> super::TypeChecker<'a> {
                 return self.infer_sorted_map_method(&key, &value, method, args, span);
             }
             if name == "Set" {
-                let element = type_args.first().cloned().unwrap_or(Type::Error);
-                return self.infer_set_method(&element, method, args, span);
+                // B-2026-08-12-34 — the `Set` peer of the `Map` gate above,
+                // same precedence rule: builtin names first, impl table only
+                // for what the builtin surface does not answer.
+                if !SET_BUILTIN_METHODS.contains(&method)
+                    && !self
+                        .env
+                        .find_methods_with_args(name, type_args, method)
+                        .is_empty()
+                {
+                    // fall through to the impl-table dispatch below
+                } else {
+                    let element = type_args.first().cloned().unwrap_or(Type::Error);
+                    return self.infer_set_method(&element, method, args, span);
+                }
             }
         }
 

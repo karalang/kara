@@ -23114,6 +23114,47 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_trait_impl_on_map_and_set_dispatches() {
+        // B-2026-08-12-34 — DIRECT dispatch of a user trait impl on `Map` /
+        // `Set`, end to end. Unlike `String` (B-2026-08-12-32) these are
+        // `Type::Named`, so registration always worked and only dispatch was
+        // missing: the typechecker early-returned into the builtin surface, and
+        // codegen loud-failed with "codegen: Map.<m> not yet implemented".
+        //
+        // `m.len()` / `s.len()` alongside prove the builtin surface keeps
+        // precedence — the builtin returns `i64` while the shadowing-name test
+        // in tests/typechecker.rs covers the collision case.
+        //
+        // The trait-BOUND spelling is deliberately ABSENT. `Map`'s bound path
+        // is a known, pre-existing run-vs-build divergence (check-green, both
+        // backends dead) that this row does not fix; routing it through the
+        // Vec/String user-impl fallthrough was implemented and REVERTED because
+        // it returns the WRONG impl when a second one exists — with both a
+        // `Map` and a `Set` impl in scope, `show(set)` printed the Map's
+        // answer. A wrong answer is worse than the build error, so the build
+        // error stays. See the follow-up row.
+        assert_eq!(
+            run_program(
+                "trait Zero { fn describe(ref self) -> String; }\n\
+                 impl Zero for Map[String, i64] { fn describe(ref self) -> String { return f\"m\"; } }\n\
+                 impl Zero for Set[i64] { fn describe(ref self) -> String { return f\"s\"; } }\n\
+                 fn main() {\n\
+                     let mut m: Map[String, i64] = Map.new();\n\
+                     m.insert(\"a\", 1);\n\
+                     println(m.describe());\n\
+                     println(m.len());\n\
+                     let mut s: Set[i64] = Set.new();\n\
+                     s.insert(7);\n\
+                     println(s.describe());\n\
+                     println(s.len());\n\
+                 }"
+            )
+            .as_deref(),
+            Some("m\n1\ns\n1\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_to_string_on_non_identifier_scalar_receiver() {
         // B-2026-08-13-2 — `<non-identifier scalar>.to_string()` used as the
         // RECEIVER of a further call was check-green and interp-green while
