@@ -14317,7 +14317,7 @@ fn test_char_unicode_case_fold_and_is_digit_interpreter() {
     // deferral stays visibly a routing choice rather than a missing capability.
     // (`sharp.to_string().to_uppercase()` is bound to a name because the same
     // chain on a bare literal hits a pre-existing, unrelated codegen gap —
-    // filed separately; interp takes either form.)
+    // B-2026-08-13-2; interp takes either form.)
     let output = run(r#"fn main() {
             println(f"{'A'.to_lowercase()} {'a'.to_uppercase()} {'7'.to_uppercase()}");
             println(f"{'é'.to_uppercase()} {'É'.to_lowercase()} {'ß'.to_uppercase()}");

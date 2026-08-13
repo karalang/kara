@@ -49591,8 +49591,8 @@ fn main() {
         // with the LITERAL inline fails codegen ("Vec/String method 'to_string'
         // is not yet supported"), which is a PRE-EXISTING gap unrelated to this
         // row — measured identical on `7`/`true`/`(7 + 1)` receivers at the
-        // commit before this one, and filed separately. Bound to a name, the
-        // same chain compiles.
+        // commit before this one, and filed as B-2026-08-13-2. Bound to a name,
+        // the same chain compiles.
         let out = run_program(
             r#"
 fn main() {

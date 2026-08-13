@@ -96,8 +96,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 171 | 1 |
 | double-free | 122 | 0 |
 | codegen-gap | 105 | 0 |
-| run-vs-build | 103 | 0 |
-| missing-feature | 93 | 2 |
+| run-vs-build | 104 | 1 |
+| missing-feature | 93 | 1 |
 | perf | 64 | 0 |
 | false-positive | 61 | 1 |
 | diagnostics | 52 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 823 | 1 |
-| typecheck | 159 | 2 |
+| codegen | 824 | 2 |
+| typecheck | 159 | 1 |
 | interp | 138 | 0 |
 | ownership | 47 | 1 |
 | other | 41 | 0 |
@@ -124,16 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1144 surfaced · 4 open · 1128 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1145 surfaced · 4 open · 1129 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
 | B-2026-08-12-31 | 2026-08-12 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS mentions the container through a CALL: `ps[0] = mk(ps[0].n + k)` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 400 B in 40 allocations, one per assign. B-2026-08-12-26 fixed the index-read RHS; this is the same displaced occupant with a different RHS shape. | — |
 | B-2026-08-13-1 | 2026-08-13 | ownership | low | The ownership checker treats an OWNED String passed as the ARGUMENT of a read-only String method as a MOVE, and does so INCONSISTENTLY across the three methods the compiler itself documents as read-only. `a.push_str(s)` twice on the same owned `s` reports `warning[ownership]: value 's' moved here, used again here`; `s.starts_with(t)` twice on the same owned `t` reports the same; `s.contains(t)` twice on the same owned `t` is CLEAN. All three are named together in `is_str_like`'s doc comment (src/typechecker/stdlib_seq.rs) as "String methods that read their argument's bytes (push_str, contains, starts_with) ... the callee only copies/scans the bytes, so there is no ownership reason to demand a move" -- the TYPECHECKER was deliberately widened to accept a borrow there, but the OWNERSHIP checker still classifies the owned-argument case as a consume for two of the three. NOT A CORRECTNESS BUG: the diagnostic is a warning, and the value really is still readable afterwards -- the same program prints `abc|abc` identically under `karac run --interp` and `karac build`. So this is a spurious move report plus, in the harder shapes, an unnecessary RC fallback. BOUNDARY (probed): argument `push_str` MOVED; argument `starts_with` MOVED; argument `contains` clean; RECEIVER reuse (`s.contains(lit)` twice) clean; argument reached through a `ref String` PARAMETER clean. COST: the only way to write the natural code without the diagnostic is to route the argument through a `ref`-parameter helper function, which is what kata #257's iterative builder had to do -- `extend(prefix: ref String, v: i64)` exists solely to turn two owned reads into two borrows. In a `Vec[Frame]`-style worklist, where the prefix is a field of an owned popped struct, there is no `ref` binding to hand and the helper is the ONLY spelling that avoids an RC. FIX DIRECTION: classify the argument of a read-only String method as a BORROW use in ownership.rs, matching what the typechecker already assumes and what `contains` already does. REPRO (1 line): `fn main(){ let s: String = "abc"; let mut a: String=""; a.push_str(s); let mut b: String=""; b.push_str(s); println(f"{a}{b}"); }` | ownership use-classification for read-only String stdlib arguments; cf. is_str_like in src/typechecker/stdlib_seq.rs |
 | B-2026-08-12-32 | 2026-08-13 | typecheck | medium | A user trait `impl` on `String` or `Slice[T]` is ACCEPTED but never found at the call site: `impl Zero for String { .. }` then `s.describe()` fails with `no method 'describe' on type 'String'`. The same impl on `i64`, `f64`, `bool` or even `Vec[i64]` resolves fine, so this is a per-builtin hole in method resolution rather than a blanket 'no user traits on builtins' rule. | method resolution for a USER trait impl whose target is a builtin type -- the `impl Zero for String` declaration is accepted, but a `String` receiver never finds the method |
+| B-2026-08-13-2 | 2026-08-13 | codegen | medium | `.to_string()` on a NON-IDENTIFIER scalar receiver is check-green and interp-green but dies under BOTH compiled backends the moment it is used as a receiver for a further method: `'x'.to_string().to_uppercase()`, `7.to_string().len()`, `true.to_string().to_uppercase()`, `(7 + 1).to_string().len()`, `3.5.to_string().len()` -- and one shape, `'x'.to_string().to_string()`, is an outright codegen ICE (`Found IntValue ... but expected the StructValue variant`) | `compile_method_call` / `try_compile_nonident_collection_method` in src/codegen/method_call.rs -- the non-identifier-receiver dispatch for `to_string` |
 
 ### Wontfix (2)
 
@@ -146,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1144 surfaced
 
 </details>
 
-### Fixed (1128)
+### Fixed (1129)
 
-<details><summary>1128 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1129 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3322,6 +3322,75 @@ second monomorph for this test; the test uses a user struct instead. Confirmed
 pre-existing by measuring both sides of this fix.
 
 Suite green at 117 targets, 0 failures; clippy and fmt clean. |
+| B-2026-08-12-25 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and… | FIXED by ef73c4d. All three names exist on `char` now, on all three backends,
+byte-identical: `to_lowercase` / `to_uppercase` -> char, `is_digit(radix)` ->
+bool.
+
+THE SPEC DECISION THE ROW FLAGGED, decided rather than deferred. A scalar can
+case-fold to SEVERAL scalars, which is why Rust returns an iterator and a
+`char -> char` signature cannot express it. Kāra returns `char` and applies the
+full mapping only when it yields exactly one scalar, leaving `self` unchanged
+when it expands -- the rule Go's `unicode.ToLower` and Java's
+`Character.toLowerCase(char)` already use, so it is a familiar contract rather
+than a novel one.
+
+WHAT THAT GIVES UP, COUNTED RATHER THAN GUESSED (whole codespace, surrogates
+excluded): exactly 102 scalars expand under uppercase -- `ß`, `ŉ`, `ǰ`, the
+Greek iota-subscript block, the `ﬁ`-family ligatures -- and exactly ONE under
+lowercase, `İ` U+0130, whose full lowercase is `i` + a combining dot. Every
+other scalar in Unicode folds 1:1 and is exact. The count is in the runtime
+extern's doc comment so the next reader does not have to re-derive it.
+
+FULL MAPPING IS NOT LOST, which is what makes the collapse a routing choice
+rather than a missing capability: `String.to_uppercase()` is already the
+full-Unicode String->String transform, so `c.to_string().to_uppercase()` renders
+`SS`. Both forms are pinned side by side in the tests.
+
+`is_digit(radix)` MIRRORS RUST AND SHARES `to_digit`'s ARM in all three phases
+-- same receiver gate, same u32 radix rule, same 2..=36 trap, and the trap
+message names the method that was called. Sharing is deliberate: two arms would
+drift on the radix, and the row's sibling method is exactly where a writer looks
+next. The discoverability half is preserved by the ARITY diagnostic -- a bare
+`c.is_digit()` now says "expects 1 argument, got 0: write `is_digit(10)` for
+decimal, or `is_numeric()` for the Unicode predicate", which replaces
+B-2026-08-11-2's `no method 'is_digit'` hint (that hint is deleted; the method
+is no longer missing).
+
+AND THE PART THAT WAS NOT ABOUT `char` AT ALL, found while wiring it and worth
+more than the feature. `to_lowercase`/`to_uppercase` were String-ONLY before
+this, and FOUR codegen sites keyed String-ness on the method NAME alone. One of
+them says so in a comment: "Restricted to methods that exist ONLY on String, so
+a Vec receiver can never take this path ... A non-String receiver here would
+already have failed the typechecker, which is what makes the name sufficient."
+Putting the two names on `char` falsified that premise everywhere at once.
+
+  - `expr_is_string_like` (expr_ops.rs) was the LIVE one, and the trigger is the
+    row's own line: `c.to_lowercase().to_string()` matched `to_string` with a
+    "string-like" receiver, entered the String-copy path, and unwrapped an i32
+    codepoint as a `{ptr,len,cap}` struct. Verified pre-fix by the identical
+    shape one link along (see the separate row filed below), which panics with
+    `Found IntValue ... but expected the StructValue variant` at that exact
+    site.
+  - `try_compile_nonident_collection_method`'s name signal and
+    `closure_body_produces_heap_string` (calls.rs) are the same premise in two
+    more places; both are now receiver-gated.
+  - `expr_is_char` gains the two names so a folded char still RENDERS as a
+    glyph -- without it `println(c.to_lowercase())` prints the codepoint, the
+    recurring gap that function's comments already record four times.
+  - The fifth site, `free_str_vec_buffer_if_heap`, was checked and deliberately
+    left alone: it discriminates on the LLVM type (`llvm_ty_is_vec_struct`), not
+    the name, so an i32 result no-ops there already. Type-guarded sites were
+    never at risk; name-guarded ones all were.
+
+VERIFICATION. Interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT all byte-identical on
+the probe, and the interp and codegen test twins assert the same bytes: the
+expanding cases (`ß`, `ﬁ`, `İ`), the `.to_string()` chain, the loop form the row
+was filed from, and String receivers on both ends to prove the String->String
+transforms were not captured by the new char arm. Typechecker pins cover typing
+in BOTH directions (a `String` annotation on the char fold is rejected; a `char`
+annotation on the String transform is rejected), the arity hint, the radix-type
+error, and that the hint set did not widen. Full suite green at 13503 passed / 0
+failed; clippy native + both wasm targets, and fmt, clean. |
 | B-2026-08-12-26 | codegen | medium | ELEMENT-TO-ELEMENT index assign LEAKS one buffer per assignment: `ps[0] = ps[1]` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 4… | FIXED by af532fb. `asan_index_assign_elem_to_elem_no_leak` is flipped from
 `#[ignore]` to live and extended; it pins at 1355 B in 160 allocations against
 the pre-fix compiler, on the DEFAULT leg (a `Vec` keeps the allocation alive, so
