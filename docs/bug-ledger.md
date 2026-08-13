@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 108 | 0 |
-| codegen-gap | 106 | 1 |
+| codegen-gap | 106 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 841 | 2 |
+| codegen | 841 | 1 |
 | typecheck | 162 | 0 |
 | interp | 142 | 0 |
 | ownership | 47 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1165 surfaced · 2 open · 1151 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1165 surfaced · 1 open · 1152 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-13-17 | 2026-08-13 | codegen | medium | An ANNOTATED tuple binding ignores its annotation: `let t: (i64, i64) = (b, d)` with `b: u8` / `d: u32` lays the aggregate out from the element VALUES (`{i8, i32}`) while every read trusts the annotation, so `t.0` sign-extends and prints 200 as -56 on both compiled backends. The UNANNOTATED form of the same tuple is correct. | src/codegen/expr_ops.rs `compile_tuple` (~L22): the struct type is built from `vals.iter().map(|v| v.get_type())`, ignoring any annotated tuple TypeExpr; the read side resolves element types via `place_chain_tuple_tes`, which uses the annotation. |
-| B-2026-08-13-18 | 2026-08-13 | codegen | medium | An implicit int-to-FLOAT widening emits INVALID IR and fails module verification at three boundaries -- a struct-literal field, a field assignment, and a call argument -- so `struct W { mut f: f64 }` with `W { f: some_u8 }` does not compile at all, while the same conversion through an annotated `let` or a `Vec[f64]` element is fine. | src/codegen/expr_ops.rs `coerce_scalar_to_type_unsigned` (~L6880): matches (IntValue, IntType) and (FloatValue, FloatType) only; `(IntValue, FloatType)` falls through to `_ => val`. |
 
 ### Wontfix (2)
 
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1165 surfaced
 
 </details>
 
-### Fixed (1151)
+### Fixed (1152)
 
-<details><summary>1151 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1152 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4833,6 +4832,76 @@ are guards.
 
 Suite green with `--features llvm` (13570 passed, 0 failed); clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-13-18 | codegen | medium | An implicit int-to-FLOAT widening emits INVALID IR and fails module verification at three boundaries -- a struct-literal field, a field assignment, a… | FIXED by aea7671. The row's repro builds and prints 200 on all three surfaces,
+and the codegen pin fails against the stashed compiler.
+
+THE PRESCRIBED FIX WAS NECESSARY AND NOT SUFFICIENT, and the shortfall is the
+finding. The row called for "one arm in the shared helper -- (IntValue,
+FloatType) -> sitofp / uitofp chosen by the source's signedness, which the
+`coerce_scalar_to_type_from` family already threads". The arm is right. The
+"already threads" is not: `coerce_call_arg_scalar`, the per-argument widen that
+carries signedness, opens by requiring an `IntType` param and returns the value
+untouched for anything else. With only the arm added, the CALL ARGUMENT
+boundary compiled -- and fell through to the signedness-BLIND boundary sweep:
+
+    struct-literal field   200      (correct)
+    field assignment       200      (correct)
+    call argument          -56      (was a build failure, now a wrong answer)
+
+which is exactly the trade the row itself warned against, arriving by a
+different route than the one it anticipated. Both changes had to land together.
+
+FOUR BOUNDARIES, NOT THREE. The row's table lists a struct-literal field, a
+field assignment and a call argument. A METHOD argument is a fourth, separate
+site: the method path pushes its compiled args with no per-argument coercion at
+all, so it never reached `coerce_call_arg_scalar`. It therefore also missed
+B-2026-08-13-15's int->int fix, which is a live silent miscompile on its own,
+with no float anywhere:
+
+    fn setn(mut ref self, x: i64)   m.setn(b)  with b: u8 200  ->  -56
+
+interp 200, both compiled backends -56, `karac check` clean. Fixed here because
+the one missing call fixes both classes at that boundary, and shipping the
+int->float half alone would have left the method argument printing -56.0.
+
+TWO MORE POSITIONS FAIL SILENTLY, which is why the row could not see them. Its
+table was assembled from verifier output, and the verifier only complains where
+the LLVM types have to agree. An ENUM PAYLOAD and a MAP VALUE are packed into
+`i64` words, so an integer landing in an `f64` slot is not a type error -- it is
+a bit reinterpretation, and the read comes back as a denormal near zero:
+
+    enum E { F(f64) }        E.F(b)                  -> 0.0000...99
+    Map[i64, f64]            mp.insert(1, b)         -> 0.0000...157947
+                             mp[2] = b               -> 0.0000...51606
+
+All three print 200 in the interpreter. Confirmed PRE-EXISTING by reproducing
+against the stashed compiler, so they are not fallout from the helper arm --
+they are the same gap failing quietly instead of loudly. `coerce_to_payload_
+words` reinterprets rather than converts, so the fix is to coerce to the
+DECLARED payload/value type before the pack, at the enum constructor (both the
+shared and non-shared arms) and at the three map value sites; the map
+index-store needed `rhs_src` threaded one level, which the slice sibling at the
+same call site was already passing.
+
+WHAT THE ROW GOT RIGHT, precisely. "Adding the leg can only turn programs that
+do not compile today into programs that do, since any site relying on the
+current fall-through would already be failing verification" holds for the shared
+helper considered alone, and the full suite agrees. It is not a statement about
+the FIX, because three of the six positions repaired here were never failing
+verification in the first place.
+
+The int->int direction was checked for the same class of gap and is clean at
+every position swept: a map value, an enum payload, a `Vec.push` and a
+`Set.insert` all carry `200u8` correctly today.
+
+MEASURED, interp / JIT / AOT / `KARAC_AUTO_PAR=0` all agreeing: the row's
+three-line repro; the method argument in both the float and the int direction;
+`return b` and tail-position `b` against an `f64` return; the enum payload; the
+map value by `insert` and by `m[k] =`; and, as the control that the unsigned leg
+did not just swap one wrong extension for another, the same boundaries fed a
+SIGNED `-5i8`, which must stay -5. The positions that already worked -- an
+annotated `let`, a `Vec[f64]` element, a `Vec[f64]` literal -- are in the sweep
+too and are unchanged. |
 | B-2026-08-13-19 | codegen | medium | Binding a struct out of a TUPLE ELEMENT (`let r = t.0;`) EMPTIES the source under both compiled backends: a later read of `t.0` sees a zero-length Ve… | FIXED by 73f7285. `let r = t.0` now defensive-copies at the consume site and, in
 the same breath, stops zeroing the source.
 
