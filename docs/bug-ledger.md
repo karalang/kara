@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 239 | 0 |
 | leak | 171 | 1 |
-| double-free | 122 | 1 |
+| double-free | 122 | 0 |
 | codegen-gap | 105 | 1 |
 | run-vs-build | 103 | 0 |
 | missing-feature | 92 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 823 | 3 |
+| codegen | 823 | 2 |
 | typecheck | 158 | 1 |
 | interp | 138 | 0 |
 | ownership | 46 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1142 surfaced · 5 open · 1125 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1142 surfaced · 4 open · 1126 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
 | B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
-| B-2026-08-12-27 | 2026-08-12 | codegen | high | A heap FIELD read out of a Vec element (`ps[0].word`) is a SHALLOW ALIAS of the container's buffer on both compiled backends. Consumed into any owning destination it double-frees -- EIGHT measured: struct-literal field, `Vec.push`, field assign, index assign, `Map.insert`, `return`, tuple construction, enum payload. A plain `let w = ps[0].word` instead cap-zeroes the SOURCE, so mutating `w` dangles the element and it reads back GARBAGE with no abort. The interpreter copies and `karac check` accepts every one of these programs. | the FieldAccess read of a Vec element; `clone_owned_vec_index_element` clones a WHOLE-element read and has no field-read sibling, while `suppress_place_field_struct_move_source` (called only from the three `let` sites in stmts.rs) cap-zeroes the source for the `let` shape |
 | B-2026-08-12-30 | 2026-08-12 | parser | medium | GENERIC PARAMETERS, TRAIT BOUNDS and WHERE-CLAUSES are absent from the span walker ENTIRELY -- not a missing field but a missing subtree. `GenericParams::span`, `GenericParam::span`, `GenericParam::variance_span`, `TraitBound::span` and `WhereClause::span` are never visited by `visit_item_spans` or `visit_item_spans_mut`, so under `module.rs`'s multi-module rebase they keep their FILE-LOCAL offsets while every span around them shifts -- the exact condition `module.rs`'s own comment warns about ('a span this walk MISSES stays at its file-local offset and can still collide'). | `src/span_visitor.rs` -- zero references to `generic_params`, `bounds`, `where_clause` or `supertraits` in either the read-only or the `_spans_mut` half |
 | B-2026-08-12-31 | 2026-08-12 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS mentions the container through a CALL: `ps[0] = mk(ps[0].n + k)` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 400 B in 40 allocations, one per assign. B-2026-08-12-26 fixed the index-read RHS; this is the same displaced occupant with a different RHS shape. | — |
 
@@ -147,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1142 surfaced
 
 </details>
 
-### Fixed (1125)
+### Fixed (1126)
 
-<details><summary>1125 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1126 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3322,6 +3321,70 @@ NOT COVERED, filed separately: an RHS that mentions the container through a CALL
 by this fix. It needs a different argument -- the call's result is fresh, but
 nothing here proves the call did not stash an alias -- so the mention guard
 keeps declining and the leak stays the safe direction. |
+| B-2026-08-12-27 | codegen | high | A heap FIELD read out of a Vec element (`ps[0].word`) is a SHALLOW ALIAS of the container's buffer on both compiled backends | FIXED by d19d0d6. A heap FIELD read out of a Vec element is now deep
+CLONED at the read, so the destination and the container own separate buffers.
+All eight double-freeing destinations, the silent use-after-free, and both
+previously-clean control shapes now agree with the interpreter; the two
+fixtures this row landed RED are flipped live.
+
+THE READ IS A COPY, and that is what forced the shape of the fix. `karac check`
+accepts reading `ps[0].word` after binding it and the interpreter still has the
+value, so aliasing was wrong on both counts. The WHOLE-element read already
+cloned (`clone_owned_vec_index_element`); this is the field-read sibling it
+never had.
+
+WHAT WAS REJECTED, and why it is worth recording: mirroring the `let` site's
+source cap-zeroing at the other seven destinations silences all eight aborts in
+a few lines. It is wrong. That suppression IS a move, and the checker says the
+read is a copy -- so it would have traded eight double frees for eight silent
+use-after-frees of exactly the kind the `let` site already had.
+
+FOUR PIECES, all small:
+
+  * `clone_vec_elem_heap_field_read` (collections.rs) -- deep-clones the read.
+    Gated to a plain element index into a NAMED owning Vec, a non-shared user
+    struct element, a `{ptr,len,cap}` field, and a value whose LLVM type really
+    is that struct (the same defensive width check the sibling makes).
+  * the clone gets its OWN scope cleanup, because a non-consuming read must not
+    leak -- `ps[0].word.len()` and `ps[0].word + "!"` are common and were clean
+    before.
+  * `vec_elem_field_clone_slots`, span -> clone alloca, so a CONSUMING
+    destination takes the clone over by zeroing its `cap`. The takeover lives
+    in `suppress_source_vec_cleanup_for_arg_ex`, which all ~87 consuming sites
+    already funnel through -- one edit instead of eight, and it stays `&self`
+    because zeroing a cap is a builder store rather than a queue edit. The map
+    is span-keyed because the clone is anonymous; there is no binding to name.
+  * `suppress_place_field_struct_move_source` now DECLINES an index-rooted
+    chain. That call was the whole reason the `let` shape looked clean while
+    the other seven aborted. Struct-rooted chains (`o.h.name`,
+    B-2026-08-01-31) keep the move -- they have no container element behind
+    them and nothing clones them.
+
+THE FRESH-TEMP CHANNEL WAS NOT NEEDED, which is the reason this landed as a
+contained change rather than the broad one the row predicted. The row's plan
+was to route the clone through `expr_yields_fresh_owned_temp` so consumers free
+it; that predicate has 62 consumers and flipping it changes what every one of
+them frees. Registering the clone's own cleanup and letting the existing
+consuming funnel disarm it gets the same ownership answer and touches one
+funnel. The row's estimate is corrected accordingly.
+
+VERIFIED against the interpreter oracle on all fifteen probe programs from the
+reshaping pass -- the eight owning destinations, the two shapes that were
+already clean (by-value argument, plain `let`), the two non-consuming reads
+(`.len()`, concatenation), the mutation case, and two controls. Every one
+byte-identical across `--interp` and `karac build`.
+
+PINNED by the two fixtures this row filed RED, now live:
+`asan_vec_elem_heap_field_read_freed_once` (all eight destinations in one
+program, plus a re-read of the container's own field afterwards -- which is the
+half that would catch a disown-the-source "fix") and
+`e2e_vec_elem_field_read_is_a_copy` (the silent half; it asserts `a1X\na1` and
+got `a1X\n<garbage>` before).
+
+Full ASAN suite green at BOTH opt levels -- 1054 passed at -O2 and at -O0, the
+-O0 leg with an empty quarantine list. The leak direction is covered by that:
+an unclaimed clone would be an LSan orphan, and a clone claimed twice a double
+free. Suite green at 116 targets, 0 failures; clippy and fmt clean. |
 | B-2026-08-12-28 | codegen | low | A chained indexed field READ (`a[i][j].field`) failed `karac build` with the generic self-accusing 'cannot resolve field .. | 63b0bd19 |
 | B-2026-08-12-29 | typecheck | low | The `s[i]`-on-String rejection prescribes `s.char_at(i)` as the substitute, but `char_at` returns `Option[char]` — so the suggested replacement does… | a092d138 |
 
