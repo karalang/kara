@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 239 | 0 |
 | leak | 172 | 0 |
-| double-free | 126 | 1 |
+| double-free | 126 | 0 |
 | codegen-gap | 105 | 0 |
 | run-vs-build | 104 | 0 |
 | missing-feature | 95 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 831 | 2 |
+| codegen | 831 | 1 |
 | typecheck | 161 | 1 |
 | interp | 139 | 1 |
 | ownership | 47 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1152 surfaced · 2 open · 1138 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1152 surfaced · 1 open · 1139 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-6 | 2026-08-13 | codegen | high | A heap field read through a SHARED-struct hop off a Vec element double-frees: `shared struct Inner { word: String }` inside `struct Holder { inner: Inner, .. }`, then `let w = hs[0].inner.word` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string | the per-hop gate in `clone_vec_elem_heap_field_read` (src/codegen/collections.rs) meets the RC machinery — a `shared` hop declines there by design |
 | B-2026-08-13-7 | 2026-08-13 | typecheck+interp+codegen | medium | Two remainders of user trait impls on builtin containers: a trait-BOUND call over a `Map` is still check-green with both compiled backends dead, and `Slice[T]` is still not callable at all. Both were implemented during B-2026-08-12-34 and REVERTED after measurement -- each produced a WORSE failure than the one it replaced. | — |
 
 ### Wontfix (2)
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1152 surfaced
 
 </details>
 
-### Fixed (1138)
+### Fixed (1139)
 
-<details><summary>1138 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1139 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4117,6 +4116,58 @@ chained-field-receiver deferral: `m[k].tags[0]` fails to build with "Index
 operator applied to non-array type", and `xs[0].word.len()` with the explicit
 "chained field receivers are deferred to v1.x" message. Both reproduce
 identically before this change; the fixtures bind an intermediate instead. |
+| B-2026-08-13-6 | codegen | high | A heap field read through a SHARED-struct hop off a Vec element double-frees: `shared struct Inner { word: String }` inside `struct Holder { inner: I… | FIXED by 71629ef. Every shape is clean on both compiled backends with output
+matching the interpreter, and the ASAN pin fails without the code change.
+
+THE ROW'S FRAMING WAS TOO NARROW, and the two probes it asked for are what
+showed it. It was filed as "off a Vec element", because that is where the
+adversarial control found it. Both suggested probes abort, and so does a shape
+with no container at all:
+
+    shared struct Inner { word: String }
+    fn main() { let i = Inner { word: f"a{k}" }; let w = i.word; println(w); }
+
+No Vec, no hop, no `Option`. The subject is a heap field read off a `shared
+struct`, full stop; the Vec element, the nested hop, the `Option[shared]` match
+binding and a second handle are all just ways of reaching that read. (The row's
+other question — whether the shared struct is the ELEMENT rather than a field of
+it — has the same answer: `is[0].word` over `Vec[Inner]` aborts too.)
+
+WHY IT DOUBLE-FREES. The read loads a `{ptr,len,cap}` ALIAS of the buffer inside
+the RC BOX. The binding registers its own scope cleanup, the box's drop frees the
+same buffer, and both fire.
+
+WHY CLONING RATHER THAN THE MOVE MODEL, which is the part specific to `shared`
+and the reason this could not simply copy the non-shared treatment. A non-shared
+local's field move-out is reconciled by cap-zeroing the SOURCE — sound because
+that local is the only owner. An RC box has no such guarantee: `let j = i` gives
+a second handle to the same box, so zeroing the field would empty it under `j`.
+The E2E test reads `j.word` after binding the field out through `i` for exactly
+that reason. The interpreter reads the field again in every leg, so the clone
+restores the semantics rather than picking a convenient one.
+
+The clone registers in the same span-keyed slot table as the container sibling
+(B-2026-08-12-27 / -13-4 / -13-5), so a CONSUMING destination takes it over by
+cap-zeroing and a NON-consuming read keeps its own cleanup instead of leaking —
+no new ownership machinery, one more shape reaching the existing one.
+
+A BORROWED RECEIVER IS EXCLUDED, and that gate is not caution but a measurement.
+`fn get(ref self) -> String { self.word }` and both `ref Inner` param spellings
+were CLEAN before this change and LEAKED 3 B per call with the clone added
+unconditionally: the frame does not own the box, the borrowed-receiver arm of
+`maybe_defensive_copy_param_arg` already clones such a read at the consuming
+position, and a clone here becomes the first of two — the consumer takes this
+one over and clones again, leaving it with no owner. All three spellings are in
+the ASAN pin as LEAK controls, so regressing the gate reports rather than passes
+silently.
+
+MEASURED, every shape interp / AOT byte-identical with zero invalid frees and
+zero leaks: bare local bind (and re-read), second handle, `Vec[Inner]` element,
+nested `Holder { inner: Inner }` hop, shared-inside-shared (`Node { leaf: Leaf }`),
+`Option[shared]` match binding, `Vec[String]` field, call-argument position,
+for-loop element binding, the three borrow spellings, a non-shared control, and a
+200-iteration loop (the leak half — a clone whose cleanup stopped firing would
+report 200 blocks). |
 
 </details>
 
