@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 239 | 0 |
+| miscompile | 240 | 1 |
 | leak | 172 | 0 |
 | double-free | 126 | 0 |
 | codegen-gap | 105 | 0 |
-| run-vs-build | 104 | 0 |
-| missing-feature | 95 | 1 |
+| run-vs-build | 105 | 1 |
+| missing-feature | 95 | 0 |
 | perf | 64 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 52 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 831 | 1 |
-| typecheck | 161 | 1 |
-| interp | 139 | 1 |
+| codegen | 833 | 2 |
+| typecheck | 161 | 0 |
+| interp | 140 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1152 surfaced · 1 open · 1139 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1154 surfaced · 2 open · 1140 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-7 | 2026-08-13 | typecheck+interp+codegen | medium | Two remainders of user trait impls on builtin containers: a trait-BOUND call over a `Map` is still check-green with both compiled backends dead, and `Slice[T]` is still not callable at all. Both were implemented during B-2026-08-12-34 and REVERTED after measurement -- each produced a WORSE failure than the one it replaced. | — |
+| B-2026-08-13-8 | 2026-08-13 | interp+codegen | high | Two impls of one trait on the same container with different element types collapse to ONE dispatch target, and the backends pick OPPOSITE ones -- `--interp` answers with the last impl, `karac build` with the first, both for every receiver. Check accepts it. The generic `impl[T] ... for Vec[T]` spelling is the same root from the other side: no unmangled symbol at all, so it is check-green and interp-green with the build dead. | — |
+| B-2026-08-13-9 | 2026-08-13 | codegen | medium | A trait-BOUND call over a user-impl'd builtin container (`fn show[T: Zero](x: ref T)` with a `Map`/`Set`/`Slice`) is check-green and interp-green with both compiled backends dead. Direct dispatch on all of those receivers now works; the bound spelling is the only one left. Routing it through the Vec/String fallthrough was tried and REVERTED -- it returns the WRONG impl once a second one exists. | — |
 
 ### Wontfix (2)
 
@@ -143,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1152 surfaced
 
 </details>
 
-### Fixed (1139)
+### Fixed (1140)
 
-<details><summary>1139 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1140 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4168,6 +4169,25 @@ nested `Holder { inner: Inner }` hop, shared-inside-shared (`Node { leaf: Leaf }
 for-loop element binding, the three borrow spellings, a non-shared control, and a
 200-iteration loop (the leak half — a clone whose cleanup stopped firing would
 report 200 blocks). |
+| B-2026-08-13-7 | typecheck+interp+codegen | medium | A user trait `impl` on `Slice[T]` is not callable at all -- `no method` at check, so `T: Zero` over a slice cannot be written | FIXED by b0ef9888. LEG (2) OF THIS ROW IS FIXED -- `Slice[T]` user trait impls now dispatch, and all four surfaces agree. Leg (1), the trait-BOUND path, is UNCHANGED and split out to its own row (it needs per-receiver monomorphization, a much larger piece).
+
+THE ROW'S PRESCRIBED ORDER OF WORK WAS RIGHT, AND ITS DIAGNOSIS WAS ONE LAYER OFF. It said to teach the interpreter to name a slice receiver `Slice` first. The `value_type_name` entry was indeed missing and was added first -- but adding it alone changed NOTHING, because the interpreter never shows that function a slice: `eval_method_call` SNAPSHOTS a `Value::Slice` receiver into a fresh `Value::Array` before any dispatch (so the builtin seq surface sees a uniform shape), and the snapshot is what renamed it `Vec`. The real interpreter fix is a third exemption to that snapshot, alongside `as_slice`/`as_slice_mut`/`split_at_mut`: skip it for a method name the builtin surface does not answer when `Slice.<method>` is bound. Worth recording because the row's own repro cannot reveal this -- the missing `value_type_name` arm was real and necessary, and fixing only it leaves the symptom byte-identical.
+
+SIX PIECES, ONE PER SUBSYSTEM:
+- `src/interpreter.rs` -- `Value::Slice { .. } => "Slice"` in `value_type_name`.
+- `src/interpreter/method_call.rs` -- the snapshot exemption above. Gated on `SLICE_BUILTIN_METHODS`, now re-exported from the typechecker (`pub(crate) use expr_method_call::SLICE_BUILTIN_METHODS`) so both surfaces read ONE list; two copies is how a precedence rule drifts into a run-vs-build divergence.
+- `src/typechecker/env_build.rs` -- a `Type::Slice { mutable: false }` arm in `env_add_impl`, registering only a FULLY CONCRETE element (see the two gates below).
+- `src/typechecker/types.rs` + `expr_method_call.rs` -- the `impl_table_key` arm (keyed on the element, so `Slice[i64]` does not answer for `Slice[String]`), the `SLICE_BUILTIN_METHODS` list, the call-site gate (builtin wins; impl table consulted only for names it does not answer), and `Slice` joining `Str` in the dispatch fork.
+- `src/codegen/method_call.rs` -- TWO fallthroughs, not one. A slice variable is registered in `vec_elem_types` too (it is built from one), so the Vec/String dispatcher gets the call FIRST and loud-failed with "Vec/String method 'describe' is not yet supported" -- which is why the symptom named Vec for a slice receiver. Its `has_user_impl` fallthrough now also fires for a slice receiver with a `Slice.<method>` fn, falling out to the slice block, whose `_` arm then falls out to the generic user-impl dispatch.
+- `src/codegen/calls.rs` -- `inferred_receiver_type` falls back to `Slice` for a slice-registered binding. A slice binding has NO `var_type_names` entry at all (`register_var_from_type_expr` files it under `slice_elem_types` and returns early), which was invisible until user impls became callable and then split the surface: a `mut Slice[T]` PARAM receiver was check-green and interp-green with both compiled backends reporting "no handler for method '<m>' on variable 's'", while every other slice spelling worked.
+
+TWO GATES KEEP THE FIX FROM RE-CREATING THE FAILURE IT REMOVES. `impl … for mut Slice[T]` and `impl[T] … for Slice[T]` are BOTH still rejected at check, and both were measured check-green/backend-dead before being gated: the first parses as `TypeKind::MutSlice`, which is not a path, so codegen's `impl_target_name` declines it and no `Slice.<method>` fn exists; the second is mangled per instantiation, so likewise no plain symbol exists. A `mut Slice[T]` RECEIVER still resolves an `impl … for Slice[T]` -- mutability is a property of the view, not a distinct impl target. `Array[T, N]` / `Vector[T, N]` also stay out: no call-site gate, and a wider dispatch-fork arm swallows the "requires an explicit `.iter()`" hint.
+
+MEASURED ON ALL FOUR SURFACES (check / --interp / run JIT / build), not just check: the row's own repro, a sub-range window (`v[1..3]`), a `ref Slice[i64]` param, and a `mut Slice[i64]` param. The fixture carries BOTH a `Slice` and a `Vec` impl, per the row's own warning that every single-impl probe passed for the sibling attempt and only a two-impl program exposed the wrong-impl selection; `v.describe()` correctly stays rejected when only a `Slice` impl exists.
+
+Both guard tests deleted as the row required, not worked around. New: `test_user_trait_impl_on_slice_resolves`, `test_slice_builtin_surface_still_wins`, `test_impl_on_mut_slice_target_rejected_but_mut_receiver_resolves`, `test_generic_impl_on_slice_still_rejected`, `test_user_trait_impl_on_fixed_array_still_rejected` (typechecker); `user_trait_impl_over_slice_dispatches` (interpreter); `test_e2e_user_trait_impl_on_slice_dispatches` (codegen E2E).
+
+FOUND WHILE MEASURING, NOT INTRODUCED HERE: two impls of one trait on the same container with DIFFERENT element types collapse to one dispatch target, and the two backends pick opposite ones; and a generic `impl[T] … for Vec[T]` is check-green and interp-green with the build dead. Both confirmed PRE-EXISTING by re-running the identical `Vec` programs on the unmodified compiler. Filed separately; `Slice` is deliberately gated out of the second rather than joined to it. |
 
 </details>
 
