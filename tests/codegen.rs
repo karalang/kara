@@ -22936,6 +22936,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_shared_struct_heap_field_read_is_a_copy() {
+        // B-2026-08-13-6's VALUE side, and the leg that decides between the two
+        // candidate fixes. Cap-zeroing the source — the move model that
+        // reconciles a NON-shared local's field move-out — would empty the RC
+        // box, so `j.word` (a SECOND handle to the same box, taken after the
+        // field was bound out through the first) is the assertion that rules it
+        // out: it must still read `a1`.
+        //
+        // `hs[0].tag` last: the scalar sibling of the cloned field must survive,
+        // which a clone emitted at the wrong offset would corrupt.
+        assert_eq!(
+            run_program(
+                "shared struct Inner { word: String }\n\
+                 struct Holder { inner: Inner, tag: i64 }\n\
+                 fn main() {\n\
+                     let k = 1;\n\
+                     let i = Inner { word: f\"a{k}\" };\n\
+                     let w = i.word;\n\
+                     println(w);\n\
+                     println(i.word);\n\
+                     let j = i;\n\
+                     println(j.word);\n\
+                     let mut hs: Vec[Holder] = Vec.new();\n\
+                     hs.push(Holder { inner: Inner { word: f\"c{k}\" }, tag: 2 });\n\
+                     let hop = hs[0].inner.word;\n\
+                     println(hop);\n\
+                     println(hs[0].inner.word);\n\
+                     println(hs[0].tag);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("a1\na1\na1\nc1\nc1\n2\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_slice_and_map_elem_field_read_is_a_copy() {
         // B-2026-08-13-5's VALUE side. The clone was extended to a BORROWED
         // container (a slice) and a side-table one (a map), so the thing to

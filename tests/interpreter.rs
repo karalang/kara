@@ -28229,6 +28229,39 @@ fn test_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-08-13-6 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_shared_struct_heap_field_read_is_a_copy`, same source and expected
+/// string.
+///
+/// The interpreter has reference semantics for a `shared struct` and value
+/// semantics for the field READ, which is exactly the combination the compiled
+/// fix had to reproduce: the second handle sees the same object, and binding
+/// the field out of either handle leaves the object's field intact. Pinning it
+/// here keeps the oracle for that pair explicit.
+#[test]
+fn test_shared_struct_heap_field_read_is_a_copy() {
+    assert_eq!(
+        run("shared struct Inner { word: String }\n\
+             struct Holder { inner: Inner, tag: i64 }\n\
+             fn main() {\n\
+                 let k = 1;\n\
+                 let i = Inner { word: f\"a{k}\" };\n\
+                 let w = i.word;\n\
+                 println(w);\n\
+                 println(i.word);\n\
+                 let j = i;\n\
+                 println(j.word);\n\
+                 let mut hs: Vec[Holder] = Vec.new();\n\
+                 hs.push(Holder { inner: Inner { word: f\"c{k}\" }, tag: 2 });\n\
+                 let hop = hs[0].inner.word;\n\
+                 println(hop);\n\
+                 println(hs[0].inner.word);\n\
+                 println(hs[0].tag);\n\
+             }"),
+        "a1\na1\na1\nc1\nc1\n2\n"
+    );
+}
+
 /// B-2026-08-13-5 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_slice_and_map_elem_field_read_is_a_copy`, same source and expected
 /// string.

@@ -3168,6 +3168,119 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap())
     }
 
+    /// B-2026-08-13-6 — the SHARED-struct sibling of
+    /// [`Self::clone_vec_elem_heap_field_read`]: `let w = i.word` where `i` is a
+    /// `shared struct` handed back a `{ptr,len,cap}` ALIAS of the buffer inside
+    /// the RC BOX, so the binding's cleanup and the box's drop freed it twice.
+    ///
+    /// NO CONTAINER IS INVOLVED, which is what the row this fixes had to be
+    /// corrected on: `let i = Inner { word: f"a{k}" }; let w = i.word;` aborts
+    /// on its own. A Vec element, a nested hop and a second handle (`let j = i`)
+    /// are all just ways of reaching the same read.
+    ///
+    /// CLONING IS THE ANSWER HERE FOR A REASON THE NON-SHARED CASE DOES NOT
+    /// SHARE. A non-shared local's field move-out is reconciled by cap-zeroing
+    /// the SOURCE — a move — which is sound because that local is the only
+    /// owner. An RC box has no such guarantee: `let j = i` gives a second handle
+    /// to the same box, so zeroing the field would empty it under the other
+    /// holder. The interpreter agrees with the copy reading — `i.word` still
+    /// reads after the binding — so the clone restores the semantics rather than
+    /// picking a convenient one.
+    ///
+    /// Registered in the same span-keyed slot table as its sibling, so a
+    /// CONSUMING destination takes the clone over (cap-zeroing it) exactly as it
+    /// does for the container case, and a NON-consuming read keeps its own scope
+    /// cleanup instead of leaking.
+    ///
+    /// Gated to a direct `{ptr,len,cap}` field of a non-generic `shared struct`
+    /// whose loaded value really is that struct — the same defensive width check
+    /// the sibling makes, for the same mis-resolved-monomorph reason.
+    pub(super) fn clone_shared_struct_heap_field_read(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ExprKind::FieldAccess { object, field } = &expr.kind else {
+            return Ok(val);
+        };
+        // A BORROWED receiver is already served, and cloning it again LEAKS.
+        // `fn get(ref self) -> String { self.word }` / a `ref Inner` param:
+        // the frame does not own the box, and the borrowed-receiver arm of
+        // `maybe_defensive_copy_param_arg` already deep-clones such a read at
+        // the consuming position (B-2026-07-29-21's family). A clone here would
+        // be the FIRST of two: the consumer takes this one over by cap-zeroing
+        // it and then clones again, leaving this buffer with no owner — 3 B per
+        // call, measured on all three borrow spellings (`ref self` method,
+        // `ref` param binding, `ref` param return), each clean before and after
+        // once this gate is in place.
+        let borrowed_receiver = match &object.kind {
+            ExprKind::Identifier(n) => self.ref_params.contains_key(n.as_str()),
+            ExprKind::SelfValue => self.ref_params.contains_key("self"),
+            _ => false,
+        };
+        if borrowed_receiver {
+            return Ok(val);
+        }
+        let Some(sname) = self.type_name_of_expr(object) else {
+            return Ok(val);
+        };
+        if !self.shared_types.contains_key(sname.as_str()) {
+            return Ok(val);
+        }
+        let Some(idx) = self
+            .struct_field_names
+            .get(sname.as_str())
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return Ok(val);
+        };
+        let Some(fte) = self
+            .struct_field_type_exprs
+            .get(sname.as_str())
+            .and_then(|tes| tes.get(idx))
+            .cloned()
+        else {
+            return Ok(val);
+        };
+        if !(self.is_string_type_expr(&fte) || self.extract_vec_elem_type(&fte).is_some()) {
+            return Ok(val);
+        }
+        let vec_ty = self.vec_struct_type();
+        if val.get_type() != vec_ty.into() {
+            return Ok(val);
+        }
+        let Some(cur_fn) = self.current_fn else {
+            return Ok(val);
+        };
+        let src = self.create_entry_alloca(cur_fn, "shfld.read.src", vec_ty.into());
+        if self.builder.build_store(src, val).is_err() {
+            return Ok(val);
+        }
+        let dst = self.create_entry_alloca(cur_fn, "shfld.read.clone", vec_ty.into());
+        let clone_fn = self.emit_clone_fn_for_type_expr(&fte);
+        if self
+            .builder
+            .build_call(clone_fn, &[src.into(), dst.into()], "")
+            .is_err()
+        {
+            return Ok(val);
+        }
+        let elem_ty = if self.is_string_type_expr(&fte) {
+            Some(self.context.i8_type().into())
+        } else {
+            self.extract_vec_elem_type(&fte)
+        };
+        self.track_vec_var(dst, elem_ty);
+        self.vec_elem_field_clone_slots
+            .insert((expr.span.offset, expr.span.length), dst);
+        self.vec_elem_field_clone_log
+            .push((expr.span.offset, expr.span.length));
+        Ok(self
+            .builder
+            .build_load(vec_ty, dst, "shfld.read.cloned")
+            .unwrap())
+    }
+
     /// #38 — deep-clone a `match <self.field[i]>.enumfield { … }` scrutinee
     /// value. The indexed object is itself a place (FieldAccess/`self`), e.g. the
     /// parser's `self.tokens[self.pos].token`. The #15/#18 source-suppression

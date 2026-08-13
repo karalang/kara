@@ -20895,6 +20895,85 @@ fn main() {
         );
     }
 
+    /// B-2026-08-13-6 — a heap field read off a `shared struct` is deep-cloned,
+    /// so it no longer double-frees.
+    ///
+    /// The read handed back a `{ptr,len,cap}` ALIAS of the buffer inside the RC
+    /// BOX, and the binding's own cleanup then freed what the box's drop also
+    /// frees. NO CONTAINER IS INVOLVED — `let i = Inner { .. }; let w = i.word;`
+    /// aborts by itself; the Vec element, the nested hop and the second handle
+    /// are just other ways of reaching the same read, and all four are pinned.
+    ///
+    /// CLONING IS RIGHT HERE FOR A REASON THE NON-SHARED CASE DOES NOT SHARE. A
+    /// non-shared local's field move-out is reconciled by cap-zeroing the
+    /// SOURCE — a move — which is sound because that local is the only owner.
+    /// An RC box has no such guarantee: the `two` leg takes a second handle
+    /// (`let j = i`) and reads the field through the first, so a move model
+    /// would empty the box under `j`. The interpreter reads the field again
+    /// afterwards in every leg, which is the copy semantics being restored.
+    ///
+    /// THE BORROW LEGS ARE LEAK CONTROLS, not double-free ones. A `ref`
+    /// receiver's frame does not own the box, and the borrowed-receiver arm of
+    /// `maybe_defensive_copy_param_arg` already clones such a read at the
+    /// consuming position; cloning again at the READ makes this one the first
+    /// of two, and the consumer takes it over and clones again, leaving 3 B per
+    /// call with no owner. All three spellings (`ref self` method, `ref` param
+    /// bound, `ref` param returned) are here so that regressing the gate shows
+    /// up as an LSan report rather than as nothing.
+    ///
+    /// The `loop` leg is the other half of that: 200 iterations of the bound
+    /// read, which reports 200 blocks if the clone's own cleanup stops firing.
+    #[test]
+    fn asan_shared_struct_heap_field_read_cloned_not_aliased() {
+        assert_clean_asan_run(
+            r#"
+shared struct Inner { word: String }
+shared struct Leaf { word: String }
+shared struct Node { leaf: Leaf }
+struct Holder { inner: Inner, tag: i64 }
+impl Inner { fn get(ref self) -> String { self.word } }
+fn peek(i: ref Inner) -> i64 { let w = i.word; w.len() }
+fn give(i: ref Inner) -> String { let w = i.word; w }
+fn main() {
+    let k = env.args().len() as i64;
+    let i = Inner { word: f"a{k}" };
+    let bound = i.word;
+    let again = i.word;
+    let mut acc = bound.len() + again.len();
+    let j = i;
+    let via_second = j.word;
+    acc = acc + via_second.len();
+    let mut is: Vec[Inner] = Vec.new();
+    is.push(Inner { word: f"b{k}" });
+    let elem = is[0].word;
+    acc = acc + elem.len();
+    let mut hs: Vec[Holder] = Vec.new();
+    hs.push(Holder { inner: Inner { word: f"c{k}" }, tag: 2 });
+    let hop = hs[0].inner.word;
+    acc = acc + hop.len();
+    let n = Node { leaf: Leaf { word: f"d{k}" } };
+    let deep = n.leaf.word;
+    acc = acc + deep.len();
+    let o: Option[Inner] = Option.Some(Inner { word: f"e{k}" });
+    match o {
+        Some(inner) => { let w = inner.word; acc = acc + w.len(); }
+        None => { acc = acc + 1; }
+    }
+    acc = acc + i.get().len() + peek(i) + give(i).len();
+    let mut c = 0i64;
+    while c < 200 {
+        let w = i.word;
+        acc = acc + w.len();
+        c = c + 1;
+    }
+    println(acc > 0);
+}
+"#,
+            &["true"],
+            "shared_struct_heap_field_read_cloned_not_aliased",
+        );
+    }
+
     /// B-2026-08-13-5 — a heap field read off a SLICE element or a MAP value is
     /// deep-cloned too, so it no longer double-frees.
     ///

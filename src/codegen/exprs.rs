@@ -1178,7 +1178,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // WHOLE-element read has always done. No-op for every other
                 // receiver / field shape.
                 let v = self.compile_field_access(object, field)?;
-                self.clone_vec_elem_heap_field_read(expr, v)
+                // B-2026-08-13-6 — the same alias one owner over: a heap field
+                // read off a `shared struct` hands back a pointer into the RC
+                // BOX. Tried after the container arm; each is a no-op for the
+                // other's shape.
+                let v = self.clone_vec_elem_heap_field_read(expr, v)?;
+                self.clone_shared_struct_heap_field_read(expr, v)
             }
             ExprKind::StructLiteral { path, fields, .. } => {
                 let name = path.last().map(|s| s.as_str()).unwrap_or("");
