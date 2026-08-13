@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 52 | 0 |
 | crash | 44 | 0 |
 | soundness | 42 | 0 |
-| other | 30 | 1 |
+| other | 30 | 0 |
 | use-after-free | 18 | 0 |
 
 ### By surface
@@ -119,20 +119,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 29 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
-| parser | 15 | 1 |
+| parser | 15 | 0 |
 | effect | 5 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1142 surfaced · 4 open · 1126 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1142 surfaced · 3 open · 1127 fixed · 2 wontfix** (2026-05-20 → 2026-08-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-12-24 | 2026-08-12 | codegen | medium | Inside a GENERIC IMPL, `let`-binding a `T`-typed struct FIELD and then calling a trait method on that local (`let a = self.v; a.describe()`) fails the whole build — `codegen: no handler for method 'describe' on variable 'a'` — though `karac check` passes and the interpreter runs it | none |
 | B-2026-08-12-25 | 2026-08-12 | typecheck | low | `char` has no `to_lowercase` / `to_uppercase` / `is_digit`, though it has `to_ascii_lowercase`, `is_alphabetic`, `is_numeric`, `is_alphanumeric` and `is_whitespace` — so case-folding a char reaches for the missing spelling first | none |
-| B-2026-08-12-30 | 2026-08-12 | parser | medium | GENERIC PARAMETERS, TRAIT BOUNDS and WHERE-CLAUSES are absent from the span walker ENTIRELY -- not a missing field but a missing subtree. `GenericParams::span`, `GenericParam::span`, `GenericParam::variance_span`, `TraitBound::span` and `WhereClause::span` are never visited by `visit_item_spans` or `visit_item_spans_mut`, so under `module.rs`'s multi-module rebase they keep their FILE-LOCAL offsets while every span around them shifts -- the exact condition `module.rs`'s own comment warns about ('a span this walk MISSES stays at its file-local offset and can still collide'). | `src/span_visitor.rs` -- zero references to `generic_params`, `bounds`, `where_clause` or `supertraits` in either the read-only or the `_spans_mut` half |
 | B-2026-08-12-31 | 2026-08-12 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS mentions the container through a CALL: `ps[0] = mk(ps[0].n + k)` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` loses 400 B in 40 allocations, one per assign. B-2026-08-12-26 fixed the index-read RHS; this is the same displaced occupant with a different RHS shape. | — |
 
 ### Wontfix (2)
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1142 surfaced
 
 </details>
 
-### Fixed (1126)
+### Fixed (1127)
 
-<details><summary>1126 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1127 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3387,6 +3386,64 @@ an unclaimed clone would be an LSan orphan, and a clone claimed twice a double
 free. Suite green at 116 targets, 0 failures; clippy and fmt clean. |
 | B-2026-08-12-28 | codegen | low | A chained indexed field READ (`a[i][j].field`) failed `karac build` with the generic self-accusing 'cannot resolve field .. | 63b0bd19 |
 | B-2026-08-12-29 | typecheck | low | The `s[i]`-on-String rejection prescribes `s.char_at(i)` as the substitute, but `char_at` returns `Option[char]` — so the suggested replacement does… | a092d138 |
+| B-2026-08-12-30 | parser | medium | GENERIC PARAMETERS, TRAIT BOUNDS and WHERE-CLAUSES are absent from the span walker ENTIRELY -- not a missing field but a missing subtree | FIXED by 3bf70a6. `visit_generic_params` / `visit_generic_params_mut`,
+`visit_trait_bound` / `_mut` and `visit_where_clause` / `_mut` are threaded
+through every generics-carrying item arm in BOTH halves of the walker, and the
+audit that found the row is now a test rather than a note.
+
+THIRTEEN CARRIERS, enumerated from the AST rather than from the row: Function,
+StructDef, EnumDef, TraitDef, TraitAliasDef, MarkerTraitDef, AssocTypeDecl,
+TraitMethod, ImplBlock, AssocTypeBinding, EffectResourceDecl, TypeAliasDef,
+DistinctTypeDef. The row named eight with a trailing "..."; the two that would
+have been easy to miss are `AssocTypeBinding` (the `type Item = T;` inside an
+`impl`, which carries its own generics) and `DistinctTypeDef`. Two of the
+thirteen -- `TypeAliasDef` and `DistinctTypeDef` -- have `generic_params` but
+NO `where_clause` field, which the compiler caught rather than a reviewer.
+
+The traversals also cover what hangs off the generics rather than just the
+declared spans: bound generic ARGS (`T: Other[i64]`), const-param types, shape
+literals and their dims, and all four `WhereConstraint` shapes -- including
+`ConstPredicate`'s expression and `ProjectionBound`'s projection type, each of
+which carries spans of its own.
+
+THE AUDIT IS NOW THREE TESTS in `tests/span_visitor_coverage.rs`, all three
+verified non-vacuous by running them against the pre-fix walker:
+
+  * `every_ast_span_field_is_visited_by_both_walker_halves` -- the mechanical
+    check that found all seven original findings, kept as the row asks. Pre-fix
+    it reports `variance_span (read-only: MISSING, mut: MISSING)`.
+  * `generics_bounds_and_where_clauses_are_reachable_from_both_halves` -- the
+    SUBTREE check, which the field check structurally cannot express: only one
+    of these spans (`variance_span`) has a distinctive field name, so six of
+    the seven missing spans were invisible to a per-field audit. Pre-fix it
+    reports all seven needles missing.
+  * `mut_walk_shifts_every_span_the_read_walk_can_see` -- the behavioural one,
+    and the only one that proves the property `module.rs` actually depends on.
+    It shifts every span through the mut walk and asserts nothing reachable
+    from the READ-ONLY walk was left at its file-local offset. Pre-fix it
+    FAILS.
+
+THE ASYMMETRY IS THE REAL FAILURE MODE, which is why the third test is phrased
+that way rather than as "the mut walk visits N spans". A field in one half and
+not the other is worse than a field in neither: the read-only walk is what
+attributes a span to a module, so a span it can see but the mut walk cannot
+move is attributed at an offset that has already shifted underneath it. That is
+`module.rs`'s own warning -- "a span this walk MISSES stays at its file-local
+offset and can still collide" -- made executable.
+
+The source-text audits are a NAME check and say so in situ: they prove a field
+is mentioned in each half, not that it is mentioned correctly. They are a floor
+against the omission class; the behavioural test is what covers correctness.
+
+NOTHING MISCOMPILED BEFORE THIS and nothing does now -- the row was explicit
+that no machine-applicable fix is currently built from a generic-parameter
+span, so the two consumers that would corrupt had nothing to corrupt with. What
+changes is that the latent case is closed rather than mitigated: the moment a
+variance / bound / where-clause diagnostic grows a fix-it, it no longer
+inherits B-2026-08-11-35's failure mode. Adding spans to the walk only WIDENS
+`module.rs`'s `max_end`, so the change is additive by construction.
+
+Suite green at 117 targets, 0 failures; clippy and fmt clean. |
 
 </details>
 
