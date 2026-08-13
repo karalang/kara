@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 243 | 2 |
+| miscompile | 243 | 1 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 108 | 0 |
@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
-| crash | 44 | 0 |
+| crash | 45 | 1 |
 | soundness | 42 | 0 |
 | other | 30 | 0 |
 | use-after-free | 18 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 840 | 3 |
+| codegen | 841 | 3 |
 | typecheck | 162 | 0 |
 | interp | 142 | 0 |
 | ownership | 47 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1164 surfaced · 3 open · 1149 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1165 surfaced · 3 open · 1150 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -132,7 +132,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1164 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-13-17 | 2026-08-13 | codegen | medium | An ANNOTATED tuple binding ignores its annotation: `let t: (i64, i64) = (b, d)` with `b: u8` / `d: u32` lays the aggregate out from the element VALUES (`{i8, i32}`) while every read trusts the annotation, so `t.0` sign-extends and prints 200 as -56 on both compiled backends. The UNANNOTATED form of the same tuple is correct. | src/codegen/expr_ops.rs `compile_tuple` (~L22): the struct type is built from `vals.iter().map(|v| v.get_type())`, ignoring any annotated tuple TypeExpr; the read side resolves element types via `place_chain_tuple_tes`, which uses the annotation. |
 | B-2026-08-13-18 | 2026-08-13 | codegen | medium | An implicit int-to-FLOAT widening emits INVALID IR and fails module verification at three boundaries -- a struct-literal field, a field assignment, and a call argument -- so `struct W { mut f: f64 }` with `W { f: some_u8 }` does not compile at all, while the same conversion through an annotated `let` or a `Vec[f64]` element is fine. | src/codegen/expr_ops.rs `coerce_scalar_to_type_unsigned` (~L6880): matches (IntValue, IntType) and (FloatValue, FloatType) only; `(IntValue, FloatType)` falls through to `_ => val`. |
-| B-2026-08-13-19 | 2026-08-13 | codegen | medium | Binding a struct out of a TUPLE ELEMENT (`let r = t.0;`) EMPTIES the source under both compiled backends: a later read of `t.0` sees a zero-length Vec field where copy semantics call for the original contents. The field-access source shape was fixed by B-2026-08-13-14; the tuple-element source takes a different path and was not covered. | `uam_defensive_copy` (src/codegen) — B-2026-08-13-14 widened its consume-site match from `ExprKind::Identifier` to `FieldAccess`; `ExprKind::TupleIndex` is the same reach gap. Check the `uam_copied_sites` span key lines up for a tuple index. |
+| B-2026-08-13-20 | 2026-08-13 | codegen | high | SEGFAULT with no diagnostic: moving a HEAP-ELEMENT Vec out of a tuple (`let r = t.0;` where the element is `Vec[String]`) crashes both compiled backends, while `karac check` passes clean and the interpreter prints the right answer. `Vec[i64]` in the same position is fine, and reading the element IN PLACE (`t.0.len()`) is fine -- it is the move-out, and only when the element type is itself heap-bearing. | `suppress_tuple_index_move_source` (control_flow_match.rs) -> `zero_tuple_elem_cap_at` + `disarm_tuple_elem_bodies_at`; the crash needs a Vec element whose ELEMENT type is heap-bearing, so the per-element `__karac_dropelems_*` walk is the part that differs from the working `Vec[i64]` case. |
 
 ### Wontfix (2)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1164 surfaced
 
 </details>
 
-### Fixed (1149)
+### Fixed (1150)
 
-<details><summary>1149 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1150 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -4834,6 +4834,77 @@ are guards.
 
 Suite green with `--features llvm` (13570 passed, 0 failed); clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-13-19 | codegen | medium | Binding a struct out of a TUPLE ELEMENT (`let r = t.0;`) EMPTIES the source under both compiled backends: a later read of `t.0` sees a zero-length Ve… | FIXED by 73f7285. `let r = t.0` now defensive-copies at the consume site and, in
+the same breath, stops zeroing the source.
+
+THE ROW'S FIX SHAPE WAS HALF THE FIX, AND THE HALF IT NAMED DID NOTHING ON ITS
+OWN. It called for a `TupleIndex` arm in `uam_defensive_copy`, the way
+B-2026-08-13-14 added the `FieldAccess` one. That arm is written, its span-key
+guess was RIGHT -- the parser gives a `TupleIndex` its object's span verbatim
+(`span: lhs.span.clone()`), same as a `FieldAccess`, so the flagged `t` and the
+`t.0` that reads it already shared one key and the site gate passed first try --
+and the output did not move: still `2 0`.
+
+The reason is that a tuple element has a SECOND source-neutralizer the field
+path does not. `suppress_tuple_index_move_source` calls `zero_tuple_elem_cap_at`
+on every `let x = t.N`, which for a struct element routes into
+`zero_struct_move_caps` and zeroes `len` as well as `cap` -- so the source read
+back EMPTY no matter how good the copy was. The disarm the field arm pairs with
+(`suppress_source_vec_cleanup_for_arg_ex`) never sees this path.
+
+So the fix is the PAIR, and the pairing is what makes it safe: the copy, plus an
+early return from `suppress_tuple_index_move_source` when a copy was made. Both
+key on `uam_copied_sites` -- the sites where a copy REALLY happened -- not on
+`uam_consume_sites`. That distinction is the whole safety argument and it
+predates this row: skipping the zeroing where no copy occurred would leave two
+owners of one buffer, turning a wrong read into a double free. Keying both
+halves on one set makes them inseparable by construction.
+
+MEASURED, four surfaces, five shapes, all agreeing post-fix (`2 1` is the
+copy-semantics answer; the interpreter was already there):
+
+                                        pre-fix          post-fix
+                                     interp  build    interp  build
+  struct element, bare local          2 1     2 0      2 1     2 1
+  Vec[i64] element                    2 1     2 1      2 1     2 1
+  String element                      ok      ok       ok      ok
+  struct element via a struct FIELD   2 1     2 0      2 1     2 1
+  move-out with NO reuse              2       2        2       2
+
+THE ROOT HAD TO BE THE CHAIN ROOT, not the object. The field arm admits only an
+`Identifier`/`self` object, and copying `t.0` with that restriction left
+`h.pe.0` disarmed-but-uncopied -- because the DISARM resolves that chain through
+`place_chain_tuple_tes` and zeroes it regardless. A copy and a disarm-skip
+defined over different sets of shapes is not a pairing. `place_root_ident` is
+the resolver the disarm's own `owned_struct_params` bail already uses, so using
+it here makes the two agree by construction rather than by coincidence.
+
+FOUND WHILE WRITING THE FIXTURE, and filed rather than folded in:
+B-2026-08-13-20 -- moving a HEAP-ELEMENT Vec out of a tuple (`let r = t.0`
+where the element is `Vec[String]`) SEGFAULTS on both compiled backends with
+`karac check` clean and the interpreter correct. Narrowed to needing all three
+of a Vec element, a heap element type, and a move-out: `t.1`, `t.0.len()` in
+place, and a `Vec[i64]` element are each fine. Confirmed pre-existing -- it
+crashes identically on the pre-fix compiler, and the repro has no reuse at all,
+so none of this row's `UseAfterMove` machinery is in play. The ASAN fixture's
+middle leg is `Vec[i64]` for exactly this reason; building it on the crash would
+have made it assert nothing.
+
+PINNED by two tests, deliberately at two levels because the two halves fail
+differently. `test_e2e_tuple_elem_bound_out_of_local_is_a_copy` covers three
+roots and reads `2 0` on two of its three lines against the pre-fix compiler;
+the third (a direct Vec element) already passed, because that move-out zeroes
+only `cap` and a `len()` read survives it -- the doc says so rather than letting
+a reader count it as a witness. `asan_tuple_elem_bound_out_of_local_then_reread_
+is_copied` is where that third line's real defect lives: it fails pre-fix with
+an ASAN memory error, and it is the only thing that could catch a mistake in the
+copy/disarm pairing, since a leak or a double free leaves the printed value
+correct.
+
+Suite green with `--features llvm` (13572 passed, 0 failed); the ASAN -O0 leg
+run too (1065 passed, 0 failed, quarantine list matched exactly), because this
+touches the move-suppression machinery where -O2 deletes the very allocations
+the bug is about. Clippy `--all --all-targets --features llvm` and fmt clean. |
 
 </details>
 
