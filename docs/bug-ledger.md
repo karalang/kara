@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 239 | 0 |
 | leak | 172 | 0 |
-| double-free | 124 | 1 |
+| double-free | 126 | 2 |
 | codegen-gap | 105 | 0 |
 | run-vs-build | 104 | 1 |
 | missing-feature | 94 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 828 | 3 |
+| codegen | 830 | 4 |
 | typecheck | 160 | 1 |
 | interp | 138 | 0 |
 | ownership | 47 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1149 surfaced · 3 open · 1134 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1151 surfaced · 4 open · 1135 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-13-2 | 2026-08-13 | codegen | medium | `.to_string()` on a NON-IDENTIFIER scalar receiver is check-green and interp-green but dies under BOTH compiled backends the moment it is used as a receiver for a further method: `'x'.to_string().to_uppercase()`, `7.to_string().len()`, `true.to_string().to_uppercase()`, `(7 + 1).to_string().len()`, `3.5.to_string().len()` -- and one shape, `'x'.to_string().to_string()`, is an outright codegen ICE (`Found IntValue ... but expected the StructValue variant`) | `compile_method_call` / `try_compile_nonident_collection_method` in src/codegen/method_call.rs -- the non-identifier-receiver dispatch for `to_string` |
-| B-2026-08-13-4 | 2026-08-13 | codegen | high | Binding or consuming a NESTED heap field read off a Vec ELEMENT double-frees: `let w = ds[0].inner.word` over `Vec[Deep]` with `struct Deep { inner: Pair, .. }` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string — no call, no index-assign, nothing else in the program | `clone_vec_elem_heap_field_read` (src/codegen/collections.rs) — it handles the ONE-level `ps[0].word` and has no nested sibling |
 | B-2026-08-12-34 | 2026-08-13 | typecheck+codegen | medium | A user trait `impl` on `Slice[T]` / `Map` / `Set` is still not callable, and `Map`'s is check-green with BOTH compiled backends dead. B-2026-08-12-32 fixed `String` end-to-end; these are the receivers whose call-site gate and codegen fallthrough it deliberately did not add. | — |
+| B-2026-08-13-5 | 2026-08-13 | codegen | high | A heap field read off a SLICE element double-frees at ANY depth: `fn take(xs: Slice[Pair]) -> String { xs[0].word }` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string — the Vec twin of this read has been cloned since B-2026-08-12-27, and the slice arm was excluded on reasoning the measurement now contradicts | `clone_vec_elem_heap_field_read`'s owning-Vec gate (src/codegen/collections.rs) — the arm that declines a slice container |
+| B-2026-08-13-6 | 2026-08-13 | codegen | high | A heap field read through a SHARED-struct hop off a Vec element double-frees: `shared struct Inner { word: String }` inside `struct Holder { inner: Inner, .. }`, then `let w = hs[0].inner.word` aborts with `free(): double free detected in tcache 2` on both compiled backends where the interpreter prints the string | the per-hop gate in `clone_vec_elem_heap_field_read` (src/codegen/collections.rs) meets the RC machinery — a `shared` hop declines there by design |
 
 ### Wontfix (2)
 
@@ -145,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1149 surfaced
 
 </details>
 
-### Fixed (1134)
+### Fixed (1135)
 
-<details><summary>1134 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1135 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3897,6 +3898,54 @@ one-level `ps[0].word` and has no nested sibling. It reproduces identically
 before this change, so the two are independent; the index-assign fixture here
 reads only scalars back out of the element to keep from asserting that bug in
 this row's name. |
+| B-2026-08-13-4 | codegen | high | Binding or consuming a NESTED heap field read off a Vec ELEMENT double-frees: `let w = ds[0].inner.word` over `Vec[Deep]` with `struct Deep { inner:… | FIXED by 15284a9. The abort is gone on both compiled backends, output matches the
+interpreter on every shape, and the ASAN pin fails without the code change.
+
+THE FIX IS THE ONE THE ROW PRESCRIBED: extend `clone_vec_elem_heap_field_read`
+from "the field sits DIRECTLY on the element struct" to a field CHAIN. It walks
+the hops down to the `Index` root, resolves each one through the struct tables,
+and hands the innermost struct to the same clone the one-level case has used
+since B-2026-08-12-27 — so there is one clone rule, reached from one more shape,
+rather than a second implementation of it.
+
+CLONING RATHER THAN MOVING, inherited from -27 and re-verified rather than
+assumed. Cap-zeroing the element's field would also stop the double free and is
+cheaper, but the semantics is a COPY: `karac check` accepts reading
+`ds[0].inner.word` after binding it and the interpreter still has the value, so
+a move model trades this double free for a silent use-after-free. That is the
+alternative -27 measured and rejected, and every test leg here reads the element
+BACK after consuming the field, which is what rules the shortcut out mechanically
+rather than by comment.
+
+GATED PER HOP: each intermediate field must be a non-shared user struct held by
+VALUE in its parent. A hop through a `shared` handle, an `Option`, an enum or a
+`Vec` is a different owner with its own machinery, so those decline and are left
+exactly as they were. The container gate is unchanged — owning `Vec` only, no
+slice, no map, no range index.
+
+MEASURED, each consuming destination the alias escaped into and each reaching
+the clone by a different route: a `let` binding, `Vec.push`, a call argument, a
+struct-literal field; two hops deep (`xs[0].mid.inner.word`) as well as one,
+since the walk is a loop; a 30-element loop; and the ONE-LEVEL form kept beside
+them so a refactor cannot fix the nested case and lose its sibling. A
+non-consuming read (`println(ds[0].inner.word)`) was already clean and stays so —
+the clone carries its own scope cleanup, so reading without consuming does not
+leak. Interp / JIT / AOT / `KARAC_AUTO_PAR=0` byte-identical throughout.
+
+TWO NEIGHBOURING SHAPES STILL ABORT, verified byte-identical before and after
+this change and filed as their own rows rather than folded in here:
+
+  - A hop through a SHARED struct (`shared struct Inner`, `hs[0].inner.word`).
+    This fix declines it by design — the refcount machinery owns that decision —
+    and it double-freed before this change too.
+  - A heap field read off a SLICE element, at ANY depth: `fn take(xs:
+    Slice[Pair]) -> String { xs[0].word }` double-frees, and so does its nested
+    form. -27's clone deliberately declines a slice because "a slice element is
+    borrowed … cloning would hand back a buffer whose original still has its own
+    owner, i.e. a leak rather than a fix" — but the measurement says the read
+    escapes into an owning destination anyway, so declining is not safe there
+    either. That reasoning needs revisiting on its own terms, which is why it is
+    a row and not a line in this one. |
 
 </details>
 
