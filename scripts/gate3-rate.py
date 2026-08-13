@@ -42,6 +42,7 @@ Usage:
     scripts/gate3-rate.py                 # current reading
     scripts/gate3-rate.py --window 28
     scripts/gate3-rate.py --history       # week-by-week, to see the trend
+    scripts/gate3-rate.py --scope corpus  # only what a narrowed promise covers
 """
 
 import argparse
@@ -61,6 +62,30 @@ FIRST_RUN_BREAKING = {
 }
 
 LEDGER = pathlib.Path(__file__).resolve().parent.parent / "docs" / "bug-ledger.jsonl"
+
+# SCOPES — which `source` families count toward the launch promise.
+#
+# The 2026-08-12 scope review found the breaking bugs do NOT cluster by language
+# FEATURE (strings, match, Vec and Option dominate — you cannot carve those out)
+# but by program SCALE. Over 28 days the hit rate for a first-run-breaking bug
+# was 71% for `selfhost` (29 of 41 rows) and 33% for `dogfood`, against 9 of 40
+# for `kata` — across a 254-program corpus. Writing a compiler in Kara breaks it
+# constantly; writing algorithmic programs rarely does. Same features, different
+# depth of nesting and heap composition.
+#
+# So `--scope` filters by the surface a launch actually promises. This is ONLY
+# honest if the public promise is narrowed to match: a scoped gate whose scope
+# lives just in this script is goalpost-moving, and the first person to write a
+# 5,000-line program finds out. See ../kara-launch/gates.md "Launch scope".
+SCOPES = {
+    # everything — the unscoped reading, and the default
+    "all": None,
+    # what a kata-to-Parallax-scale promise covers: the corpus with a
+    # four-language oracle, plus shipped examples
+    "corpus": {"kata", "kata-gap", "kata-gap-audit", "example"},
+    # anything a user could plausibly author, incl. compiler-scale work
+    "natural": {"kata", "kata-gap", "kata-gap-audit", "example", "dogfood", "selfhost"},
+}
 
 
 def load(path):
@@ -87,6 +112,12 @@ def main():
     )
     ap.add_argument("--as-of", help="ISO date; defaults to the newest row in the ledger")
     ap.add_argument("--history", action="store_true", help="print the week-by-week trend and exit")
+    ap.add_argument(
+        "--scope",
+        choices=sorted(SCOPES),
+        default="all",
+        help="which source families count toward the promise (default all; see SCOPES)",
+    )
     ap.add_argument("--ledger", default=str(LEDGER))
     args = ap.parse_args()
 
@@ -95,8 +126,12 @@ def main():
     breaking = counts(rows)
 
     if args.history:
-        allw = Counter(date[r["id"]].isocalendar()[:2] for r in rows)
-        brkw = Counter(date[r["id"]].isocalendar()[:2] for r in breaking)
+        fams = SCOPES[args.scope]
+        keep = (lambda r: True) if fams is None else (lambda r: r["source"].split(":")[0] in fams)
+        allw = Counter(date[r["id"]].isocalendar()[:2] for r in rows if keep(r))
+        brkw = Counter(date[r["id"]].isocalendar()[:2] for r in breaking if keep(r))
+        if fams is not None:
+            print(f"scope: {args.scope} ({', '.join(sorted(fams))})")
         print("week        all   breaking   share")
         for k in sorted(allw):
             b = brkw.get(k, 0)
@@ -110,13 +145,26 @@ def main():
 
     as_of = datetime.date.fromisoformat(args.as_of) if args.as_of else max(date.values())
     window = [r for r in rows if 0 <= (as_of - date[r["id"]]).days < args.window]
-    hit = counts(window)
+    fams = SCOPES[args.scope]
+    # The anti-gaming floor stays on the FULL window on purpose. It asks "did the
+    # search continue?", and the search is projectwide — scoping it to the
+    # promised surface would let a quiet fortnight in one corner read as proof of
+    # effort everywhere.
+    scoped = window if fams is None else [r for r in window if r["source"].split(":")[0] in fams]
+    hit = counts(scoped)
 
     print(f"Gate 3 — rolling {args.window}-day first-run-breaking rate, as of {as_of}")
+    if fams is not None:
+        print(f"  scope: {args.scope} ({', '.join(sorted(fams))})")
     print(f"  high-severity first-run-breaking : {len(hit):>4}   (pass: <= {args.max_breaking})")
     print(f"  new rows of any class            : {len(window):>4}   (pass: >= {args.min_total})")
-    if window:
-        print(f"  share                            : {len(hit) / len(window):>4.0%}")
+    if fams is not None:
+        print(f"  new rows in scope                : {len(scoped):>4}")
+    # Share is hits over the SAME population they were drawn from. Dividing
+    # scoped hits by the projectwide total would read as absurdly clean.
+    denom = scoped if fams is not None else window
+    if denom:
+        print(f"  share of in-scope rows           : {len(hit) / len(denom):>4.0%}")
 
     searched = len(window) >= args.min_total
     quiet = len(hit) <= args.max_breaking
