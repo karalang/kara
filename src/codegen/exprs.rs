@@ -834,6 +834,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     let returns_borrow_call =
                         self.current_fn_returns_ref && self.is_borrow_returning_call_expr(e);
                     let ret_opt_inner = self.current_fn_ret_option_inner_heap();
+                    // B-2026-08-13-21 — `return (b, d)` from a `-> (i64, i64)`
+                    // function. Without the declared type staged here,
+                    // `compile_tuple` lays the aggregate out from the element
+                    // VALUES and the module verifier rejects the function:
+                    // `ret { i8, i32 }` against a `{ i64, i64 }` signature.
+                    // A no-op unless the operand is a tuple literal AND the
+                    // return type is a tuple.
+                    let saved_tuple_te =
+                        self.stage_declared_tuple_te(Some(e), self.current_fn_return_te().as_ref());
                     let v = if returns_borrow_call {
                         let prev = self.compiling_ref_return_let_rhs;
                         self.compiling_ref_return_let_rhs = true;
@@ -883,6 +892,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.compile_expr(e)?
                     };
+                    self.pending_let_tuple_te = saved_tuple_te;
                     // Owned String/Vec PARAM returned by value (`return s;`
                     // where `s: String` is a parameter): the caller that
                     // passed `s` still owns its buffer (by-value header
@@ -2545,7 +2555,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.emit_weak_field_init(field_ptr, new_box);
                         continue;
                     }
+                    // B-2026-08-13-21 — a tuple literal in FIELD position
+                    // (`P { t: (b, d) }` where `t: (i64, i64)`). Without the
+                    // declared field type staged here, `compile_tuple` lays the
+                    // aggregate out from the element VALUES and the store into
+                    // the field slot is rejected ("Invalid InsertValueInst
+                    // operands": `{ i8, i32 }` into a `{ i64, i64 }` slot).
+                    //
+                    // Read from `struct_field_type_exprs`, the same per-field
+                    // source the `Option[shared]` resolution below uses; the
+                    // helper is a no-op unless both the value is a tuple literal
+                    // and the field is declared a tuple.
+                    let field_te = self
+                        .struct_field_type_exprs
+                        .get(name)
+                        .and_then(|tes| tes.get(idx))
+                        .cloned();
+                    let saved_tuple_te =
+                        self.stage_declared_tuple_te(Some(&field_init.value), field_te.as_ref());
                     let val = self.compile_expr(&field_init.value)?;
+                    self.pending_let_tuple_te = saved_tuple_te;
                     // Owned String/Vec PARAM captured into a field
                     // (`Node { name: s }` where `s: String` is a param):
                     // deep-copy — the caller retains the buffer's free
@@ -2785,7 +2814,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         continue;
                     }
                 }
+                // B-2026-08-13-21 — the `insertvalue` sibling of the staging in
+                // the shared-struct branch above. A plain (non-shared) struct
+                // literal builds its aggregate with `insertvalue` rather than
+                // GEP+store, and that is the branch `P { t: (b, d) }` takes:
+                // without the declared field type staged here `compile_tuple`
+                // lays the tuple out from its VALUES and the insert is rejected
+                // ("Invalid InsertValueInst operands", `{ i8, i32 }` into a
+                // `{ i64, i64 }` slot).
+                let tuple_field_te = self
+                    .struct_field_type_exprs
+                    .get(name)
+                    .and_then(|tes| tes.get(idx))
+                    .cloned();
+                let saved_tuple_te =
+                    self.stage_declared_tuple_te(Some(&field_init.value), tuple_field_te.as_ref());
                 let val = self.compile_expr(&field_init.value)?;
+                self.pending_let_tuple_te = saved_tuple_te;
                 // Owned String/Vec PARAM captured into a field — deep-copy,
                 // same rationale as the shared-struct branch above.
                 let val = self.maybe_defensive_copy_param_arg(&field_init.value, val);

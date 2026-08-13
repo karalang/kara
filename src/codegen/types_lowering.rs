@@ -3230,6 +3230,46 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `fn_return_option_inner_shared`, so nested-fn compiles (closures,
     /// par branch fns, monos) resolve to `None` without flag threading —
     /// same discipline as `current_fn_ret_is_niche`.
+    /// Stage the DECLARED tuple type of an expression that is about to be
+    /// compiled into a slot of that type, so `compile_tuple` lays the aggregate
+    /// out at the declared element widths instead of at its values' widths.
+    ///
+    /// B-2026-08-13-21 — the shared half of B-2026-08-13-17's fix. That row
+    /// wired the `let` position; the same value-derived layout applies wherever
+    /// a tuple literal meets a declared tuple type, and at every OTHER position
+    /// the mismatch is a module-verification failure rather than a wrong answer
+    /// (`ret { i8, i32 }` against a `{ i64, i64 }` signature, a call parameter
+    /// that does not match, an `insertvalue` into a differently-shaped field).
+    ///
+    /// A no-op unless BOTH the expression is a tuple literal and the declared
+    /// type is a tuple, which is what keeps every other program's codegen
+    /// byte-identical. Returns the previous hint so the caller can restore it —
+    /// these positions nest (a tuple argument inside a returned tuple).
+    pub(super) fn stage_declared_tuple_te(
+        &mut self,
+        expr: Option<&crate::ast::Expr>,
+        declared: Option<&TypeExpr>,
+    ) -> Option<TypeExpr> {
+        let prev = self.pending_let_tuple_te.take();
+        if let (Some(e), Some(te)) = (expr, declared) {
+            if matches!(&e.kind, crate::ast::ExprKind::Tuple(_))
+                && matches!(te.kind, TypeKind::Tuple(_))
+            {
+                self.pending_let_tuple_te = Some(te.clone());
+            }
+        }
+        prev
+    }
+
+    /// The declared return `TypeExpr` of the function currently being compiled.
+    /// `None` for a closure or any function with no recorded signature — those
+    /// keep the value-derived layout they have today.
+    pub(super) fn current_fn_return_te(&self) -> Option<TypeExpr> {
+        let cf = self.current_fn?;
+        let name = cf.get_name().to_str().ok()?;
+        self.fn_return_type_exprs.get(name).cloned()
+    }
+
     pub(crate) fn current_fn_ret_option_inner_heap(&self) -> Option<StructType<'ctx>> {
         let cf = self.current_fn?;
         let name = cf.get_name().to_str().ok()?;

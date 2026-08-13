@@ -2563,7 +2563,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // groups to `karac_par_run` when a `ConcurrencyAnalysis` was
         // threaded into codegen. With no analysis, `compile_function_body`
         // falls through to `compile_block` and behavior is unchanged.
+        // B-2026-08-13-21 — the TAIL-expression sibling of the explicit-`return`
+        // staging in `exprs.rs`. `fn give() -> (i64, i64) { (b, d) }` reaches
+        // codegen as this body's final expression, and without the declared type
+        // staged here `compile_tuple` lays the aggregate out from the element
+        // VALUES: `ret { i8, i32 }` against a `{ i64, i64 }` signature, which
+        // the module verifier rejects.
+        //
+        // Staged HERE rather than inside `compile_tail_final_expr` even though
+        // that is where the value is compiled: that helper also serves nested
+        // block tails and match-arm tails, where the function's return type is
+        // the wrong answer and would overwrite a `let`'s own annotation
+        // (`let x: (u8, u32) = { (b, d) }` inside a tuple-returning fn). Only
+        // the function body's own final expression is unambiguously the return.
+        let saved_tuple_te = self
+            .stage_declared_tuple_te(func.body.final_expr.as_deref(), func.return_type.as_ref());
         let mut result = self.compile_function_body(&func.body)?;
+        self.pending_let_tuple_te = saved_tuple_te;
         self.tail_ret_inner = None;
 
         if self

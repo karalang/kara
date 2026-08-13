@@ -1667,7 +1667,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 compiled_args.push(temp.into());
                 continue;
             }
+            // B-2026-08-13-21 — the tuple sibling of the tensor threading in
+            // the `ref`-param branch above, needed for the same reason: a tuple
+            // literal cannot recover its declared element widths from its own
+            // elements. `take((b, d))` against an `(i64, i64)` param built
+            // `{i8, i32}` and the module verifier rejected the CALL ("Call
+            // parameter type does not match function signature").
+            //
+            // Staged on the BY-VALUE path specifically. The `ref`-param branch
+            // above passes a pointer to caller-side storage and returns early;
+            // a tuple argument is passed by value, so this is the compile it
+            // actually goes through.
+            //
+            // The declared param type comes from the callee's AST rather than
+            // its LLVM signature because `compile_tuple` lowers each slot from a
+            // `TypeExpr`, and because the AST is what the READ side resolves too
+            // — both ends deriving the layout from one source is the point.
+            let param_te = self
+                .fn_asts
+                .get(&name)
+                .and_then(|f| f.params.get(i))
+                .map(|p| p.ty.clone());
+            let saved_tuple_te = self.stage_declared_tuple_te(Some(&a.value), param_te.as_ref());
             let val = self.compile_expr(&a.value)?;
+            self.pending_let_tuple_te = saved_tuple_te;
             // `Option[shared T]` ref-share at the call site: when
             // the arg is a tracked Identifier binding whose static
             // type is Option[shared T], emit a discriminant- and

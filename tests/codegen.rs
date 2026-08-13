@@ -12869,6 +12869,111 @@ fn main() {
         assert_eq!(got[8], "0", "Set[String].contains found an absent key");
     }
 
+    /// B-2026-08-13-21 — the same declared-widths rule at every OTHER position a
+    /// tuple literal can appear in: RETURN (both spellings), ARGUMENT, and
+    /// STRUCT FIELD. B-2026-08-13-17 fixed the `let` position and left the
+    /// consuming machinery shared; only the per-position staging was missing.
+    ///
+    /// Unlike that row, these were LOUD — the layout mismatch reached the module
+    /// verifier rather than producing a wrong number (`ret { i8, i32 }` against a
+    /// `{ i64, i64 }` signature; "Call parameter type does not match function
+    /// signature"; "Invalid InsertValueInst operands"). `--interp` ran all of
+    /// them correctly throughout, so each was a run-vs-build divergence too.
+    ///
+    /// Four staging sites, because a tuple literal reaches codegen through four
+    /// distinct paths and each carries the declared type differently: the
+    /// function body's final expression (`func.return_type`), the explicit
+    /// `return` operand (`fn_return_type_exprs` for the function being
+    /// compiled), the call-argument BY-VALUE path (`fn_asts` param — the
+    /// `ref`-param branch passes a pointer and returns early, so it is not the
+    /// one a tuple takes), and BOTH struct-literal builders — the plain one
+    /// builds its aggregate with `insertvalue` while the shared one GEPs and
+    /// stores, and `P { t: (b, d) }` goes through the former.
+    ///
+    /// Lines 03/04/05 pin what must NOT change: a nested tuple return gets its
+    /// own declared widths, a `String` element keeps the compiled value's own
+    /// layout, and an already-matching tuple is untouched. Line 09 covers a
+    /// `shared struct`, which is the GEP+store builder. Line 11 passes a tuple
+    /// by `ref`, which must keep taking the pointer path.
+    #[test]
+    fn test_e2e_tuple_positions_use_declared_element_widths() {
+        let src = r#"
+struct P { t: (i64, i64), n: i64 }
+shared struct S { t: (i64, i64) }
+fn take(t: (i64, i64)) -> i64 { return t.0 + t.1; }
+fn take2(a: i64, t: (i64, i64), b: i64) -> i64 { return a + t.0 + t.1 + b; }
+fn takeref(t: ref (i64, i64)) -> i64 { return t.0 + t.1; }
+fn giveret() -> (i64, i64) { let b: u8 = 200u8; let d: u32 = 4000000000u32; return (b, d); }
+fn givetail() -> (i64, i64) { let b: u8 = 200u8; let d: u32 = 4000000000u32; (b, d) }
+fn givenest() -> ((i64, i64), i64) { let b: u8 = 200u8; let d: u32 = 4000000000u32; return ((b, d), 7); }
+fn giveheap() -> (String, i64) { let b: u8 = 200u8; return ("hi", b); }
+fn givesame() -> (i64, i64) { return (1, 2); }
+
+fn main() {
+    let b: u8 = 200u8;
+    let d: u32 = 4000000000u32;
+    let r1 = giveret();    println(f"01 {r1.0} {r1.1}");
+    let r2 = givetail();   println(f"02 {r2.0} {r2.1}");
+    let r3 = givenest();   println(f"03 {r3.0.0} {r3.0.1} {r3.1}");
+    let r4 = giveheap();   println(f"04 {r4.0} {r4.1}");
+    let r5 = givesame();   println(f"05 {r5.0} {r5.1}");
+    println(f"06 {take((b, d))}");
+    println(f"07 {take2(1, (b, d), 2)}");
+    let p = P { t: (b, d), n: 7 };
+    println(f"08 {p.t.0} {p.t.1} {p.n}");
+    let s = S { t: (b, d) };
+    println(f"09 {s.t.0} {s.t.1}");
+    let lt: (i64, i64) = (b, d);
+    println(f"10 {lt.0} {lt.1}");
+    println(f"11 {takeref(lt)}");
+    let un = (b, d);
+    println(f"12 {un.0} {un.1}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 200 4000000000\n\
+                 02 200 4000000000\n\
+                 03 200 4000000000 7\n\
+                 04 hi 200\n\
+                 05 1 2\n\
+                 06 4000000200\n\
+                 07 4000000203\n\
+                 08 200 4000000000 7\n\
+                 09 200 4000000000\n\
+                 10 200 4000000000\n\
+                 11 4000000200\n\
+                 12 200 4000000000\n"
+            ),
+        );
+    }
+
+    /// B-2026-08-13-21 — the boundary that decided WHERE the tail-return staging
+    /// goes. A nested block's tail is compiled by the same helper as a function
+    /// body's, so staging the function's return type inside that helper would
+    /// overwrite an inner `let`'s own annotation: here `inner` is declared
+    /// `(u8, u32)` inside a fn returning `(i64, i64)`, and it must keep its own
+    /// widths. The staging therefore sits at the function-body final expression,
+    /// the only tail that is unambiguously the return.
+    #[test]
+    fn test_e2e_nested_block_tail_keeps_its_own_tuple_annotation() {
+        assert_eq!(
+            run_program(
+                "fn f() -> (i64, i64) {\n\
+                     let b: u8 = 200u8;\n\
+                     let d: u32 = 4000000000u32;\n\
+                     let inner: (u8, u32) = { (b, d) };\n\
+                     println(f\"inner {inner.0} {inner.1}\");\n\
+                     return (b, d);\n\
+                 }\n\
+                 fn main() { let t = f(); println(f\"outer {t.0} {t.1}\"); }"
+            )
+            .as_deref(),
+            Some("inner 200 4000000000\nouter 200 4000000000\n"),
+        );
+    }
+
     /// B-2026-08-13-17 — an ANNOTATED tuple binding must lay its aggregate out
     /// at the DECLARED element widths, not at the compiled values' widths.
     ///
