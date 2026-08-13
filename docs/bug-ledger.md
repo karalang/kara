@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 239 | 0 |
-| leak | 172 | 1 |
-| double-free | 122 | 0 |
+| leak | 172 | 0 |
+| double-free | 123 | 1 |
 | codegen-gap | 105 | 0 |
 | run-vs-build | 104 | 1 |
 | missing-feature | 93 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 825 | 2 |
+| codegen | 826 | 2 |
 | typecheck | 159 | 1 |
 | interp | 138 | 0 |
 | ownership | 47 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1146 surfaced · 3 open · 1131 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1147 surfaced · 3 open · 1132 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-12-33 | 2026-08-12 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS passes container HEAP into a call: `ps[0] = passthru(ps[0])` and `ps[0] = takes(ps[0].word)` over `Vec[Pair]` with `struct Pair { word: String, n: i64 }` each lose 400 B in 40 allocations. B-2026-08-12-31 fixed the scalar-reaching case; these are the two where the argument genuinely carries a buffer out of the container. | — |
 | B-2026-08-12-32 | 2026-08-13 | typecheck | medium | A user trait `impl` on `String` or `Slice[T]` is ACCEPTED but never found at the call site: `impl Zero for String { .. }` then `s.describe()` fails with `no method 'describe' on type 'String'`. The same impl on `i64`, `f64`, `bool` or even `Vec[i64]` resolves fine, so this is a per-builtin hole in method resolution rather than a blanket 'no user traits on builtins' rule. | method resolution for a USER trait impl whose target is a builtin type -- the `impl Zero for String` declaration is accepted, but a `String` receiver never finds the method |
 | B-2026-08-13-2 | 2026-08-13 | codegen | medium | `.to_string()` on a NON-IDENTIFIER scalar receiver is check-green and interp-green but dies under BOTH compiled backends the moment it is used as a receiver for a further method: `'x'.to_string().to_uppercase()`, `7.to_string().len()`, `true.to_string().to_uppercase()`, `(7 + 1).to_string().len()`, `3.5.to_string().len()` -- and one shape, `'x'.to_string().to_string()`, is an outright codegen ICE (`Found IntValue ... but expected the StructValue variant`) | `compile_method_call` / `try_compile_nonident_collection_method` in src/codegen/method_call.rs -- the non-identifier-receiver dispatch for `to_string` |
+| B-2026-08-13-3 | 2026-08-13 | codegen | high | Passing a Vec ELEMENT whose struct has a NESTED STRUCT field to a call and assigning the result back to that same slot DOUBLE-FREES on both compiled backends, on a SINGLE assignment: `ds[0] = bump(ds[0])` over `struct Deep { inner: Pair, tag: i64 }` aborts with `free(): double free detected in tcache 2` where the interpreter prints the right answer | the by-value aggregate param entry copy — `make_aggregate_param_callee_owned_inst` / `aggregate_param_copy_supported_struct` (src/codegen/param_own.rs) against the index-store element drop (src/codegen/stmts.rs) |
 
 ### Wontfix (2)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1146 surfaced
 
 </details>
 
-### Fixed (1131)
+### Fixed (1132)
 
-<details><summary>1131 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1132 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -3637,6 +3637,80 @@ heap out of the container -- `passthru(ps[0])` (the element itself) and
 `takes(ps[0].word)` (a heap field). Both still leak 400 B / 40, unchanged by
 this and by -26. They need the callee's escape behaviour, which nothing at this
 site establishes. |
+| B-2026-08-12-33 | codegen | medium | The displaced element still LEAKS when an index-assign's RHS passes container HEAP into a call: `ps[0] = passthru(ps[0])` and `ps[0] = takes(ps[0].wo… | FIXED by 0eec7ad. Both shapes are clean under valgrind (200 B / 40 blocks each ->
+0) with output unchanged on all four surfaces, and the ASAN/LSan pin fails
+without the code change.
+
+NEITHER FIX TRUSTS THE CALLEE, which is what the row said the shapes would
+need. Both establish the same thing the reachability arm establishes -- that
+the callee was never handed a pointer into the container -- by finding the
+copy that already happens.
+
+  - `takes(ps[0].word)`. The row's own WORTH CHECKING FIRST was the answer:
+    B-2026-08-12-27 deep-clones a heap FIELD read off a Vec element AT THE
+    READ, so the argument is an independent buffer and the element keeps its
+    own. The row measured "the leak is unchanged after rebasing onto that
+    commit" and concluded the clone might not cover the call-argument
+    position. It does. The leak was unchanged because the clone's existence
+    was never the blocker -- the GUARD could not see it. It now asks, and the
+    same clone that was there all along clears the shape.
+  - `passthru(ps[0])`. No caller-side clone exists, but an owned bare-`Path`
+    aggregate param is callee-owned by ENTRY COPY
+    (`make_aggregate_param_callee_owned_inst`): the callee duplicates the heap
+    fields into its own frame before the body runs, so what it can hand back
+    is its copy. The displaced occupant therefore still has exactly one owner,
+    the container, and freeing it is the missing free rather than a second
+    one.
+
+ASKED OF THE EMITTED CODE, NOT RE-DERIVED. The field clone's admission test is
+eight conditions deep; restating it at the guard would drift from the real one
+the first time either is tuned, with a double free as the failure mode -- the
+lesson B-2026-08-12-26 already wrote down when it chose value identity over a
+second predicate. So the clone now RECORDS its span when it fires and the guard
+reads the record. The entry-copy arm calls
+`aggregate_param_copy_supported_struct` -- the same function the callee's entry
+copy is gated on, not a copy of it.
+
+THE RECORD IS ORDERED, NOT JUST KEYED, and that is a real distinction rather
+than tidiness: a span-keyed map answers "was this span ever cloned in this
+module", which is a different claim once one source expression compiles twice
+(two monomorphs of one generic body) and the clone's type-driven gates decide
+differently in each. The stale hit would authorize freeing a buffer the second
+context still aliases. The guard marks the log's length before the RHS is
+compiled and looks only past that mark, so the evidence is the statement's own.
+
+OWN-BY-TRANSFER IS EXCLUDED ON PURPOSE, and it is the sharp edge of the
+entry-copy arm. B-2026-08-05-33's arm makes a param callee-owned by handing it
+the ORIGINAL buffers with no copy at all; its scope-exit drop then frees
+exactly what this free would free. Asking "is the param callee-owned" would
+admit it and produce a double free -- which is why the gate asks for the COPY
+arm specifically. A `Map`-bearing element (`Reg { by: Map[String, i64], .. }`)
+is the measured instance and stays declining, verified clean.
+
+A SECOND, NARROWER GATE ON TOP, from a measurement rather than a hunch: the
+element's fields must be scalars or a DIRECT buffer (`String`, `Vec[scalar]`,
+`Vec[String]`). A NESTED STRUCT field passes copy-support, but the whole shape
+it would admit -- `ds[0] = bump(ds[0])` over `Deep { inner: Pair, .. }` --
+already DOUBLE-FREES on both compiled backends BEFORE this change, on a single
+assignment, while `ds[0] = mk(ds[0].tag + 1)` and `ds[0] = ds[1]` over the same
+element are clean. Filed as its own row. Admitting the shape would mean
+reasoning from a property the target program demonstrably does not have, so it
+is excluded until that row is fixed and it can be re-measured. Verified
+byte-identical to pre-change behaviour with the narrowing in place.
+
+STILL DECLINING, each a leak rather than corruption, each verified unchanged:
+a `ref`-param callee (nothing copies anywhere -- 29 B / 5 blocks, before and
+after), and a FIELD-ROOTED container (`h.xs[0] = passthru(h.xs[0])`), where
+both the field-read clone and the entry-copy arm want an `Identifier` root.
+
+MEASURED ACROSS SURFACES, not just under the sanitizer: interp / JIT / AOT /
+`KARAC_AUTO_PAR=0` AOT byte-identical on every probe, with valgrind
+before/after on each -- 39 B / 15 blocks -> 0 on the mixed-shape program,
+192 B / 5 -> 0 on the `Vec[String]`-element one. Pins: an ASAN twin over all
+four call shapes including the `Vec[String]` element (asserted to FAIL without
+the code change, so it is not vacuous), a codegen value test that the round
+trip through the callee and back into its own slot preserves the string, and
+an interpreter twin fixing the oracle those values are checked against. |
 | B-2026-08-13-1 | ownership | low | The ownership checker treats an OWNED String passed as the ARGUMENT of a read-only String method as a MOVE, and does so INCONSISTENTLY across the thr… | FIXED by 1299fd3. All seven read-only String methods now classify their argument
 as a BORROW, so the row's one-line repro is clean and prints `abc|abc`
 identically on both backends.
