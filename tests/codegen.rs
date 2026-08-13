@@ -23312,6 +23312,73 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_trait_bound_call_over_builtin_containers_dispatches() {
+        // B-2026-08-13-9 — a TRAIT-BOUND call (`fn show[T: Zero](x: ref T)`)
+        // over a user-impl'd builtin container. Direct dispatch on all of these
+        // receivers already worked; the bound spelling was the last one dead,
+        // and the row's own warning is what this fixture is shaped around:
+        //
+        //   "Routing it through the Vec/String fallthrough was tried and
+        //    REVERTED — it returns the WRONG impl once a second one exists."
+        //
+        // So FIVE impls are live at once and every receiver is exercised through
+        // the bound. A body that serves more than one instantiation cannot
+        // produce this output; it prints one impl's answer for several
+        // receivers, which is what the earlier attempt did (`m s m m` where the
+        // interpreter said `m s m s`).
+        //
+        // The cause was a mangle collision, not a missing dispatcher arm: `Map`,
+        // `Set` and `Slice` all lower to `ptr`, so `show$ptr` served every
+        // instantiation. `String`/`Vec` were never in that collision (the
+        // `$<p>_ct_<token>` axis disambiguates them element-awarely) and are
+        // here as the controls that say the fix did not disturb them.
+        //
+        // `outer` is the NESTED generic call: inside a monomorph the inner
+        // call's LLVM-type binding is empty (the typechecker drops the
+        // self-referential `T -> T`), so it appended nothing at all and both
+        // outer monos shared one `inner`. `pair` covers two bound params in one
+        // signature, and both slice spellings are here — a binding and an inline
+        // range — because they resolve by different routes.
+        //
+        // Distinct from B-2026-08-13-8's fixture next door, which is the same
+        // erasure on the ELEMENT axis (two impls under one head); this one is
+        // the HEAD axis (one impl each on five different heads).
+        assert_eq!(
+            run_program(
+                "trait Zero { fn describe(ref self) -> String; }\n\
+                 impl Zero for Map[String, i64] { fn describe(ref self) -> String { return \"m\"; } }\n\
+                 impl Zero for Set[i64] { fn describe(ref self) -> String { return \"s\"; } }\n\
+                 impl Zero for Slice[i64] { fn describe(ref self) -> String { return \"l\"; } }\n\
+                 impl Zero for Vec[i64] { fn describe(ref self) -> String { return \"v\"; } }\n\
+                 impl Zero for String { fn describe(ref self) -> String { return \"t\"; } }\n\
+                 fn show[T: Zero](x: ref T) -> String { return x.describe(); }\n\
+                 fn outer[T: Zero](x: ref T) -> String { return show(x) + \"!\"; }\n\
+                 fn pair[A: Zero, B: Zero](x: ref A, y: ref B) -> String {\n\
+                     return x.describe() + y.describe();\n\
+                 }\n\
+                 fn main() {\n\
+                     let mut m: Map[String, i64] = Map.new();\n\
+                     m.insert(\"k\", 1);\n\
+                     let mut s: Set[i64] = Set.new();\n\
+                     s.insert(7);\n\
+                     let mut v: Vec[i64] = Vec.new();\n\
+                     v.push(3);\n\
+                     v.push(4);\n\
+                     let t: String = \"hi\";\n\
+                     let sl = v[0..2];\n\
+                     println(show(m) + show(s) + show(sl) + show(v) + show(t));\n\
+                     println(show(v[0..2]));\n\
+                     println(outer(m) + outer(s));\n\
+                     println(pair(m, s) + pair(s, m));\n\
+                     println(m.describe() + s.describe() + v.describe() + t.describe());\n\
+                 }"
+            )
+            .as_deref(),
+            Some("mslvt\nl\nm!s!\nmssm\nmsvt\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_user_trait_impl_on_slice_dispatches() {
         // B-2026-08-13-7 — DIRECT dispatch of a user trait impl on `Slice[T]`,
         // end to end. This one was reverted TWICE before landing, and the order

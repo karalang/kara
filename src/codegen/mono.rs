@@ -363,6 +363,77 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.string_vars.contains(arg_name) {
             return Some(("String".to_string(), None));
         }
+        // B-2026-08-13-9 — a MAP / SET / SLICE argument, before the Vec arm.
+        //
+        // That arm reads `var_elem_type_exprs` and, finding an entry, calls the
+        // container a `Vec` — defaulting the head to "Vec" when the recorded
+        // name is anything else. But that table doubles as the MAP's value slot
+        // and carries a `Set`'s element too, so a `Map[String, i64]` argument
+        // bound to a bare `T` param resolved to the type-expr `Vec[i64]`: the
+        // monomorph then registered its receiver as a Vec and every method on it
+        // went to the Vec/String path ("Vec/String method 'describe' is not yet
+        // supported in codegen" for a user trait impl). The head name survived
+        // only because the typechecker had already filled it and this resolver
+        // uses `or_insert`, which is why the two subst tables disagreed —
+        // `{"T": "Map"}` beside a `Vec[i64]` type-expr.
+        //
+        // Each of these returns its OWN head with its own element-aware
+        // type-expr, so the registration matches the container the caller
+        // actually passed. `Map` carries two args and cannot be expressed as a
+        // one-element head, so this returns the FULL container type-expr and the
+        // caller inserts it verbatim.
+        if let Some(head) = self
+            .var_type_names
+            .get(arg_name)
+            .filter(|h| matches!(h.as_str(), "Map" | "SortedMap"))
+        {
+            let (Some(k), Some(v)) = (
+                self.map_key_type_exprs.get(arg_name),
+                self.var_elem_type_exprs.get(arg_name),
+            ) else {
+                return None;
+            };
+            return Some((
+                head.clone(),
+                Some(Self::path_type_expr(head, &[k.clone(), v.clone()])),
+            ));
+        }
+        if let Some(head) = self
+            .var_type_names
+            .get(arg_name)
+            .filter(|h| matches!(h.as_str(), "Set" | "SortedSet"))
+        {
+            let elem = self
+                .set_elem_type_exprs
+                .get(arg_name)
+                .or_else(|| self.var_elem_type_exprs.get(arg_name))?;
+            return Some((
+                head.clone(),
+                Some(Self::path_type_expr(head, std::slice::from_ref(elem))),
+            ));
+        }
+        if self.slice_elem_types.contains_key(arg_name) {
+            // The element type-expr is recorded only when the binding was
+            // registered FROM a declared `Slice[E]`. An INFERRED slice binding
+            // (`let sl = v[0..2]`) has none, and records the ELEMENT's name in
+            // `var_type_names` instead — the same convention that makes
+            // `inferred_receiver_type` need its own slice fallback. Rebuild the
+            // element from that name when the type-expr is absent, so both
+            // spellings of a slice binding resolve identically.
+            let elem = self
+                .var_elem_type_exprs
+                .get(arg_name)
+                .cloned()
+                .or_else(|| {
+                    self.var_type_names
+                        .get(arg_name)
+                        .map(|n| Self::path_type_expr(n, &[]))
+                })?;
+            return Some((
+                "Slice".to_string(),
+                Some(Self::path_type_expr("Slice", std::slice::from_ref(&elem))),
+            ));
+        }
         if let Some(elem) = self.var_elem_type_exprs.get(arg_name) {
             let head = self
                 .var_type_names
@@ -370,9 +441,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 .filter(|h| h.as_str() == "Vec" || h.as_str() == "VecDeque")
                 .cloned()
                 .unwrap_or_else(|| "Vec".to_string());
-            return Some((head, Some(elem.clone())));
+            return Some((
+                head.clone(),
+                Some(Self::path_type_expr(&head, std::slice::from_ref(elem))),
+            ));
         }
         None
+    }
+
+    /// B-2026-08-13-9 — build `Head[A, B, …]` as a `TypeExpr`, so a resolver can
+    /// hand back a whole container type rather than an element the caller has to
+    /// re-wrap (which is what limited the shape above to one generic arg).
+    fn path_type_expr(head: &str, args: &[TypeExpr]) -> TypeExpr {
+        let span = args
+            .first()
+            .map(|a| a.span.clone())
+            .unwrap_or(crate::token::Span {
+                line: 0,
+                column: 0,
+                offset: 0,
+                length: 0,
+            });
+        TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![head.to_string()],
+                // No args means a BARE path (`i64`), not `i64[]` — an empty
+                // `generic_args` list is a different type expression and every
+                // consumer that peels one arg would see a malformed head.
+                generic_args: if args.is_empty() {
+                    None
+                } else {
+                    Some(args.iter().cloned().map(GenericArg::Type).collect())
+                },
+                span: span.clone(),
+            }),
+            span,
+        }
     }
 
     /// Resolve each bare generic type param `x: T` bound WHOLE to a builtin
@@ -419,28 +523,38 @@ impl<'ctx> super::Codegen<'ctx> {
             if !is_param(pname) {
                 continue;
             }
-            let ExprKind::Identifier(arg_name) = &arg.value.kind else {
-                continue;
+            // A RANGE INDEX (`show(v[0..2])`) is a slice VALUE with no binding
+            // to look up, so the identifier path below cannot see it — it was
+            // the one spelling of a slice argument still dead after the binding
+            // form worked (B-2026-08-13-9). Resolve it from the container it
+            // slices: the head is `Slice`, the element is the container's own.
+            let resolved = match &arg.value.kind {
+                ExprKind::Identifier(arg_name) => self.arg_collection_head_elem(arg_name.as_str()),
+                ExprKind::Index { object, index }
+                    if matches!(&index.kind, ExprKind::Range { .. }) =>
+                {
+                    match &object.kind {
+                        ExprKind::Identifier(base) => self
+                            .var_elem_type_exprs
+                            .get(base.as_str())
+                            .map(|elem| Self::path_type_expr("Slice", std::slice::from_ref(elem)))
+                            .map(|te| ("Slice".to_string(), Some(te))),
+                        _ => None,
+                    }
+                }
+                _ => None,
             };
-            let Some((head, elem)) = self.arg_collection_head_elem(arg_name.as_str()) else {
+            let Some((head, elem)) = resolved else {
                 continue;
             };
             // Fill the head name only if the typechecker didn't (leg A).
             subst_names.entry(pname.clone()).or_insert(head.clone());
-            // Record the element-aware full type for Vec/VecDeque (leg B).
-            if let Some(elem_te) = elem {
-                let sp = param.ty.span.clone();
-                out.insert(
-                    pname.clone(),
-                    TypeExpr {
-                        kind: TypeKind::Path(PathExpr {
-                            segments: vec![head],
-                            generic_args: Some(vec![GenericArg::Type(elem_te)]),
-                            span: sp.clone(),
-                        }),
-                        span: sp,
-                    },
-                );
+            // Record the element-aware full type (leg B). `String` carries
+            // none; every other head hands back its whole container type-expr
+            // (B-2026-08-13-9), so a two-parameter `Map[K, V]` survives the
+            // round trip that a head-plus-one-element shape could not express.
+            if let Some(container_te) = elem {
+                out.insert(pname.clone(), container_te);
             }
         }
         out
@@ -3210,7 +3324,59 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-08-13-9 — the same collapse, one type family over.
+                    // A BUILTIN CONTAINER lowers to `"struct"` (String/Vec) or
+                    // `"ptr"` (Map/Set/Slice and the handle-backed builtins), so
+                    // `show(map)` and `show(set)` both mangled to `show$ptr`: one
+                    // compiled body served both instantiations and dispatched
+                    // every receiver to whichever impl it was built against —
+                    // measured as `m s m m` against the interpreter's `m s m s`.
+                    //
+                    // The arm above says a builtin "keeps the `$struct` token so
+                    // its existing per-mono symbols are unchanged (its method
+                    // dispatch never keys on `var_type_names`, so the opaque
+                    // token is still sound)". That premise expired: user trait
+                    // impls on `Map`/`Set` (ec1d19c) and on `Slice[T]` (b0ef988)
+                    // dispatch BY RECEIVER NAME, so the identity the token erases
+                    // is now load-bearing. Disambiguating by name is what the
+                    // primitive arm (B-2026-07-03-24) and the user-struct arm
+                    // (B-2026-07-03-11) each already do for their own erasure —
+                    // this is the third instance of one rule, not a new one.
+                    if matches!(token.as_str(), "ptr" | "struct") {
+                        if let Some(name) = subst_names.get(&param.name) {
+                            if Self::is_builtin_container_mangle_name(name) {
+                                mangled.push_str(name);
+                                continue;
+                            }
+                        }
+                    }
                     mangled.push_str(&token);
+                } else if let Some(name) = subst_names.get(&param.name) {
+                    // B-2026-08-13-9 — a NESTED generic call inside a monomorph
+                    // (`outer[T](x) { inner(x) }`) reaches here with NO LLVM-type
+                    // binding: `infer_type_args` leaves the inner `subst` empty
+                    // because the typechecker drops the self-referential `T -> T`
+                    // it sees inside a generic body. The arms above are all keyed
+                    // on that binding, so the inner call appended NOTHING and every
+                    // instantiation shared one symbol — `outer(map)` and
+                    // `outer(set)` got distinct outer monos that both called the
+                    // same `inner`, which answered `m! m!` where the interpreter
+                    // said `m! s!`.
+                    //
+                    // The NAME is known here even when the LLVM type is not
+                    // (`resolve_collection_param_substs` fills it from the caller's
+                    // live side-tables), and it is the same identity the arms above
+                    // reach for. Gated to names that ARE a concrete type — a bare
+                    // type param that resolved to nothing keeps today's suffix-less
+                    // symbol rather than putting `T` in the symbol table.
+                    if Self::is_builtin_container_mangle_name(name)
+                        || Self::is_scalar_primitive_mangle_name(name)
+                        || self.struct_types.contains_key(name)
+                        || self.enum_layouts.contains_key(name)
+                    {
+                        mangled.push('$');
+                        mangled.push_str(name);
+                    }
                 }
             }
         }
@@ -3552,6 +3718,26 @@ impl<'ctx> super::Codegen<'ctx> {
             "PartialEq" | "PartialOrd" | "Display" | "Clone" | "Copy" => true,
             _ => true,
         }
+    }
+
+    /// B-2026-08-13-9 — is `name` a BUILTIN container head whose LLVM lowering
+    /// erases its identity in the mangle token?
+    ///
+    /// The HANDLE-shaped ones only. `String` / `Vec` / `VecDeque` lower to
+    /// `{ptr,i64,i64}` and are already disambiguated — element-awarely, which is
+    /// strictly better — by `append_collection_type_param_mangle`'s `$<p>_ct_<t>`
+    /// axis; adding them here appended a SECOND copy of the same identity
+    /// (`driver$String$T_ct_String`) and broke five per-mono destructor tests
+    /// that read the emitted symbol. What that axis skips is exactly this list:
+    /// its comment says "Map/Set (single-`ptr` handle) … mangle distinctly
+    /// already", which was true until a user `impl` could attach methods to
+    /// them — a `ptr` is a `ptr`, so `Map` and `Set` collided.
+    ///
+    /// Deliberately a CLOSED list rather than "anything not a user type": a name
+    /// absent from it keeps its existing token, so no symbol outside this family
+    /// changes.
+    fn is_builtin_container_mangle_name(name: &str) -> bool {
+        matches!(name, "Slice" | "Map" | "Set" | "SortedMap" | "SortedSet")
     }
 
     /// Produce a stable string token for an LLVM type suitable for name mangling.

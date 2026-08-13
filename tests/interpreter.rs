@@ -28303,6 +28303,49 @@ fn test_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-08-13-9 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_user_trait_bound_call_over_builtin_containers_dispatches`, same
+/// source and expected string.
+///
+/// The interpreter answered this correctly all along — it dispatches on the
+/// runtime value, so a bound call needs no monomorph identity — which is what
+/// made it the oracle the compiled fix was measured against, and what made the
+/// earlier reverted attempt visibly wrong (`m s m m` here would have read
+/// `m s m s`). Pinning it keeps that oracle explicit rather than implied.
+#[test]
+fn test_user_trait_bound_call_over_builtin_containers() {
+    assert_eq!(
+        run("trait Zero { fn describe(ref self) -> String; }\n\
+             impl Zero for Map[String, i64] { fn describe(ref self) -> String { return \"m\"; } }\n\
+             impl Zero for Set[i64] { fn describe(ref self) -> String { return \"s\"; } }\n\
+             impl Zero for Slice[i64] { fn describe(ref self) -> String { return \"l\"; } }\n\
+             impl Zero for Vec[i64] { fn describe(ref self) -> String { return \"v\"; } }\n\
+             impl Zero for String { fn describe(ref self) -> String { return \"t\"; } }\n\
+             fn show[T: Zero](x: ref T) -> String { return x.describe(); }\n\
+             fn outer[T: Zero](x: ref T) -> String { return show(x) + \"!\"; }\n\
+             fn pair[A: Zero, B: Zero](x: ref A, y: ref B) -> String {\n\
+                 return x.describe() + y.describe();\n\
+             }\n\
+             fn main() {\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 m.insert(\"k\", 1);\n\
+                 let mut s: Set[i64] = Set.new();\n\
+                 s.insert(7);\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(3);\n\
+                 v.push(4);\n\
+                 let t: String = \"hi\";\n\
+                 let sl = v[0..2];\n\
+                 println(show(m) + show(s) + show(sl) + show(v) + show(t));\n\
+                 println(show(v[0..2]));\n\
+                 println(outer(m) + outer(s));\n\
+                 println(pair(m, s) + pair(s, m));\n\
+                 println(m.describe() + s.describe() + v.describe() + t.describe());\n\
+             }"),
+        "mslvt\nl\nm!s!\nmssm\nmsvt\n"
+    );
+}
+
 /// B-2026-08-13-6 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_shared_struct_heap_field_read_is_a_copy`, same source and expected
 /// string.
