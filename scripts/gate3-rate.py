@@ -43,6 +43,7 @@ Usage:
     scripts/gate3-rate.py --window 28
     scripts/gate3-rate.py --history       # week-by-week, to see the trend
     scripts/gate3-rate.py --scope corpus  # only what a narrowed promise covers
+    scripts/gate3-rate.py --family selfhost --history   # one phase's own curve
 """
 
 import argparse
@@ -118,6 +119,22 @@ def main():
         default="all",
         help="which source families count toward the promise (default all; see SCOPES)",
     )
+    ap.add_argument(
+        "--min-family",
+        type=int,
+        default=10,
+        help="with --family: minimum in-family rows in the window for the gate to be "
+             "evaluable (default 10). The global --min-total cannot protect a family "
+             "read — the project can be loud while one phase's port is paused, and "
+             "that family's silence is 'the search stopped', not 'the curve flattened'.",
+    )
+    ap.add_argument(
+        "--family",
+        help="restrict the COUNT to one source family (e.g. selfhost) — the per-phase "
+             "gate: a phase's port step is done when ITS family's breaking rate is "
+             "quiet, not when the global curve is. Composable with --scope is not "
+             "meaningful (both filter the numerator); use one or the other.",
+    )
     ap.add_argument("--ledger", default=str(LEDGER))
     args = ap.parse_args()
 
@@ -126,7 +143,7 @@ def main():
     breaking = counts(rows)
 
     if args.history:
-        fams = SCOPES[args.scope]
+        fams = {args.family} if args.family else SCOPES[args.scope]
         keep = (lambda r: True) if fams is None else (lambda r: r["source"].split(":")[0] in fams)
         allw = Counter(date[r["id"]].isocalendar()[:2] for r in rows if keep(r))
         brkw = Counter(date[r["id"]].isocalendar()[:2] for r in breaking if keep(r))
@@ -145,7 +162,9 @@ def main():
 
     as_of = datetime.date.fromisoformat(args.as_of) if args.as_of else max(date.values())
     window = [r for r in rows if 0 <= (as_of - date[r["id"]]).days < args.window]
-    fams = SCOPES[args.scope]
+    fams = {args.family} if args.family else SCOPES[args.scope]
+    if args.family and args.scope != "all":
+        sys.exit("--family and --scope both filter the numerator; pass one, not both")
     # The anti-gaming floor stays on the FULL window on purpose. It asks "did the
     # search continue?", and the search is projectwide — scoping it to the
     # promised surface would let a quiet fortnight in one corner read as proof of
@@ -167,6 +186,8 @@ def main():
         print(f"  share of in-scope rows           : {len(hit) / len(denom):>4.0%}")
 
     searched = len(window) >= args.min_total
+    if args.family:
+        searched = searched and len(scoped) >= args.min_family
     quiet = len(hit) <= args.max_breaking
     if quiet and searched:
         verdict = "MET"
