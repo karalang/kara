@@ -226,10 +226,8 @@ fn walk_expr(expr: &Expr, out: &mut Vec<TypeError>) {
                 out.push(diagnostic(object, &format!("method '{method}'")));
             }
         }
-        ExprKind::Index { object, .. } => {
-            if is_chained_field_receiver(object) {
-                out.push(diagnostic(object, "an index expression"));
-            }
+        ExprKind::Index { object, .. } if is_chained_field_receiver(object) => {
+            out.push(diagnostic(object, "an index expression"));
         }
         _ => {}
     }
