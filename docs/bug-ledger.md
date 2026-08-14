@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 246 | 2 |
+| miscompile | 246 | 1 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 111 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 848 | 4 |
+| codegen | 848 | 3 |
 | typecheck | 164 | 1 |
 | interp | 144 | 1 |
 | ownership | 47 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced · 5 open · 1157 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced · 4 open · 1158 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-3 | 2026-08-14 | codegen | high | GENERICS AT UNSIGNED NARROW WIDTHS RETURN SIGN-EXTENDED GARBAGE on both compiled backends: `fn idg[T](x: T) -> T` called as `idg(200u8)` yields -56, `idg(60000u16)` yields -5536, `idg(4000000000u32)` yields -294967296, and the generic struct `Boxg[T] { v: T }` at `Boxg[u8]` reads its field back as -56. Signed T is correct, and the same values held in a non-generic binding are correct. | The monomorphization path's extension of a narrow T: it appears to sign-extend unconditionally rather than choosing sext/zext from T's signedness. Both the generic FUNCTION return/argument and the generic STRUCT field read are affected, which points at one shared widen rather than two. Contrast with the non-generic control in the same program (a plain `let direct = 200u8` prints 200) and with `Vec[u8]`, which round-trips 200 correctly — so it is the generic instantiation, not narrow unsigned handling in general. |
 | B-2026-08-14-4 | 2026-08-14 | codegen | high | A STRUCT WITH UNSIGNED NARROW FIELDS IS CORRUPTED BY A Vec ROUND-TRIP: reading `v[0].a` where `a: u8 = 200` yields -56 on both compiled backends, while reading the SAME field off the same struct directly yields 200. u16 and u32 fields corrupt identically; the direct read is correct in the same program. | The Vec-element struct field read path, versus the direct field read which is correct. Likely the same signedness-blind extension as B-2026-08-14-3's generic instantiation (a `Vec[T]` element read is a monomorphized read), but filed separately because the direct-vs-through-Vec split is a distinct observable and may be a distinct site. |
 | B-2026-08-14-5 | 2026-08-14 | codegen | medium | A FIELD READ ON AN ARRAY-INDEXED STRUCT IS A HARD CODEGEN GAP: `arr[0].a` where `arr: Array[Plain, 1]` fails to build with "codegen: cannot resolve field 'a' on this receiver (its type was not recorded for codegen)". The same read through a `Vec[Plain]` compiles, and `--interp` runs it. | The receiver-type recording for an index expression whose base is an `Array[Struct, N]` — the Vec-indexed sibling records it, the array-indexed one does not. The message is the compiler's own self-report and names the gap precisely. |
 | B-2026-08-14-6 | 2026-08-14 | typecheck+codegen | medium | The int-to-float implicit widening is performed at NEITHER surface for a CONTAINER element: the interpreter stores an Int in a `Vec[f64]`, and the compiled backends store a float but never convert a lookup PROBE, so `Vec[f64].contains(some_int)` can never match on either. Split from B-2026-08-14-2, which fixed every position whose declared type is reachable from the AST. | Interpreter: the container-argument sites in method_call_seq.rs have no element type (a method call's receiver span carries the CALL's result type). Codegen: the lookup-probe conversion at the same sites' twins. Channel to add: a span set keyed by the argument, the `weak_elem_store_sites` pattern. |
@@ -147,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced
 
 </details>
 
-### Fixed (1157)
+### Fixed (1158)
 
-<details><summary>1157 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1158 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5266,6 +5265,85 @@ the operator.
 
 Suite green with `--features llvm` (13583 passed, 0 failed); clippy `--all
 --all-targets --features llvm` and fmt clean. |
+| B-2026-08-14-3 | codegen | high | GENERICS AT UNSIGNED NARROW WIDTHS RETURN SIGN-EXTENDED GARBAGE on both compiled backends: `fn idg[T](x: T) -> T` called as `idg(200u8)` yields -56,… | FIXED by 6f6256c. Both of the row's repros print the interpreter's answer on JIT
+and AOT, and the codegen pin fails against the stashed compiler with 11 of its
+12 lines wrong.
+
+THE TRACKER'S DIAGNOSIS WAS THE WRONG HALF OF THE COMPILER. It reads "the
+monomorphization path's extension of a narrow T: it appears to sign-extend
+unconditionally". Nothing in the mono path is wrong. The failing decision is
+`expr_is_unsigned_int` (codegen/expr_ops.rs), which answers "must a widening of
+this value zero-extend?" by walking the expression SYNTACTICALLY: a suffixed
+literal, a variable's `var_type_names` entry, a callee's `fn_return_type_names`
+entry. For `fn idg[T](x: T) -> T` that last one is the string `"T"`, which is
+not a uint name, so the walk said signed and the PRINT path sign-extended.
+
+The bisect that shows it is a `let`:
+
+    let r: u8 = idg(200u8); println(r)   -> 200   (identifier arm, concrete)
+    let s     = idg(200u8); println(s)   -> 200   (same, via inference)
+    println(idg(200u8))                  -> -56   (no name to read)
+
+Binding the value first was always correct. If the mono path had been extending
+wrongly, all three would have been wrong.
+
+THE u64 CASE IS THE PROOF, and it is not in the row. `idg(18446744073709551615u64)`
+printed -1. At 64 bits there is no extension to get wrong at all — only the
+print FORMATTING is — so the fault cannot be an extend site. That is what
+settles the fix as a type hint rather than a change to any widen.
+
+FIX: two plain-data hints, no LLVM type crossing the boundary.
+
+  * `unsigned_int_exprs` — spans whose typechecked type is `Type::UInt(_)`,
+    derived in lowering from `expr_types`, exactly like the existing
+    `unsigned_vector_exprs`. `expr_is_unsigned_int` consults it as a FALLBACK,
+    only where the syntactic walk found nothing, so it can turn a `false` into
+    a `true` and never the reverse.
+
+    The fallback ordering is load-bearing, not caution. The parser gives a
+    `MethodCall` and a `FieldAccess` their RECEIVER's span, so a key in that
+    table can describe an ENCLOSING expression rather than the one being asked
+    about; keeping the syntactic arms authoritative wherever they have an answer
+    keeps the collision from ever overriding a correct verdict.
+
+  * `cast_source_unsigned` — the one shape the first hint cannot serve. A `Cast`
+    carries its OPERAND's span verbatim, so `idg(200u8) as i64` is recorded at
+    that key as an `i64`-typed expression and the operand's unsignedness is
+    unrecoverable. The typechecker has both types in hand at the cast, so it
+    records the verdict there. Same collision `vector_method_receivers` exists
+    to work around, and the same remedy.
+
+    Found by probing past the row's repros, not by the row: it is the only case
+    that still printed -56 after the first hint landed.
+
+THE SHAPE IS WIDER THAN THE TWO REPROS, and every extra case was measured
+against the stashed compiler rather than assumed. Pre-fix, all wrong:
+
+    idg(200u8) / 60000u16 / 4000000000u32          -56 / -5536 / -294967296
+    idg(18446744073709551615u64)                   -1
+    Boxg[u8].v          (the row's repro B)        -56
+    Boxg[u8].get()      generic METHOD             -56
+    Boxg.ident(200u8)   generic ASSOCIATED fn      -56
+    pair(200u8, 1u8)    two-param generic          -56
+    vg[0].v             Vec of a generic struct    -56
+    idg(idg(200u8))     nested                     -56
+    idg(200u8) as i64   cast                       -56
+
+`Option[u8].unwrap_or` was already correct — B-2026-07-17-13 gave that path its
+own arm — and every SIGNED instantiation (`i8`, `i16`) was correct throughout
+and stays so. So did the non-generic control, whose concrete `u8` the syntactic
+walk resolves; the pin asserts all of them, because a fix that flipped
+signedness blindly would break exactly those.
+
+THE ROW'S NOTE ON CORPUS BLINDNESS IS RIGHT and worth keeping: kata code
+instantiates generics at `i64` almost exclusively, so no amount of existing
+dogfooding would have surfaced this. It took a sweep that varies the
+INSTANTIATION width.
+
+MEASURED, interp / JIT / AOT / `KARAC_AUTO_PAR=0` all agreeing: both repros, the
+nine shapes above, and the signed and non-generic controls. `width-matrix`'s
+three axes are unchanged by this — it does not vary generic instantiation, which
+is why it did not catch this and does not regress on it. |
 
 </details>
 
