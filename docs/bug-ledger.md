@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 247 | 0 |
-| leak | 174 | 1 |
+| miscompile | 248 | 1 |
+| leak | 175 | 2 |
 | double-free | 127 | 0 |
 | run-vs-build | 118 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
-| perf | 65 | 0 |
+| perf | 66 | 1 |
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
 | soundness | 45 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 857 | 2 |
+| codegen | 860 | 5 |
 | typecheck | 170 | 1 |
 | interp | 145 | 1 |
 | ownership | 47 | 0 |
@@ -124,15 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1187 surfaced · 3 open · 1172 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1190 surfaced · 6 open · 1172 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-18 | 2026-08-14 | codegen | high | Reassigning a `mut` CONTAINER field (`Vec` / `Map` / `Set`) of a `shared struct` never frees the OLD container -- the whole thing leaks, scaling with its contents. The `String` field twin is handled, the scalar field is trivially fine, and the PLAIN-struct twin is handled for every type, so this is the `shared struct` field-assign path missing the container arm it already has for `String`. | the `shared struct` field-assignment drop path -- it releases the old value for a `String` field but not for a `Vec` / `Map` / `Set` field. Plain-struct field reassignment is already correct (B-2026-07-31-39 family), so the working arm to mirror is one type-class over. |
 | B-2026-08-14-19 | 2026-08-14 | interp+codegen | medium | `String.substring` AT A NON-CODEPOINT BOUNDARY DIVERGES BETWEEN `karac run` AND `karac build`: the interpreter replaces each invalid byte with U+FFFD, codegen returns the raw bytes. The two results have DIFFERENT LENGTHS, so the divergence is not confined to what gets printed — `.len()`, `.bytes().len()` and `.chars().len()` all disagree. | `String.substring` is byte-indexed on both surfaces (both agree that `"\u65e5\u672c\u8a9e".len()` is 9), and both agree on every slice that lands on a codepoint boundary. They differ only in what they do with a slice that does not: the interpreter runs a LOSSY UTF-8 conversion over the byte range, codegen hands back the bytes verbatim. |
 | B-2026-08-14-20 | 2026-08-14 | typecheck | low | THE `String -> bytes -> String` ROUND TRIP DOES NOT TYPECHECK: `String.from_utf8(s.bytes())` fails with "expected 'Vec<u8>', found 'Slice[u8]'", and `Slice` has no `to_vec()`, so the only way back is a hand-rolled push loop. | `String.bytes()` returns `Slice[u8]`; `String.from_utf8` is signed `(Vec[u8]) -> Result[String, Utf8Error]`. Nothing bridges them — no implicit borrow-to-owned at the argument, and no `Slice.to_vec()` / `Vec.from_slice()`. |
+| B-2026-08-14-21 | 2026-08-14 | codegen | high | `s += x` ON A `mut ref String` PARAMETER IS SILENTLY DROPPED IN COMPILED CODE: the callee's append never reaches the caller's binding. `s.push_str(x)` and `s = s + x` through the SAME parameter both work, and the interpreter is correct on all three, so this is a run-vs-build divergence that produces a wrong answer with no diagnostic. | The `+=` compound-assignment lowering for `String` when the assignment target is a `mut ref` PARAMETER rather than a local. The value is evidently computed and stored somewhere that is not the referent — for a LOCAL target the same operator stores the right value (though it leaks the old buffer, B-2026-08-14-22), so the concatenation itself is fine and the store is not. |
+| B-2026-08-14-22 | 2026-08-14 | codegen | high | `s += x` ON A LOCAL `String` LEAKS THE ENTIRE PREVIOUS BUFFER ON EVERY APPEND: building a 160 KB string with 20,000 appends peaks at 1.5 GB of RSS — the exact sum of every intermediate — where `push_str` and `s = s + x` both peak at 2.5 MB. | The `+=` compound-assignment lowering for `String`. It evidently allocates a fresh concatenation and stores it over the binding without releasing the buffer the binding held. `s = s + x`, which produces the same value through an explicit assignment, DOES release — so the drop of the overwritten value exists and the `+=` path does not reach it. |
+| B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 
 ### Wontfix (2)
 
