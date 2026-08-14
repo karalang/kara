@@ -92,14 +92,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 249 | 2 |
+| miscompile | 249 | 1 |
 | leak | 176 | 2 |
 | double-free | 128 | 1 |
 | run-vs-build | 118 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
 | perf | 67 | 2 |
-| false-positive | 61 | 0 |
+| false-positive | 62 | 1 |
 | diagnostics | 53 | 0 |
 | soundness | 45 | 0 |
 | crash | 45 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 864 | 8 |
-| typecheck | 170 | 1 |
+| codegen | 864 | 7 |
+| typecheck | 171 | 2 |
 | interp | 145 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1195 surfaced · 10 open · 1173 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1196 surfaced · 10 open · 1174 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -132,7 +132,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1195 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-14-19 | 2026-08-14 | interp+codegen | medium | `String.substring` AT A NON-CODEPOINT BOUNDARY DIVERGES BETWEEN `karac run` AND `karac build`: the interpreter replaces each invalid byte with U+FFFD, codegen returns the raw bytes. The two results have DIFFERENT LENGTHS, so the divergence is not confined to what gets printed — `.len()`, `.bytes().len()` and `.chars().len()` all disagree. | `String.substring` is byte-indexed on both surfaces (both agree that `"\u65e5\u672c\u8a9e".len()` is 9), and both agree on every slice that lands on a codepoint boundary. They differ only in what they do with a slice that does not: the interpreter runs a LOSSY UTF-8 conversion over the byte range, codegen hands back the bytes verbatim. |
 | B-2026-08-14-20 | 2026-08-14 | typecheck | low | THE `String -> bytes -> String` ROUND TRIP DOES NOT TYPECHECK: `String.from_utf8(s.bytes())` fails with "expected 'Vec<u8>', found 'Slice[u8]'", and `Slice` has no `to_vec()`, so the only way back is a hand-rolled push loop. | `String.bytes()` returns `Slice[u8]`; `String.from_utf8` is signed `(Vec[u8]) -> Result[String, Utf8Error]`. Nothing bridges them — no implicit borrow-to-owned at the argument, and no `Slice.to_vec()` / `Vec.from_slice()`. |
-| B-2026-08-14-21 | 2026-08-14 | codegen | high | `s += x` ON A `mut ref String` PARAMETER IS SILENTLY DROPPED IN COMPILED CODE: the callee's append never reaches the caller's binding. `s.push_str(x)` and `s = s + x` through the SAME parameter both work, and the interpreter is correct on all three, so this is a run-vs-build divergence that produces a wrong answer with no diagnostic. | The `+=` compound-assignment lowering for `String` when the assignment target is a `mut ref` PARAMETER rather than a local. The value is evidently computed and stored somewhere that is not the referent — for a LOCAL target the same operator stores the right value (though it leaks the old buffer, B-2026-08-14-22), so the concatenation itself is fine and the store is not. |
 | B-2026-08-14-22 | 2026-08-14 | codegen | high | `s += x` ON A LOCAL `String` LEAKS THE ENTIRE PREVIOUS BUFFER ON EVERY APPEND: building a 160 KB string with 20,000 appends peaks at 1.5 GB of RSS — the exact sum of every intermediate — where `push_str` and `s = s + x` both peak at 2.5 MB. | The `+=` compound-assignment lowering for `String`. It evidently allocates a fresh concatenation and stores it over the binding without releasing the buffer the binding held. `s = s + x`, which produces the same value through an explicit assignment, DOES release — so the drop of the overwritten value exists and the `+=` path does not reach it. |
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 | B-2026-08-14-24 | 2026-08-14 | autopar | medium | a disjoint-write loop nested inside an `if` (or a bare block) is INVISIBLE to the auto-parallelisation analysis -- it is not declined with a reason, it is absent from `--concurrency-report` entirely, and it lowers sequentially with nothing to say so | the disjoint-write fan-out analysis walks only top-level statements of a function body — a loop nested in an `if` or a bare block is never reached |
@@ -140,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1195 surfaced
 | B-2026-08-14-26 | 2026-08-14 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--interp` applies it — for a scalar field as well as a container, so this is not a heap-ownership gap but a lost write. `karac check` passes and nothing reports an error; the program simply keeps the old value. | The FieldAccess-rooted branch of `compile_field_store`: with a SHARED chain root, `nested_store_place_ptr` or `place_chain_type_name` declines and the branch exits through the no-op tail. Two prior fixes in that same branch (B-2026-07-28-6, B-2026-08-01-35) were for this same tail — instrument which resolution returns None before changing anything. |
 | B-2026-08-14-27 | 2026-08-14 | codegen | high | BINDING AN INNER `Vec` ELEMENT OF A `ref Vec[Vec[i64]]` TO A LOCAL DOUBLE-FREES ITS BUFFER: `let first = m[0i64];` copies the row header without a retain, so the local's scope-exit cleanup and the outer Vec's element drop both free the same pointer. ASAN-confirmed double-free of the 8-byte row buffer; the interpreter is correct. | The `let` binding of an INDEXED element of a `ref`-mode `Vec[Vec[T]]` parameter. Replacing `let first = m[0i64]; first.len()` with the direct read `m[0i64].len()` makes the same program clean, so the defect is in the binding's ownership classification and not in the index read. |
 | B-2026-08-14-28 | 2026-08-14 | codegen | high | A `shared struct` LINKED LIST BUILT THROUGH A DUMMY-HEAD CURSOR IS READ AFTER FREE: `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTS under `karac build` and prints six lines of GARBAGE DIGITS under an ASAN build, while the interpreter is correct. The plain-build crash and the ASAN-build wrong answer are the same defect landing on different heap layouts. | The interaction between consuming an input `Option[shared]` chain with `if let Some(n) = a { a = n.next; }` and simultaneously BUILDING a result chain through a `tail` cursor (`tail.next = Some(node); tail = node;`) returned as `dummy.next`. Consuming without building is clean; building without the surrounding call structure is clean. |
+| B-2026-08-14-29 | 2026-08-14 | typecheck | medium | COMPOUND ASSIGNMENT IS NOT OPERAND-TYPE-CHECKED AT ALL: `s += 1i64` on a String, `n += "a"` on an i64, and `p += 1i64` on a struct all report "All checks passed", then fail at codegen with an internal-sounding error that itself says "likely a typechecker gap". The PLAIN spelling of the same expression (`s = s + 1i64`) is rejected correctly, so the check exists and the compound form simply does not reach it. | The `StmtKind::CompoundAssign` arm of the typechecker. The `BinOp` arithmetic-operand check that rejects `s + 1i64` ("arithmetic operator requires numeric type, found 'String'") is evidently not run for the desugared compound form -- the target and value are each checked, but the implied binary operation between them is not. |
 
 ### Wontfix (2)
 
@@ -152,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1195 surfaced
 
 </details>
 
-### Fixed (1173)
+### Fixed (1174)
 
-<details><summary>1173 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1174 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6363,6 +6363,79 @@ problem — the store is silently DROPPED under `karac build` while `--interp`
 applies it, for a scalar field as well as a container. Measured on four shapes
 and verified pre-existing; filed as B-2026-08-14-26. It is a lost write rather
 than a leak, in a different branch, so this row's release does not apply to it. |
+| B-2026-08-14-21 | codegen | high | `s += x` ON A `mut ref String` PARAMETER IS SILENTLY DROPPED IN COMPILED CODE: the callee's append never reaches the caller's binding | FIXED by e6605e9. The row's three-spelling repro reproduces exactly as written
+— `plus_eq` printed `X` under JIT / build / `KARAC_AUTO_PAR=0` while the
+interpreter printed `Xabc` — and all four surfaces now agree, with the loop
+version returning 160000 instead of 0.
+
+THE ROW'S TRACKER NAMED THE RIGHT HALF: "the concatenation itself is fine and
+the store is not." It is the store, and the store alone.
+
+The `CompoundAssign` identifier arm routes a `mut ref` target through the
+borrow pointer ONLY when the pointee is an int or a float. An aggregate pointee
+fell past that gate to the generic `build_store(slot.ptr, …)`, which writes a
+24-byte `{ptr,len,cap}` into the 8-byte alloca holding the borrow POINTER. The
+caller's storage is never touched — hence the pre-call value, silently.
+
+THIS IS A RE-RUN OF B-2026-08-05-39, WHICH FIXED THE SAME DEFECT IN THE
+PLAIN-`Assign` ARM AND WAS NEVER MIRRORED TO ITS COMPOUND TWIN. That is not a
+coincidental resemblance; it is the whole explanation of the row's most
+confusing observation. `s = s + x` works precisely BECAUSE it takes the arm
+that was already widened, and `s += x` fails because it takes the arm that was
+not. The two arms have carried the same int/float-only gate since, and only one
+of them was ever taught about aggregates.
+
+The fix is the store and nothing else: take the branch the plain-Assign arm
+takes, reclaiming the displaced pointee before storing through `get_data_ptr`.
+
+THE MISCOMPILE WAS ALSO A LEAK, which the row could not have seen because the
+program it was measuring produced no output to attribute the memory to. Each
+`+=` built a fresh concatenated buffer and stored it into the alloca: nothing
+freed it and nobody could read it. Measured on the row's own loop shape, a
+20,000-iteration append through a `mut ref` parameter now peaks at 7 MB and is
+valgrind-clean, where pre-fix every intermediate was stranded. So the fix
+closes the `mut ref` leg of what the row filed as B-2026-08-14-22's territory.
+
+B-2026-08-14-22 ITSELF IS UNTOUCHED AND STILL OPEN, and the boundary is exact
+rather than assumed: `+=` on a LOCAL `String` takes the `self.variables` store
+at the end of the same arm, which has no reclaim. Measured after this fix, the
+local 20,000-append loop still leaks 1,599,548,800 bytes in 19,990 blocks while
+the `mut ref` version leaks nothing. The row's closing suggestion — route `+=`
+to the in-place append `push_str` already uses, closing both — remains the
+right shape for -22; this change deliberately does not attempt it, because the
+correctness bug is in the store and an in-place-append rewrite would be a
+larger change riding on a wrong-answer fix.
+
+MEASURED: the three spellings; the 20,000-iteration loop (160000, not 0); `+=`
+with a variable RHS, an f-string RHS, and two appends in one body; a `mut ref
+self` receiver (`self.s += x`); a struct FIELD through a `mut ref` struct
+(`b.s += "z"`); a nested forward of the same `mut ref` down one more call; a
+caller whose string is a STATIC literal (`cap == 0`, where the reclaim must be
+a no-op and is — `emit_free_vec_buffer_if_owned` is cap-guarded); an empty
+starting string; and the scalar `mut ref i64` / `mut ref f64` controls for the
+branch this did not touch. All agree across interp / JIT / AOT /
+`KARAC_AUTO_PAR=0` and are valgrind-clean.
+
+PINS. `tests/codegen.rs::test_e2e_compound_assign_through_mut_ref_param` and
+`tests/memory_sanitizer.rs::asan_compound_append_through_mut_ref_param_is_balanced`
+both FAIL against the stashed compiler — the value pin on the wrong string, the
+ASAN pin on the leak. The interpreter twin
+(`tests/interpreter.rs::test_compound_assign_through_mut_ref_param`) passes
+pre-fix, as an oracle should. The value pin asserts all five lines rather than
+the broken one: `push_str` and `s = s + x` are the spellings that already
+worked, so a fix that traded one miscompile for another would fail here.
+
+FOUND WHILE FIXING THIS, FILED SEPARATELY AS B-2026-08-14-29: the typechecker
+does not check compound-assignment operand types at all. `s += 1i64` on a
+`String`, `n += "a"` on an `i64`, and `p += 1i64` on a struct all report "All
+checks passed" and then fail at codegen with an internal-sounding message,
+while the plain spelling `s = s + 1i64` is rejected properly. Pre-existing and
+independent of this fix (it fails in `compile_binop`, before the store this
+touched) — confirmed by running it against the stashed compiler.
+
+Full `--features llvm` suite green (2963 codegen, 1517 interpreter, 1074
+memory_sanitizer, 2218 typechecker, 427 ownership, 255 par_codegen, 4574 across
+everything else), fmt and clippy `--all-targets` clean. |
 
 </details>
 
