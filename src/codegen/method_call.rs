@@ -5117,6 +5117,85 @@ impl<'ctx> super::Codegen<'ctx> {
                             return self
                                 .compile_binary_search(data, len, elem_ty, &elem_name, &args[0]);
                         }
+                        // B-2026-08-14-8 — READ-ONLY accessors shared with
+                        // `Vec`, routed rather than reimplemented.
+                        //
+                        // A slice header is `{ptr, len}` and a Vec header is
+                        // `{ptr, len, cap}` with the first two fields at the
+                        // same indices, so a borrowed VIEW of the slice — the
+                        // same `cap == 0` convention `zero_cap_if_ref_heap_borrow`
+                        // already uses for a borrowed heap value — is a valid
+                        // Vec header for any method that only reads `ptr`/`len`.
+                        // `compile_vec_method` then supplies the whole
+                        // implementation, including the Option-payload word
+                        // splitting `first`/`last`/`get` need for a multi-word
+                        // element, which is why routing beats four hand-written
+                        // arms that would each have to repeat it.
+                        //
+                        // SCOPED TO READS ON PURPOSE. The mutators and
+                        // view-producers the typechecker also lists for `Slice`
+                        // (`fill`/`reverse`/`sort`/`sort_by_key`/`swap`,
+                        // `chunks`/`windows`/`split_at`) are NOT routed: a
+                        // `cap == 0` header is a lie to anything that would
+                        // grow or reallocate, and the sort family needs the
+                        // comparator machinery keyed off a real Vec binding.
+                        // They keep the loud error and are filed with the
+                        // survey that found them.
+                        "contains" | "first" | "last" | "get" => {
+                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                            let data = {
+                                let p = self
+                                    .builder
+                                    .build_struct_gep(slice_ty, slice_ptr, 0, "s.view.data.p")
+                                    .unwrap();
+                                self.builder.build_load(ptr_ty, p, "s.view.data").unwrap()
+                            };
+                            let len = {
+                                let p = self
+                                    .builder
+                                    .build_struct_gep(slice_ty, slice_ptr, 1, "s.view.len.p")
+                                    .unwrap();
+                                self.builder.build_load(i64_t, p, "s.view.len").unwrap()
+                            };
+                            let fn_val = self.current_fn.unwrap();
+                            let vec_ty = self.vec_struct_type();
+                            let view = self.create_entry_alloca(fn_val, "s.view", vec_ty.into());
+                            let dp = self
+                                .builder
+                                .build_struct_gep(vec_ty, view, 0, "s.view.d")
+                                .unwrap();
+                            let lp = self
+                                .builder
+                                .build_struct_gep(vec_ty, view, 1, "s.view.l")
+                                .unwrap();
+                            let cp = self
+                                .builder
+                                .build_struct_gep(vec_ty, view, 2, "s.view.c")
+                                .unwrap();
+                            let _ = self.builder.build_store(dp, data);
+                            let _ = self.builder.build_store(lp, len);
+                            let _ = self.builder.build_store(cp, i64_t.const_zero());
+                            // `compile_vec_method` resolves the element type by
+                            // VARIABLE NAME through `vec_elem_types`, which a
+                            // slice binding is absent from — it would silently
+                            // default to i64 and misread the stride for any
+                            // wider element. Publish the slice's own element
+                            // type under that name for the call and restore
+                            // after, so no slice binding is left masquerading as
+                            // a Vec for anything downstream.
+                            let saved = self.vec_elem_types.insert(name.clone(), elem_ty);
+                            let out = self.compile_vec_method(name, view, method, args);
+                            match saved {
+                                Some(prev) => {
+                                    self.vec_elem_types.insert(name.clone(), prev);
+                                }
+                                None => {
+                                    self.vec_elem_types.remove(name.as_str());
+                                }
+                            }
+                            return out;
+                        }
                         // B-2026-08-13-7 — the `Slice` peer of the blanket-`Vec`
                         // fallthrough above. When the builtin dispatcher has no
                         // arm for `method` but `impl Trait for Slice[..]`

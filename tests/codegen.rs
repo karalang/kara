@@ -23735,6 +23735,69 @@ fn main() {
     /// blindly would turn them into 251.0. `vf`/`h` are the no-coercion
     /// controls: a genuine float element and a genuine float field must be
     /// untouched by any of this.
+    /// B-2026-08-14-8 — `Slice[T]`'s read accessors have codegen.
+    ///
+    /// `contains` / `first` / `last` / `get` typechecked and interpreted
+    /// correctly but had no arm in codegen's slice dispatch, so every program
+    /// using one checked clean and died at `karac build` with "no handler for
+    /// slice method". `binary_search` / `len` / `is_empty` / `iter` on the same
+    /// receiver built fine, which is what showed this was missing arms rather
+    /// than a slice-wide deferral.
+    ///
+    /// They are ROUTED to `compile_vec_method` over a borrowed `{ptr, len,
+    /// cap: 0}` view rather than reimplemented. A slice header and a Vec header
+    /// share their first two fields, and `cap == 0` is the codebase's existing
+    /// borrowed-view convention, so any method that only reads `ptr`/`len` is
+    /// already correct against it — including the Option-payload word splitting
+    /// `first`/`last`/`get` need for a multi-word element, which four
+    /// hand-written arms would each have had to repeat.
+    ///
+    /// The `Vec[String]` half is the reason the element type is published under
+    /// the slice's name for the duration of the call: `compile_vec_method`
+    /// resolves the element type by VARIABLE NAME, and a slice binding is
+    /// absent from `vec_elem_types` — it would have silently defaulted to i64
+    /// and misread the stride for any wider element.
+    ///
+    /// The trailing `v.len()` / `w.len()` are the aliasing controls: the view
+    /// borrows the Vec's buffer, so the source containers must be intact and
+    /// unfreed afterwards. Verified under valgrind as well as here.
+    ///
+    /// NOT covered, and deliberately so: the mutators and view-producers the
+    /// typechecker also lists for `Slice` (`fill`/`reverse`/`sort`/
+    /// `sort_by_key`/`swap`, `chunks`/`windows`/`split_at`). A `cap == 0`
+    /// header is a lie to anything that would grow or reallocate. They keep the
+    /// loud error and are filed.
+    #[test]
+    fn test_e2e_slice_read_accessors_have_codegen() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[i64] = Vec.new();\n\
+                     v.push(3); v.push(1); v.push(2);\n\
+                     let s: Slice[i64] = v.as_slice();\n\
+                     println(s.contains(2));\n\
+                     println(s.contains(9));\n\
+                     match s.first() { Some(x) => { println(x); } None => { println(-1); } }\n\
+                     match s.last() { Some(x) => { println(x); } None => { println(-1); } }\n\
+                     match s.get(1i64) { Some(x) => { println(x); } None => { println(-1); } }\n\
+                     match s.get(9i64) { Some(x) => { println(x); } None => { println(-1); } }\n\
+                     let mut w: Vec[String] = Vec.new();\n\
+                     let mut a = String.new(); a.push_str(\"alpha\"); w.push(a);\n\
+                     let mut b = String.new(); b.push_str(\"beta\"); w.push(b);\n\
+                     let t: Slice[String] = w.as_slice();\n\
+                     match t.first() { Some(x) => { println(x); } None => { println(\"none\"); } }\n\
+                     match t.get(1i64) { Some(x) => { println(x); } None => { println(\"none\"); } }\n\
+                     let mut cs = String.new(); cs.push_str(\"beta\");\n\
+                     println(t.contains(cs));\n\
+                     println(v.len());\n\
+                     println(w.len());\n\
+                 }"
+            )
+            .as_deref(),
+            Some("true\nfalse\n3\n2\n1\n-1\nalpha\nbeta\ntrue\n3\n2\n"),
+        );
+    }
+
     #[test]
     fn test_e2e_int_to_float_widening_reaches_container_and_probe() {
         assert_eq!(
@@ -61508,13 +61571,22 @@ fn main() {
         // asserts the inner slice-method fall-through fires for a
         // typechecker-accepted-but-not-codegened slice method.
         //
-        // If a future arm adds `first()` codegen support, swap this to
+        // If a future arm adds `windows()` codegen support, swap this to
         // any other typechecker-accepted method without a codegen arm.
+        //
+        // Was `first()` until B-2026-08-14-8 gave the four read accessors
+        // (`contains`/`first`/`last`/`get`) codegen by routing them through
+        // `compile_vec_method` over a borrowed `{ptr,len,cap:0}` view. `windows`
+        // is one of eight still deferred (the mutators and the view-producers,
+        // filed as their own row) and cannot take that route — a `cap == 0`
+        // header is a lie to anything that reallocates, and a view-producer has
+        // no Vec analogue to borrow. It is the probe now for exactly the reason
+        // the comment above anticipated.
         let src = r#"
 fn main() {
     let xs: Array[i64, 3] = [1, 2, 3];
     let s: Slice[i64] = xs.as_slice();
-    let _ = s.first();
+    let _ = s.windows(2i64);
 }
 "#;
         let mut parsed = karac::parse(src);
@@ -61532,7 +61604,7 @@ fn main() {
              the dispatcher silent-zero must not be re-introduced",
         );
         assert!(
-            err.contains("no handler for slice method 'first'"),
+            err.contains("no handler for slice method 'windows'"),
             "expected diagnostic to name the missing slice method; got: {}",
             err
         );

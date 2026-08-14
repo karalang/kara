@@ -28388,6 +28388,41 @@ fn test_user_trait_bound_call_over_builtin_containers() {
     );
 }
 
+/// B-2026-08-14-8 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_slice_read_accessors_have_codegen`, same source and expected
+/// string.
+///
+/// The interpreter ran all of these correctly the whole time — the gap was
+/// codegen-only — so this twin is the oracle the routed implementation had to
+/// match, and the guard against the two drifting as more slice methods land.
+#[test]
+fn test_slice_read_accessors_match_codegen() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(3); v.push(1); v.push(2);\n\
+                 let s: Slice[i64] = v.as_slice();\n\
+                 println(s.contains(2));\n\
+                 println(s.contains(9));\n\
+                 match s.first() { Some(x) => { println(x); } None => { println(-1); } }\n\
+                 match s.last() { Some(x) => { println(x); } None => { println(-1); } }\n\
+                 match s.get(1i64) { Some(x) => { println(x); } None => { println(-1); } }\n\
+                 match s.get(9i64) { Some(x) => { println(x); } None => { println(-1); } }\n\
+                 let mut w: Vec[String] = Vec.new();\n\
+                 let mut a = String.new(); a.push_str(\"alpha\"); w.push(a);\n\
+                 let mut b = String.new(); b.push_str(\"beta\"); w.push(b);\n\
+                 let t: Slice[String] = w.as_slice();\n\
+                 match t.first() { Some(x) => { println(x); } None => { println(\"none\"); } }\n\
+                 match t.get(1i64) { Some(x) => { println(x); } None => { println(\"none\"); } }\n\
+                 let mut cs = String.new(); cs.push_str(\"beta\");\n\
+                 println(t.contains(cs));\n\
+                 println(v.len());\n\
+                 println(w.len());\n\
+             }"),
+        "true\nfalse\n3\n2\n1\n-1\nalpha\nbeta\ntrue\n3\n2\n"
+    );
+}
+
 /// B-2026-08-14-6 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_int_to_float_widening_reaches_container_and_probe`, same source
 /// and expected string.
