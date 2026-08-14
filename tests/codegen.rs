@@ -93287,6 +93287,78 @@ fn main() {
         }
     }
 
+    // The same narrowing rule at the AUTO-PAR TABULATE REWRITE, which is a
+    // SECOND element-store site. When the analyzer recognizes a
+    // `while … { v.push(e) }` loop as a tabulate, it replaces the per-push
+    // grow/store with one hoisted realloc plus a raw `base[idx] = v` store
+    // (`emit_tabulate_store`, codegen/reduce.rs) — and that rewrite did not
+    // carry the `coerce_scalar_to_type_from` the push arm above performs, so a
+    // computed sub-word element went back to an 8-byte store over a 1-byte
+    // slot. Verified at the machine level, not just by crash: pre-fix the
+    // `Vec[u16]` form emitted `mov %rdx,(%rax,%rcx,2)` — a 64-bit store at a
+    // 2-byte stride — while the `Vec[u8]` form aborted in glibc
+    // (`realloc(): invalid next size`) at as few as 20 elements. The wider
+    // sub-word types corrupt identically but land in allocator slack, so `u8`
+    // is the shape that reports it.
+    //
+    // Distinct from `e2e_subword_vec_push_narrows_to_elem_width_no_heap_
+    // overflow` above: that one guards the ordinary push arm and does NOT
+    // trigger the tabulate rewrite, which is why it stayed green throughout.
+    // The nested-loop body here is what the rewrite recognizes.
+    #[test]
+    fn e2e_subword_vec_tabulate_store_narrows_to_elem_width() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut src: Vec[u8] = Vec.new();\n\
+                 let mut i = 0i64;\n\
+                 while i < 40i64 {\n\
+                     let mut p = 0i64;\n\
+                     while p < 12i64 {\n\
+                         src.push(97u8 + ((i + p) % 26i64) as u8);\n\
+                         p = p + 1i64;\n\
+                     }\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 let mut k = 0i64;\n\
+                 let mut s = 0i64;\n\
+                 while k < src.len() { s = s + (src[k] as i64); k = k + 1i64; }\n\
+                 println(f\"{src.len()} {s}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "480 52476\n");
+        }
+    }
+
+    #[test]
+    fn e2e_subword_vec_tabulate_store_narrows_u16_and_u32() {
+        // The width-family peers of the case above. These never crashed — the
+        // 6-/4-byte spill lands inside realloc rounding — so they are pinned on
+        // VALUES, which the fix must keep exact while the store narrows.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut a: Vec[u16] = Vec.new();\n\
+                 let mut b: Vec[u32] = Vec.new();\n\
+                 let mut i = 0i64;\n\
+                 while i < 40i64 {\n\
+                     let mut p = 0i64;\n\
+                     while p < 4i64 {\n\
+                         a.push(1000u16 + ((i + p) % 26i64) as u16);\n\
+                         b.push(100000u32 + ((i + p) % 26i64) as u32);\n\
+                         p = p + 1i64;\n\
+                     }\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 let mut k = 0i64;\n\
+                 let mut sa = 0i64;\n\
+                 let mut sb = 0i64;\n\
+                 while k < a.len() { sa = sa + (a[k] as i64); sb = sb + (b[k] as i64); k = k + 1i64; }\n\
+                 println(f\"{a.len()} {sa} {sb}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "160 161748 16001748\n");
+        }
+    }
+
     #[test]
     fn e2e_vec_filled_2d_table_rows_independent() {
         // Vec.filled(rows, Vec.filled(cols, x)) must give each row its OWN

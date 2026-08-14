@@ -2315,7 +2315,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let StmtKind::Expr(e) = &body_stmt.kind {
                     if let Some(arg) = push_arg_of(e) {
                         let v = self.compile_expr(&arg)?;
-                        self.emit_tabulate_store(v, elem_ty, buf, idx_alloca, &store_alias_md);
+                        self.emit_tabulate_store(
+                            v,
+                            elem_ty,
+                            buf,
+                            idx_alloca,
+                            &arg,
+                            &store_alias_md,
+                        );
                         continue;
                     }
                 }
@@ -2338,7 +2345,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(e) = &body.final_expr {
                     if let Some(arg) = push_arg_of(e) {
                         let v = self.compile_expr(&arg)?;
-                        self.emit_tabulate_store(v, elem_ty, buf, idx_alloca, &store_alias_md);
+                        self.emit_tabulate_store(
+                            v,
+                            elem_ty,
+                            buf,
+                            idx_alloca,
+                            &arg,
+                            &store_alias_md,
+                        );
                     } else {
                         self.compile_expr(e)?;
                     }
@@ -2959,12 +2973,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Emit one in-place tabulate element store: `base[idx] = v`, tagged
     /// with the output alias scope when metadata is active. Shared by the
     /// stmt-position and final-expr-position push rewrites.
+    ///
+    /// `src` is the pushed argument expression, carried so the value can be
+    /// narrowed to the ELEMENT width before the store. The push this lowering
+    /// replaces does exactly that (`coerce_scalar_to_type_from` in
+    /// `vec_method.rs`), and the rewrite dropped it: a sub-word element type
+    /// (`Vec[u8]` / `Vec[bool]` / `Vec[u16]` / `Vec[u32]`) allocates at a
+    /// 1/2/4-byte stride, but a COMPUTED scalar compiles at the default i64, so
+    /// `store i64` over a 1-byte slot smeared 7 bytes past the buffer on the
+    /// final element — heap-metadata corruption (`realloc(): invalid next
+    /// size`), while the interpreter printed the right answer.
+    /// `v.push(97u8 + (i % 26i64) as u8)` reproduced it at 20 elements;
+    /// `v.push(((i) % 26i64) as u8)` did not, because a bare `as` already
+    /// yields an i8 and the missing coercion was a no-op there.
     fn emit_tabulate_store(
         &mut self,
         v: BasicValueEnum<'ctx>,
         elem_ty: BasicTypeEnum<'ctx>,
         base: PointerValue<'ctx>,
         idx_alloca: PointerValue<'ctx>,
+        src: &Expr,
         store_alias_md: &Option<(
             inkwell::values::MetadataValue<'ctx>,
             inkwell::values::MetadataValue<'ctx>,
@@ -2981,6 +3009,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_gep(elem_ty, base, &[idx_cur], "stab.slot")
                 .unwrap()
         };
+        let v = self.coerce_scalar_to_type_from(v, elem_ty, src);
         let st = self.builder.build_store(slot, v).unwrap();
         if let Some((out_list, noalias_list)) = store_alias_md {
             let _ = st.set_metadata(*out_list, self.context.get_kind_id("alias.scope"));
@@ -3281,7 +3310,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if let StmtKind::Expr(e) = &body_stmt.kind {
                 if let Some(arg) = push_arg_of(e) {
                     let v = self.compile_expr(&arg)?;
-                    self.emit_tabulate_store(v, elem_ty, base, idx_alloca, &store_alias_md);
+                    self.emit_tabulate_store(v, elem_ty, base, idx_alloca, &arg, &store_alias_md);
                     continue;
                 }
             }
@@ -3309,7 +3338,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(e) = &shape.body.final_expr {
                 if let Some(arg) = push_arg_of(e) {
                     let v = self.compile_expr(&arg)?;
-                    self.emit_tabulate_store(v, elem_ty, base, idx_alloca, &store_alias_md);
+                    self.emit_tabulate_store(v, elem_ty, base, idx_alloca, &arg, &store_alias_md);
                 } else {
                     self.compile_expr(e)?;
                 }
