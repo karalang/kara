@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 247 | 0 |
 | leak | 173 | 1 |
 | double-free | 127 | 0 |
-| run-vs-build | 116 | 1 |
+| run-vs-build | 117 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 854 | 2 |
-| typecheck | 169 | 1 |
+| codegen | 855 | 2 |
+| typecheck | 169 | 0 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1183 surfaced · 2 open · 1169 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1184 surfaced · 2 open · 1170 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-14 | 2026-08-14 | typecheck+codegen | medium | A TENSOR-scalar operation never checks its scalar operand against the element type: `Tensor[f16] * some_f64` silently narrows the f64 to `f16`, and `Tensor[f64] + some_i64` — which design.md's own worked example specifies as a compile error — runs under `--interp` and FAILS TO BUILD with codegen's "likely a typechecker gap" message. | The tensor-scalar broadcast arm, wherever it resolves a scalar operand against the element type; B-2026-08-14-13's gate keys on both operands being `Type::Float`, so a `Tensor[E, …]` operand never enters it. Message family already exists in `src/typechecker/expr_ops.rs`. |
 | B-2026-08-14-15 | 2026-08-14 | codegen | high | Two leaks that share one polarity: a NESTED CONTAINER read into a `let` BINDING and then consumed leaks, while the identical read consumed INLINE is clean. LEG A -- a `Map` read out of a `Vec[Map[..]]` element and queried with `.get()` leaks the WHOLE Map (602 B / 4 allocs per element). LEG B -- an `Option`/`Result[Vec[Struct]]` `let`-bound then matched leaks every element's heap field. Both scale linearly with data size. | the drop/ownership decision for a `let` binding whose initializer reads a nested container out of a Vec ELEMENT (leg A) or out of an Option/Result payload (leg B). Same let-vs-inline polarity as B-2026-08-11-30 leg A (fixed, 19d0e9a) -- worth checking whether that fix's `nonescaping_param_names` gate has a binding-site sibling. |
+| B-2026-08-14-17 | 2026-08-14 | codegen | medium | Indexing a tensor-valued TEMPORARY fails to build while `--interp` runs it: `(t * 2)[0]`, `(t + t)[0]`, `Tensor.from([1.0, 2.0])[0]` and `(0.0 - t)[0]` all typecheck, all print the right answer under `--interp`, and all die in codegen with a message that names a typechecker gap. Binding the same value to a local first (`let r = t * 2; r[0]`) compiles and runs. | Index lowering for a Tensor RECEIVER: the working path resolves through a named binding's recorded element type, the rvalue case reaches three different fallbacks (comparison, Index, float-convert) depending on how the temporary was produced. Compare B-2026-08-14-5's Array fix, which materialized via `compile_expr` on the object rather than adding new element-loading machinery. |
 
 ### Wontfix (2)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1183 surfaced
 
 </details>
 
-### Fixed (1169)
+### Fixed (1170)
 
-<details><summary>1169 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1170 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5975,6 +5975,112 @@ direction. And by twinned E2E tests asserting that the two `as` directions give
 GENUINELY DIFFERENT answers (1.2100000262260437 at f64, 1.2100000381469727 at
 f32) and that `--interp` and the binary agree on both — the second half being
 what the old behaviour got wrong.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean. |
+| B-2026-08-14-14 | typecheck+codegen | medium | A TENSOR-scalar operation never checks its scalar operand against the element type: `Tensor[f16] * some_f64` silently narrows the f64 to `f16`, and `… | FIXED by d6dc6d8. An element-wise `Tensor`/`Column` scalar operand is now checked against
+the element type, at both the tensor and the column site.
+
+ONE FALLBACK, IN TWO FUNCTIONS THAT BOTH DOCUMENTED THE OPPOSITE RULE.
+`check_tensor_scalar` and `check_column_scalar` each say, in their own doc
+comment, "a typed scalar must already be `T`" — and each then implemented
+`scalar_ty == elem || types_compatible(scalar_ty, elem)`. `types_compatible` is
+permissive across the numeric types, which is right while one side is still
+being solved and wrong once both are fixed, so every width and both domains were
+admitted and silently coerced to the element type. The fix is to require an
+exact match when BOTH sides are concrete primitives and keep `types_compatible`
+for everything else, which is where its permissiveness is doing real work.
+
+THE SHARPEST REPRO IS THE ONE THAT TRAPS. `Tensor[u8] + x` with `x: i64 = 300`:
+
+    karac check          All checks passed.
+    karac run --interp   runtime error: integer overflow
+    karac build          45
+
+One accepted program, three behaviours. 45 is 301 truncated to `u8` — a silent
+two's-complement wrap, which is precisely the class design.md's trapping default
+exists to convert into a loud failure ("silent two's-complement wrapping is a
+live logic-bug and CVE class"). So the compiled path was not merely disagreeing
+with the interpreter; it was delivering the exact outcome the overflow rule
+promises never to deliver silently. The interpreter's trap was the correct
+behaviour for a program that should not have typechecked.
+
+MY OWN FILED ROW MISATTRIBUTED ITS SECOND REPRO, AND MEASURING IT IS WHAT FOUND
+A SEPARATE BUG. The row (written while closing B-2026-08-14-13) claimed
+`Tensor[f64] + some_i64` "runs under `--interp` and FAILS TO BUILD". Re-measured
+properly, that is false: bound to a local (`let r = t + x; r[0]`) it builds and
+prints 3 on both surfaces. The build failure came from the repro's `(t + x)[0]`
+spelling — indexing a tensor TEMPORARY — which fails identically for `(t + t)[0]`,
+`(t * 2)[0]` and even `Tensor.from([1.0,2.0])[0]`, with no scalar in sight. The
+first matrix run reported BUILD FAIL on every row including the pure-literal
+controls, which is what gave it away. Corrected in the row's detail and filed
+separately; the row's PRIMARY claim — that the scalar is never checked against
+the element type — is confirmed by the corrected matrix, which is why this
+closes as fixed rather than invalid.
+
+THE CORRECTED MATRIX, all accepted before, both surfaces agreeing except where
+noted:
+
+                                    check   interp                 build
+  Tensor[f64] * f32 var (widen)     0 err   0.5                    0.5
+  Tensor[f32] * f64 var (NARROW)    0 err   0.10000000149011612    0.10000000149011612
+  Tensor[f16] * f64 var (NARROW)    0 err   0.0999755859375        0.0999755859375
+  Tensor[f64] + i64 var (DOMAIN)    0 err   3                      3
+  Tensor[f64] + i32 var (DOMAIN)    0 err   3                      3
+  Tensor[i64] + u8  var             0 err   3                      3
+  Tensor[u8]  + i64 var (300)       0 err   TRAP integer overflow  45
+  f32 var * Tensor[f64] (reversed)  0 err   0.5                    0.5
+  Column[f32] * f64 var (NARROW)    0 err   accepted               accepted
+  Column[i64] * u8  var             0 err   accepted               accepted
+
+`Column[T]` carried a byte-identical copy of the bug — same fallback, same
+doc-comment claim — so both sites now route through one helper.
+
+THE COLUMN CHECK ALSO COVERS COMPARISON, where B-2026-08-14-13 deliberately
+excluded it, and the difference is real rather than an inconsistency. `a < b` on
+two SCALARS widens the narrower operand losslessly to answer a `bool` — nothing
+is lost and no result width is chosen. `col < scalar` compares AT THE ELEMENT
+TYPE: the scalar is coerced into it before the element-wise compare, so a value
+the element type cannot hold silently becomes one that it can, and the answer
+changes. Same operator, opposite mechanics, so the two rows scope it opposite
+ways on purpose. A non-numeric element type never reaches the new rule at all.
+
+WIDENING IS REFUSED TOO, which is the one place this rule is stricter than a
+declared-slot coercion, and deliberately so: the element type is the RESULT's
+type, so the scalar has to be it. That is B-2026-08-14-13's reasoning applied to
+the same shape — a tensor-scalar op is arithmetic, and arithmetic does not
+unify widths. design.md writes this exact program with a tensor as its own
+counter-example: `arr + 1` promotes, `arr + x` with a typed `x` is "compile
+error: expected f64, got i64 — add `x as f64`".
+
+THE PROMOTION HAD TO WIDEN AT THE SAME TIME, or the fix would have rejected the
+stdlib. Promotion keyed on a BARE literal, so `sv * -1.0` — a unary minus on one
+— took the typed path and was only ever accepted because that path fell through
+to `types_compatible`. Two `std.autograd` lines are written that way. The
+predicate now accepts any unsuffixed numeric CONSTANT expression, tracking
+whether it is float-domain so the pre-existing "a float constant cannot promote
+into an integer element" guard survives (`Tensor[i64] * -1.5` is still refused).
+Same shape and same argument as B-2026-08-14-12's const-expression exemption: a
+typed variable is a leaf the predicate rejects, so it cannot swallow the bug.
+
+MIGRATION: ONE BINDING, in the four copies of one program. The sweep over all
+231 `.kara` files in the tree found three sites; two were the `* -1.0`
+constants above, which the promotion now handles with no source change. The
+third is real — `examples/autograd_training.kara`'s `let lr = 0.75;` is f64 and
+`grad * lr` narrowed it into an `f32` tensor op — and the same training loop is
+mirrored verbatim in the codegen E2E, the interpreter twin and the ASAN twin, so
+the same annotation lands four times: `let lr: f32 = 0.75;`, the one-binding fix
+the GELU kernels took in B-2026-08-14-12. 0.75 is exact in both widths, so no
+printed value moves — the codegen and ASAN twins were the only two failures in
+the whole suite, and both were this line.
+
+PINNED by `element_wise_scalar_operand_must_match_the_element_type` — both
+domains, both directions of width, both operand orders, both `Tensor` and
+`Column`, plus the over-reach guards: literals, constant expressions
+(`-1.0`, `0.0 - 1.0`, `-1`), the float-const-into-int-element refusal, exact
+matches and the `as`. And by twinned E2E tests asserting that the `as u8`
+spelling of the trapping repro now gives 45 on BOTH backends, so the truncation
+is the author's and no longer a disagreement.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
