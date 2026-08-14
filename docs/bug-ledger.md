@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 118 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
-| perf | 66 | 1 |
+| perf | 67 | 2 |
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
 | soundness | 45 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 145 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
-| autopar | 40 | 0 |
+| autopar | 41 | 1 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1190 surfaced · 6 open · 1172 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1191 surfaced · 7 open · 1172 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1190 surfaced
 | B-2026-08-14-21 | 2026-08-14 | codegen | high | `s += x` ON A `mut ref String` PARAMETER IS SILENTLY DROPPED IN COMPILED CODE: the callee's append never reaches the caller's binding. `s.push_str(x)` and `s = s + x` through the SAME parameter both work, and the interpreter is correct on all three, so this is a run-vs-build divergence that produces a wrong answer with no diagnostic. | The `+=` compound-assignment lowering for `String` when the assignment target is a `mut ref` PARAMETER rather than a local. The value is evidently computed and stored somewhere that is not the referent — for a LOCAL target the same operator stores the right value (though it leaks the old buffer, B-2026-08-14-22), so the concatenation itself is fine and the store is not. |
 | B-2026-08-14-22 | 2026-08-14 | codegen | high | `s += x` ON A LOCAL `String` LEAKS THE ENTIRE PREVIOUS BUFFER ON EVERY APPEND: building a 160 KB string with 20,000 appends peaks at 1.5 GB of RSS — the exact sum of every intermediate — where `push_str` and `s = s + x` both peak at 2.5 MB. | The `+=` compound-assignment lowering for `String`. It evidently allocates a fresh concatenation and stores it over the binding without releasing the buffer the binding held. `s = s + x`, which produces the same value through an explicit assignment, DOES release — so the drop of the overwritten value exists and the `+=` path does not reach it. |
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
+| B-2026-08-14-24 | 2026-08-14 | autopar | medium | a disjoint-write loop nested inside an `if` (or a bare block) is INVISIBLE to the auto-parallelisation analysis -- it is not declined with a reason, it is absent from `--concurrency-report` entirely, and it lowers sequentially with nothing to say so | the disjoint-write fan-out analysis walks only top-level statements of a function body — a loop nested in an `if` or a bare block is never reached |
 
 ### Wontfix (2)
 
