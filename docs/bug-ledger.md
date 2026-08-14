@@ -95,13 +95,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 249 | 1 |
 | leak | 176 | 2 |
 | double-free | 128 | 0 |
-| run-vs-build | 118 | 0 |
+| run-vs-build | 119 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
 | perf | 67 | 1 |
 | false-positive | 62 | 1 |
 | diagnostics | 53 | 0 |
-| crash | 46 | 1 |
+| crash | 46 | 0 |
 | soundness | 45 | 0 |
 | other | 30 | 0 |
 | use-after-free | 19 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 865 | 6 |
+| codegen | 866 | 6 |
 | typecheck | 171 | 2 |
 | interp | 145 | 0 |
 | ownership | 47 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced · 8 open · 1177 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1198 surfaced · 8 open · 1178 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
@@ -137,7 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced
 | B-2026-08-14-26 | 2026-08-14 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--interp` applies it — for a scalar field as well as a container, so this is not a heap-ownership gap but a lost write. `karac check` passes and nothing reports an error; the program simply keeps the old value. | The FieldAccess-rooted branch of `compile_field_store`: with a SHARED chain root, `nested_store_place_ptr` or `place_chain_type_name` declines and the branch exits through the no-op tail. Two prior fixes in that same branch (B-2026-07-28-6, B-2026-08-01-35) were for this same tail — instrument which resolution returns None before changing anything. |
 | B-2026-08-14-28 | 2026-08-14 | codegen | high | A `shared struct` LINKED LIST BUILT THROUGH A DUMMY-HEAD CURSOR IS READ AFTER FREE: `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTS under `karac build` and prints six lines of GARBAGE DIGITS under an ASAN build, while the interpreter is correct. The plain-build crash and the ASAN-build wrong answer are the same defect landing on different heap layouts. | The interaction between consuming an input `Option[shared]` chain with `if let Some(n) = a { a = n.next; }` and simultaneously BUILDING a result chain through a `tail` cursor (`tail.next = Some(node); tail = node;`) returned as `dummy.next`. Consuming without building is clean; building without the surrounding call structure is clean. |
 | B-2026-08-14-29 | 2026-08-14 | typecheck | medium | COMPOUND ASSIGNMENT IS NOT OPERAND-TYPE-CHECKED AT ALL: `s += 1i64` on a String, `n += "a"` on an i64, and `p += 1i64` on a struct all report "All checks passed", then fail at codegen with an internal-sounding error that itself says "likely a typechecker gap". The PLAIN spelling of the same expression (`s = s + 1i64`) is rejected correctly, so the check exists and the compound form simply does not reach it. | The `StmtKind::CompoundAssign` arm of the typechecker. The `BinOp` arithmetic-operand check that rejects `s + 1i64` ("arithmetic operator requires numeric type, found 'String'") is evidently not run for the desugared compound form -- the target and value are each checked, but the implied binary operation between them is not. |
-| B-2026-08-14-30 | 2026-08-14 | codegen | high | Interpolating a DECODED `repeated string` protobuf field SEGFAULTS under `karac build` — `println(f"{rt.members}")` on a `Team.decode(...)` result dies while `--interp` prints `[Ada, Grace, Alan]`. The `repeated int64` and `repeated double` siblings are fine, and `.len()` on the same field is fine, so it is whole-Vec formatting of the STRING-element case specifically. | Formatting a `Vec[String]` produced by a comptime-generated protobuf `decode`. The decode itself is fine (len is right, and the i64/f64 repeated siblings round-trip and print), so suspect the element Strings' shape — an unset capacity, or elements borrowed into the wire buffer where the per-element formatter expects owned ones. NOT minimal: a two-line `message X { repeated string xs = 1; }` schema was not tried. |
+| B-2026-08-14-31 | 2026-08-14 | codegen | medium | Printing a whole `Map` or `Set` STRUCT FIELD emits a raw pointer address under `karac build` — `println(f"{b.m}")` gives `{aaaaaaaaaaaa: 1}` under `--interp` and `94924495492304` compiled. The bound-variable spelling is correct on both, so it is the place expression that falls through, and the fall-through prints an address rather than failing. | `compile_print`'s value-kind fall-through: the identifier arms key off per-variable side tables, and B-2026-07-28-12 added a span-typed non-identifier arm for `Vec` only. Mirror it for `Map`/`Set` with `emit_map_display_fn` / `emit_set_display_fn`, and reuse `print_vec_operand_is_owned_temp` for the drop decision — B-2026-08-14-30 is what happens when that arm takes ownership of a place expression. |
 
 ### Wontfix (2)
 
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced
 
 </details>
 
-### Fixed (1177)
+### Fixed (1178)
 
-<details><summary>1177 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1178 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6605,6 +6605,111 @@ MEASURED. The kata itself (`leetcode/1-100/54-spiral-matrix/spiral_boundary.kara
 NOT THE SAME BUG AS B-2026-08-14-28, checked rather than assumed. The two were filed by one probe commit and share a "value bound out of a container" description, so it was worth testing: `leetcode/1-100/2-add-two-numbers/iterative.kara` still SEGFAULTs after this fix. That row stands on its own.
 
 GATES: fmt / clippy / the full `--features llvm` suite (103 targets) all clean. The asan `-O0` leg reports one failure, `asan_shared_struct_string_field_reassign_no_leak` — checked against the parent commit rather than waved through, and it fails there identically. That is B-2026-08-14-25's fixture and is untouched by this change. |
+| B-2026-08-14-30 | codegen | high | Interpolating a DECODED `repeated string` protobuf field SEGFAULTS under `karac build` — `println(f"{rt.members}")` on a `Team.decode(...)` result di… | FIXED by 823ab4b. Printing a `Vec` read out of a place expression prints it, instead of
+freeing the container's buffer out from under it.
+
+THE ROW — WHICH I FILED — WAS WRONG ABOUT ALMOST EVERY QUALIFIER IN ITS TITLE.
+It says "a DECODED `repeated string` protobuf field", and names the `int64` and
+`double` siblings as working controls. None of that survives a minimal
+reduction. The bug has nothing to do with protobuf, nothing to do with `decode`,
+and nothing to do with String elements:
+
+    struct B { xs: Vec[i64] }
+    fn main() {
+        let b = B { xs: [1, 2] };
+        println(b.xs);
+    }
+
+    karac run --interp   [1, 2]
+    karac build          free(): double free detected in tcache 2
+
+Printing a `Vec` STRUCT FIELD double-frees, for any element type. The row's
+"controls" were an artifact of the probe that produced them: those runs reported
+exit 0 with EMPTY stdout, which I recorded as "ok" instead of treating a print
+that printed nothing as the anomaly it was. The reduction the row explicitly
+deferred ("a two-line schema was NOT tried") is what corrected it, which is the
+argument for doing it before filing rather than after.
+
+TWO SITES, ONE WRONG ASSUMPTION, stated in both their comments. `compile_print`'s
+non-identifier Vec branch says "the temp owns everything this expression
+produced (a fresh literal / call result)", and `try_compile_vec_display` says "a
+materialized temporary has no other owner, so its slot is registered for scope
+cleanup here". Both then TEST for it with `!matches!(kind, Identifier(_))` — and
+"not a bound identifier" does not mean "a fresh temporary". A PLACE expression is
+not an identifier either: `b.xs`, `v[i]`, `t.0` and `*p` read storage something
+else owns, and `compile_expr` hands back that container's own `{ptr, len, cap}`
+rather than a copy of it. So the display path took ownership of a buffer that
+already had an owner, and both freed it.
+
+MEASURED MATRIX, pre-fix, `karac build` (every row is correct under `--interp`):
+
+    println(b.xs)          field Vec[i64]              DOUBLE FREE
+    println(f"{b.xs}")     field Vec[i64]              DOUBLE FREE
+    println(b.xs)          field Vec[String]           DOUBLE FREE
+    println(f"{b.xs}")     field Vec[String]           DOUBLE FREE
+    println(f"{b.xs}") x2  field Vec[String]           SEGV
+    println(f"{b.nested}") field Vec[Vec[i64]]         SEGV
+    println(f"{s.xs}")     SHARED struct field         SEGV
+    println(f"{b.xs[0]}")  indexed element             DOUBLE FREE
+    println(xs)            LOCAL Vec[String]           ok
+    let v = b.xs; print v  field bound first           ok
+    println([9, 8])        literal                     ok
+    println(mk())          call result                 ok
+    println(b.xs.len())    length only                 ok
+    take(b.xs)             user fn, by value           ok
+
+`Vec[String]` and nested `Vec` SEGFAULT rather than aborting cleanly because the
+drop is a DEEP one — it walks and frees each element's heap, none of which the
+display path ever owned.
+
+THE FIX ENUMERATES PRODUCERS RATHER THAN EXCLUDING PLACES, which matters for
+where future shapes land. The producer list is short and closed — a collection
+literal, and a call whose return is owned (`expr_yields_fresh_owned_temp`, the
+same predicate the `ref`-param materialization uses, which already excludes a
+borrow-returning callee so a `ref Vec` return is not freed either). Anything not
+on it keeps the identifier path's behaviour and is left alone. That is also the
+safe direction for the next unanticipated expression kind: a missed drop is a
+leak the LSan corpus catches on the next run, an extra one is a double free in a
+user's program.
+
+THE FIRST FIX CHANGED NOTHING, and the measurement is why the second site was
+found. `compile_print`'s branch was patched, rebuilt, and every shape failed
+byte-identically — because `println(b.xs)` and `f"{b.xs}"` both route through
+`try_compile_vec_display` first. Re-running the matrix rather than trusting the
+edit is what surfaced the second copy of the same assumption; the two now share
+one predicate so they cannot drift apart again.
+
+PINNED by four tests. Two LSan fixtures: the place fixture loops 20 times over
+every crashing shape (field `Vec[String]`, field `Vec[i64]`, nested `Vec`, an
+indexed element, a shared node's field) and SEGVs pre-fix inside
+`karac_display_Vec_i64`; the owned fixture loops over the two producers and
+passes on both compilers by design, because the fix's own risk is the opposite
+failure — a printed temporary nobody frees. And twinned value tests carrying
+every shape plus both producers in one program, with a place printed TWICE (the
+spelling that escalated the double free to a segfault) proving the field is
+still intact after the first print.
+
+`examples/protobuf_schema.kara`, the program this was found through, now builds
+and runs with output byte-identical to `--interp`'s nine lines.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean.
+
+A RESIDUAL FOUND WHILE CHECKING FOR OTHER SITES WITH THE SAME ASSUMPTION, and
+filed rather than folded in because it is a wrong ANSWER rather than a crash and
+needs a different remedy. Printing a whole `Map` or `Set` STRUCT FIELD prints a
+raw pointer: `f"{b.m}"` gives `{aaaaaaaaaaaa: 1}` under `--interp` and
+`94924495492304` compiled. Same root shape — the identifier arm handles a bound
+Map/Set and a place expression falls past it — but the fall-through lands in the
+value-kind arms rather than the ownership path, so the fix is display routing,
+not a drop gate. `compile_print`'s own comment predicted this class ("Map gets
+printed as a raw address"). Verified pre-existing against the stashed compiler. Filed as B-2026-08-14-31.
+
+Also measured and NOT filed: an `Option[Vec[i64]]` field interpolates to a LOUD,
+already-labelled codegen refusal ("Display of a struct in an f-string … bind a
+struct literal or call result to a `let` first — user-struct Display, subtask-5
+follow-on"), and it refuses the LOCAL spelling identically, so it is a known
+deferral rather than a place-expression gap. |
 
 </details>
 
