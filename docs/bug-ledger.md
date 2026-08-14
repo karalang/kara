@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 246 | 2 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 109 | 1 |
+| run-vs-build | 111 | 2 |
 | codegen-gap | 108 | 1 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 847 | 3 |
-| typecheck | 163 | 0 |
-| interp | 143 | 1 |
+| codegen | 848 | 4 |
+| typecheck | 164 | 1 |
+| interp | 144 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
@@ -124,16 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1172 surfaced · 4 open · 1156 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced · 5 open · 1157 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-2 | 2026-08-14 | interp | high | INTERPRETER-SIDE: the implicit int-to-float widening is not performed at all, so an int source bound to a float destination stays an Int. At an annotated `let` this makes a program that `karac check`s clean and runs correctly compiled DIE AT RUNTIME under --interp ("operator 'Eq' is not defined for operands of type 'Int' and 'Float'"), with a diagnostic that blames a typecheck error which does not exist. At `Vec[f64].push` it is silent instead: `contains` answers the exact inverse of the compiled backends. | The interpreter's coercion at a float-typed binding/argument position: it stores the incoming `Value::Int` unchanged where the declared type is a float, and the later operator dispatch has no Int/Float arm. The compiled backends convert correctly at these boundaries (B-2026-08-13-18 did that work for codegen), so the fix is the interpreter's side of the same rule. The runtime error text is separately wrong and should not survive the fix — it asserts the typechecker reports this as a hard error, and `karac check` on the repro prints "All checks passed." |
 | B-2026-08-14-3 | 2026-08-14 | codegen | high | GENERICS AT UNSIGNED NARROW WIDTHS RETURN SIGN-EXTENDED GARBAGE on both compiled backends: `fn idg[T](x: T) -> T` called as `idg(200u8)` yields -56, `idg(60000u16)` yields -5536, `idg(4000000000u32)` yields -294967296, and the generic struct `Boxg[T] { v: T }` at `Boxg[u8]` reads its field back as -56. Signed T is correct, and the same values held in a non-generic binding are correct. | The monomorphization path's extension of a narrow T: it appears to sign-extend unconditionally rather than choosing sext/zext from T's signedness. Both the generic FUNCTION return/argument and the generic STRUCT field read are affected, which points at one shared widen rather than two. Contrast with the non-generic control in the same program (a plain `let direct = 200u8` prints 200) and with `Vec[u8]`, which round-trips 200 correctly — so it is the generic instantiation, not narrow unsigned handling in general. |
 | B-2026-08-14-4 | 2026-08-14 | codegen | high | A STRUCT WITH UNSIGNED NARROW FIELDS IS CORRUPTED BY A Vec ROUND-TRIP: reading `v[0].a` where `a: u8 = 200` yields -56 on both compiled backends, while reading the SAME field off the same struct directly yields 200. u16 and u32 fields corrupt identically; the direct read is correct in the same program. | The Vec-element struct field read path, versus the direct field read which is correct. Likely the same signedness-blind extension as B-2026-08-14-3's generic instantiation (a `Vec[T]` element read is a monomorphized read), but filed separately because the direct-vs-through-Vec split is a distinct observable and may be a distinct site. |
 | B-2026-08-14-5 | 2026-08-14 | codegen | medium | A FIELD READ ON AN ARRAY-INDEXED STRUCT IS A HARD CODEGEN GAP: `arr[0].a` where `arr: Array[Plain, 1]` fails to build with "codegen: cannot resolve field 'a' on this receiver (its type was not recorded for codegen)". The same read through a `Vec[Plain]` compiles, and `--interp` runs it. | The receiver-type recording for an index expression whose base is an `Array[Struct, N]` — the Vec-indexed sibling records it, the array-indexed one does not. The message is the compiler's own self-report and names the gap precisely. |
+| B-2026-08-14-6 | 2026-08-14 | typecheck+codegen | medium | The int-to-float implicit widening is performed at NEITHER surface for a CONTAINER element: the interpreter stores an Int in a `Vec[f64]`, and the compiled backends store a float but never convert a lookup PROBE, so `Vec[f64].contains(some_int)` can never match on either. Split from B-2026-08-14-2, which fixed every position whose declared type is reachable from the AST. | Interpreter: the container-argument sites in method_call_seq.rs have no element type (a method call's receiver span carries the CALL's result type). Codegen: the lookup-probe conversion at the same sites' twins. Channel to add: a span set keyed by the argument, the `weak_elem_store_sites` pattern. |
+| B-2026-08-14-7 | 2026-08-14 | interp | medium | The interpreter performs f32 ARITHMETIC at f64 precision, so an `f32` result diverges from both compiled backends wherever the true f32 result would have rounded: `let a: f32 = 4000000000u32 as f32; a + 1.0` reads 4000000001 under `--interp` and 4000000000 compiled. The CAST itself rounds correctly — it is only the operators. | `Value::Float` is an f64 with no width tag, so every f32/f16/bf16 binop in eval_ops.rs computes and stores at f64. The narrowing CASTS were given explicit rounding (B-2026-07-22-4); the arithmetic path never was. |
 
 ### Wontfix (2)
 
@@ -146,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1172 surfaced
 
 </details>
 
-### Fixed (1156)
+### Fixed (1157)
 
-<details><summary>1156 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1157 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5159,6 +5160,112 @@ new test pins all five sites plus the sign-changing `-1i64 -> u8` case, and
 pins the WIDENING direction and the literal form at the same sites as controls,
 since a gate that is too eager here would reject every program relying on
 implicit widening. |
+| B-2026-08-14-2 | interp | high | INTERPRETER-SIDE: the implicit int-to-float widening is not performed at all, so an int source bound to a float destination stays an Int | FIXED by ebe60bf for every position whose declared type is reachable from the
+AST; the two container positions are split out as B-2026-08-14-6 because the
+channel they need does not exist yet.
+
+SHAPE 1 IS FIXED AND IT WAS NEVER JUST THE `let`. The row's fatal repro is an
+annotated binding, but the abort is not a property of `let` — it is a property
+of ANY float-declared destination receiving an int, because the interpreter
+converted at none of them and the operator dispatch has no mixed Int/Float arm.
+Probed one position per program so no crash could hide another:
+
+                       pre-fix              post-fix   compiled
+  let_annot            ABORT                true       true
+  fn_arg               ABORT                true       true
+  ret_coerce           ABORT                true       true
+  struct_lit           ABORT                true       true
+  field_assign         ABORT                true       true
+  method_arg           ABORT                true       true
+  tuple_annot          ABORT                true       true
+  array_elem           ABORT                true       false (B-2026-08-13-22)
+  vec_push             ABORT                ABORT      true
+  vec_idx_assign       ABORT                ABORT      true
+  set_insert / map_insert  rejected at typecheck (float keys) — out of scope
+
+Eight of ten. Every one of them was a program `karac check` passes and
+`karac build` runs correctly, dying only under `--interp`.
+
+ONE HELPER, APPLIED WHERE THE DECLARED TYPE IS IN HAND.
+`coerce_int_value_to_declared_float` routes through the existing `cast_value`
+table, so the destination's real storage precision applies — an `f32` slot
+rounds through `f32`, `f16`/`bf16` through their own helpers. Without that,
+`2147483647i32` into an `f32` would read back exactly here and as `2147483648`
+on every compiled surface, trading one divergence for another. It touches only
+`Value::Int` at a float-named destination; tuples and fixed-size arrays recurse
+element-wise. Signedness needs no thought on this surface: the interpreter
+already stores `200u8` as `Int(200)`, so `as f64` is right for signed and
+unsigned alike — the sitofp/uitofp question codegen had is a representation
+artifact it does not share.
+
+THE SITES, and what each had to resolve the type from: the `let` annotation
+(covers `tuple_annot` and `array_elem` too, by recursion); the callee's
+`Param::ty` and `return_type`, read back off the program item because
+`Value::Function` carries patterns and defaults but not types; the struct
+definition's field type, for both the literal and `s.f = v`.
+
+THE METHOD PATH RESOLVES BY (TYPE, METHOD), NOT BY NAME. An impl method reaches
+the generic call arm under its bare name — the env key is `Type.method` but the
+value carries only `name` — so a name-only lookup would convert against the
+wrong signature when two types both define `echo`. Converting an Int to a Float
+against a signature that is not the callee's is a MISCOMPILE, strictly worse
+than the crash it would be papering over. The method-dispatch path knows the
+receiver's type name and matches exactly; the generic arm's impl scan is
+FAIL-CLOSED, returning `None` on an ambiguous name and leaving that call alone.
+
+THE ROW'S "SHAPE 2 IS INTERPRETER-ONLY" PREMISE DOES NOT HOLD, and this is the
+part worth reading before picking up the split row. Measured directly:
+
+    vd.push(200.0)  (a real float, no coercion involved)
+        interp:  contains(some_u8) false   contains(200.0) true
+        compiled: contains(some_u8) false  contains(200.0) true
+
+So the COMPILED backend does not convert the `contains` PROBE either — a
+`Vec[f64].contains(some_int)` can never match there, whatever is stored.
+Converting only the interpreter's `push` would make both surfaces agree on
+`contains(u8) == false`, which is agreement on the wrong answer. Shape 2 needs
+both surfaces, which is why it is not folded in here.
+
+AND IT NEEDS A CHANNEL THAT DOES NOT EXIST. Measured at `vp.push(v)`:
+`expr_types[arg.span]` is the argument's own `UInt(U8)`, and
+`expr_types[receiver.span]` is `Unit` — the method call shares its receiver's
+span and the CALL's result type wins. The interpreter has no per-variable
+declared element type, and the code says so where it already hit this wall:
+`weak_elem_store_sites` exists because "the interpreter has no static element
+type to consult". So the fix is a new typechecker-recorded span set at the
+container-argument sites — the same five functions B-2026-08-14-1 is currently
+editing, which is the second reason to split rather than collide.
+
+THE ROW'S SECOND COMPLAINT IS FIXED BY CONSEQUENCE. The error text asserts "a
+type error the typechecker reports as a hard error", which was false on its own
+terms — `karac check` prints "All checks passed" on the repro. It is not
+reworded here: with the conversion in place no legal program reaches that arm
+for this reason, and the message is still accurate for the case it was written
+for (`String * Int` under `karac run`'s demote-typecheck-errors mode).
+
+PINNED by two interpreter tests. `test_int_at_a_float_destination_is_converted`
+covers all eight fixed positions in one program and returns EMPTY output against
+the pre-fix interpreter — the first position aborts the run, which is exactly
+what a reader who breaks one of them should see.
+`test_int_to_float_conversion_rounds_at_the_declared_width` pins the precision
+half separately, reading `2147483647` where the pre-fix interpreter read
+`2147483647` for an `f32` slot that must round to `2147483648`. Both compare
+against literal expected output rather than against the compiled backend,
+because the sweep above is the differential and it covers far more of the
+product than a hand-written pair could.
+
+VERIFIED BY THE SWEEP THAT FOUND IT. `scripts/width-matrix.py --floats` went
+from 154 SURFACE SKIPS to ZERO — every one of those skips was this abort. The
+remaining divergences are three things this row does not own: the container
+sites (B-2026-08-14-6), `array_elem` (B-2026-08-13-22, since fixed by a
+sibling), and a NEW residual the fix exposed rather than caused —
+B-2026-08-14-7, the interpreter computing f32 ARITHMETIC at f64 precision.
+That last one has an explicit-cast repro that diverges identically without this
+change; it had simply been masked, because those cases aborted before reaching
+the operator.
+
+Suite green with `--features llvm` (13583 passed, 0 failed); clippy `--all
+--all-targets --features llvm` and fmt clean. |
 
 </details>
 
