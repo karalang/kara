@@ -2139,7 +2139,13 @@ impl<'a> super::Interpreter<'a> {
         // codegen's `llvm.sqrt`). Float-only; integer receivers fall through.
         if method == "sqrt" && args.is_empty() {
             if let Value::Float(f) = &obj {
-                return Value::Float(f.sqrt());
+                // Round to the receiver's declared width, same as the binop
+                // path: codegen calls `sqrtf` for an `f32` receiver, and an
+                // f64 result left unrounded is not even representable in the
+                // f32 slot it lands in (B-2026-08-14-7). `span` aliases the
+                // receiver span and holds the call's RESULT type, which for
+                // these `-> Self` methods is the receiver type.
+                return self.round_float_to_span_width(Value::Float(f.sqrt()), span);
             }
         }
 
@@ -2181,7 +2187,11 @@ impl<'a> super::Interpreter<'a> {
                             "ln_1p" => x.ln_1p(),
                             _ => unreachable!("float_math unary classify/match drift"),
                         };
-                        return Value::Float(r);
+                        // Narrow-width round, as at `sqrt` above. For the
+                        // transcendentals this is a nearest-f32 of the f64
+                        // result rather than a claim of bit-identity with
+                        // libm's `sinf`/`expf`/`logf` — see B-2026-08-14-7.
+                        return self.round_float_to_span_width(Value::Float(r), span);
                     }
                     crate::float_math::FloatMathKind::Binary if args.len() == 1 => {
                         if let Value::Float(y) = self.eval_expr_inner(&args[0].value) {
@@ -2192,7 +2202,7 @@ impl<'a> super::Interpreter<'a> {
                                 "copysign" => x.copysign(y),
                                 _ => unreachable!("float_math binary classify/match drift"),
                             };
-                            return Value::Float(r);
+                            return self.round_float_to_span_width(Value::Float(r), span);
                         }
                     }
                     _ => {}

@@ -23939,6 +23939,62 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-7, compiled twin of
+    /// `narrow_float_arithmetic_rounds_to_declared_width` in
+    /// `tests/interpreter.rs`.
+    ///
+    /// That fix is interpreter-side, so nothing here changed — which is the
+    /// point. These are the values the compiled backends have always produced
+    /// and that the interpreter now agrees with; pinning them on both surfaces
+    /// is what makes the pair a parity guard rather than two tests that could
+    /// drift apart. Every line's f32/f16/bf16 source is written with an
+    /// explicit `as` or a suffix, so the binding really is narrow on both
+    /// sides and the comparison is about the OPERATORS.
+    #[test]
+    fn test_e2e_narrow_float_arithmetic_matches_interpreter() {
+        let src = r#"
+fn main() {
+    let a: f32 = 4000000000u32 as f32;
+    let one: f32 = 1 as f32;
+    println(f"01 {a + one}");
+    println(f"02 {a - one}");
+    println(f"03 {a / (3 as f32)}");
+    let t: f32 = 0.1 as f32;
+    println(f"04 {t * (3 as f32)}");
+    println(f"05 {t + t + t}");
+    let mut m: f32 = 4000000000 as f32;
+    m += one;
+    println(f"06 {m}");
+    println(f"07 {-t}");
+    println(f"08 {t.sqrt()}");
+    let bh: bf16 = 1.0bf16;
+    println(f"09 {bh + 0.01bf16}");
+    let hh: f16 = 1.0f16;
+    println(f"10 {hh + 0.0005f16}");
+    let d: f64 = 0.1;
+    println(f"11 {d * 3.0}");
+    println(f"12 {d.sqrt()}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 4000000000\n\
+                 02 4000000000\n\
+                 03 1333333376\n\
+                 04 0.30000001192092896\n\
+                 05 0.30000001192092896\n\
+                 06 4000000000\n\
+                 07 -0.10000000149011612\n\
+                 08 0.3162277638912201\n\
+                 09 1.0078125\n\
+                 10 1.0009765625\n\
+                 11 0.30000000000000004\n\
+                 12 0.31622776601683794\n"
+            ),
+        );
+    }
+
     #[test]
     fn test_e2e_implicit_int_to_float_widening_at_every_boundary() {
         // B-2026-08-13-18. The typechecker admits int→float as an implicit

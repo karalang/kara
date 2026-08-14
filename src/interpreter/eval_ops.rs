@@ -262,7 +262,70 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// Re-round a narrow-float binop RESULT to its declared width.
+    ///
+    /// `Value::Float` is an f64 and carries no width tag, so every `f32` /
+    /// `f16` / `bf16` operator computed and stored at f64 precision and kept
+    /// bits the compiled backends do not have: `(4000000000u32 as f32) + 1.0`
+    /// read 4000000001 under `--interp` and 4000000000 compiled, and a `bf16`
+    /// — 8 mantissa bits — diverged on `1.0 + 0.01` (B-2026-08-14-7). The
+    /// narrowing CASTS were given this treatment in B-2026-07-22-4 and the
+    /// TENSOR element-wise path in B-2026-08-05-31 (`round_tensor_elems`, for
+    /// the identical reason); the scalar arithmetic path is the third site and
+    /// the last one holding f64 bits in a narrower slot.
+    ///
+    /// Computing at f64 and rounding once is not an approximation of computing
+    /// at the narrow width — it is exact. A single `+`/`-`/`*`/`/` is
+    /// correctly rounded when the intermediate carries at least `2p+2` bits,
+    /// and f64's 53 clear that for f32 (50), f16 (24) and bf16 (18). Overflow
+    /// to infinity survives the second rounding, and an f32-subnormal result
+    /// is exact in f64 long before f64 itself underflows.
+    ///
+    /// A no-op for f64, for a non-float result (every comparison, every
+    /// integer op), and for a span the typechecker recorded nothing at.
+    pub(super) fn round_float_to_span_width(&self, v: Value, span: &Span) -> Value {
+        use crate::typechecker::types::{FloatSize, Type};
+        let Value::Float(f) = v else {
+            return v;
+        };
+        let key = crate::resolver::SpanKey::from_span(span);
+        let Some(ty) = self.typecheck_result.expr_types.get(&key) else {
+            return Value::Float(f);
+        };
+        // Same container peel as `span_int_width`: the element-wise
+        // `Column[T] ⊕ x` / `Tensor[T, S] ⊕ x` / `Vector[T, N] ⊕ x` arms
+        // recurse per slot with the CONTAINER expression's span, so the
+        // narrow element width lives one level in.
+        let ty = match ty {
+            Type::Named { name, args }
+                if (name == "Column" || name == "Tensor") && !args.is_empty() =>
+            {
+                &args[0]
+            }
+            Type::Vector { element, .. } => element.as_ref(),
+            other => other,
+        };
+        match ty {
+            Type::Float(FloatSize::F32) => Value::Float(f as f32 as f64),
+            Type::Float(FloatSize::F16) => Value::Float(super::eval_expr::round_f64_via_f16(f)),
+            Type::Float(FloatSize::BF16) => Value::Float(super::eval_expr::round_f64_via_bf16(f)),
+            _ => Value::Float(f),
+        }
+    }
+
     pub(crate) fn eval_binary(
+        &mut self,
+        op: &BinOp,
+        left: Value,
+        right: Value,
+        span: &Span,
+        unsigned_hint: bool,
+    ) -> Value {
+        let v = self.eval_binary_unrounded(op, left, right, span, unsigned_hint);
+        self.round_float_to_span_width(v, span)
+    }
+
+    fn eval_binary_unrounded(
         &mut self,
         op: &BinOp,
         left: Value,

@@ -25319,9 +25319,18 @@ fn main() {
 /// and 0.30000001192092896 from the built binary. AOT was the correct one.
 ///
 /// `Value::Tensor` now carries the declared element width and the element-wise
-/// ops round through it. The scalar line is the control: a plain `f32` local is
-/// f64 on BOTH backends, so it is unchanged here — this is a tensor-only
-/// narrowing, not a general f32 carrier.
+/// ops round through it.
+///
+/// The scalar line was written as a control on the claim that "a plain `f32`
+/// local is f64 on BOTH backends, so this is a tensor-only narrowing". That
+/// claim no longer holds and its expectation moved: B-2026-08-14-7 gave the
+/// SCALAR binop path the same rounding, so `s * 3.0` now yields the f32 value
+/// here too. It is kept, rather than deleted, because it is the marker for what
+/// is left: `karac build` still prints 0.30000000000000004 for this line, and
+/// the reason is neither backend's arithmetic but the BINDING — an unsuffixed
+/// `0.1` at an `f32` annotation is never narrowed to f32 on either surface, so
+/// codegen is multiplying a double it should not be holding. Spelled `0.1f32`
+/// or `0.1 as f32`, both surfaces agree on the f32 answer.
 #[test]
 fn tensor_f32_elements_round_to_f32_precision() {
     let out = run_no_errors(
@@ -25341,10 +25350,12 @@ fn main() {
 "#,
     );
     // f32 lane: 0.1f32 * 3 rounds to 0.30000001192092896 — the value `karac
-    // build` produces. f64 lane and the scalar keep full double precision.
+    // build` produces. The f64 lane keeps full double precision. The scalar
+    // now rounds too (B-2026-08-14-7); see the doc comment for why `karac
+    // build` still disagrees on that last line alone.
     assert_eq!(
         out,
-        "0.30000001192092896\n-0.30000001192092896\n0.30000000000000004\n0.30000000000000004\n"
+        "0.30000001192092896\n-0.30000001192092896\n0.30000000000000004\n0.30000001192092896\n"
     );
 }
 
@@ -25837,11 +25848,13 @@ fn test_volatile_cell_rejected_under_tree_walk_interpreter() {
 
 #[test]
 fn test_f16_bf16_arithmetic_tree_walk() {
-    // f16 / bf16 run under the tree-walk interpreter (promoted to f64 for
-    // computation). Uses values exactly representable in f16/bf16 (halves) so
-    // the result matches the compiled backends bit-for-bit. Non-exact values
-    // (e.g. 0.1f16) compute at f64 precision here vs. exact half precision
-    // under `karac build` / the default JIT — a documented approximation.
+    // f16 / bf16 run under the tree-walk interpreter (computed at f64 and
+    // rounded back to the declared width after each operator — B-2026-08-14-7).
+    // Uses values exactly representable in f16/bf16 (halves), so these lines
+    // matched the compiled backends even before that rounding existed; the
+    // non-exact values it fixed (`1.0bf16 + 0.01bf16` read 1.010009765625 here
+    // against 1.0078125 compiled) are pinned in
+    // `narrow_float_arithmetic_rounds_to_declared_width` below.
     let out = run_no_errors(
         "fn main() {\n\
              let x: f16 = 1.5f16;\n\
@@ -25853,6 +25866,73 @@ fn test_f16_bf16_arithmetic_tree_walk() {
          }\n",
     );
     assert_eq!(out, "3.75\n1.5\n");
+}
+
+/// B-2026-08-14-7 — an `f32` / `f16` / `bf16` operator must produce a value of
+/// that width, not the f64 the interpreter computes it in.
+///
+/// `Value::Float` is an f64 and carries no width tag, so every narrow-float
+/// operator computed AND STORED at double precision and kept bits no compiled
+/// backend has. The narrowing CASTS were given explicit rounding in
+/// B-2026-07-22-4 and the TENSOR element-wise path in B-2026-08-05-31; scalar
+/// arithmetic was the third site and never got it. Each line below printed a
+/// different number under `--interp` than from the built binary, with `karac
+/// check` silent — the expectations here are the compiled values.
+///
+/// Rounding once at the end is exact, not an approximation: a single IEEE
+/// `+`/`-`/`*`/`/` is correctly rounded when the intermediate carries `2p+2`
+/// bits, and f64's 53 cover f32 (50), f16 (24) and bf16 (18).
+///
+/// The `bf16` line is why the row's "only `+` on f32 was measured" note
+/// mattered — 8 mantissa bits means `1.0 + 0.01` already diverges, where f32
+/// needs a value engineered past its ULP. The `sqrt` line is the second site
+/// the fix had to reach: the float-math methods compute at f64 too, and
+/// codegen calls `sqrtf`. The f64 lines are controls that must not move, and
+/// the `-t` line pins that negation is exact at any width and needs no
+/// rounding.
+#[test]
+fn narrow_float_arithmetic_rounds_to_declared_width() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: f32 = 4000000000u32 as f32;
+    let one: f32 = 1 as f32;
+    println(f"01 {a + one}");
+    println(f"02 {a - one}");
+    println(f"03 {a / (3 as f32)}");
+    let t: f32 = 0.1 as f32;
+    println(f"04 {t * (3 as f32)}");
+    println(f"05 {t + t + t}");
+    let mut m: f32 = 4000000000 as f32;
+    m += one;
+    println(f"06 {m}");
+    println(f"07 {-t}");
+    println(f"08 {t.sqrt()}");
+    let bh: bf16 = 1.0bf16;
+    println(f"09 {bh + 0.01bf16}");
+    let hh: f16 = 1.0f16;
+    println(f"10 {hh + 0.0005f16}");
+    let d: f64 = 0.1;
+    println(f"11 {d * 3.0}");
+    println(f"12 {d.sqrt()}");
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "01 4000000000\n\
+         02 4000000000\n\
+         03 1333333376\n\
+         04 0.30000001192092896\n\
+         05 0.30000001192092896\n\
+         06 4000000000\n\
+         07 -0.10000000149011612\n\
+         08 0.3162277638912201\n\
+         09 1.0078125\n\
+         10 1.0009765625\n\
+         11 0.30000000000000004\n\
+         12 0.31622776601683794\n"
+    );
 }
 
 // ── critical_section (interrupt-mask RAII guard) ────────────────
