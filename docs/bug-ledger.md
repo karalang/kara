@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 111 | 2 |
-| codegen-gap | 108 | 1 |
+| codegen-gap | 108 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 848 | 2 |
+| codegen | 848 | 1 |
 | typecheck | 164 | 1 |
 | interp | 144 | 1 |
 | ownership | 47 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced · 3 open · 1159 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced · 2 open · 1160 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-5 | 2026-08-14 | codegen | medium | A FIELD READ ON AN ARRAY-INDEXED STRUCT IS A HARD CODEGEN GAP: `arr[0].a` where `arr: Array[Plain, 1]` fails to build with "codegen: cannot resolve field 'a' on this receiver (its type was not recorded for codegen)". The same read through a `Vec[Plain]` compiles, and `--interp` runs it. | The receiver-type recording for an index expression whose base is an `Array[Struct, N]` — the Vec-indexed sibling records it, the array-indexed one does not. The message is the compiler's own self-report and names the gap precisely. |
 | B-2026-08-14-6 | 2026-08-14 | typecheck+codegen | medium | The int-to-float implicit widening is performed at NEITHER surface for a CONTAINER element: the interpreter stores an Int in a `Vec[f64]`, and the compiled backends store a float but never convert a lookup PROBE, so `Vec[f64].contains(some_int)` can never match on either. Split from B-2026-08-14-2, which fixed every position whose declared type is reachable from the AST. | Interpreter: the container-argument sites in method_call_seq.rs have no element type (a method call's receiver span carries the CALL's result type). Codegen: the lookup-probe conversion at the same sites' twins. Channel to add: a span set keyed by the argument, the `weak_elem_store_sites` pattern. |
 | B-2026-08-14-7 | 2026-08-14 | interp | medium | The interpreter performs f32 ARITHMETIC at f64 precision, so an `f32` result diverges from both compiled backends wherever the true f32 result would have rounded: `let a: f32 = 4000000000u32 as f32; a + 1.0` reads 4000000001 under `--interp` and 4000000000 compiled. The CAST itself rounds correctly — it is only the operators. | `Value::Float` is an f64 with no width tag, so every f32/f16/bf16 binop in eval_ops.rs computes and stores at f64. The narrowing CASTS were given explicit rounding (B-2026-07-22-4); the arithmetic path never was. |
 
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced
 
 </details>
 
-### Fixed (1159)
+### Fixed (1160)
 
-<details><summary>1159 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1160 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5354,6 +5353,71 @@ VERIFIED INDEPENDENTLY against 6f6256c rather than assumed from the shared cause
 PINNED SEPARATELY by `test_e2e_narrow_unsigned_survives_indexed_and_array_reads`, because 6f6256c's own E2E cannot cover this: its receivers are all generic, so they exercise the arm that resolves a name and then fails on `v: T`. This one has no name to resolve. The test keeps the direct read alongside the indexed one on the same field of the same struct — the pairing is what makes a future regression legible rather than just red — and pins the wide struct's signed fields as controls.
 
 NOTE ON PROVENANCE: this row and -3 were fixed concurrently by two sessions that converged on the same design independently (the same two side tables, the same fallback-only ordering, the same seven files). 6f6256c landed first and is the fix of record; the duplicate was discarded rather than rebased, and only the verification and the non-overlapping guard above were kept. |
+| B-2026-08-14-5 | codegen | medium | A FIELD READ ON AN ARRAY-INDEXED STRUCT IS A HARD CODEGEN GAP: `arr[0].a` where `arr: Array[Plain, 1]` fails to build with "codegen: cannot resolve f… | FIXED by 33ae956. A field read through a fixed-size array index now compiles, at
+parity with the `Vec` spelling of the same read.
+
+THE ROW'S DIAGNOSIS WAS RIGHT AND ITS SCOPE WAS ONE OF FOUR. It says "the
+Vec-indexed sibling records it, the array-indexed one does not", which is
+exactly the mechanism: an Array binding's element type lives in
+`array_elem_type_exprs`, not `var_elem_type_exprs`, and that split is
+deliberate — the table's own doc records that ~170 readers treat an entry in it
+as "this binding is a Vec/Slice/Map", so Arrays were given their own map rather
+than widening it. The consequence is that every resolution point has to read
+BOTH, and three more of them did not. Measured Array against its Vec twin, one
+program per shape:
+
+                                   pre-fix              post-fix
+                              interp   build       interp   build
+  arr[0].f  (const index)       ok    BUILD FAIL     ok      ok
+  arr[i].f  (variable index)    ok    BUILD FAIL     ok      ok
+  arr[0].f.g                    ok    BUILD FAIL     ok      ok
+  h.arr[0].f  (array in a field)ok    BUILD FAIL     ok      ok
+  sa[0].f     (shared element)  ok    BUILD FAIL     ok      ok
+
+Every Vec twin of those five compiled before and after. So the gap was never
+"the reported shape" — it was the whole Array leg of one resolution surface.
+
+THREE FIXES, one per resolution point, each mirroring what the Vec path already
+does:
+
+  * `compile_field_access` gained an Array arm beside the plain-struct Vec
+    element arm. It materializes the element through the SAME path the
+    already-working whole-element read uses (`let el = arr[0]; el.f`) and
+    extracts the field, so the two spellings cannot disagree — no new
+    element-loading machinery was written.
+  * `type_name_of_expr`'s `Index` arm now falls back to `array_elem_type_exprs`
+    on an identifier root and to `array_inner_type_expr` on a field root. That
+    single arm is what `arr[0].f.g` and `h.arr[0].f` both needed: the first
+    because the receiver of the SECOND field has to be typed, the second because
+    the field's declared `Array[E, N]` was only unwrapped for `Vec`/`Slice`.
+  * the general indexed-shared-element branch now admits an ARRAY identifier
+    root. It was restricted to non-identifier roots because the
+    identifier-rooted branch above it covers Vec and Slice — but that branch
+    resolves its element pointer through `lower_indexed_elem_ptr_vec` /
+    `_slice`, which have no Array sibling. The general branch needs only the RC
+    handle by value, which `compile_expr` on the index already yields. Vec and
+    Slice identifier roots stay excluded, so the earlier branch is
+    byte-identical for every shape it already served.
+
+THE FIELD TYPE REALLY IS INCIDENTAL, as the row says. The repro used a
+mixed-width struct only because the narrow-unsigned sweep is what first indexed
+an Array of structs; the reproduction here holds for `i64` fields, a nested
+struct field, and a `shared struct` element alike.
+
+LOUD, NEVER SILENT — worth restating, because it is what kept this at medium and
+what makes a value test sufficient. Every failure was codegen's own
+"cannot resolve field … please report it", which exists precisely so this class
+cannot fall through to the `i64 0` placeholder that B-2026-07-20-9 removed. The
+guard did its job: an unresolvable receiver stopped the build instead of
+compiling a zero.
+
+PINNED by `test_e2e_field_read_through_an_array_index_compiles`, which carries
+all four shapes plus the variable-index form in one program and fails to build
+against the pre-fix compiler. JIT and AOT both checked against the interpreter
+on every shape.
+
+Suite green with `--features llvm` (13587 passed, 0 failed); clippy `--all --all-targets --features llvm`
+and fmt clean. |
 
 </details>
 
