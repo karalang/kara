@@ -29009,6 +29009,35 @@ fn test_element_wise_scalar_as_cast_agrees_across_backends() {
     );
 }
 
+/// B-2026-08-14-17 — the interpreter twin of
+/// `tests/codegen.rs::test_e2e_index_a_tensor_temporary`, same source and same
+/// expected string.
+///
+/// This surface always ran these programs correctly — the bug was that
+/// `karac build` could not compile them, which is what made it run-vs-build
+/// rather than a wrong answer. So this test passes before the fix and after,
+/// and its job is to be the ORACLE the compiled twin is checked against: the
+/// two assert one string, so a codegen fix that compiled but computed
+/// something else would fail the pair rather than silently redefine it.
+#[test]
+fn test_index_a_tensor_temporary() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let t: Tensor[f64, [2]] = Tensor.from([1.0, 2.0]);\n\
+                 println((t * 2)[0]);\n\
+                 println((t + t)[1]);\n\
+                 println((0.0 - t)[0]);\n\
+                 println(Tensor.from([5.0, 6.0])[1]);\n\
+                 println(((t + t) * 2)[0]);\n\
+                 let m: Tensor[i64, [2, 2]] = Tensor.from([[1, 2], [3, 4]]);\n\
+                 println((m + m)[1, 0]);\n\
+                 let r = t * 2;\n\
+                 println(r[0]);\n\
+             }"),
+        "2\n4\n-1\n6\n4\n6\n2\n"
+    );
+}
+
 /// B-2026-08-14-2 — an int at a FLOAT-declared destination is converted, at
 /// every position whose declared type the interpreter can reach.
 ///

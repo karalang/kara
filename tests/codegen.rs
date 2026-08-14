@@ -23614,6 +23614,46 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-17 — indexing a tensor-valued TEMPORARY compiles, at parity
+    /// with the same read through a named binding.
+    ///
+    /// `(t * 2)[0]` typechecked and ran under `--interp` but could not be
+    /// built, in three different messages depending on how the temporary was
+    /// produced. One cause: the parser stamps a postfix expression with its
+    /// RECEIVER's span, so the `Index` and its object share a key in
+    /// `expr_types` and the index's scalar element type wins. Everything
+    /// downstream that decides "is this a tensor" reads a table derived from
+    /// that map, so `compile_expr` on the `Binary` skipped the tensor lowering
+    /// and lowered two control-block POINTERS as scalar arithmetic.
+    ///
+    /// Every shape is here because each reached a different guard: arithmetic
+    /// ("Binary op Mul: left operand has non-comparable type PointerType(…)"),
+    /// a bare constructor ("Index operator applied to non-array type"), a unary
+    /// ("Cannot convert PointerType(…) to float"), and a nested temporary. The
+    /// last line is the named binding, which always worked — it is the control,
+    /// and the value the other spellings have to match.
+    #[test]
+    fn test_e2e_index_a_tensor_temporary() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let t: Tensor[f64, [2]] = Tensor.from([1.0, 2.0]);\n\
+                     println((t * 2)[0]);\n\
+                     println((t + t)[1]);\n\
+                     println((0.0 - t)[0]);\n\
+                     println(Tensor.from([5.0, 6.0])[1]);\n\
+                     println(((t + t) * 2)[0]);\n\
+                     let m: Tensor[i64, [2, 2]] = Tensor.from([[1, 2], [3, 4]]);\n\
+                     println((m + m)[1, 0]);\n\
+                     let r = t * 2;\n\
+                     println(r[0]);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("2\n4\n-1\n6\n4\n6\n2\n"),
+        );
+    }
+
     /// B-2026-08-14-5 — a field read through a FIXED-SIZE ARRAY index compiles,
     /// at parity with the `Vec` spelling of the same read.
     ///

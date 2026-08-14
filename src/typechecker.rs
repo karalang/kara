@@ -1273,6 +1273,16 @@ pub struct TypeCheckResult {
     /// aliasing the soon-freed temp buffer (general-owned-temp-tracking spike,
     /// slice 3b).
     pub temp_recv_elem_types: HashMap<SpanKey, TypeExpr>,
+    /// B-2026-08-14-17 — the TENSOR type of an `Index` receiver, keyed by the
+    /// RECEIVER's span. Needed because the parser stamps every postfix
+    /// expression with its receiver's span, so an `Index` and its object share
+    /// one key in `expr_types` and the index's ELEMENT type overwrites the
+    /// object's `Tensor`. Codegen's `tensor_typed_exprs` is derived from
+    /// `expr_types`, so `(t * 2)[0]` reached the binop lowering with no tensor
+    /// entry and was compiled as SCALAR arithmetic on two pointers — while
+    /// `let r = t * 2; r[0]`, whose spans do not collide, compiled fine. Same
+    /// shape and same reason as `temp_recv_elem_types` (B-2026-07-20-2).
+    pub tensor_index_recv_types: HashMap<SpanKey, Type>,
     /// Sibling of `temp_recv_elem_types` for `Map`/`Set` fresh-temp receivers
     /// (`make_map().get(k)`, `make_set().contains(x)`): span of the MethodCall →
     /// the receiver's whole `Map[K, V]` / `Set[T]` `TypeExpr` (codegen needs K+V
@@ -1800,6 +1810,8 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → scalar element `TypeExpr` of a fresh-temp
     /// `Vec`/`VecDeque` receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_elem_types: HashMap<SpanKey, TypeExpr>,
+    /// B-2026-08-14-17 — see `TypeCheckResult::tensor_index_recv_types`.
+    pub(super) tensor_index_recv_types: HashMap<SpanKey, Type>,
     /// MethodCall span → `Map[K,V]` / `Set[T]` `TypeExpr` of a fresh-temp
     /// Map/Set receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_mapset_types: HashMap<SpanKey, TypeExpr>,
@@ -2083,6 +2095,7 @@ impl<'a> TypeChecker<'a> {
             pending_expected_call_return: None,
             pending_unwrap_receiver_expectation: None,
             temp_recv_elem_types: HashMap::new(),
+            tensor_index_recv_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
             temp_recv_len_elem_types: HashMap::new(),
             iter_terminal_elem_types: HashMap::new(),
@@ -2291,6 +2304,7 @@ impl<'a> TypeChecker<'a> {
             method_unwrap_inner_types: self.method_unwrap_inner_types,
             method_unwrap_err_types: self.method_unwrap_err_types,
             temp_recv_elem_types: self.temp_recv_elem_types,
+            tensor_index_recv_types: self.tensor_index_recv_types,
             temp_recv_mapset_types: self.temp_recv_mapset_types,
             temp_recv_len_elem_types: self.temp_recv_len_elem_types,
             iter_terminal_elem_types: self.iter_terminal_elem_types,

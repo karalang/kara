@@ -1678,6 +1678,42 @@ fn main() {
     }
 
     #[test]
+    fn asan_tensor_temporary_index_no_leak() {
+        // B-2026-08-14-17: indexing a tensor-valued TEMPORARY (`(t * 2)[0]`)
+        // now compiles, which means codegen mallocs a fresh control block that
+        // nothing else owns. It gets the same `FreeTensor` a `let`-bound tensor
+        // gets — the fix is literally the workaround this bug had (`let r =
+        // t * 2; r[0]`), emitted — so this asserts the free actually runs.
+        //
+        // LOOPED, because that is the only way a per-iteration leak becomes
+        // visible: one stranded block is a fixed cost LSan would still catch,
+        // but 50 makes the failure unambiguous and rules out a
+        // free-once-outside-the-loop bug. Every producing shape is inside the
+        // loop — arithmetic, a nested arithmetic temporary, a constructor and a
+        // unary — since each reaches a different guard on the way down and only
+        // arithmetic/negation are freed unconditionally.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let t: Tensor[f64, [3]] = Tensor.from([1.0, 2.0, 3.0]);
+    let mut acc: f64 = 0.0;
+    let mut k = 0;
+    while k < 50 {
+        acc = acc + (t * 2.0)[0];
+        acc = acc + ((t + t) * 2.0)[1];
+        acc = acc + Tensor.from([7.0, 8.0])[1];
+        acc = acc + (0.0 - t)[2];
+        k = k + 1;
+    }
+    println(f"{acc}");
+}
+"#,
+            &["750"],
+            "asan_tensor_temporary_index_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_vec_string_var_reassign_loop_no_leak() {
         // B-2026-07-18-52: a whole-`Vec[String]` VARIABLE reassignment
         // (`cur = nxt`, the BFS double-buffer / worklist idiom) freed only the

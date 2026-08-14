@@ -3934,6 +3934,22 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     if let Some((_, args)) = tensor_ty {
                         if args.len() == 2 {
+                            // B-2026-08-14-17 — record the RECEIVER's tensor
+                            // type before this arm returns the element type.
+                            // The parser stamps a postfix expression with its
+                            // receiver's span, so the value recorded for this
+                            // `Index` will overwrite the object's entry in
+                            // `expr_types` — and `tensor_typed_exprs`, which
+                            // codegen reads to decide whether a `Binary` is
+                            // element-wise tensor arithmetic, is derived from
+                            // it. `(t * 2)[0]` therefore reached the binop
+                            // lowering with no tensor entry and was compiled as
+                            // scalar arithmetic on two pointers, while
+                            // `let r = t * 2; r[0]` compiled fine. Sibling of
+                            // the `temp_recv_elem_types` recording above, for
+                            // the same collision and the same reason.
+                            self.tensor_index_recv_types
+                                .insert(SpanKey::from_span(&object.span), obj_ty.clone());
                             let elem_ty = args[0].clone();
                             let idx_arity = match &idx_ty {
                                 Type::Tuple(parts) => {

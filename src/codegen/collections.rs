@@ -2251,6 +2251,84 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-08-14-17 — the same read through a tensor-valued RVALUE:
+        // `(t * 2)[0]`, `(t + t)[0]`, `Tensor.from([1.0, 2.0])[0]`,
+        // `(0.0 - t)[0]`. The arm above is keyed on a NAMED binding, so a
+        // temporary fell through to the generic tail and died three different
+        // ways depending on how it was produced — "Index operator applied to
+        // non-array type" for the constructor, "Binary op Mul: left operand has
+        // non-comparable type PointerType(…)" for the arithmetic, "Cannot
+        // convert PointerType(…) to float" for the unary. All four typecheck
+        // and all four run under `--interp`, so this was a run-vs-build gap
+        // with a one-line workaround (`let r = t * 2; r[0]`).
+        //
+        // ONE CAUSE, THREE MESSAGES: the parser stamps a postfix expression
+        // with its RECEIVER's span, so the `Index` and its object share a key
+        // in `expr_types` — and the index's scalar element type wins. Every
+        // tensor decision downstream reads `tensor_typed_exprs`, which is
+        // derived from that map, so the receiver simply stopped looking like a
+        // tensor: `compile_expr` on the `Binary` skipped `compile_tensor_binop`
+        // and lowered two control-block POINTERS as scalar arithmetic. The
+        // messages differ only because each shape hits a different guard on the
+        // way down. `let r = t * 2; r[0]` works because those spans do not
+        // collide.
+        //
+        // So the fix is to give the receiver its type back. The typechecker
+        // records it in `tensor_index_recv_types` — a table the collision
+        // cannot reach, the same remedy `temp_recv_elem_types` is for
+        // (B-2026-07-20-2) — and it is installed here for exactly the duration
+        // of compiling the receiver. Installing it PERMANENTLY would be wrong:
+        // after this call the span belongs to the `Index`, whose value is a
+        // scalar, and any later reader keyed on it would be told otherwise.
+        //
+        // Ownership is the other half. The temporary's block has no other
+        // cleanup owner and would leak, so it gets the same `FreeTensor` a
+        // `let`-bound tensor gets — which is precisely what the workaround
+        // did by hand. A borrow must NOT be freed twice, and
+        // `expr_yields_fresh_owned_temp` (the predicate the `ref`-param
+        // materialization uses for this same decision) already excludes
+        // borrow-returning calls; tensor arithmetic and negation always
+        // allocate, so they are owned unconditionally.
+        if container_recv.is_none() {
+            let key = (object.span.offset, object.span.length);
+            if let Some(ti) = self.tensor_index_recv_types.get(&key).cloned() {
+                let info = self.tensor_var_info_from_table(&ti);
+                let saved = self.tensor_typed_exprs.insert(key, ti);
+                let compiled = self.compile_expr(object);
+                match saved {
+                    Some(prev) => {
+                        self.tensor_typed_exprs.insert(key, prev);
+                    }
+                    None => {
+                        self.tensor_typed_exprs.remove(&key);
+                    }
+                }
+                let val = compiled?;
+                let BasicValueEnum::PointerValue(t_ptr) = val else {
+                    return Err(
+                        "indexing a tensor temporary produced a non-pointer value".to_string()
+                    );
+                };
+                if self.expr_yields_fresh_owned_temp(object)
+                    || matches!(
+                        &object.kind,
+                        ExprKind::Binary { .. } | ExprKind::Unary { .. }
+                    )
+                {
+                    let cur_fn = self
+                        .builder
+                        .get_insert_block()
+                        .and_then(|bb| bb.get_parent())
+                        .ok_or("indexing a tensor temporary outside a function context")?;
+                    let temp =
+                        self.create_entry_alloca(cur_fn, "tensor_index_rvalue", val.get_type());
+                    self.builder.build_store(temp, val).unwrap();
+                    self.track_tensor_var(temp);
+                }
+                return self.compile_tensor_index(t_ptr, &info, index);
+            }
+        }
+
         // Column variable indexing: `c[i] -> Option[T]` (phase-11
         // data-science stdlib). Column bindings are single-pointer slots
         // to the `{data, null_bitmap, len, cap}` control block; a valid

@@ -705,6 +705,15 @@ pub struct Program {
     /// empty otherwise. Fresh-temp `Vec`/`VecDeque` receiver scalar element
     /// types for codegen's slice-3b read-method redispatch.
     pub temp_recv_elem_types: TempRecvElemTypesTable,
+    /// Set by the lowering pass from
+    /// `TypeCheckResult.tensor_index_recv_types`; empty otherwise. The
+    /// `TensorTypeInfo` of an `Index` RECEIVER, keyed by the receiver's span.
+    /// Kept separate from `tensor_typed_exprs` on purpose: those two tables
+    /// share a key at every tensor index — the parser stamps a postfix
+    /// expression with its receiver's span — and the entry there describes the
+    /// index's scalar RESULT, which is why the receiver's tensor type needed a
+    /// table of its own (B-2026-08-14-17).
+    pub tensor_index_recv_types: TensorTypedExprsTable,
     /// Set by the lowering pass from `TypeCheckResult.temp_recv_mapset_types`;
     /// empty otherwise. Fresh-temp `Map`/`Set` receiver types for codegen's
     /// slice-3d read-method redispatch + handle drop-tracking.

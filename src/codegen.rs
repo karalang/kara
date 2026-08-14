@@ -3306,6 +3306,15 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch. See `src/codegen/tensor.rs` for the value layout this
     /// drives.
     pub(crate) tensor_typed_exprs: HashMap<(usize, usize), crate::ast::TensorTypeInfo>,
+    /// B-2026-08-14-17 — the `TensorTypeInfo` of an `Index` RECEIVER, keyed by
+    /// the receiver's span (`Program.tensor_index_recv_types`). Shares its key
+    /// with `tensor_typed_exprs` at every tensor index — the parser stamps a
+    /// postfix expression with its receiver's span — where that table describes
+    /// the index's scalar RESULT. `compile_index` installs this entry for the
+    /// duration of compiling the receiver so a tensor-valued rvalue
+    /// (`(t * 2)[0]`) routes through the tensor lowering instead of being
+    /// compiled as scalar arithmetic on two pointers.
+    pub(crate) tensor_index_recv_types: HashMap<(usize, usize), crate::ast::TensorTypeInfo>,
     /// Per-binding Tensor registration: element LLVM type + static dims
     /// (`Some(n)` = concrete literal usable for stride folding /
     /// bounds-check elision; `None` = read the dim from the value's
@@ -8336,6 +8345,7 @@ impl<'ctx> Codegen<'ctx> {
             call_type_subs: HashMap::new(),
             call_type_subs_mangle: HashMap::new(),
             tensor_typed_exprs: HashMap::new(),
+            tensor_index_recv_types: HashMap::new(),
             tensor_var_infos: HashMap::new(),
             pending_let_tensor_info: None,
             column_typed_exprs: HashMap::new(),
@@ -9674,6 +9684,7 @@ impl<'ctx> Codegen<'ctx> {
         // construction / let-registration / indexing dispatch (see
         // `src/codegen/tensor.rs`).
         self.tensor_typed_exprs = program.tensor_typed_exprs.clone();
+        self.tensor_index_recv_types = program.tensor_index_recv_types.clone();
         // Sibling: per-span Column element-type info for construction /
         // let-registration / indexing dispatch (see `src/codegen/column.rs`).
         self.column_typed_exprs = program.column_typed_exprs.clone();

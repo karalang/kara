@@ -461,29 +461,24 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
                 Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
                 other => other,
             };
-            match core {
-                Type::Named { name, args } if name == "Tensor" && args.len() == 2 => {
-                    let Type::Shape(dim_args) = &args[1] else {
-                        return None;
-                    };
-                    let mut dims = Vec::with_capacity(dim_args.len());
-                    for d in dim_args {
-                        match d {
-                            DimArg::Splice(_) | DimArg::SpliceVar(_) => return None,
-                            DimArg::Const(ConstArg::Literal(v)) => dims.push(Some(*v)),
-                            _ => dims.push(None),
-                        }
-                    }
-                    Some((
-                        (k.0, k.1),
-                        crate::ast::TensorTypeInfo {
-                            elem: TypeChecker::type_to_type_expr(&args[0]),
-                            dims,
-                        },
-                    ))
-                }
-                _ => None,
-            }
+            tensor_type_info_of(core).map(|ti| ((k.0, k.1), ti))
+        })
+        .collect();
+    // B-2026-08-14-17 — the same conversion for the `Index`-RECEIVER table.
+    // Separate from the map above because the two share a key at every tensor
+    // index: the parser stamps a postfix expression with its receiver's span,
+    // so `expr_types` (and therefore `tensor_typed_exprs`) holds the index's
+    // scalar RESULT there, and the receiver's tensor type is only recoverable
+    // from a table the collision cannot reach.
+    program.tensor_index_recv_types = tc
+        .tensor_index_recv_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            let core = match ty {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            };
+            tensor_type_info_of(core).map(|ti| ((k.0, k.1), ti))
         })
         .collect();
     // Column[T] (phase-11 data-science stdlib, Arrow commitment Q5):
@@ -2139,4 +2134,36 @@ fn count_expr_idents(e: &mut Expr, out: &mut HashMap<String, usize>) {
             count_block_idents(b, &mut g);
         },
     );
+}
+
+/// B-2026-08-14-17 — `Tensor[T, Shape]` (borrow already unwrapped) to the
+/// plain-data [`crate::ast::TensorTypeInfo`] codegen consumes.
+///
+/// Factored out of the `tensor_typed_exprs` builder so the `Index`-receiver
+/// table beside it produces byte-identical entries. `None` for anything that is
+/// not a tensor, and for a splice-bearing / bare-param shape whose rank is not
+/// statically known — codegen reads those from the value's runtime header,
+/// which is always authoritative.
+fn tensor_type_info_of(ty: &Type) -> Option<crate::ast::TensorTypeInfo> {
+    let Type::Named { name, args } = ty else {
+        return None;
+    };
+    if name != "Tensor" || args.len() != 2 {
+        return None;
+    }
+    let Type::Shape(dim_args) = &args[1] else {
+        return None;
+    };
+    let mut dims = Vec::with_capacity(dim_args.len());
+    for d in dim_args {
+        match d {
+            DimArg::Splice(_) | DimArg::SpliceVar(_) => return None,
+            DimArg::Const(ConstArg::Literal(v)) => dims.push(Some(*v)),
+            _ => dims.push(None),
+        }
+    }
+    Some(crate::ast::TensorTypeInfo {
+        elem: TypeChecker::type_to_type_expr(&args[0]),
+        dims,
+    })
 }
