@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 249 | 2 |
 | leak | 176 | 2 |
-| double-free | 127 | 0 |
+| double-free | 128 | 1 |
 | run-vs-build | 118 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 45 | 0 |
 | crash | 45 | 0 |
 | other | 30 | 0 |
-| use-after-free | 18 | 0 |
+| use-after-free | 19 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 862 | 6 |
+| codegen | 864 | 8 |
 | typecheck | 170 | 1 |
 | interp | 145 | 1 |
 | ownership | 47 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1193 surfaced · 8 open · 1173 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1195 surfaced · 10 open · 1173 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1193 surfaced
 | B-2026-08-14-24 | 2026-08-14 | autopar | medium | a disjoint-write loop nested inside an `if` (or a bare block) is INVISIBLE to the auto-parallelisation analysis -- it is not declined with a reason, it is absent from `--concurrency-report` entirely, and it lowers sequentially with nothing to say so | the disjoint-write fan-out analysis walks only top-level statements of a function body — a loop nested in an `if` or a bare block is never reached |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-26 | 2026-08-14 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--interp` applies it — for a scalar field as well as a container, so this is not a heap-ownership gap but a lost write. `karac check` passes and nothing reports an error; the program simply keeps the old value. | The FieldAccess-rooted branch of `compile_field_store`: with a SHARED chain root, `nested_store_place_ptr` or `place_chain_type_name` declines and the branch exits through the no-op tail. Two prior fixes in that same branch (B-2026-07-28-6, B-2026-08-01-35) were for this same tail — instrument which resolution returns None before changing anything. |
+| B-2026-08-14-27 | 2026-08-14 | codegen | high | BINDING AN INNER `Vec` ELEMENT OF A `ref Vec[Vec[i64]]` TO A LOCAL DOUBLE-FREES ITS BUFFER: `let first = m[0i64];` copies the row header without a retain, so the local's scope-exit cleanup and the outer Vec's element drop both free the same pointer. ASAN-confirmed double-free of the 8-byte row buffer; the interpreter is correct. | The `let` binding of an INDEXED element of a `ref`-mode `Vec[Vec[T]]` parameter. Replacing `let first = m[0i64]; first.len()` with the direct read `m[0i64].len()` makes the same program clean, so the defect is in the binding's ownership classification and not in the index read. |
+| B-2026-08-14-28 | 2026-08-14 | codegen | high | A `shared struct` LINKED LIST BUILT THROUGH A DUMMY-HEAD CURSOR IS READ AFTER FREE: `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTS under `karac build` and prints six lines of GARBAGE DIGITS under an ASAN build, while the interpreter is correct. The plain-build crash and the ASAN-build wrong answer are the same defect landing on different heap layouts. | The interaction between consuming an input `Option[shared]` chain with `if let Some(n) = a { a = n.next; }` and simultaneously BUILDING a result chain through a `tail` cursor (`tail.next = Some(node); tail = node;`) returned as `dummy.next`. Consuming without building is clean; building without the surrounding call structure is clean. |
 
 ### Wontfix (2)
 
