@@ -99,8 +99,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
 | perf | 67 | 1 |
-| false-positive | 62 | 1 |
-| diagnostics | 54 | 1 |
+| false-positive | 62 | 0 |
+| diagnostics | 55 | 2 |
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
 | other | 30 | 0 |
@@ -111,20 +111,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 867 | 7 |
-| typecheck | 171 | 2 |
+| typecheck | 171 | 1 |
 | interp | 145 | 0 |
-| ownership | 47 | 0 |
+| ownership | 48 | 1 |
 | autopar | 42 | 1 |
 | other | 41 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
-| resolver | 18 | 0 |
+| resolver | 19 | 1 |
 | parser | 16 | 0 |
 | effect | 5 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1200 surfaced · 10 open · 1178 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1201 surfaced · 10 open · 1179 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -136,10 +136,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1200 surfaced
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-26 | 2026-08-14 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--interp` applies it — for a scalar field as well as a container, so this is not a heap-ownership gap but a lost write. `karac check` passes and nothing reports an error; the program simply keeps the old value. | The FieldAccess-rooted branch of `compile_field_store`: with a SHARED chain root, `nested_store_place_ptr` or `place_chain_type_name` declines and the branch exits through the no-op tail. Two prior fixes in that same branch (B-2026-07-28-6, B-2026-08-01-35) were for this same tail — instrument which resolution returns None before changing anything. |
 | B-2026-08-14-28 | 2026-08-14 | codegen | high | A `shared struct` LINKED LIST BUILT THROUGH A DUMMY-HEAD CURSOR IS READ AFTER FREE: `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTS under `karac build` and prints six lines of GARBAGE DIGITS under an ASAN build, while the interpreter is correct. The plain-build crash and the ASAN-build wrong answer are the same defect landing on different heap layouts. | The interaction between consuming an input `Option[shared]` chain with `if let Some(n) = a { a = n.next; }` and simultaneously BUILDING a result chain through a `tail` cursor (`tail.next = Some(node); tail = node;`) returned as `dummy.next`. Consuming without building is clean; building without the surrounding call structure is clean. |
-| B-2026-08-14-29 | 2026-08-14 | typecheck | medium | COMPOUND ASSIGNMENT IS NOT OPERAND-TYPE-CHECKED AT ALL: `s += 1i64` on a String, `n += "a"` on an i64, and `p += 1i64` on a struct all report "All checks passed", then fail at codegen with an internal-sounding error that itself says "likely a typechecker gap". The PLAIN spelling of the same expression (`s = s + 1i64`) is rejected correctly, so the check exists and the compound form simply does not reach it. | The `StmtKind::CompoundAssign` arm of the typechecker. The `BinOp` arithmetic-operand check that rejects `s + 1i64` ("arithmetic operator requires numeric type, found 'String'") is evidently not run for the desugared compound form -- the target and value are each checked, but the implied binary operation between them is not. |
 | B-2026-08-14-31 | 2026-08-14 | codegen | medium | Printing a whole `Map` or `Set` STRUCT FIELD emits a raw pointer address under `karac build` — `println(f"{b.m}")` gives `{aaaaaaaaaaaa: 1}` under `--interp` and `94924495492304` compiled. The bound-variable spelling is correct on both, so it is the place expression that falls through, and the fall-through prints an address rather than failing. | `compile_print`'s value-kind fall-through: the identifier arms key off per-variable side tables, and B-2026-07-28-12 added a span-typed non-identifier arm for `Vec` only. Mirror it for `Map`/`Set` with `emit_map_display_fn` / `emit_set_display_fn`, and reuse `print_vec_operand_is_owned_temp` for the drop decision — B-2026-08-14-30 is what happens when that arm takes ownership of a place expression. |
 | B-2026-08-14-32 | 2026-08-14 | codegen | high | an index read into a heap-owning Vec, used as the value of an `if`/`match` ARM, is freed by both the binding and the container -- `let w = if c { v[i] } else { .. }` aborts with a double free while `let w = v[i]` is correct | src/codegen/stmts.rs:4074 and let_binding_is_borrow_elided (stmts.rs:1581) test only the TOP-LEVEL RHS kind for ExprKind::Index; an index read reached through an If/Match arm is invisible to them, so the binding registers an owned cleanup over a pointer the container still owns. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
+| B-2026-08-14-34 | 2026-08-14 | resolver+ownership | medium | DIAGNOSTIC OUTPUT IS NONDETERMINISTIC RUN-TO-RUN on the same binary and the same input, in two independent places: a resolver "did you mean" suggestion picks a different candidate among equal-distance ties (7/7/6 three-way split over 20 runs), and two `perf[rc-fallback]` diagnostics are emitted in a different ORDER (10/10 over 20 runs). Both reach the `--output=json` surface the Mend loop consumes. | HashMap iteration order leaking into user-visible output, the same mechanism as B-2026-08-14-10 but on the diagnostics side rather than the typechecking side. LEG A: the resolver's suggestion search evidently walks a hash-ordered name table and keeps the first best candidate, so an edit-distance TIE resolves by hash. LEG B: the RC-fallback diagnostics are collected from a hash-ordered map and emitted in iteration order rather than sorted by span. |
 
 ### Wontfix (2)
 
@@ -152,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1200 surfaced
 
 </details>
 
-### Fixed (1178)
+### Fixed (1179)
 
-<details><summary>1178 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1179 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6607,6 +6607,64 @@ MEASURED. The kata itself (`leetcode/1-100/54-spiral-matrix/spiral_boundary.kara
 NOT THE SAME BUG AS B-2026-08-14-28, checked rather than assumed. The two were filed by one probe commit and share a "value bound out of a container" description, so it was worth testing: `leetcode/1-100/2-add-two-numbers/iterative.kara` still SEGFAULTs after this fix. That row stands on its own.
 
 GATES: fmt / clippy / the full `--features llvm` suite (103 targets) all clean. The asan `-O0` leg reports one failure, `asan_shared_struct_string_field_reassign_no_leak` — checked against the parent commit rather than waved through, and it fails there identically. That is B-2026-08-14-25's fixture and is untouched by this change. |
+| B-2026-08-14-29 | typecheck | medium | COMPOUND ASSIGNMENT IS NOT OPERAND-TYPE-CHECKED AT ALL: `s += 1i64` on a String, `n += "a"` on an i64, and `p += 1i64` on a struct all report "All ch… | FIXED by 0fea7d1. All four shapes in the row now report a proper typecheck
+error with a source span, and every valid compound assignment still checks.
+
+THE ROW'S TRACKER WAS EXACTLY RIGHT: the `StmtKind::CompoundAssign` arm
+inferred each operand and stopped —
+
+    self.infer_expr(target);
+    self.infer_expr(value);
+
+— so the implied binary operation was never checked. It now routes through
+`infer_binary` under the operator the compound form implies. `infer_binary`
+infers both operands itself, once each, exactly as the two calls it replaces
+did, and then applies the operator's own rules, so this is a re-route rather
+than a new rule.
+
+THAT MATTERS FOR WHAT STAYS ACCEPTED, which is the half that actually
+constrains the fix. `infer_binary` already knows about numeric operands, String
+concatenation, distinct types with `#[derive(Arithmetic)]`, `T: Numeric`
+parameters, operator-trait-bounded parameters, and `mut ref` operands on either
+side (`n = n + 5i64` on a `mut ref i64` typechecks today, which is what made
+routing through it safe). Reusing it is what makes "everything the plain
+spelling accepts" true by construction rather than by enumeration.
+
+ONE CASE LOOKED LIKE A FALSE POSITIVE AND WAS NOT, and it is worth recording
+because it is the shape a real regression here would take. A first draft of the
+accept-side probe wrote `d += Meters(6i64)` on a bare `distinct type Meters =
+i64` and the new check rejected it. The plain spelling `d = d + Meters(6i64)`
+is rejected identically — a distinct type needs `#[derive(Arithmetic)]` to
+support `+` — so the probe had been relying on the very hole being closed. With
+the derive, both spellings pass. The probe was corrected, not the fix.
+
+SWEPT FOR FALSE POSITIVES ACROSS THE WHOLE CORPUS rather than trusting the test
+suite: all 819 `.kara` files under kara-katas, kara/examples and kara/selfhost,
+`karac check` diffed against the pre-fix compiler. NO FILE GAINS AN ERROR.
+
+Five files differ, and none of the differences are this change. Two are the
+ORDER of two `perf[rc-fallback]` diagnostics; three are which candidate a
+resolver "did you mean" picks. Both reproduce from a SINGLE binary on repeated
+runs — measured 10/10 vs 10/10 on the diagnostic order and a three-way 7/7/6
+split on the suggestion over 20 runs each — so they are pre-existing
+nondeterminism, not a consequence of the fix. Filed separately as
+B-2026-08-14-34; they reach the `--output=json` surface, which is the Mend
+loop's input.
+
+PINS. `tests/typechecker.rs::compound_assign_checks_the_implied_binary_operation`
+covers all four shapes (String, i64, struct local, and the `mut ref` parameter
+spelling, whose target reaches a different inference path) and FAILS against
+the stashed compiler. Its peer,
+`compound_assign_still_accepts_every_valid_operand_shape`, is the one that
+constrains the fix: every operator (`+= -= *= /= %= &= |= ^= <<= >>=`) and every
+operand shape that reaches a distinct arm of `infer_binary`, plus the place
+forms whose targets infer differently from a bare local — field, index, map
+entry, `mut ref` parameter, `mut ref self` receiver. It passes both before and
+after, which is the point.
+
+Full `--features llvm` suite green (2963 codegen, 2220 typechecker, 1517
+interpreter, 1074 memory_sanitizer, 584 drop_differential, 427 ownership, 255
+par_codegen, 4586 across everything else), fmt and clippy `--all-targets` clean. |
 | B-2026-08-14-30 | codegen | high | Interpolating a DECODED `repeated string` protobuf field SEGFAULTS under `karac build` — `println(f"{rt.members}")` on a `Team.decode(...)` result di… | FIXED by 823ab4b. Printing a `Vec` read out of a place expression prints it, instead of
 freeing the container's buffer out from under it.
 
