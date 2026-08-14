@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
-| soundness | 45 | 2 |
+| soundness | 45 | 1 |
 | crash | 45 | 0 |
 | other | 30 | 0 |
 | use-after-free | 18 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 851 | 0 |
-| typecheck | 167 | 2 |
+| typecheck | 167 | 1 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1179 surfaced · 2 open · 1165 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1179 surfaced · 1 open · 1166 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-10 | 2026-08-14 | typecheck | high | NONDETERMINISTIC TYPECHECKING: a user enum declaring a variant named `None`, `Some` or `Ok` makes `karac check` return a COIN FLIP on identical input -- measured 15/30, 10/20 and 7/16 pass-vs-fail on three unchanged files. Root cause is a first-match `return` inside `for (enum_name, enum_info) in &self.env.enums` (src/typechecker/expr_ops.rs:352) over a `HashMap` whose iteration order is randomly seeded per process. On the runs that PASS, the JIT then fails LLVM `Module verification`. | src/typechecker/expr_ops.rs:352 -- `for (enum_name, enum_info) in &self.env.enums` returning the FIRST enum carrying a matching variant name; `self.env.enums` is `HashMap<String, EnumInfo>` (src/typechecker/env.rs:314). |
 | B-2026-08-14-12 | 2026-08-14 | typecheck | medium | An implicit float NARROWING between two declared types is accepted with no diagnostic and no rounding on either surface — `let c: f64 = 0.1; let d: f32 = c;` leaves `d` holding a value its own declared type cannot represent. The integer sibling of this rule is enforced; enforcing the float one breaks 13 existing tests and the shipped `std.autograd` source, so it is a language decision with a migration, not a one-line gate. | A `check_float_narrowing_coercion` sibling of `check_int_widening_coercion` (typechecker/exprs.rs), called beside it in `check_expr`'s fall-through. Written and measured during B-2026-08-14-11; the blocker is the 20 sites it fires on, not the gate. |
 
 ### Wontfix (2)
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1179 surfaced
 
 </details>
 
-### Fixed (1165)
+### Fixed (1166)
 
-<details><summary>1165 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1166 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5587,6 +5586,88 @@ ONE REGISTRATION GAP FOUND BY USING THE RESULT. `chunks`/`windows` return `Vec[S
 THE WHOLE `Slice` SURFACE NOW BUILDS. All twenty names in `SLICE_BUILTIN_METHODS` compile — which is why `test_codegen_rejects_unsupported_slice_method` no longer has a real method to probe with. That test has now cycled through `first()` and `windows()`, each time on its own comment's instruction to swap in another unsupported name; it probes a name the TYPECHECKER rejects instead, which still reaches the dispatcher (the harness drives codegen past typecheck errors) and still pins the only thing it was ever about — the fall-through must `Err` naming the method, never return a silent zero.
 
 MEASURED against the interpreter as oracle on all four surfaces and both optimization levels: a 16-line fixture covering every method, a partial window (a `split_at_mut` second half, where a fix that wrote from index 0 would corrupt the untouched first half), narrow-element stride, the degenerate counts (`n` wider than the slice, an empty receiver, a zero-length half), and a `String`-element pass. Zero divergences. |
+| B-2026-08-14-10 | typecheck | high | NONDETERMINISTIC TYPECHECKING: a user enum declaring a variant named `None`, `Some` or `Ok` makes `karac check` return a COIN FLIP on identical input… | FIXED by 9cea4a0. The row's 7-line repro is deterministic over 40 `karac check`
+runs and agrees across interp / JIT / AOT; the codegen pin fails 12 of 12
+process seeds against the stashed compiler.
+
+THE ROW'S ROOT-CAUSE READING IS EXACTLY RIGHT and the determinism half went in
+as described: `self.env.enums` is a `HashMap` with a per-process `RandomState`,
+and the bare-constructor scan `return`ed on the first match. The scan now walks a
+SORTED key list.
+
+BUT DETERMINISM ALONE IS A TRAP, and this is the part the row could not have
+known. Sorting makes the answer stable; it does not make it right. With sorting
+and nothing else, `Other(7)` against a user `MyIoErr.Other` resolved to the
+seeded `IoError.Other(String)` — alphabetically, every time — and reported
+`expected 'String', found 'i64'`. That program was ALSO a coin flip before (6 of
+20 runs passed, measured on the stashed compiler); a determinism-only fix would
+have frozen it on the losing side and read as a regression rather than the same
+bug. So the scan sorts in TWO TIERS, user-declared before prelude.
+
+The tier key needed both `defining_stdlib_origin` AND membership in
+`PRELUDE_TYPES`: `IoError` and its siblings are prelude-visible by name but do
+not carry the flag, so keying on the flag alone left them in the user tier and
+`IoError` still beat `MyIoErr` alphabetically.
+
+THE SEMANTIC HALF THE ROW DECLINED TO PRESUME IS SETTLED, AND A MEASUREMENT
+SETTLES IT. Codegen had already picked a rule — `user_pick.or(seed_pick)`,
+user-declared wins, with a comment explaining that HashMap order is otherwise
+nondeterministic — so the obvious move was to make the typechecker agree with
+it. Measured, that rule is unusable:
+
+    enum Sink { None, Open(i64) }
+    let x: Option[i64] = None;      ->  error: expected 'Option[i64]', found 'Sink'
+
+Check-mode does not push the expected type into a bare constructor, so a user
+enum declaring `None` would poison EVERY use of the real `Option` in the file.
+The other direction has no such cost: the built-in wins for the bare name, and a
+program that means its own variant writes `Sink.None`, which resolves by enum
+name through a path that runs first. So:
+
+    Some / None / Ok / Err      -> the SEEDED Option/Result wins
+    every other colliding name  -> the USER's enum wins (unchanged)
+
+expressed as one fixed four-name table on each side (`builtin_variant_owner` in
+the typechecker, `seeded_variant_owner` in codegen) rather than a search,
+because the whole bug was an answer that depended on where two candidates landed
+in a hash map.
+
+THAT REQUIRED REVERSING CODEGEN at both of its bare-name scans, and the reversal
+is narrow on purpose. Its old rationale — "the wider seeded `Option` layout would
+mis-construct a value for a user-defined `MyOption.None`" — is answered by the
+qualified form. Its OTHER rationale, the `MyIoErr.Other` vs seeded
+`TcpError.Other` case, is still live and still user-first; only the four
+Option/Result constructors changed sides.
+
+THE VERIFIER CRASH WAS THE TWO PHASES DISAGREEING, not a third bug. On the runs
+where check typed a bare `None` as `Option[i64]`, codegen constructed the user's
+one-word `Sink.None` and the module failed with `ret i64 0` against
+`{i64, i64, i64, i64}`. Once both sides consult the same table there is nothing
+left to disagree about, which is why no separate codegen fix was needed.
+
+`Err` STABLE ACROSS 120 RUNS — the row reported this as measured, did not
+explain it, and warned against assuming immunity. The warning was right and the
+explanation is mundane: that fixture DECLARED a colliding `Err` but never used a
+bare `Err` anywhere, so the collision was never exercised. Measured on the
+stashed compiler, with the same file plus a `Result`-returning fn that actually
+writes `Ok(x)` / `Err(e)`:
+
+    declare-only `Ok` / `Err`   30/30 pass   (stable — nothing collides)
+    bare `Ok` used              11/30 pass   NONDETERMINISTIC
+    bare `Err` used             16/30 pass   NONDETERMINISTIC
+
+So `Err` was never immune; the probe just did not reach it. Both spellings are
+fixed here and the `Result` leg is in the pin.
+
+MEASURED: the row's repro with the colliding variant named each of `None`,
+`Some`, `Ok`, `Err`, 30 `karac check` runs each — one distinct output apiece,
+where they were ~50/50 before; interp / JIT / AOT agreeing on all four, where the
+row recorded "there is no run in which all three agree"; the qualified
+`Sink.None`; `let x: Option[i64] = None` with `Sink.None` declared; and the
+`MyIoErr.Other` control, which must go the OTHER way and which no rule based on
+determinism alone gets right. The codegen pin was additionally run across 25
+process seeds, since a single green run proves nothing about a bug whose whole
+character is that it passes half the time. |
 | B-2026-08-14-11 | typecheck+codegen | medium | An UNSUFFIXED float literal at a narrow-float annotation is never narrowed, on EITHER surface: `let a: f32 = 0.1` holds the f64 0.1 where `let b: f32… | FIXED by 254fc47, leg 1 of two. The second leg is split out as B-2026-08-14-12
 after its blast radius was measured.
 
