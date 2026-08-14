@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 249 | 1 |
 | leak | 176 | 2 |
-| double-free | 128 | 1 |
+| double-free | 128 | 0 |
 | run-vs-build | 118 | 0 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 865 | 7 |
+| codegen | 865 | 6 |
 | typecheck | 171 | 2 |
 | interp | 145 | 0 |
 | ownership | 47 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced · 10 open · 1175 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced · 9 open · 1176 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced
 | B-2026-08-14-24 | 2026-08-14 | autopar | medium | a disjoint-write loop nested inside an `if` (or a bare block) is INVISIBLE to the auto-parallelisation analysis -- it is not declined with a reason, it is absent from `--concurrency-report` entirely, and it lowers sequentially with nothing to say so | the disjoint-write fan-out analysis walks only top-level statements of a function body — a loop nested in an `if` or a bare block is never reached |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-26 | 2026-08-14 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--interp` applies it — for a scalar field as well as a container, so this is not a heap-ownership gap but a lost write. `karac check` passes and nothing reports an error; the program simply keeps the old value. | The FieldAccess-rooted branch of `compile_field_store`: with a SHARED chain root, `nested_store_place_ptr` or `place_chain_type_name` declines and the branch exits through the no-op tail. Two prior fixes in that same branch (B-2026-07-28-6, B-2026-08-01-35) were for this same tail — instrument which resolution returns None before changing anything. |
-| B-2026-08-14-27 | 2026-08-14 | codegen | high | BINDING AN INNER `Vec` ELEMENT OF A `ref Vec[Vec[i64]]` TO A LOCAL DOUBLE-FREES ITS BUFFER: `let first = m[0i64];` copies the row header without a retain, so the local's scope-exit cleanup and the outer Vec's element drop both free the same pointer. ASAN-confirmed double-free of the 8-byte row buffer; the interpreter is correct. | The `let` binding of an INDEXED element of a `ref`-mode `Vec[Vec[T]]` parameter. Replacing `let first = m[0i64]; first.len()` with the direct read `m[0i64].len()` makes the same program clean, so the defect is in the binding's ownership classification and not in the index read. |
 | B-2026-08-14-28 | 2026-08-14 | codegen | high | A `shared struct` LINKED LIST BUILT THROUGH A DUMMY-HEAD CURSOR IS READ AFTER FREE: `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTS under `karac build` and prints six lines of GARBAGE DIGITS under an ASAN build, while the interpreter is correct. The plain-build crash and the ASAN-build wrong answer are the same defect landing on different heap layouts. | The interaction between consuming an input `Option[shared]` chain with `if let Some(n) = a { a = n.next; }` and simultaneously BUILDING a result chain through a `tail` cursor (`tail.next = Some(node); tail = node;`) returned as `dummy.next`. Consuming without building is clean; building without the surrounding call structure is clean. |
 | B-2026-08-14-29 | 2026-08-14 | typecheck | medium | COMPOUND ASSIGNMENT IS NOT OPERAND-TYPE-CHECKED AT ALL: `s += 1i64` on a String, `n += "a"` on an i64, and `p += 1i64` on a struct all report "All checks passed", then fail at codegen with an internal-sounding error that itself says "likely a typechecker gap". The PLAIN spelling of the same expression (`s = s + 1i64`) is rejected correctly, so the check exists and the compound form simply does not reach it. | The `StmtKind::CompoundAssign` arm of the typechecker. The `BinOp` arithmetic-operand check that rejects `s + 1i64` ("arithmetic operator requires numeric type, found 'String'") is evidently not run for the desugared compound form -- the target and value are each checked, but the implied binary operation between them is not. |
 | B-2026-08-14-30 | 2026-08-14 | codegen | high | Interpolating a DECODED `repeated string` protobuf field SEGFAULTS under `karac build` — `println(f"{rt.members}")` on a `Team.decode(...)` result dies while `--interp` prints `[Ada, Grace, Alan]`. The `repeated int64` and `repeated double` siblings are fine, and `.len()` on the same field is fine, so it is whole-Vec formatting of the STRING-element case specifically. | Formatting a `Vec[String]` produced by a comptime-generated protobuf `decode`. The decode itself is fine (len is right, and the i64/f64 repeated siblings round-trip and print), so suspect the element Strings' shape — an unset capacity, or elements borrowed into the wire buffer where the per-element formatter expects owned ones. NOT minimal: a two-line `message X { repeated string xs = 1; }` schema was not tried. |
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced
 
 </details>
 
-### Fixed (1175)
+### Fixed (1176)
 
-<details><summary>1175 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1176 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6540,6 +6539,21 @@ touched) — confirmed by running it against the stashed compiler.
 Full `--features llvm` suite green (2963 codegen, 1517 interpreter, 1074
 memory_sanitizer, 2218 typechecker, 427 ownership, 255 par_codegen, 4574 across
 everything else), fmt and clippy `--all-targets` clean. |
+| B-2026-08-14-27 | codegen | high | BINDING AN INNER `Vec` ELEMENT OF A `ref Vec[Vec[i64]]` TO A LOCAL DOUBLE-FREES ITS BUFFER: `let first = m[0i64];` copies the row header without a re… | FIXED by 0dc28cf4. THE ROW'S ABLATION HAS ONE WRONG LINE AND IT IS THE LOAD-BEARING ONE. "KARAC_AUTO_PAR=0 — same" is not what happens: this is an AUTO-PARALLELISATION bug, and a build with auto-par off is clean. The measurement went wrong at the stage, not the observation — auto-par is a COMPILE-time decision, so `KARAC_AUTO_PAR=0 ./binary` sets it after the parallelism is already in the object. Building the same kata as `KARAC_AUTO_PAR=0 karac build …` produces the correct twelve lines and the correct `sums:` fold. That is why the row's other ablations behaved so strangely: removing the reverse passes kept the crash, replacing the binding with a direct read killed it, and dropping the push loop killed it — all of them are edits to the DEPENDENCE GRAPH the parallelizer reads, not to ownership.
+
+THE BINDING IS INNOCENT ON ITS OWN, which the row half-saw when it recorded "the binding is necessary and not sufficient". The sequential path gets `let first = m[0]` exactly right: `borrow_elided` is computed from `vec_index_borrow_spans`, and the `track_vec_*` registration is guarded on `!borrow_elided` under a comment that states the reason in full — "this binding aliases the container element and does NOT own a buffer — registering a `track_vec_*` cleanup would double-free". The emitted IR bears that out: no cleanup for `first` at all.
+
+WHAT THE PARALLELIZER DOES WITH IT. The three independent bindings in the preamble — `out`, `rows`, `first` — become a three-branch par group. Each branch computes into a `__par_returns` slot and the parent loads them back. The branch itself is careful: it zeroes its local's cap after publishing, so it does not free. The PARENT then re-registers a `track_vec_*` cleanup for every Vec-shaped slot, and `first`'s slot carries the row header verbatim, cap included. So the parent frees the row buffer, and the caller's `Vec[Vec[i64]]` element drop frees it again.
+
+THE FIX IS TO ASK THE QUESTION THE SEQUENTIAL PATH ALREADY ANSWERS. `ReturnSlot` gains a `borrow_elided` flag, set at both slot-construction sites from the same `vec_index_borrow_spans` lookup the let path uses, and both bind-back sites (auto-par in stmts.rs, explicit `par {}` in par_blocks.rs) skip the cleanup registration when it is set. The dispatch registration stays — `first.len()` still has to resolve — so only the ownership claim is dropped. The explicit-par site is fixed even though no test reaches it today: it is the same code with the same slot list, and leaving one of a pair correct is how this family keeps regrowing (that site's own comments record two previous rounds of exactly that).
+
+WHY THE THIRD BINDING MATTERS, recorded because it makes the shape look unrelated to concurrency: two independent bindings do not form a group. `let rows = 3i64` in place of `let rows = m.len()` — one word, no ownership content — is enough to keep the program sequential and clean. The row's 38-line reduction survived because it kept all three; the reductions that "stopped reproducing" each dropped one.
+
+MEASURED. The kata itself (`leetcode/1-100/54-spiral-matrix/spiral_boundary.kara`) now prints all twelve cases and the `sums:` line identically on `--interp`, JIT, AOT and AOT with auto-par off, and runs clean under ASAN with LeakSanitizer live — so this is not a leak traded for a double free. Ten reductions from the bisection re-run clean. A permanent ASAN test (`asan_borrow_elided_index_read_across_a_par_join`) and its plain-build twin pin a 20-line version that aborts before the fix.
+
+NOT THE SAME BUG AS B-2026-08-14-28, checked rather than assumed. The two were filed by one probe commit and share a "value bound out of a container" description, so it was worth testing: `leetcode/1-100/2-add-two-numbers/iterative.kara` still SEGFAULTs after this fix. That row stands on its own.
+
+GATES: fmt / clippy / the full `--features llvm` suite (103 targets) all clean. The asan `-O0` leg reports one failure, `asan_shared_struct_string_field_reassign_no_leak` — checked against the parent commit rather than waved through, and it fails there identically. That is B-2026-08-14-25's fixture and is untouched by this change. |
 
 </details>
 
