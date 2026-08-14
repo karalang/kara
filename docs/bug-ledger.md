@@ -95,14 +95,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 246 | 0 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 114 | 1 |
+| run-vs-build | 114 | 0 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
+| soundness | 45 | 2 |
 | crash | 45 | 0 |
-| soundness | 44 | 1 |
 | other | 30 | 0 |
 | use-after-free | 18 | 0 |
 
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 851 | 1 |
-| typecheck | 166 | 2 |
+| codegen | 851 | 0 |
+| typecheck | 167 | 2 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1178 surfaced · 2 open · 1164 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1179 surfaced · 2 open · 1165 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-10 | 2026-08-14 | typecheck | high | NONDETERMINISTIC TYPECHECKING: a user enum declaring a variant named `None`, `Some` or `Ok` makes `karac check` return a COIN FLIP on identical input -- measured 15/30, 10/20 and 7/16 pass-vs-fail on three unchanged files. Root cause is a first-match `return` inside `for (enum_name, enum_info) in &self.env.enums` (src/typechecker/expr_ops.rs:352) over a `HashMap` whose iteration order is randomly seeded per process. On the runs that PASS, the JIT then fails LLVM `Module verification`. | src/typechecker/expr_ops.rs:352 -- `for (enum_name, enum_info) in &self.env.enums` returning the FIRST enum carrying a matching variant name; `self.env.enums` is `HashMap<String, EnumInfo>` (src/typechecker/env.rs:314). |
-| B-2026-08-14-11 | 2026-08-14 | typecheck+codegen | medium | An UNSUFFIXED float literal at a narrow-float annotation is never narrowed, on EITHER surface: `let a: f32 = 0.1` holds the f64 0.1 where `let b: f32 = 0.1f32` holds 0.10000000149011612, and `a == b` then answers false under `--interp` and true compiled — a run-vs-build split on a program with no arithmetic in it. | The float-literal path: `ExprKind::Float(f, sfx)` lowers through `const_float_for_suffix`, which reads the SUFFIX only — an unsuffixed literal is always a `double`, and nothing at the annotated `let` re-types or coerces it. Contrast the integer twin, which is correct (`let x: u8 = 200` stores an i8), and the same float literal at a struct field / fn param / `Vec` element, which codegen DOES narrow. So the gap is the scalar `let` specifically, in codegen; the typechecker's own `expr_types` already says f32 at that binding. |
+| B-2026-08-14-12 | 2026-08-14 | typecheck | medium | An implicit float NARROWING between two declared types is accepted with no diagnostic and no rounding on either surface — `let c: f64 = 0.1; let d: f32 = c;` leaves `d` holding a value its own declared type cannot represent. The integer sibling of this rule is enforced; enforcing the float one breaks 13 existing tests and the shipped `std.autograd` source, so it is a language decision with a migration, not a one-line gate. | A `check_float_narrowing_coercion` sibling of `check_int_widening_coercion` (typechecker/exprs.rs), called beside it in `check_expr`'s fall-through. Written and measured during B-2026-08-14-11; the blocker is the 20 sites it fires on, not the gate. |
 
 ### Wontfix (2)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1178 surfaced
 
 </details>
 
-### Fixed (1164)
+### Fixed (1165)
 
-<details><summary>1164 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1165 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5587,6 +5587,77 @@ ONE REGISTRATION GAP FOUND BY USING THE RESULT. `chunks`/`windows` return `Vec[S
 THE WHOLE `Slice` SURFACE NOW BUILDS. All twenty names in `SLICE_BUILTIN_METHODS` compile — which is why `test_codegen_rejects_unsupported_slice_method` no longer has a real method to probe with. That test has now cycled through `first()` and `windows()`, each time on its own comment's instruction to swap in another unsupported name; it probes a name the TYPECHECKER rejects instead, which still reaches the dispatcher (the harness drives codegen past typecheck errors) and still pins the only thing it was ever about — the fall-through must `Err` naming the method, never return a silent zero.
 
 MEASURED against the interpreter as oracle on all four surfaces and both optimization levels: a 16-line fixture covering every method, a partial window (a `split_at_mut` second half, where a fix that wrote from index 0 would corrupt the untouched first half), narrow-element stride, the degenerate counts (`n` wider than the slice, an empty receiver, a zero-length half), and a `String`-element pass. Zero divergences. |
+| B-2026-08-14-11 | typecheck+codegen | medium | An UNSUFFIXED float literal at a narrow-float annotation is never narrowed, on EITHER surface: `let a: f32 = 0.1` holds the f64 0.1 where `let b: f32… | FIXED by 254fc47, leg 1 of two. The second leg is split out as B-2026-08-14-12
+after its blast radius was measured.
+
+LEG 1 IS ONE BUG WITH ONE CAUSE ON BOTH SURFACES, exactly as the row says.
+Synthesis types a bare literal `f64` (`type_from_float_suffix`'s `None` arm) and
+nothing moved it, so the literal's OWN SPAN said `f64` while it sat in a
+narrow-float slot. The interpreter reads that span, so it kept the full double
+everywhere; codegen reads the SUFFIX, so it narrowed wherever some other
+mechanism re-typed the literal and not at the annotated `let`.
+
+THE ROW'S SCOPE SWEEP REPRODUCED EXACTLY, which is worth saying because it is
+the part that told me where to put the fix:
+
+                    pre-fix                 post-fix
+                 interp    build         interp   build
+  let_annot        0.1      0.1           narrow  narrow
+  struct_lit       0.1     narrow         narrow  narrow
+  fn_arg           0.1     narrow         narrow  narrow
+  ret              0.1     narrow         narrow  narrow
+  vec_push         0.1     narrow         narrow  narrow
+  array_elem       0.1     narrow         narrow  narrow
+  tuple            0.1     narrow         narrow  narrow
+
+("narrow" is 0.10000000149011612, the value the SUFFIXED spelling holds.)
+
+ONE RE-RECORD COVERS THE WHOLE INTERPRETER SIDE, rather than one store site at
+a time: recording the literal at its contextual type is the same move the
+collection-literal arms already make for their elements (B-2026-07-02-6), and
+the interpreter's float-literal eval then routes through
+`round_float_to_span_width` — the lookup B-2026-08-14-7 built for operators.
+No new table, no new channel.
+
+PLACEMENT WAS THE ONLY SUBTLETY, and it cost a wrong first attempt worth
+recording: put at the TOP of `check_expr`, beside the integer-literal range
+checks, the record is overwritten by the fall-through that records the
+SYNTHESIZED type — measured, the literal still read `Float(F64)`. It belongs at
+the TAIL, next to the collection re-record that depends on the same ordering.
+
+TWO POSITIONS NEEDED EXPLICIT REACH, found by re-sweeping rather than assumed.
+`Vec.push` INFERS its argument and calls `check_assignable` — `check_expr` never
+sees it — so the re-record is applied at the push site, beside the existing
+`rerecord_resolved_ctor_arg`. And a tuple literal checks its elements against
+their slots ONLY when one element is an inferred constructor, so `(0.1, 0.2)` at
+`(f32, f32)` never descended; the helper recurses through tuples for that.
+
+CODEGEN'S ONE BAD POSITION is the annotated `let`, gated on the literal. An
+f64-typed VALUE at an f32 annotation is a NARROWING between two declared types,
+which is leg 2 — rounding it silently here would have hidden exactly the thing
+that leg wants diagnosed.
+
+LEG 2 WAS WRITTEN, MEASURED AND REVERTED. A `check_float_narrowing_coercion`
+sibling of the integer rule (same shape, literals exempt, `f16`/`bf16` ranked
+equal so neither widens into the other) took the suite from 0 failures to 13
+over 20 coercion sites — including `runtime/stdlib/autograd.kara`, which
+computes a `Tensor[f32]` map in f64 throughout because its constants are
+decimal literals. That is legal today since Kāra permits MIXED-WIDTH FLOAT
+ARITHMETIC, unlike integers. So leg 2 is not a one-line gate: it is a decision
+about whether float arithmetic may mix widths at all, plus a stdlib migration.
+Filed as B-2026-08-14-12 with the failing list, so whoever takes it starts from
+the measurement rather than rediscovering it.
+
+PINNED by three tests. The interpreter one covers all seven positions plus an
+`f16` (to show the rule is about the declared width, not about f32) and reads
+`0.1` on every line pre-fix; `tests/codegen.rs` carries the identical source and
+expected string as the compiled twin, failing pre-fix on the `let` and the
+`f16`. A third asserts the OTHER direction — an `f64` slot and a suffixed
+literal are both untouched — and passes pre-fix by design: it is an over-reach
+guard, not a regression witness, and its doc says so.
+
+Suite green with `--features llvm` (13597 passed, 0 failed); clippy
+`--all --all-targets --features llvm` and fmt clean. |
 
 </details>
 
