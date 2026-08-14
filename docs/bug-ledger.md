@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 246 | 0 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 112 | 2 |
+| run-vs-build | 113 | 2 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 849 | 1 |
+| codegen | 850 | 1 |
 | typecheck | 164 | 0 |
 | interp | 144 | 1 |
 | ownership | 47 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1175 surfaced · 2 open · 1161 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1176 surfaced · 2 open · 1162 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-7 | 2026-08-14 | interp | medium | The interpreter performs f32 ARITHMETIC at f64 precision, so an `f32` result diverges from both compiled backends wherever the true f32 result would have rounded: `let a: f32 = 4000000000u32 as f32; a + 1.0` reads 4000000001 under `--interp` and 4000000000 compiled. The CAST itself rounds correctly — it is only the operators. | `Value::Float` is an f64 with no width tag, so every f32/f16/bf16 binop in eval_ops.rs computes and stores at f64. The narrowing CASTS were given explicit rounding (B-2026-07-22-4); the arithmetic path never was. |
-| B-2026-08-14-8 | 2026-08-14 | codegen | medium | `Slice[T].contains` typechecks and interprets but has NO codegen: `karac check` passes, `karac run --interp` answers correctly, `karac build` dies with "no handler for slice method 'contains'". `Slice.binary_search` on the same receiver builds fine, so it is a single missing dispatch arm, not a slice-wide gap | `compile_slice_method` (src/codegen/vec_method.rs / method_call.rs slice dispatch) has no `contains` arm, so it falls through to the catch-all error. The `Vec` twin at vec_method.rs's `"contains"` is the model — same loop, same element compare — and `Slice.binary_search` already has its slice arm, which is what shows this is one missing method rather than a slice-wide deferral. |
+| B-2026-08-14-9 | 2026-08-14 | codegen | medium | EIGHT more `Slice[T]` methods typecheck and interpret but have no codegen: the mutators `fill`/`reverse`/`sort`/`sort_by_key`/`swap` and the view-producers `chunks`/`windows`/`split_at`. Split from B-2026-08-14-8, which fixed the four READ accessors by routing them through the Vec implementation — a route these eight cannot take | The `Slice` arm of the method dispatch in src/codegen/method_call.rs (~L5010). The four read accessors B-2026-08-14-8 fixed are ROUTED to `compile_vec_method` over a `{ptr,len,cap:0}` borrowed view; these eight cannot take that route, so each needs a real implementation over the 2-field header. |
 
 ### Wontfix (2)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1175 surfaced
 
 </details>
 
-### Fixed (1161)
+### Fixed (1162)
 
-<details><summary>1161 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1162 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5492,6 +5492,63 @@ container and the assignment, which must stay -5.0 and would read 251.0 under a
 blind zero-extension; and two no-coercion controls (a genuine float element, a
 genuine float field) that must be untouched. The other two sweep axes
 (`--quick`, `--narrowing`) are unchanged at 0. |
+| B-2026-08-14-8 | codegen | medium | `Slice[T].contains` typechecks and interprets but has NO codegen: `karac check` passes, `karac run --interp` answers correctly, `karac build` dies wi… | FIXED by e803ba7 for `contains` and three siblings. The row's scope was wrong and
+the correction is the finding — see below; the remainder is filed separately
+rather than buried here.
+
+THE ROW SAID "ONE MISSING ARM". It is TWELVE. Diffing codegen's slice dispatch
+against the typechecker's own `Slice` method list — the survey this row's own
+detail proposed and did not run — gives:
+
+    HAS codegen    binary_search  is_empty  iter  len  get_unchecked
+    MISSING        contains  first  get  last            <- fixed here
+                   chunks  windows  split_at              <- filed
+                   fill  reverse  sort  sort_by_key  swap <- filed
+
+Every missing one is `karac check`-clean and interp-correct, so the row's
+severity was right even though its size was not. `binary_search` building on
+the same receiver is what made "one arm" look plausible; it is simply the one
+that had already been done.
+
+THE FOUR ARE ROUTED, NOT REIMPLEMENTED, and that is the whole change. A slice
+header is `{ptr, len}` and a Vec header is `{ptr, len, cap}` with the first two
+fields at the same indices, so a borrowed VIEW of the slice — `cap == 0`, the
+convention `zero_cap_if_ref_heap_borrow` already uses for a borrowed heap value
+— is a valid Vec header for any method that only reads `ptr`/`len`.
+`compile_vec_method` then supplies the entire implementation, including the
+Option-payload word splitting `first`/`last`/`get` need for a multi-word
+element. Four hand-written arms would each have had to repeat that, and the
+`coerce_to_payload_words` / `build_option_some_via_phis` pair is exactly the
+part most likely to be got subtly wrong four times.
+
+ONE NON-OBVIOUS PIECE, and it is the piece that would have failed silently.
+`compile_vec_method` resolves the element type BY VARIABLE NAME through
+`vec_elem_types`, and a slice binding is not in that map — `vec_elem_type_for_var`
+falls back to `i64` without complaint. Routing naively would therefore have read
+an `i64` stride for a `Vec[String]` slice and produced garbage rather than an
+error. The slice's own element type is published under that name for the
+duration of the call and restored after, so no slice binding is left
+masquerading as a Vec for anything downstream. The `Vec[String]` half of the pin
+exists to hold that.
+
+THE MUTATORS AND VIEW-PRODUCERS ARE NOT ROUTED, deliberately. `cap == 0` is a
+LIE to anything that would grow or reallocate, and `sort`/`sort_by_key` need the
+comparator machinery keyed off a real Vec binding. Routing them would trade a
+loud, honest build error for a silent wrong answer or a heap corruption — the
+same trade this cluster has refused several times. They keep the error and are
+filed with the survey.
+
+THE ALIASING IS SAFE AND IS CHECKED. The view borrows the source Vec's buffer,
+so the question is whether any routed method frees through it —
+`Vec.contains` calls `free_fresh_owned_str_arg` on its needle, which is a
+FRESH-temp free and not a container free. Measured: valgrind clean, no invalid
+reads and nothing definitely lost, and the pin asserts the source Vecs are still
+intact (`v.len()` / `w.len()`) after the slice methods run.
+
+MEASURED, interp / JIT / AOT all agreeing: `contains` hit and miss; `first` /
+`last` / `get` in range and `get` out of range (the `None` arm); the same over a
+`Vec[String]` slice, which is what catches the element-type default; and the two
+source-container controls. The codegen pin fails against the stashed compiler. |
 
 </details>
 
