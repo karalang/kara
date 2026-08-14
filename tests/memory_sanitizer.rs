@@ -1732,7 +1732,10 @@ import std.autograd.{TensorTape, TensorVar};
 fn main() {
     let target: Tensor[f32, [?]] = Tensor.from([3.0, 5.0, 7.0]);
     let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
-    let lr = 0.75;
+    // B-2026-08-14-14: annotated at the tensors' element type. Unannotated the
+    // literal is f64, and `grad * lr` below narrowed it silently into an f32
+    // element-wise op. 0.75 is exact in both widths, so no printed value moves.
+    let lr: f32 = 0.75;
     let mut step = 0;
     while step < 12 {
         let tape = TensorTape.new();

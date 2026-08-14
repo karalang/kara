@@ -30808,6 +30808,145 @@ fn mixed_width_float_arithmetic_is_rejected() {
     typecheck_ok("fn main() { let a: f32 = 1.5f32; let b: f64 = 1.5; println(a * (b as f32)); }");
 }
 
+/// B-2026-08-14-14 — the ELEMENT-WISE sibling: a `Tensor`/`Column` scalar
+/// operand is checked against the element type.
+///
+/// `check_tensor_scalar` and `check_column_scalar` both documented the rule as
+/// "a typed scalar must already be `T`" and then implemented
+/// `scalar_ty == elem || types_compatible(scalar_ty, elem)`. `types_compatible`
+/// is permissive across the numeric types — right while one side is still being
+/// solved, wrong once both are fixed — so every width and both domains were
+/// admitted and silently coerced. The worst of it traps on one backend and
+/// answers on the other: `Tensor[u8] + x` with `x: i64 = 300` typechecked,
+/// raised "runtime error: integer overflow" under `--interp`, and printed 45
+/// from the binary — a two's-complement truncation of 301, which is also the
+/// wrapping design.md's trapping default exists to prevent.
+///
+/// design.md writes this program with a tensor as its own counter-example:
+/// `arr + 1` promotes, `arr + x` with a typed `x` is "compile error: expected
+/// f64, got i64 — add `x as f64`".
+#[test]
+fn element_wise_scalar_operand_must_match_the_element_type() {
+    let mismatches = |src: &str| {
+        assert!(
+            typecheck_errors(src)
+                .iter()
+                .any(|e| e.message.contains("must match the element")),
+            "expected an element-type rejection from: {src}"
+        );
+    };
+    // Cross-DOMAIN: design.md's own example, plus the widths that would look
+    // "safe" under an implicit-widening reading.
+    mismatches(
+        "fn main() { let t: Tensor[f64,[2]] = Tensor.from([1.0,2.0]); let x: i64 = 2; \
+         let r = t + x; println(r[0]); }",
+    );
+    mismatches(
+        "fn main() { let t: Tensor[f64,[2]] = Tensor.from([1.0,2.0]); let x: i32 = 2; \
+         let r = t + x; println(r[0]); }",
+    );
+    // Float NARROWING into the element type.
+    mismatches(
+        "fn main() { let t: Tensor[f32,[2]] = Tensor.from([1.0,2.0]); let d: f64 = 0.1; \
+         let r = t * d; println(r[0]); }",
+    );
+    // Float WIDENING is refused too: the element type is the result's type, so
+    // the scalar has to BE it — the same reason mixed-width scalar arithmetic
+    // is refused rather than silently unified (B-2026-08-14-13).
+    mismatches(
+        "fn main() { let t: Tensor[f64,[2]] = Tensor.from([1.0,2.0]); let s: f32 = 0.5f32; \
+         let r = t + s; println(r[0]); }",
+    );
+    // Integer widths, including the trapping repro above.
+    mismatches(
+        "fn main() { let t: Tensor[u8,[2]] = Tensor.from([1,2]); let x: i64 = 300; \
+         let r = t + x; println(r[0]); }",
+    );
+    mismatches(
+        "fn main() { let t: Tensor[i64,[2]] = Tensor.from([1,2]); let x: u8 = 2; \
+         let r = t + x; println(r[0]); }",
+    );
+    // scalar ⊕ Tensor is the same check from the other side.
+    mismatches(
+        "fn main() { let t: Tensor[f64,[2]] = Tensor.from([1.0,2.0]); let s: f32 = 0.5f32; \
+         let r = s * t; println(r[0]); }",
+    );
+    // `Column[T]` carried a byte-identical copy of the bug.
+    mismatches(
+        "fn main() { let c: Column[f32] = Column.from_vec([1.0,2.0]); let d: f64 = 0.1; \
+         let r = c * d; println(r.len()); }",
+    );
+    mismatches(
+        "fn main() { let c: Column[i64] = Column.from_vec([1,2]); let x: u8 = 2; \
+         let r = c * x; println(r.len()); }",
+    );
+    // A `Column` COMPARISON is included, where a scalar-vs-scalar comparison is
+    // not (B-2026-08-14-13). The difference is real, not an inconsistency:
+    // `a < b` on two scalars widens the narrower operand losslessly to answer a
+    // `bool`, so nothing is lost; `col < scalar` compares AT THE ELEMENT TYPE,
+    // so the scalar is coerced into it first and a value the element type
+    // cannot hold silently becomes one that it can.
+    mismatches(
+        "fn main() { let c: Column[i64] = Column.from_vec([1,2,3]); let x: u8 = 2; \
+         let m = c == x; println(m.len()); }",
+    );
+    mismatches(
+        "fn main() { let d: Column[f32] = Column.from_vec([1.0,2.0]); let f: f64 = 1.0; \
+         let n = d < f; println(n.len()); }",
+    );
+
+    // UNSUFFIXED LITERALS still promote to the element type — that is
+    // design.md's literal-promotion rule and the whole reason the typed case
+    // can be strict without friction.
+    typecheck_ok(
+        "fn main() { let t: Tensor[f64,[2]] = Tensor.from([1.0,2.0]); let r = t * 2; println(r[0]); }",
+    );
+    typecheck_ok(
+        "fn main() { let t: Tensor[f32,[2]] = Tensor.from([1.0,2.0]); let r = t * 0.5; println(r[0]); }",
+    );
+    typecheck_ok(
+        "fn main() { let c: Column[i64] = Column.from_vec([1,2]); let r = c * 2; println(r.len()); }",
+    );
+    // …and so does a CONSTANT EXPRESSION built from them. `sv * -1.0` is two
+    // `std.autograd` lines; keying promotion on a bare literal would have
+    // rejected the stdlib for a value the compiler can see.
+    typecheck_ok(
+        "fn main() { let t: Tensor[f32,[2]] = Tensor.from([1.0,2.0]); let r = t * -1.0; println(r[0]); }",
+    );
+    typecheck_ok(
+        "fn main() { let t: Tensor[f32,[2]] = Tensor.from([1.0,2.0]); let r = t * (0.0 - 1.0); println(r[0]); }",
+    );
+    typecheck_ok(
+        "fn main() { let t: Tensor[i64,[2]] = Tensor.from([1,2]); let r = t + -1; println(r[0]); }",
+    );
+    // A FLOAT constant still cannot promote into an INTEGER element — that
+    // guard predates this row and must survive the widening above.
+    assert!(!typecheck_errors(
+        "fn main() { let t: Tensor[i64,[2]] = Tensor.from([1,2]); let r = t * -1.5; println(r[0]); }"
+    )
+    .is_empty());
+
+    // Exact match, and the `as` the diagnostic names.
+    typecheck_ok(
+        "fn main() { let t: Tensor[f32,[2]] = Tensor.from([1.0,2.0]); let s: f32 = 0.5f32; \
+         let r = t * s; println(r[0]); }",
+    );
+    typecheck_ok(
+        "fn main() { let t: Tensor[f32,[2]] = Tensor.from([1.0,2.0]); let d: f64 = 0.1; \
+         let r = t * (d as f32); println(r[0]); }",
+    );
+    typecheck_ok(
+        "fn main() { let t: Tensor[u8,[2]] = Tensor.from([1,2]); let x: i64 = 300; \
+         let r = t + (x as u8); println(r[0]); }",
+    );
+    // A NON-NUMERIC element type never reaches the new rule — `types_compatible`
+    // still decides there, which is where its permissiveness belongs.
+    typecheck_ok(
+        "fn main() { let s: Column[String] = Column.from_vec([\"a\",\"b\"]); \
+         let t: String = \"a\"; let m = s == t; println(m.len()); }",
+    );
+}
+
 /// B-2026-08-08-9 — a slot fixed by the EXPECTATION still owes the
 /// narrowing check.
 ///

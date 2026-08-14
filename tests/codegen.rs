@@ -23577,6 +23577,43 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-14 — the compiled twin of
+    /// `tests/interpreter.rs::test_element_wise_scalar_as_cast_agrees_across_backends`,
+    /// same source and same expected string.
+    ///
+    /// The first line is the row's repro made explicit. Written as
+    /// `tu + x` with `x: i64 = 300`, it typechecked, TRAPPED under `--interp`
+    /// with "runtime error: integer overflow", and printed 45 from the binary —
+    /// three different behaviours from one accepted program, and the compiled
+    /// one a silent two's-complement wrap that design.md's trapping default
+    /// exists to prevent. With the `as u8` written the truncation is the
+    /// author's, both backends do it, and 45 is the honest answer.
+    ///
+    /// The last line pins the constant-expression promotion: `-1.0` is a unary
+    /// minus on a literal, so it takes the element type and needs no cast. Two
+    /// `std.autograd` lines are written that way.
+    #[test]
+    fn test_e2e_element_wise_scalar_as_cast_agrees_across_backends() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let tu: Tensor[u8, [2]] = Tensor.from([1, 2]);\n\
+                     let x: i64 = 300;\n\
+                     let r = tu + (x as u8);\n\
+                     println(r[0]);\n\
+                     let t32: Tensor[f32, [2]] = Tensor.from([1.0, 2.0]);\n\
+                     let d: f64 = 0.1;\n\
+                     let s = t32 * (d as f32);\n\
+                     println(s[0]);\n\
+                     let n = t32 * -1.0;\n\
+                     println(n[0]);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("45\n0.10000000149011612\n-1\n"),
+        );
+    }
+
     /// B-2026-08-14-5 — a field read through a FIXED-SIZE ARRAY index compiles,
     /// at parity with the `Vec` spelling of the same read.
     ///
@@ -92556,7 +92593,10 @@ fn loss_of(w: ref Tensor[f32, [?]], target: ref Tensor[f32, [?]]) -> f32 {
 fn main() {
     let target: Tensor[f32, [?]] = Tensor.from([3.0, 5.0, 7.0]);
     let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
-    let lr = 0.75;
+    // B-2026-08-14-14: annotated at the tensors' element type. Unannotated the
+    // literal is f64, and `grad * lr` below narrowed it silently into an f32
+    // element-wise op. 0.75 is exact in both widths, so no printed value moves.
+    let lr: f32 = 0.75;
     let l0 = loss_of(w, target);
     println(f"{l0.round()}");
     let mut step = 0;

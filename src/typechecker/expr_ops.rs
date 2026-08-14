@@ -1227,33 +1227,97 @@ impl<'a> super::TypeChecker<'a> {
             );
             return false;
         }
-        let is_unsuffixed = matches!(
-            &scalar.kind,
-            ExprKind::Integer(_, None) | ExprKind::Float(_, None)
-        );
-        if is_unsuffixed {
-            // A float literal cannot promote to an integer element type.
-            let can_promote = !(matches!(&scalar.kind, ExprKind::Float(_, None))
-                && matches!(elem, Type::Int(_) | Type::UInt(_)));
+        if let Some(is_float_const) = Self::unsuffixed_const_scalar_is_float(scalar) {
+            // A float constant cannot promote to an integer element type.
+            let can_promote = !(is_float_const && matches!(elem, Type::Int(_) | Type::UInt(_)));
             if can_promote {
                 self.record_expr_type(&scalar.span, elem);
                 return true;
             }
         }
-        if scalar_ty == elem || types_compatible(scalar_ty, elem) {
+        if Self::typed_scalar_matches_element(scalar_ty, elem) {
             return true;
         }
         self.type_error(
             format!(
                 "scalar operand of element-wise tensor arithmetic must match the element \
-                 type '{}', found '{}'",
+                 type '{}', found '{}' — cast explicitly with `as {}` (an unsuffixed \
+                 literal takes the element type automatically)",
                 type_display(elem),
-                type_display(scalar_ty)
+                type_display(scalar_ty),
+                type_display(elem)
             ),
             scalar.span.clone(),
             TypeErrorKind::TypeMismatch,
         );
         false
+    }
+
+    /// B-2026-08-14-14 — does a TYPED scalar operand satisfy an element-wise
+    /// op's element type?
+    ///
+    /// Both `check_tensor_scalar` and `check_column_scalar` documented the rule
+    /// as "a typed scalar must already be `T`" and then implemented
+    /// `scalar_ty == elem || types_compatible(scalar_ty, elem)`.
+    /// `types_compatible` is permissive across the numeric types — correct
+    /// while one side is still being solved, wrong once both are fixed — so
+    /// every width and every domain was admitted and silently coerced to the
+    /// element type. `Tensor[u8] + x` with `x: i64 = 300` typechecked, TRAPPED
+    /// with "integer overflow" under `--interp`, and printed 45 from the binary.
+    ///
+    /// The element type is the answer's type, so a concrete numeric scalar has
+    /// to BE it; design.md's literal-promotion section writes this exact
+    /// program with a tensor and specifies `arr + x` (typed `i64`, `f64`
+    /// element) as "compile error: expected f64, got i64 — add `x as f64`".
+    /// Non-numeric or not-yet-concrete operands keep `types_compatible`, which
+    /// is where its permissiveness is doing real work.
+    /// B-2026-08-14-14 — is this scalar an UNSUFFIXED numeric constant
+    /// expression, and is it float-domain? `Some(true)` for a float constant,
+    /// `Some(false)` for an integer one, `None` when it is not a constant.
+    ///
+    /// The promotion this feeds used to key on a BARE literal, which meant
+    /// `sv * -1.0` — a unary minus on one — took the typed path instead and was
+    /// only accepted because that path fell through to `types_compatible`. Two
+    /// `std.autograd` lines are written that way, so tightening the typed path
+    /// without widening this one would have rejected the stdlib for a constant
+    /// the compiler can see. Same argument, and the same shape, as
+    /// B-2026-08-14-12's const-expression exemption: a typed variable is a leaf
+    /// that returns `None`, so this cannot swallow the case the gate is for.
+    ///
+    /// A mixed-domain constant (`2 * 1.5`) reports float, which is what the
+    /// caller needs to refuse promoting it into an integer element.
+    fn unsuffixed_const_scalar_is_float(expr: &Expr) -> Option<bool> {
+        match &expr.kind {
+            ExprKind::Integer(_, None) => Some(false),
+            ExprKind::Float(_, None) => Some(true),
+            ExprKind::Unary { op, operand } => matches!(op, UnaryOp::Neg)
+                .then(|| Self::unsuffixed_const_scalar_is_float(operand))
+                .flatten(),
+            ExprKind::Binary { op, left, right } => {
+                if !matches!(
+                    op,
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+                ) {
+                    return None;
+                }
+                let l = Self::unsuffixed_const_scalar_is_float(left)?;
+                let r = Self::unsuffixed_const_scalar_is_float(right)?;
+                Some(l || r)
+            }
+            _ => None,
+        }
+    }
+
+    fn typed_scalar_matches_element(scalar_ty: &Type, elem: &Type) -> bool {
+        if scalar_ty == elem {
+            return true;
+        }
+        let concrete_numeric =
+            |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_));
+        if concrete_numeric(scalar_ty) && concrete_numeric(elem) {
+            return false;
+        }
+        types_compatible(scalar_ty, elem)
     }
 
     /// Element-wise three-valued-logic arithmetic / comparison on `Column[T]`
@@ -1366,28 +1430,27 @@ impl<'a> super::TypeChecker<'a> {
             );
             return false;
         }
-        let is_unsuffixed = matches!(
-            &scalar.kind,
-            ExprKind::Integer(_, None) | ExprKind::Float(_, None)
-        );
-        if is_unsuffixed {
-            // A float literal cannot promote to an integer element type.
-            let can_promote = !(matches!(&scalar.kind, ExprKind::Float(_, None))
-                && matches!(elem, Type::Int(_) | Type::UInt(_)));
+        if let Some(is_float_const) = Self::unsuffixed_const_scalar_is_float(scalar) {
+            // A float constant cannot promote to an integer element type.
+            let can_promote = !(is_float_const && matches!(elem, Type::Int(_) | Type::UInt(_)));
             if can_promote && is_numeric(elem) {
                 self.record_expr_type(&scalar.span, elem);
                 return true;
             }
         }
-        if scalar_ty == elem || types_compatible(scalar_ty, elem) {
+        // B-2026-08-14-14 — same rule as the tensor sibling; see
+        // `typed_scalar_matches_element`.
+        if Self::typed_scalar_matches_element(scalar_ty, elem) {
             return true;
         }
         self.type_error(
             format!(
                 "scalar operand of an element-wise column op must match the element \
-                 type '{}', found '{}'",
+                 type '{}', found '{}' — cast explicitly with `as {}` (an unsuffixed \
+                 literal takes the element type automatically)",
                 type_display(elem),
-                type_display(scalar_ty)
+                type_display(scalar_ty),
+                type_display(elem)
             ),
             scalar.span.clone(),
             TypeErrorKind::TypeMismatch,

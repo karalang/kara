@@ -50,7 +50,11 @@ fn loss_of(w: ref Tensor[f32, [?]], target: ref Tensor[f32, [?]]) -> f32 {
 fn main() {
     let target: Tensor[f32, [?]] = Tensor.from([3.0, 5.0, 7.0]);
     let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
-    let lr = 0.75;
+    // B-2026-08-14-14: annotated at the tensors' element type. Unannotated the
+    // literal is f64, and `grad * lr` below then narrowed it silently into an
+    // f32 element-wise op. 0.75 is exact in both widths, so nothing this
+    // program prints moves; the annotation just says which width it meant.
+    let lr: f32 = 0.75;
 
     // Loss before any training — the weights start at zero, far from target.
     let l0 = loss_of(w, target);

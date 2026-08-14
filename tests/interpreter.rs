@@ -21220,7 +21220,10 @@ fn loss_of(w: ref Tensor[f32, [?]], target: ref Tensor[f32, [?]]) -> f32 {
 fn main() {
     let target: Tensor[f32, [?]] = Tensor.from([3.0, 5.0, 7.0]);
     let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
-    let lr = 0.75;
+    // B-2026-08-14-14: annotated at the tensors' element type. Unannotated the
+    // literal is f64, and `grad * lr` below narrowed it silently into an f32
+    // element-wise op. 0.75 is exact in both widths, so no printed value moves.
+    let lr: f32 = 0.75;
     let l0 = loss_of(w, target);
     println(f"{l0.round()}");
     let mut step = 0;
@@ -28974,6 +28977,35 @@ fn test_mixed_float_arithmetic_as_cast_computes_at_the_stated_width() {
                  println(up);\n\
              }"),
         "1.2100000262260437\n1.2100000381469727\n1.6500000953674316\n"
+    );
+}
+
+/// B-2026-08-14-14 — the interpreter twin of
+/// `tests/codegen.rs::test_e2e_element_wise_scalar_as_cast_agrees_across_backends`,
+/// same source and same expected string.
+///
+/// This is the surface that TRAPPED. `tu + x` with `tu: Tensor[u8]` and
+/// `x: i64 = 300` raised "runtime error: integer overflow" here while the
+/// binary printed 45 — the typechecker had admitted a scalar the element type
+/// cannot hold, so the two backends met it differently: an honest trap on one,
+/// a silent two's-complement wrap on the other. With the mismatch rejected and
+/// the truncation written as `as u8`, both agree on 45.
+#[test]
+fn test_element_wise_scalar_as_cast_agrees_across_backends() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let tu: Tensor[u8, [2]] = Tensor.from([1, 2]);\n\
+                 let x: i64 = 300;\n\
+                 let r = tu + (x as u8);\n\
+                 println(r[0]);\n\
+                 let t32: Tensor[f32, [2]] = Tensor.from([1.0, 2.0]);\n\
+                 let d: f64 = 0.1;\n\
+                 let s = t32 * (d as f32);\n\
+                 println(s[0]);\n\
+                 let n = t32 * -1.0;\n\
+                 println(n[0]);\n\
+             }"),
+        "45\n0.10000000149011612\n-1\n"
     );
 }
 
