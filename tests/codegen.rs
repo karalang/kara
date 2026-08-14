@@ -62057,6 +62057,86 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-28 — the plain-build face of the cluster-walk
+    /// use-after-free. Sibling of
+    /// `asan_shared_cluster_published_from_a_par_branch`, which is the
+    /// authoritative gate (only LeakSanitizer separates a correct TRANSFER of
+    /// the free-walk from a mere suppression that leaks).
+    ///
+    /// This one is here because the field failure was a SIGSEGV, not a wrong
+    /// number: `leetcode/1-100/2-add-two-numbers/iterative.kara` died on its
+    /// first `to_string`. `run_program` returns `None` on an abort, so this
+    /// asserts only that the program reaches the end — which is exactly what it
+    /// could not do.
+    #[test]
+    fn test_e2e_shared_cluster_survives_a_par_join() {
+        let src = r#"
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn consume(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    loop {
+        let mut done = true;
+        if let Some(n) = a { a = n.next; done = false; }
+        if let Some(n) = b { b = n.next; done = false; }
+        if done { break; }
+        let node = ListNode { val: 7, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    dummy.next
+}
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 { return None; }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn total(list: Option[ListNode]) -> i64 {
+    let mut c = 0i64;
+    let mut cur = list;
+    loop {
+        match cur {
+            Some(n) => { c = c + n.val; cur = n.next; }
+            None => break,
+        }
+    }
+    c
+}
+
+fn report(a: Slice[i64], b: Slice[i64]) {
+    let l1 = from_array(a);
+    let l2 = from_array(b);
+    let out = consume(l1, l2);
+    println(f"{total(out)}");
+}
+
+fn main() {
+    let a1: Array[i64, 3] = [2, 4, 3];
+    let b1: Array[i64, 3] = [5, 6, 4];
+    report(a1, b1);
+    let a2: Array[i64, 1] = [1];
+    let b2: Array[i64, 2] = [9, 9];
+    report(a2, b2);
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("21\n14\n"));
+    }
+
     /// B-2026-08-14-27 — the plain-build face of the par-join double-free.
     ///
     /// Its sibling `asan_borrow_elided_index_read_across_a_par_join` is the

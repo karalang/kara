@@ -48443,4 +48443,99 @@ fn main() {
             "asan_print_an_owned_vec_temporary_still_frees_it",
         );
     }
+
+    /// B-2026-08-14-28 — an `Option[shared]` CLUSTER root published from a par
+    /// branch must transfer its free-walk to the parent, not run it.
+    ///
+    /// A `let l = build_list()` returning a linked chain queues a
+    /// `FreeClusterWalkOption` that follows the `next` links and frees every
+    /// node. The branch's publish-time suppression scan handled `RcDec`,
+    /// `RcDecOption` and the inline payload drains but had no arm for the
+    /// cluster walk, so the branch freed the WHOLE LIST it had just handed to
+    /// the parent. `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTed
+    /// on the first `to_string`; linked with ASAN — a different heap layout —
+    /// the same binary printed six lines of garbage digits instead, which is
+    /// what reading freed nodes looks like once the allocator has reused them.
+    ///
+    /// TRANSFERRED rather than sentinel-suppressed, and this test is what
+    /// distinguishes the two. Suppression alone stops the branch from freeing
+    /// what the parent reads and passes any output comparison — while leaking
+    /// 400 bytes across the kata's six lists, where the same program built with
+    /// auto-par off is clean. Only LeakSanitizer separates those two fixes.
+    ///
+    /// Two lists, both let-bound before the call, is the minimum: with one the
+    /// group never forms, and passing them inline instead of binding them keeps
+    /// the whole thing sequential.
+    #[test]
+    fn asan_shared_cluster_published_from_a_par_branch() {
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn consume(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    loop {
+        let mut done = true;
+        if let Some(n) = a { a = n.next; done = false; }
+        if let Some(n) = b { b = n.next; done = false; }
+        if done { break; }
+        let node = ListNode { val: 7, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    dummy.next
+}
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 { return None; }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn total(list: Option[ListNode]) -> i64 {
+    let mut c = 0i64;
+    let mut cur = list;
+    loop {
+        match cur {
+            Some(n) => { c = c + n.val; cur = n.next; }
+            None => break,
+        }
+    }
+    c
+}
+
+fn report(a: Slice[i64], b: Slice[i64]) {
+    let l1 = from_array(a);
+    let l2 = from_array(b);
+    let out = consume(l1, l2);
+    println(f"{total(out)}");
+}
+
+fn main() {
+    let a1: Array[i64, 3] = [2, 4, 3];
+    let b1: Array[i64, 3] = [5, 6, 4];
+    report(a1, b1);
+    let a2: Array[i64, 1] = [1];
+    let b2: Array[i64, 2] = [9, 9];
+    report(a2, b2);
+    println("end");
+}
+"#,
+            &["21", "14", "end"],
+            "shared_cluster_published_from_par_branch",
+        );
+    }
 }

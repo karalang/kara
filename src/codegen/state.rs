@@ -1333,7 +1333,12 @@ pub(crate) struct ReturnRetarget<'ctx> {
 /// `RcDec` / `RcDecOption` / Vec slots stay on the established
 /// branch-side *mutation* suppression (null ptr / zero tag / zero cap)
 /// and are not represented here.
-#[derive(Clone, Copy)]
+/// `Clone` but not `Copy`: the cluster-walk variants carry the member struct's
+/// NAME, which the walk emitter needs to resolve the heap layout at drain time
+/// (B-2026-08-14-28). Every consumer already takes `&SlotOwnership` and the
+/// records live in a `Vec` per binding, so the lost `Copy` costs one `.clone()`
+/// at the two sites that build a `CleanupAction` from a transfer.
+#[derive(Clone)]
 pub(crate) enum SlotOwnership<'ctx> {
     /// `FreeMapHandle` metadata minus the alloca (parent supplies its
     /// own).
@@ -1406,6 +1411,27 @@ pub(crate) enum SlotOwnership<'ctx> {
     /// same defect as the leak arm above, differing only in whether the
     /// branch's release happened to be suppressed.
     SharedElided,
+    /// An adopted `Option[shared T]` CLUSTER root — a linked chain the branch
+    /// built and published (`FreeClusterWalkOption`). B-2026-08-14-28.
+    ///
+    /// Transferred rather than sentinel-suppressed. Suppressing alone stops the
+    /// branch from freeing the list the parent is about to read, but nothing
+    /// then frees it at all: the kata's six lists leaked 400 bytes where the
+    /// same program built without auto-par is clean. Handing the walk to the
+    /// parent makes it the unique owner, which is what every other
+    /// ownership-bearing slot shape already does.
+    ClusterWalkOption {
+        option_ty: StructType<'ctx>,
+        member_type: String,
+        link_field_index: usize,
+        some_tag: u64,
+    },
+    /// Non-Option sibling of the above (`FreeClusterWalk`) — a bare cluster
+    /// root pointer rather than a tagged Option.
+    ClusterWalk {
+        member_type: String,
+        link_field_index: usize,
+    },
 }
 
 #[derive(Clone)]

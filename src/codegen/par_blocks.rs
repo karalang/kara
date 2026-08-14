@@ -539,6 +539,28 @@ impl<'ctx> super::Codegen<'ctx> {
             SlotOwnership::File => CleanupAction::FreeFileHandle {
                 file_alloca: parent_alloca,
             },
+            SlotOwnership::ClusterWalkOption {
+                option_ty,
+                ref member_type,
+                link_field_index,
+                some_tag,
+            } => CleanupAction::FreeClusterWalkOption {
+                name: binding_name.to_string(),
+                option_slot: parent_alloca,
+                option_ty,
+                member_type: member_type.clone(),
+                link_field_index,
+                some_tag,
+            },
+            SlotOwnership::ClusterWalk {
+                ref member_type,
+                link_field_index,
+            } => CleanupAction::FreeClusterWalk {
+                name: binding_name.to_string(),
+                ptr: parent_alloca,
+                member_type: member_type.clone(),
+                link_field_index,
+            },
             SlotOwnership::Enum { drop_fn } => CleanupAction::EnumDrop {
                 enum_alloca: parent_alloca,
                 drop_fn,
@@ -2383,6 +2405,51 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if Some(*file_alloca) == local_ptr =>
                             {
                                 Some(SlotOwnership::File)
+                            }
+                            // B-2026-08-14-28 — the CLUSTER-WALK pair, the shape
+                            // this scan was missing entirely. A `let l = build()`
+                            // returning an `Option[shared]` linked chain queues a
+                            // `FreeClusterWalkOption` that follows the `next`
+                            // links and frees every node. Published to the parent
+                            // and then run on branch exit, it freed the WHOLE
+                            // LIST the parent was about to read:
+                            // `add-two-numbers/iterative.kara` SEGFAULTed on the
+                            // first `to_string`, and an ASAN build — a different
+                            // heap layout — printed six lines of garbage digits
+                            // instead, which is what reading freed nodes looks
+                            // like once the allocator has reused them.
+                            //
+                            // TRANSFERRED, not sentinel-suppressed. Suppression
+                            // alone stops the branch from freeing what the parent
+                            // reads, but then nothing frees it: the same kata
+                            // leaked 400 bytes where its auto-par-off build is
+                            // clean. The parent becomes the unique owner, exactly
+                            // as for every other ownership-bearing slot shape.
+                            CleanupAction::FreeClusterWalkOption {
+                                name,
+                                option_slot,
+                                option_ty,
+                                member_type,
+                                link_field_index,
+                                some_tag,
+                            } if *name == slot.binding_name || Some(*option_slot) == local_ptr => {
+                                Some(SlotOwnership::ClusterWalkOption {
+                                    option_ty: *option_ty,
+                                    member_type: member_type.clone(),
+                                    link_field_index: *link_field_index,
+                                    some_tag: *some_tag,
+                                })
+                            }
+                            CleanupAction::FreeClusterWalk {
+                                name,
+                                ptr,
+                                member_type,
+                                link_field_index,
+                            } if *name == slot.binding_name || Some(*ptr) == local_ptr => {
+                                Some(SlotOwnership::ClusterWalk {
+                                    member_type: member_type.clone(),
+                                    link_field_index: *link_field_index,
+                                })
                             }
                             CleanupAction::EnumDrop {
                                 enum_alloca,
