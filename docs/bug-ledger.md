@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 246 | 0 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 115 | 1 |
+| run-vs-build | 116 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 851 | 0 |
-| typecheck | 168 | 1 |
+| codegen | 852 | 1 |
+| typecheck | 169 | 1 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,13 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1180 surfaced · 1 open · 1167 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1181 surfaced · 1 open · 1168 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-13 | 2026-08-14 | typecheck | medium | Mixed-width float arithmetic between two TYPED operands is accepted and takes the LEFT operand's width, so `a * b` is `f32` and `b * a` is `f64` for the same two bindings — and the f64 spelling then SPLITS THE BACKENDS, printing 1.2100000262260437 under `--interp` against 1.2100000381469727 compiled. The integer twin is refused outright, and design.md's "two typed expressions always follow the same rules everywhere" invariant forbids it. | The float arm of the numeric binop match in `src/typechecker/expr_ops.rs` that rejects `both_ints && left_ty != right_ty`; its own comment records the gap ("Same-domain floats keep the looser `types_compatible` check"). Literal promotion is already correct and must stay. |
+| B-2026-08-14-14 | 2026-08-14 | typecheck+codegen | medium | A TENSOR-scalar operation never checks its scalar operand against the element type: `Tensor[f16] * some_f64` silently narrows the f64 to `f16`, and `Tensor[f64] + some_i64` — which design.md's own worked example specifies as a compile error — runs under `--interp` and FAILS TO BUILD with codegen's "likely a typechecker gap" message. | The tensor-scalar broadcast arm, wherever it resolves a scalar operand against the element type; B-2026-08-14-13's gate keys on both operands being `Type::Float`, so a `Tensor[E, …]` operand never enters it. Message family already exists in `src/typechecker/expr_ops.rs`. |
 
 ### Wontfix (2)
 
@@ -143,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1180 surfaced
 
 </details>
 
-### Fixed (1167)
+### Fixed (1168)
 
-<details><summary>1167 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1168 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5875,6 +5875,105 @@ f32 and `b * a` is f64 for the same two bindings. That is the mechanism that
 MANUFACTURES the wrong width which this gate then catches at a boundary far from
 the cause, and design.md's "two typed expressions always follow the same rules"
 invariant refuses it for integers. Separate rule, separate blast radius.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean. |
+| B-2026-08-14-13 | typecheck | medium | Mixed-width float arithmetic between two TYPED operands is accepted and takes the LEFT operand's width, so `a * b` is `f32` and `b * a` is `f64` for… | FIXED by d9fb605. Mixed-width float arithmetic between two typed operands is now rejected,
+exactly as the mixed-INTEGER case has always been.
+
+ONE ARM, IN THE MATCH THAT ALREADY REJECTED THE INTEGER TWIN. Two floats of
+different widths fell past `both_ints` and past the int/float cross-domain arm
+into `!types_compatible(left, right)` — and `types_compatible` answers `true`
+for ANY float pair, so nothing fired and the result took `left_ty`. That single
+fall-through is the whole defect: `a * b` was `f32` and `b * a` was `f64` for
+the same two bindings, so an operand's POSITION chose the precision, and on the
+`f64` spelling the two backends then disagreed about what the precision had been
+(`--interp` 1.2100000262260437 against 1.2100000381469727 from the binary).
+
+BOTH OF THE ROW'S OPEN QUESTIONS ARE ANSWERED BY design.md, AND THEY ANSWER
+DIFFERENTLY — which is why the row said to check rather than assume.
+
+  1. `f16`/`bf16` beside `f32`/`f64`: STRICT, same rule, no exception. The
+     mixed-precision section names this exact workload ("store weights in
+     `f16`/`bf16`, compute in `f32`, store results back") and writes it with an
+     explicit `as` in BOTH directions — the upcast to `f32` AND the store back
+     to `bf16`. So the ML pattern is not evidence for a loophole; it is the
+     worked example of the rule. `f16` and `bf16` mixed with each other are
+     caught too, for the reason B-2026-08-14-12 records: neither is a subset of
+     the other. This is the question the row flagged as most likely to have an
+     exception, and the suite appeared to hold one — see the `f16` test below,
+     which turned out to be asserting a behaviour that never happened.
+
+  2. Comparison operators: NOT included, and not merely for parity. The defect
+     is that the RESULT WIDTH is decided by operand order — a comparison has no
+     result width. Its answer is a `bool`, the narrower operand widens
+     losslessly to produce it, and nothing downstream can observe an order
+     dependence. Measured alongside: mixed-width INTEGER comparisons are
+     accepted today as well, so arithmetic-only is both the principled scope and
+     the existing one.
+
+BLAST RADIUS ON SHIPPED SOURCE: ZERO. Every `.kara` in the repo — 231 files,
+stdlib, examples, mend corpus, self-host units — checks clean. That is not luck:
+the two `std.autograd` GELU lines that B-2026-08-14-12 annotated were the only
+mixed-width float arithmetic in the tree, and they were annotated because that
+row's gate caught the value at the boundary this rule now catches at the
+operator. The two rows are the same defect seen from both ends, and closing the
+first paid for the second.
+
+IN THE SUITE IT WAS TWO TESTS, AND ONE OF THEM WAS ASSERTING SOMETHING FALSE.
+`f16_widens_to_f32_in_mixed_arithmetic` (phase-11, when the half types landed)
+read "`f16 + f32` widens the half to f32; result is f32" and checked only that
+`fn f(a: f16, b: f32) -> f32 { a + b }` TYPECHECKS. It did — for the wrong
+reason. Measured on the parent commit, with the gate stashed out:
+
+  * `a + b` had type **f16**, not f32. The mixed arm returned the LEFT
+    operand's type, so the sibling `b + a` was f32. It typechecked only because
+    f16 then widened to f32 at the RETURN — a boundary coercion, which is a
+    different rule and still legal.
+  * and the backends disagreed about the VALUE. `let r: f32 = a + b` with
+    `a: f16 = 0.1f16`, `b: f32 = 0.1f32` printed **0.199951171875** under
+    `--interp`, where the half-precision add is real, against
+    **0.19997557997703552** from the binary, where codegen had already `fpext`ed
+    the half to f32 before the `fadd`.
+
+So one expression had three different answers — the declared type, the
+interpreted value, and the compiled value — and the test named after it checked
+none of them. A SECOND run-vs-build split, independent of the f32/f64 one in
+the row's own repro, found only because a deliberate-looking test failed and was
+measured instead of edited. It is renamed
+`f16_widens_to_f32_at_a_boundary_but_not_in_arithmetic`, its claim rewritten to
+what was measured, and the boundary widenings it should always have covered
+added. The codegen twin (`test_e2e_f16_widens_to_f32_in_mixed_add`, which guards
+against `fadd half, float` reaching the module verifier) keeps its subject: the
+`as f32` is now what feeds the `fadd` its widened operand, so the bad IR is
+still exactly one bug away and still guarded.
+
+The section comment above that test — "Implicit widening `f16`/`bf16` -> `f32`
+(lossless)" — was the seed of the confusion and now says AT A BOUNDARY, with the
+integer parallel spelled out (`i8` -> `i64` is implicit at a boundary; `i64 + u8`
+has always been refused).
+
+THE DIAGNOSTIC NAMES BOTH DIRECTIONS ON PURPOSE, rather than picking the wider
+one the way the integer message picks `left_ty`. Casting the narrow side UP is
+lossless, but the result is then the wider type, and if it is heading for a
+narrow declared slot it trips B-2026-08-14-12's gate at the destination — a
+second error for following the first fix-it. Casting the wide side DOWN keeps
+the expression at the destination's width and is usually what a kernel wants.
+Which is right depends on where the value is going, which the operator does not
+know, so the message states both and lets the author choose:
+
+    cannot mix float types 'f32' and 'f64' in arithmetic — they must match;
+    cast explicitly with `as` (e.g. the 'f32' operand as 'f64' to compute at the
+    wider width, or the 'f64' operand as 'f32' to compute at the narrower)
+
+PINNED by `mixed_width_float_arithmetic_is_rejected` — all five arithmetic
+operators in BOTH operand orders (the order is the point), every distinct width
+pair including `f16`/`bf16`, plus the over-reach guards: same-width arithmetic,
+literal promotion in both orders, all six comparison spellings, and each `as`
+direction. And by twinned E2E tests asserting that the two `as` directions give
+GENUINELY DIFFERENT answers (1.2100000262260437 at f64, 1.2100000381469727 at
+f32) and that `--interp` and the binary agree on both — the second half being
+what the old behaviour got wrong.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
