@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 244 | 1 |
+| miscompile | 246 | 3 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 109 | 1 |
-| codegen-gap | 107 | 0 |
+| codegen-gap | 108 | 1 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 844 | 2 |
+| codegen | 847 | 5 |
 | typecheck | 163 | 1 |
 | interp | 143 | 1 |
 | ownership | 47 | 0 |
@@ -124,15 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1169 surfaced · 3 open · 1154 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1172 surfaced · 6 open · 1154 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-13-22 | 2026-08-13 | codegen | high | An ANNOTATED ARRAY literal ignores its annotation the way B-2026-08-13-17's tuple did: `let a: Array[i64, 2] = [v, v]` with `v: u8 = 200` lays the aggregate out at the ELEMENT's width and sign-extends on read, printing -56 on all three compiled surfaces while `--interp` prints 200. Unsigned sources only (u8/u16/u32); signed sources are correct, because sign-extension is what they wanted. | src/codegen/collections.rs `compile_array_literal` (~L1265): it consults `literal_pending_elem_hint()` and would coerce via `coerce_literal_elem_to_type_from`, but the hint is None for an `Array[T, N]` annotation — the staging in src/codegen/stmts.rs (~L3880) keys off `vec_elem_types` / `var_elem_type_exprs`, which an Array binding does not populate. With no hint the function falls through to `let elem_ty = vals[0].get_type()`, i.e. layout from the VALUES rather than the annotation — the same shape B-2026-08-13-17 fixed for tuples via `pending_let_tuple_te`. |
 | B-2026-08-14-1 | 2026-08-14 | typecheck+codegen | high | FIVE SITES ACCEPT AN IMPLICIT NARROWING the language says it refuses — Vec.push, Vec.contains, Set.insert/contains, Set.remove and the annotated tuple take an i64 where a u8 is declared, with NO diagnostic. The two surfaces then disagree: `Vec[u8]` + `push(300i64)` reads back 300 under --interp and 44 compiled. Map and Vec index-assign reject the same shape, so this is per-site, not a missing rule. | The rejecting sites go through `check_int_widening_coercion` (src/typechecker/exprs.rs, B-2026-07-09-7 decision B); the five leaking sites are container-argument and annotated-aggregate paths that never call it. Compare Map.insert/contains_key (rejects) against Set.insert/contains (accepts) — same shape, different answer — and Vec index-assign (rejects) against Vec.push (accepts), which is a disagreement INSIDE one container's method set. |
 | B-2026-08-14-2 | 2026-08-14 | interp | high | INTERPRETER-SIDE: the implicit int-to-float widening is not performed at all, so an int source bound to a float destination stays an Int. At an annotated `let` this makes a program that `karac check`s clean and runs correctly compiled DIE AT RUNTIME under --interp ("operator 'Eq' is not defined for operands of type 'Int' and 'Float'"), with a diagnostic that blames a typecheck error which does not exist. At `Vec[f64].push` it is silent instead: `contains` answers the exact inverse of the compiled backends. | The interpreter's coercion at a float-typed binding/argument position: it stores the incoming `Value::Int` unchanged where the declared type is a float, and the later operator dispatch has no Int/Float arm. The compiled backends convert correctly at these boundaries (B-2026-08-13-18 did that work for codegen), so the fix is the interpreter's side of the same rule. The runtime error text is separately wrong and should not survive the fix — it asserts the typechecker reports this as a hard error, and `karac check` on the repro prints "All checks passed." |
+| B-2026-08-14-3 | 2026-08-14 | codegen | high | GENERICS AT UNSIGNED NARROW WIDTHS RETURN SIGN-EXTENDED GARBAGE on both compiled backends: `fn idg[T](x: T) -> T` called as `idg(200u8)` yields -56, `idg(60000u16)` yields -5536, `idg(4000000000u32)` yields -294967296, and the generic struct `Boxg[T] { v: T }` at `Boxg[u8]` reads its field back as -56. Signed T is correct, and the same values held in a non-generic binding are correct. | The monomorphization path's extension of a narrow T: it appears to sign-extend unconditionally rather than choosing sext/zext from T's signedness. Both the generic FUNCTION return/argument and the generic STRUCT field read are affected, which points at one shared widen rather than two. Contrast with the non-generic control in the same program (a plain `let direct = 200u8` prints 200) and with `Vec[u8]`, which round-trips 200 correctly — so it is the generic instantiation, not narrow unsigned handling in general. |
+| B-2026-08-14-4 | 2026-08-14 | codegen | high | A STRUCT WITH UNSIGNED NARROW FIELDS IS CORRUPTED BY A Vec ROUND-TRIP: reading `v[0].a` where `a: u8 = 200` yields -56 on both compiled backends, while reading the SAME field off the same struct directly yields 200. u16 and u32 fields corrupt identically; the direct read is correct in the same program. | The Vec-element struct field read path, versus the direct field read which is correct. Likely the same signedness-blind extension as B-2026-08-14-3's generic instantiation (a `Vec[T]` element read is a monomorphized read), but filed separately because the direct-vs-through-Vec split is a distinct observable and may be a distinct site. |
+| B-2026-08-14-5 | 2026-08-14 | codegen | medium | A FIELD READ ON AN ARRAY-INDEXED STRUCT IS A HARD CODEGEN GAP: `arr[0].a` where `arr: Array[Plain, 1]` fails to build with "codegen: cannot resolve field 'a' on this receiver (its type was not recorded for codegen)". The same read through a `Vec[Plain]` compiles, and `--interp` runs it. | The receiver-type recording for an index expression whose base is an `Array[Struct, N]` — the Vec-indexed sibling records it, the array-indexed one does not. The message is the compiler's own self-report and names the gap precisely. |
 
 ### Wontfix (2)
 

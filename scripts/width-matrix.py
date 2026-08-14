@@ -41,10 +41,19 @@ The narrowing mode is the inverse test: it asserts a compile ERROR, so it runs
 `karac check` per site and reports any site that accepts what the language says
 it refuses.
 
+The roundtrip axis exists because the other three all pair a NARROW source with
+a WIDE destination, which leaves a whole quadrant untested: a narrow value living
+in a container of its own width, where no coercion should happen at all. Three of
+this file's findings (B-2026-08-13-22, B-2026-08-14-3, B-2026-08-14-4) are in
+that quadrant — a `Vec[u8]` holding 200 is fine, but an `Array[u8]`, a
+`Vec[Struct-with-u8-field]` and any generic at `T = u8` are not, and every one of
+them sign-extends on the way out.
+
 Usage:
     python3 scripts/width-matrix.py                 # int -> int sweep
     python3 scripts/width-matrix.py --floats        # int -> float sweep
     python3 scripts/width-matrix.py --narrowing     # rejection sweep
+    python3 scripts/width-matrix.py --roundtrip     # same-width roundtrip sweep
     python3 scripts/width-matrix.py --quick         # one value per source type
     python3 scripts/width-matrix.py --site vec_push # filter to matching sites
     python3 scripts/width-matrix.py --keep DIR      # keep generated .kara files
@@ -200,6 +209,80 @@ def surfaces(path, workdir):
     return out, bad
 
 
+# --- roundtrip axis --------------------------------------------------------
+# A narrow value in a container of its OWN type. No coercion is involved, so
+# every one of these must read back exactly what went in.
+RT_PRELUDE = """struct RtPlain{D} {{ a: {D} }}
+struct RtBox{D}[T] {{ v: T }}
+
+fn rt_id{D}[T](x: T) -> T {{ return x; }}
+"""
+
+RT_SITES = {
+    "scalar":        'let sc: {D} = {V};\n    println(f"scalar {{sc}}");',
+    "vec":           'let mut rv: Vec[{D}] = Vec.new();\n    rv.push({V});\n    println(f"vec {{rv[0i64]}}");',
+    "set":           'let mut rs: Set[{D}] = Set.new();\n    rs.insert({V});\n    println(f"set {{rs.contains({V})}} {{rs.len()}}");',
+    "map":           'let mut rm: Map[{D}, {D}] = Map.new();\n    rm.insert({V}, {V});\n    println(f"map {{rm.contains_key({V})}}");',
+    "array":         'let ra: Array[{D}, 2] = [{V}, {V}];\n    println(f"array {{ra[0i64]}}");',
+    "tuple":         'let rt: ({D}, {D}) = ({V}, {V});\n    println(f"tuple {{rt.0}}");',
+    "struct_field":  'let rp = RtPlain{D} {{ a: {V} }};\n    println(f"struct_field {{rp.a}}");',
+    "struct_in_vec": 'let rp2 = RtPlain{D} {{ a: {V} }};\n    let mut rvp: Vec[RtPlain{D}] = Vec.new();\n    rvp.push(rp2);\n    println(f"struct_in_vec {{rvp[0i64].a}}");',
+    "generic_fn":    'println(f"generic_fn {{rt_id{D}({V})}}");',
+    "generic_struct":'let rb: RtBox{D}[{D}] = RtBox{D} {{ v: {V} }};\n    println(f"generic_struct {{rb.v}}");',
+}
+
+
+def roundtrip_sweep(workdir, quick, site_filter):
+    names = [n for n in RT_SITES if not site_filter or site_filter in n]
+    divergences, skips, cases = [], [], 0
+    for src, values in SOURCES:
+        for value in (values[:1] if quick else values):
+            for name in names:
+                body = RT_SITES[name].format(D=src, V=value)
+                text = RT_PRELUDE.format(D=src) + "\nfn main() {\n    " + body + "\n}\n"
+                path = workdir / f"rt_{src}_{name}_{value.replace('-', 'neg')}.kara"
+                path.write_text(text, encoding="utf-8")
+                out, bad = surfaces(path, workdir)
+                if out is None:
+                    skips.append((src, value, name, "interp", bad["interp"]))
+                    continue
+                ref = out["interp"].splitlines()
+                cases += len(ref)
+                for lbl, rsn in bad.items():
+                    skips.append((src, value, name, lbl, rsn))
+                for lbl, txt in out.items():
+                    if lbl == "interp":
+                        continue
+                    got = txt.splitlines()
+                    for i, line in enumerate(ref):
+                        g = got[i] if i < len(got) else "<missing>"
+                        if g != line:
+                            divergences.append((src, value, name, lbl, line, g))
+
+    print(f"width-matrix --roundtrip: {cases} case-lines, {len(divergences)} divergences, {len(skips)} skips")
+    print(f"generated sources: {workdir}")
+    if divergences:
+        print("\nDIVERGENCES (a same-width roundtrip must be the identity):")
+        seen = set()
+        for src, value, name, lbl, want, got in divergences:
+            key = (name, src, lbl)
+            if key in seen:
+                continue
+            seen.add(key)
+            print(f"  {name:<16} {src:>4}  [{lbl:<7}]  interp: {want!r}  got: {got!r}  (value {value})")
+        print(f"\n  {len(divergences)} raw, {len(seen)} distinct (site, type, surface)")
+    if skips:
+        print("\nSKIPS:")
+        seen = set()
+        for src, value, name, lbl, rsn in skips:
+            key = (name, src, lbl)
+            if key in seen:
+                continue
+            seen.add(key)
+            print(f"  {name:<16} {src:>4} [{lbl}] {rsn}")
+    return 1 if divergences else 0
+
+
 def narrowing_sweep(workdir, groups):
     """Every site must REFUSE an implicit narrowing. One site per program, so a
     rejection is attributable; `karac check` only, since nothing should build."""
@@ -238,6 +321,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--floats", action="store_true", help="sweep int -> f64/f32 instead of int -> int")
     ap.add_argument("--narrowing", action="store_true", help="assert every site REJECTS a narrowing")
+    ap.add_argument("--roundtrip", action="store_true", help="assert a same-width container roundtrip is the identity")
     ap.add_argument("--quick", action="store_true", help="one value per source type")
     ap.add_argument("--site", default=None, help="only groups containing a site matching this substring")
     ap.add_argument("--keep", default=None, help="directory to keep generated .kara files in")
@@ -257,6 +341,8 @@ def main():
     workdir = Path(args.keep) if args.keep else Path(tempfile.mkdtemp(prefix="widthmatrix-"))
     workdir.mkdir(parents=True, exist_ok=True)
 
+    if args.roundtrip:
+        return roundtrip_sweep(workdir, args.quick, args.site)
     if args.narrowing:
         return narrowing_sweep(workdir, groups)
 
