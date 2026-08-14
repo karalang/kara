@@ -94,13 +94,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 249 | 1 |
 | leak | 176 | 2 |
-| double-free | 128 | 0 |
+| double-free | 129 | 1 |
 | run-vs-build | 119 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
 | perf | 67 | 1 |
 | false-positive | 62 | 1 |
-| diagnostics | 53 | 0 |
+| diagnostics | 54 | 1 |
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
 | other | 30 | 0 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 866 | 6 |
+| codegen | 867 | 7 |
 | typecheck | 171 | 2 |
 | interp | 145 | 0 |
 | ownership | 47 | 0 |
+| autopar | 42 | 1 |
 | other | 41 | 0 |
-| autopar | 41 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1198 surfaced · 8 open · 1178 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1200 surfaced · 10 open · 1178 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1198 surfaced
 | B-2026-08-14-28 | 2026-08-14 | codegen | high | A `shared struct` LINKED LIST BUILT THROUGH A DUMMY-HEAD CURSOR IS READ AFTER FREE: `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTS under `karac build` and prints six lines of GARBAGE DIGITS under an ASAN build, while the interpreter is correct. The plain-build crash and the ASAN-build wrong answer are the same defect landing on different heap layouts. | The interaction between consuming an input `Option[shared]` chain with `if let Some(n) = a { a = n.next; }` and simultaneously BUILDING a result chain through a `tail` cursor (`tail.next = Some(node); tail = node;`) returned as `dummy.next`. Consuming without building is clean; building without the surrounding call structure is clean. |
 | B-2026-08-14-29 | 2026-08-14 | typecheck | medium | COMPOUND ASSIGNMENT IS NOT OPERAND-TYPE-CHECKED AT ALL: `s += 1i64` on a String, `n += "a"` on an i64, and `p += 1i64` on a struct all report "All checks passed", then fail at codegen with an internal-sounding error that itself says "likely a typechecker gap". The PLAIN spelling of the same expression (`s = s + 1i64`) is rejected correctly, so the check exists and the compound form simply does not reach it. | The `StmtKind::CompoundAssign` arm of the typechecker. The `BinOp` arithmetic-operand check that rejects `s + 1i64` ("arithmetic operator requires numeric type, found 'String'") is evidently not run for the desugared compound form -- the target and value are each checked, but the implied binary operation between them is not. |
 | B-2026-08-14-31 | 2026-08-14 | codegen | medium | Printing a whole `Map` or `Set` STRUCT FIELD emits a raw pointer address under `karac build` — `println(f"{b.m}")` gives `{aaaaaaaaaaaa: 1}` under `--interp` and `94924495492304` compiled. The bound-variable spelling is correct on both, so it is the place expression that falls through, and the fall-through prints an address rather than failing. | `compile_print`'s value-kind fall-through: the identifier arms key off per-variable side tables, and B-2026-07-28-12 added a span-typed non-identifier arm for `Vec` only. Mirror it for `Map`/`Set` with `emit_map_display_fn` / `emit_set_display_fn`, and reuse `print_vec_operand_is_owned_temp` for the drop decision — B-2026-08-14-30 is what happens when that arm takes ownership of a place expression. |
+| B-2026-08-14-32 | 2026-08-14 | codegen | high | an index read into a heap-owning Vec, used as the value of an `if`/`match` ARM, is freed by both the binding and the container -- `let w = if c { v[i] } else { .. }` aborts with a double free while `let w = v[i]` is correct | src/codegen/stmts.rs:4074 and let_binding_is_borrow_elided (stmts.rs:1581) test only the TOP-LEVEL RHS kind for ExprKind::Index; an index read reached through an If/Match arm is invisible to them, so the binding registers an owned cleanup over a pointer the container still owns. |
+| B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
 
 ### Wontfix (2)
 
