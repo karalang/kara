@@ -1262,6 +1262,21 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// [`Self::coerce_literal_elem_to_type_from`] for a caller that may not
+    /// have the source expression; `None` keeps the signedness-blind
+    /// behaviour. B-2026-08-14-6.
+    pub(super) fn coerce_literal_elem_to_type_src(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        target: BasicTypeEnum<'ctx>,
+        src: Option<&Expr>,
+    ) -> BasicValueEnum<'ctx> {
+        match src {
+            Some(e) => self.coerce_literal_elem_to_type_from(val, target, e),
+            None => self.coerce_literal_elem_to_type(val, target),
+        }
+    }
+
     pub(super) fn compile_array_literal(
         &mut self,
         elems: &[Expr],
@@ -5656,6 +5671,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_gep(arr_ty, arr_ptr, &[zero, idx_val], "arr.store.ptr")
                     .unwrap()
             };
+            // B-2026-08-14-6 — coerce to the ARRAY's declared element type
+            // before the store. LLVM types a store by its VALUE, so writing an
+            // `iN` into an `[N x double]` slot is not an error — it writes the
+            // integer's bytes and the next read comes back as a denormal near
+            // zero. `arr[i] = some_u8` on an `Array[f64, N]` did exactly that,
+            // silently, while the interpreter stored 200. The `_src` form
+            // carries the RHS's signedness, so an unsigned source lands as
+            // 200.0 rather than -56.0; a same-typed store is a no-op.
+            let val = self.coerce_literal_elem_to_type_src(val, at.get_element_type(), rhs_src);
             self.builder.build_store(elem_ptr, val).unwrap();
             Ok(())
         } else {

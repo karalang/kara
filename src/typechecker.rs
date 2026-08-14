@@ -1389,6 +1389,21 @@ pub struct TypeCheckResult {
     /// is the last write at that key, and the operand's type is unrecoverable
     /// from it. Same collision `vector_method_receivers` exists to work around,
     /// and the same remedy.
+    /// B-2026-08-14-6 — spans of expressions that sit in a FLOAT-typed slot
+    /// while being an INTEGER themselves, i.e. the implicit int-to-float
+    /// widening applies to them.
+    ///
+    /// Plain-data side channel for the INTERPRETER, which stores a container's
+    /// elements as whatever `Value` the argument evaluated to and has no
+    /// declared element type of its own to consult — the same wall
+    /// `weak_elem_store_sites` exists for, and recorded the same way. Codegen
+    /// needs none of it: it has `elem_ty` in hand at every one of these sites.
+    ///
+    /// Recorded broadly (every `check_expr` boundary plus the container-element
+    /// checks that do not route through one) and consumed NARROWLY — only at
+    /// the container store/probe sites listed in the fix. A span in this set is
+    /// a fact about the program, not an instruction to convert.
+    pub float_coerced_arg_sites: std::collections::HashSet<SpanKey>,
     pub cast_source_unsigned: std::collections::HashSet<SpanKey>,
     pub weak_elem_store_sites: std::collections::HashSet<SpanKey>,
     pub weak_elem_read_sites: std::collections::HashSet<SpanKey>,
@@ -1852,6 +1867,7 @@ pub struct TypeChecker<'a> {
     /// the callee's body can look up `T`'s concrete binding.
     pub(super) call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
     /// B-2026-08-08-14 — see the public copies on `TypeCheckResult`.
+    pub(super) float_coerced_arg_sites: std::collections::HashSet<SpanKey>,
     pub(super) cast_source_unsigned: std::collections::HashSet<SpanKey>,
     pub(super) weak_elem_store_sites: std::collections::HashSet<SpanKey>,
     pub(super) weak_elem_read_sites: std::collections::HashSet<SpanKey>,
@@ -2080,6 +2096,7 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: HashMap::new(),
             path_call_method_dispatch: HashSet::new(),
             call_type_subs: HashMap::new(),
+            float_coerced_arg_sites: std::collections::HashSet::new(),
             cast_source_unsigned: std::collections::HashSet::new(),
             weak_elem_store_sites: std::collections::HashSet::new(),
             weak_elem_read_sites: std::collections::HashSet::new(),
@@ -2285,6 +2302,7 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             path_call_method_dispatch: self.path_call_method_dispatch,
             call_type_subs: self.call_type_subs,
+            float_coerced_arg_sites: self.float_coerced_arg_sites,
             cast_source_unsigned: self.cast_source_unsigned,
             weak_elem_store_sites: self.weak_elem_store_sites,
             weak_elem_read_sites: self.weak_elem_read_sites,

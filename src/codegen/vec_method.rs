@@ -6819,6 +6819,20 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 // Evaluate the needle once, before the loop.
                 let needle_val = self.compile_expr(&args[0].value)?;
+                // Coerce the PROBE to the declared element type
+                // (B-2026-08-14-6). The store side already converts — a
+                // `Vec[f64].push(some_u8)` really holds 200.0 — but the needle
+                // arrived at its own width and class, so the compare below was
+                // an `iN` against a `double` and answered `false` for a value
+                // that IS in the container. Measured with a genuine-float
+                // control: `vd.push(200.0); vd.contains(some_u8)` was false on
+                // both surfaces, which is what shows this is the probe rather
+                // than the store. `coerce_literal_elem_to_type_from` carries
+                // both the int-width and the int->float legs and picks
+                // zext/uitofp from the SOURCE's signedness, so `200u8` lands as
+                // 200.0 rather than -56.0.
+                let needle_val =
+                    self.coerce_literal_elem_to_type_from(needle_val, elem_ty, &args[0].value);
 
                 let fn_val = self.current_fn.unwrap();
                 let head_bb = self.context.append_basic_block(fn_val, "vct.head");

@@ -42,6 +42,40 @@ fn found_map_value_to_option(v: &Value) -> Value {
 }
 
 impl<'a> super::Interpreter<'a> {
+    /// B-2026-08-14-6 — apply the implicit int-to-float widening to a container
+    /// element argument the typechecker flagged.
+    ///
+    /// The interpreter stores whatever `Value` an argument evaluated to and has
+    /// no declared element type of its own, so `Vec[f64].push(some_u8)` left an
+    /// `Int` in the container. Codegen converts (it has `elem_ty` in hand), so
+    /// this is a run-vs-build divergence in both directions at once: the store
+    /// AND the lookup probe.
+    ///
+    /// `float_coerced_arg_sites` is recorded by the typechecker wherever an
+    /// integer expression sits in a float slot. This helper is the only
+    /// consumer that CONVERTS, and it is called only at the container
+    /// store/probe sites — a span in that set is a fact about the program, not
+    /// a standing instruction.
+    ///
+    /// Already-`Float` values and non-flagged arguments pass through untouched,
+    /// so the conversion is idempotent and inert everywhere else.
+    fn coerce_float_slot_arg(&self, val: &Value, arg: Option<&CallArg>) -> Value {
+        let Some(arg) = arg else {
+            return val.clone();
+        };
+        if !self
+            .typecheck_result
+            .float_coerced_arg_sites
+            .contains(&crate::resolver::SpanKey::from_span(&arg.value.span))
+        {
+            return val.clone();
+        }
+        match val {
+            Value::Int(n) => Value::Float(*n as f64),
+            other => other.clone(),
+        }
+    }
+
     pub(super) fn try_eval_seq_method(
         &mut self,
         method: &str,
@@ -523,6 +557,15 @@ impl<'a> super::Interpreter<'a> {
                         }
                         _ => val,
                     };
+                    // B-2026-08-14-6 — an INT argument landing in a FLOAT
+                    // element slot. The implicit int-to-float widening is a
+                    // real coercion, and the interpreter stores whatever the
+                    // argument evaluated to, so a `Vec[f64]` ended up holding
+                    // an `Int` — after which `contains(200.0)` answered false
+                    // for a Vec that had just been pushed a 200. Same reason as
+                    // the weak downgrade above: the site set comes from the
+                    // typechecker because there is no static element type here.
+                    let val = self.coerce_float_slot_arg(&val, args.first());
                     // A bare-identifier arg moves its WHOLE value into the
                     // Vec — own `impl Drop` body included; the container's
                     // element walk runs it now (codegen twin:
@@ -1040,6 +1083,13 @@ impl<'a> super::Interpreter<'a> {
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
+                    // B-2026-08-14-6 — the PROBE takes the same int-to-float
+                    // widening the store does. Without it an `Int` needle never
+                    // equals a `Float` element, so `Vec[f64].contains(some_u8)`
+                    // was false for a value the Vec holds. Fixing only the store
+                    // would have made both surfaces agree on that false, which
+                    // is agreement on the wrong answer.
+                    let needle = self.coerce_float_slot_arg(&needle, args.first());
                     return Some(Value::Bool(v.contains(&needle)));
                 }
                 if let Value::String(ref s) = obj {

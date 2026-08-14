@@ -4379,6 +4379,11 @@ impl<'a> super::TypeChecker<'a> {
                 // `frozen` deref so a `ref T` argument compares peeled, which
                 // is what the gate's own peel expects.
                 self.check_int_widening_coercion(&args[0].value, &elem, &arg_ty);
+                // B-2026-08-14-6 — the int-to-float sibling of the gate above.
+                // This site hand-rolls its slot check rather than routing
+                // through `check_expr`, so the generic recording boundary never
+                // sees it and the interpreter left an `Int` in a `Vec[f64]`.
+                self.record_float_coercion(&args[0].value, &elem, &arg_ty);
                 // Unify so an unsolved element typevar bound to the
                 // receiver (e.g. `let mut v = Vec.new(); v.push(x);`)
                 // gets pinned to the first push's value type. Otherwise

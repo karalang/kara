@@ -8336,7 +8336,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // to the `iN` slot (lossless: the op already
                         // range-checked). No-op when widths match or the value
                         // is non-scalar. Mirrors the let-binding boundary.
-                        let cval = self.coerce_scalar_to_type(val, slot.ty);
+                        // B-2026-08-14-6: `_from`, not the signedness-blind
+                        // form. The helper's int->float leg (B-2026-08-13-18)
+                        // makes `x = some_u8` on an `f64` local a real
+                        // conversion rather than a raw bit-write, but blind it
+                        // picks `sitofp` and `200u8` lands as -56.0. The RHS
+                        // expression is right here, so the signedness is free.
+                        let cval = self.coerce_scalar_to_type_from(val, slot.ty, value);
                         self.builder.build_store(slot.ptr, cval).unwrap();
                     }
                     // B-2026-08-07-5 — `b = c` between two boxed-payload

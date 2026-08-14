@@ -23705,6 +23705,79 @@ fn main() {
     /// signed instantiation (`i8`/`i16`), and the non-generic `direct` binding
     /// whose concrete `u8` the syntactic walk resolves. A fix that flipped
     /// signedness blindly would break these.
+    /// B-2026-08-14-6 — the implicit int-to-float widening reaches a CONTAINER
+    /// element, its lookup PROBE, and an assignment store, on both surfaces.
+    ///
+    /// The row's own control is the first three lines, and it is what shows the
+    /// bug is two bugs. `vc` is pushed a `u8`; `vd` is pushed a genuine `200.0`
+    /// with no coercion anywhere. Before the fix:
+    ///
+    /// ```text
+    ///                      interp   compiled
+    ///   vc.contains(200.0)  false    true      <- interp stored an Int
+    ///   vc.contains(v)      true     false
+    ///   vd.contains(v)      false    false     <- NEITHER converts the probe
+    /// ```
+    ///
+    /// The `vd` line is the finding: with a real float in the Vec, both
+    /// surfaces answered false to `contains(some_u8)`. Converting only the
+    /// interpreter's store would have made them agree on that false — agreement
+    /// on the wrong answer, since a `u8` 200 is 200.0 and IS in the container.
+    ///
+    /// The remaining lines are sites found by probing past the row, each
+    /// measured wrong before: an `Array[f64, N]` index-assign, which wrote the
+    /// integer's BYTES into a double slot and read back a denormal (LLVM types
+    /// a store by its value, so nothing complained); and a plain `x = some_u8`
+    /// on an `f64` local, which took `sitofp` blind to the source's signedness
+    /// and produced -56.0.
+    ///
+    /// The `-5i8` lines are the signedness control — a fix that zero-extended
+    /// blindly would turn them into 251.0. `vf`/`h` are the no-coercion
+    /// controls: a genuine float element and a genuine float field must be
+    /// untouched by any of this.
+    #[test]
+    fn test_e2e_int_to_float_widening_reaches_container_and_probe() {
+        assert_eq!(
+            run_program(
+                "struct H { mut f: f64 }\n\
+                 fn main() {\n\
+                     let v = 200u8;\n\
+                     let n = -5i8;\n\
+                     let mut vc: Vec[f64] = Vec.new();\n\
+                     vc.push(v);\n\
+                     println(vc.contains(200.0));\n\
+                     println(vc.contains(v));\n\
+                     let mut vd: Vec[f64] = Vec.new();\n\
+                     vd.push(200.0);\n\
+                     println(vd.contains(v));\n\
+                     let mut ve: Vec[f64] = Vec.new();\n\
+                     ve.push(0.0);\n\
+                     ve[0i64] = v;\n\
+                     println(ve.contains(200.0));\n\
+                     let mut arr: Array[f64, 2] = [0.0, 0.0];\n\
+                     arr[0i64] = v;\n\
+                     println(arr[0i64]);\n\
+                     let mut x: f64 = 0.0;\n\
+                     x = v;\n\
+                     println(x == 200.0);\n\
+                     let mut vn: Vec[f64] = Vec.new();\n\
+                     vn.push(n);\n\
+                     println(vn.contains(-5.0));\n\
+                     let mut y: f64 = 0.0;\n\
+                     y = n;\n\
+                     println(y == -5.0);\n\
+                     let mut vf: Vec[f64] = Vec.new();\n\
+                     vf.push(1.5);\n\
+                     println(vf.contains(1.5));\n\
+                     let h = H { f: 0.0 };\n\
+                     println(h.f == 0.0);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("true\ntrue\ntrue\ntrue\n200\ntrue\ntrue\ntrue\ntrue\ntrue\n"),
+        );
+    }
+
     #[test]
     fn test_e2e_generic_at_unsigned_width_zero_extends() {
         assert_eq!(

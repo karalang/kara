@@ -28388,6 +28388,55 @@ fn test_user_trait_bound_call_over_builtin_containers() {
     );
 }
 
+/// B-2026-08-14-6 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_int_to_float_widening_reaches_container_and_probe`, same source
+/// and expected string.
+///
+/// Unlike most of this family the interpreter was NOT the oracle here: it
+/// stored an `Int` in a `Vec[f64]`, so `contains(200.0)` was false for a Vec it
+/// had just been pushed a 200. It needed a typechecker-recorded span set to fix
+/// — it keeps no declared element type of its own — which is why the twin
+/// matters: the two halves were fixed by different mechanisms and could drift.
+#[test]
+fn test_int_to_float_widening_reaches_container_and_probe() {
+    assert_eq!(
+        run("struct H { mut f: f64 }\n\
+             fn main() {\n\
+                 let v = 200u8;\n\
+                 let n = -5i8;\n\
+                 let mut vc: Vec[f64] = Vec.new();\n\
+                 vc.push(v);\n\
+                 println(vc.contains(200.0));\n\
+                 println(vc.contains(v));\n\
+                 let mut vd: Vec[f64] = Vec.new();\n\
+                 vd.push(200.0);\n\
+                 println(vd.contains(v));\n\
+                 let mut ve: Vec[f64] = Vec.new();\n\
+                 ve.push(0.0);\n\
+                 ve[0i64] = v;\n\
+                 println(ve.contains(200.0));\n\
+                 let mut arr: Array[f64, 2] = [0.0, 0.0];\n\
+                 arr[0i64] = v;\n\
+                 println(arr[0i64]);\n\
+                 let mut x: f64 = 0.0;\n\
+                 x = v;\n\
+                 println(x == 200.0);\n\
+                 let mut vn: Vec[f64] = Vec.new();\n\
+                 vn.push(n);\n\
+                 println(vn.contains(-5.0));\n\
+                 let mut y: f64 = 0.0;\n\
+                 y = n;\n\
+                 println(y == -5.0);\n\
+                 let mut vf: Vec[f64] = Vec.new();\n\
+                 vf.push(1.5);\n\
+                 println(vf.contains(1.5));\n\
+                 let h = H { f: 0.0 };\n\
+                 println(h.f == 0.0);\n\
+             }"),
+        "true\ntrue\ntrue\ntrue\n200\ntrue\ntrue\ntrue\ntrue\ntrue\n"
+    );
+}
+
 /// B-2026-08-14-3 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_generic_at_unsigned_width_zero_extends`, same source and expected
 /// string.

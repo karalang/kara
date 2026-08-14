@@ -1215,6 +1215,11 @@ impl<'a> super::TypeChecker<'a> {
             _ => actual,
         };
         self.check_int_widening_coercion(expr, expected, &actual);
+        // B-2026-08-14-6 — the int-to-float sibling. Recording only; see the
+        // helper. This is the boundary that covers an index-assign
+        // (`v[i] = some_u8` on a `Vec[f64]`), a `let`, an argument and a
+        // struct field in one place.
+        self.record_float_coercion(expr, expected, &actual);
         // B-2026-08-14-1 — an ANNOTATED TUPLE checks element-wise, which the
         // whole-value gate above cannot do: it compares `(i64, i64)` against
         // `(u8, u8)`, and neither side is an integer, so the gate returns
@@ -3290,6 +3295,26 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    /// B-2026-08-14-6 — note that `expr` is an INTEGER landing in a FLOAT
+    /// slot, so the implicit int-to-float widening applies to it.
+    ///
+    /// Recording only; nothing here rejects or rewrites. The interpreter reads
+    /// the set at the container store/probe sites, where it otherwise has no
+    /// declared element type to convert against and would leave an `Int` in a
+    /// `Vec[f64]`.
+    pub(super) fn record_float_coercion(&mut self, expr: &Expr, expected: &Type, actual: &Type) {
+        let peel = |t: &Type| -> Type {
+            match t {
+                Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                other => other.clone(),
+            }
+        };
+        if matches!(peel(expected), Type::Float(_)) && is_integer(&peel(actual)) {
+            self.float_coerced_arg_sites
+                .insert(crate::resolver::SpanKey::from_span(&expr.span));
         }
     }
 

@@ -1110,6 +1110,11 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-6 — the int-to-float sibling; see
+                    // `Vec.push`. A lookup PROBE needs it as much as a store:
+                    // an unconverted `Int` needle never matches a `Float`
+                    // element.
+                    self.record_float_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Bool
@@ -1121,6 +1126,11 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-6 — the int-to-float sibling; see
+                    // `Vec.push`. A lookup PROBE needs it as much as a store:
+                    // an unconverted `Int` needle never matches a `Float`
+                    // element.
+                    self.record_float_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 // B-2026-08-11-7 — binary search is only meaningful over a
@@ -1264,6 +1274,11 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-6 — the int-to-float sibling; see
+                    // `Vec.push`. A lookup PROBE needs it as much as a store:
+                    // an unconverted `Int` needle never matches a `Float`
+                    // element.
+                    self.record_float_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Unit
@@ -1418,6 +1433,11 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-6 — the int-to-float sibling; see
+                    // `Vec.push`. A lookup PROBE needs it as much as a store:
+                    // an unconverted `Int` needle never matches a `Float`
+                    // element.
+                    self.record_float_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Bool
@@ -1429,6 +1449,11 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-6 — the int-to-float sibling; see
+                    // `Vec.push`. A lookup PROBE needs it as much as a store:
+                    // an unconverted `Int` needle never matches a `Float`
+                    // element.
+                    self.record_float_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 // B-2026-08-11-7 — binary search is only meaningful over a
@@ -1530,6 +1555,11 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-6 — the int-to-float sibling; see
+                    // `Vec.push`. A lookup PROBE needs it as much as a store:
+                    // an unconverted `Int` needle never matches a `Float`
+                    // element.
+                    self.record_float_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Unit

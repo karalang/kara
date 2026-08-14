@@ -25,6 +25,29 @@ use super::value::{EnumData, Value};
 use super::Interpreter;
 
 impl<'a> super::Interpreter<'a> {
+    /// B-2026-08-14-6 — apply the implicit int-to-float widening to an
+    /// assignment RHS the typechecker flagged.
+    ///
+    /// The statement sibling of `coerce_float_slot_arg` (container arguments).
+    /// The typechecker records every integer expression that sits in a float
+    /// slot; this converts at the assignment store, where the interpreter would
+    /// otherwise write an `Int` into a slot the program declared `f64`.
+    /// Non-flagged RHSs and already-`Float` values pass through, so it is inert
+    /// everywhere else and idempotent where it fires.
+    fn coerce_float_assign_rhs(&self, value: &crate::ast::Expr, val: Value) -> Value {
+        if !self
+            .typecheck_result
+            .float_coerced_arg_sites
+            .contains(&crate::resolver::SpanKey::from_span(&value.span))
+        {
+            return val;
+        }
+        match val {
+            Value::Int(n) => Value::Float(n as f64),
+            other => other,
+        }
+    }
+
     /// REPL cross-cell snapshot capture (B-2026-07-29-20). Record every
     /// watched binding held by the scope that is about to pop.
     ///
@@ -2938,6 +2961,14 @@ impl<'a> super::Interpreter<'a> {
                 // re-arm f below once the store lands.
                 self.record_container_bodies_move_sources(value);
                 let val = self.eval_expr_inner(value);
+                // B-2026-08-14-6 — an INT RHS landing in a FLOAT slot
+                // (`v[i] = some_u8` on a `Vec[f64]`, and the field / plain-binding
+                // spellings alike). Codegen converts at the store; the interpreter
+                // kept the `Int`, so the container's contents disagreed with its
+                // declared element type and a later `contains(200.0)` answered false.
+                // Keyed by the RHS's span, which the typechecker flagged when it
+                // checked the value against the target's type.
+                let val = self.coerce_float_assign_rhs(value, val);
                 // A faulted RHS (index OOB, unwrap of None, …) or a control-flow
                 // signal escaping a closure body (`break` out of an enclosing
                 // loop through a `with_provider` body, B-2026-07-31-15) sets
