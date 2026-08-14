@@ -29009,6 +29009,65 @@ fn test_element_wise_scalar_as_cast_agrees_across_backends() {
     );
 }
 
+/// B-2026-08-14-19 — the interpreter half of the `String.substring` boundary
+/// fault, twin of `tests/codegen.rs::test_e2e_substring_non_codepoint_boundary_panics`.
+///
+/// This surface used to run a LOSSY conversion over the byte range, so it
+/// answered where the compiled backends answered differently: `"日本語".substring(0, 2)`
+/// measured `3 3 1` here (one U+FFFD) against `2 2 2` compiled. Both were
+/// defensible readings of a mid-codepoint cut and that is exactly the problem —
+/// they have different LENGTHS, and length is what the next line branches on.
+///
+/// Rejecting rather than picking one garbage is the design.md answer twice
+/// over: `String` is UTF-8 encoded, so raw bytes are not representable in one;
+/// and the overflow rule already settled that a silent plausible-looking wrong
+/// value loses to a loud failure the Mend loop can act on.
+#[test]
+fn test_substring_non_codepoint_boundary_faults() {
+    let errors = runtime_errors(
+        "fn main() { let s = \"\u{65e5}\u{672c}\u{8a9e}\"; println(s.substring(0i64, 2i64).len()); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("not a UTF-8 codepoint boundary")),
+        "expected a boundary fault, got: {errors:?}"
+    );
+    // A START that is off-boundary faults too, and so does an EMPTY range at a
+    // bad index — the index is just as invalid whether or not bytes come back.
+    let errors = runtime_errors(
+        "fn main() { let s = \"\u{65e5}\u{672c}\u{8a9e}\"; println(s.substring(1i64, 1i64).len()); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("start byte index 1")),
+        "expected a start-boundary fault, got: {errors:?}"
+    );
+}
+
+/// B-2026-08-14-19's over-reach guard, and the interpreter twin of
+/// `test_e2e_substring_aligned_slices_unchanged`. Every slice landing ON a
+/// boundary is untouched, including the two established out-of-range contracts
+/// (a start past the end yields empty and must NOT fault; an end past the end
+/// clamps). These passed before the check and must keep passing.
+#[test]
+fn test_substring_aligned_slices_unchanged() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let s = \"\u{65e5}\u{672c}\u{8a9e}\";\n\
+                 println(s.substring(0i64, 3i64).len());\n\
+                 println(s.substring(3i64, 9i64).len());\n\
+                 println(s.substring(0i64, 9i64).len());\n\
+                 println(s.substring(9i64).len());\n\
+                 println(\"abcdef\".substring(0i64, 20i64));\n\
+                 println(\"abcdef\".substring(2i64));\n\
+                 println(s.substring(20i64).len());\n\
+             }"),
+        "3\n6\n9\n0\nabcdef\ncdef\n0\n"
+    );
+}
+
 /// B-2026-08-14-17 — the interpreter twin of
 /// `tests/codegen.rs::test_e2e_index_a_tensor_temporary`, same source and same
 /// expected string.

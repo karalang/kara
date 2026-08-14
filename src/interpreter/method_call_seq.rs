@@ -259,8 +259,26 @@ impl<'a> super::Interpreter<'a> {
                 // `String.substring(start) -> String` — bytes from `start` to end.
                 // `String.substring(start, end) -> String` — bytes in `[start, end)`.
                 // Byte offsets (matching `bytes()`); out-of-range / negative /
-                // inverted bounds saturate to an empty String. Extraction is
-                // byte-level (from_utf8_lossy) so a non-boundary index never panics.
+                // inverted bounds saturate to an empty String.
+                //
+                // B-2026-08-14-19 — a cut that lands INSIDE a codepoint is a
+                // runtime error on both surfaces. It used to be
+                // `from_utf8_lossy` here and a raw byte copy in codegen, which
+                // produced results of DIFFERENT LENGTHS: `"日本語".substring(0, 2)`
+                // measured 3/3/1 interpreted and 2/2/2 compiled, so a loop that
+                // sliced and measured terminated differently under `karac run`
+                // than under `karac build`.
+                //
+                // Rejecting is what reconciles them, rather than either side
+                // adopting the other's garbage. design.md's `String` is
+                // "UTF-8 encoded", so handing back raw bytes would let a
+                // `String` hold invalid UTF-8 — an invariant the rest of the
+                // language relies on, and the reason `s[i]` is refused at
+                // COMPILE time already. And replacing the bytes with U+FFFD is
+                // the wrapping-vs-trapping trade the overflow rule already
+                // settled the other way: it turns a logic bug into a
+                // plausible-looking value whose length has silently changed.
+                // Rust's `&s[a..b]` panics here for the same reason.
                 if let Value::String(s) = &obj {
                     let len = s.len() as i64;
                     let (start, end) = match args {
@@ -287,6 +305,18 @@ impl<'a> super::Interpreter<'a> {
                         return Some(Value::String(String::new()));
                     }
                     let end = end.clamp(start, len);
+                    for (idx, which) in [(start, "start"), (end, "end")] {
+                        if !s.is_char_boundary(idx as usize) {
+                            let msg = format!(
+                                "String.substring: {which} byte index {idx} is not a UTF-8 \
+                                 codepoint boundary in a {len}-byte string — substring takes \
+                                 BYTE offsets (like `bytes()`), so a multi-byte character must \
+                                 be cut on its edge; use `char_at`/`chars()` to work in \
+                                 codepoints, or `find` to locate a valid cut point"
+                            );
+                            return Some(self.record_runtime_error(msg, span));
+                        }
+                    }
                     let bytes = &s.as_bytes()[start as usize..end as usize];
                     return Some(Value::String(String::from_utf8_lossy(bytes).into_owned()));
                 }

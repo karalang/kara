@@ -48256,6 +48256,76 @@ fn main() {
     // the bare `panic: <msg>` form is preserved — see the existing
     // `test_e2e_vec_indexed_write_oob_panics` above.
 
+    /// B-2026-08-14-19 — a `String.substring` cut that lands INSIDE a codepoint
+    /// faults, instead of handing back the raw bytes.
+    ///
+    /// The run-vs-build split this closes was not about which garbage came
+    /// back: the two garbages had DIFFERENT LENGTHS. `"日本語".substring(0, 2)`
+    /// measured `3 3 1` under `--interp` (one U+FFFD) against `2 2 2` compiled
+    /// (two truncated bytes, with the continuation byte counted as a codepoint),
+    /// so a loop that sliced and measured terminated differently on the two
+    /// backends — and the compiled side put invalid UTF-8 on stdout, which
+    /// design.md's UTF-8 `String` is not allowed to hold.
+    ///
+    /// Rejecting is what reconciles them. The interpreter raises the same error
+    /// (`tests/interpreter.rs::test_substring_non_codepoint_boundary_faults`),
+    /// so run and build agree by both refusing rather than by one adopting the
+    /// other's garbage.
+    #[test]
+    fn test_e2e_substring_non_codepoint_boundary_panics() {
+        let captured = run_program_capturing_with_filename(
+            "fn main() {\n\
+                 let s = \"\u{65e5}\u{672c}\u{8a9e}\";\n\
+                 let a = s.substring(0i64, 2i64);\n\
+                 println(a.len());\n\
+             }",
+            "cut.kara",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("panic at ") && c.stdout.contains("cut.kara:"),
+                "expected a located panic, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                c.stdout.contains("not a UTF-8 codepoint boundary"),
+                "expected the boundary diagnosis, got stdout={:?}",
+                c.stdout
+            );
+            // The fault must happen INSTEAD of the read, not after it.
+            assert!(
+                !c.stdout.contains("\n2\n"),
+                "substring returned a value before faulting: stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    /// B-2026-08-14-19's over-reach guard: every slice that lands ON a boundary
+    /// is untouched, including the established out-of-range contracts. These
+    /// passed before the check and must keep passing — a boundary test that
+    /// fires one byte early would make `substring` useless rather than safe.
+    #[test]
+    fn test_e2e_substring_aligned_slices_unchanged() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let s = \"\u{65e5}\u{672c}\u{8a9e}\";\n\
+                     println(s.substring(0i64, 3i64).len());\n\
+                     println(s.substring(3i64, 9i64).len());\n\
+                     println(s.substring(0i64, 9i64).len());\n\
+                     println(s.substring(9i64).len());\n\
+                     println(\"abcdef\".substring(0i64, 20i64));\n\
+                     println(\"abcdef\".substring(2i64));\n\
+                     println(s.substring(20i64).len());\n\
+                 }"
+            )
+            .as_deref(),
+            Some("3\n6\n9\n0\nabcdef\ncdef\n0\n"),
+        );
+    }
+
     #[test]
     fn test_e2e_panic_location_vec_oob() {
         let captured = run_program_capturing_with_filename(

@@ -1544,6 +1544,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_or(start_lt0, start_gt_len, "ss.oob")
                     .unwrap();
+
+                // B-2026-08-14-19 — reject a cut that lands INSIDE a codepoint,
+                // matching the interpreter, which now raises the same error.
+                // Before this the two surfaces produced results of DIFFERENT
+                // LENGTHS for the same slice (`"日本語".substring(0, 2)` measured
+                // 3/3/1 under `--interp` against 2/2/2 compiled), so a loop that
+                // sliced and measured terminated differently under `karac run`
+                // than under `karac build` — and the compiled side put invalid
+                // UTF-8 on stdout, which `String` is not allowed to hold.
+                //
+                // Ordered to match the interpreter exactly: an out-of-range
+                // START keeps the established empty-String contract and is NOT
+                // boundary-checked, so only a slice that would really have been
+                // taken can fault. An EMPTY range still is
+                // (`"日本語".substring(1, 1)` faults on both), because the index
+                // is just as invalid whether or not any bytes come back.
+                self.emit_substring_boundary_checks(oob, recv_data, recv_len, start, end);
+
                 let out_of_range = self.builder.build_or(oob, empty_range, "ss.empty").unwrap();
 
                 let fn_val = self.current_fn.unwrap();
@@ -12207,6 +12225,88 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         thunk_fn
+    }
+
+    /// B-2026-08-14-19 — fault a `String.substring` whose start or end lands
+    /// inside a multi-byte codepoint, so the compiled backends agree with the
+    /// interpreter instead of handing back raw bytes.
+    ///
+    /// The test is `str::is_char_boundary`'s: index `len` is always a boundary
+    /// (nothing follows it), and any other index is one unless the byte there is
+    /// a UTF-8 CONTINUATION byte — `0b10xxxxxx`, i.e. `b & 0xC0 == 0x80`. Two
+    /// loads and two compares on a method that already mallocs and memcpys, so
+    /// the cost is not measurable against what it guards.
+    ///
+    /// `skip` short-circuits the whole check: the caller passes its
+    /// out-of-range predicate, because a start outside `[0, len]` keeps the
+    /// established empty-String contract and must not fault. Emitted as one
+    /// guarded region rather than two so a valid slice pays a single branch.
+    fn emit_substring_boundary_checks(
+        &mut self,
+        skip: inkwell::values::IntValue<'ctx>,
+        data: inkwell::values::PointerValue<'ctx>,
+        len: inkwell::values::IntValue<'ctx>,
+        start: inkwell::values::IntValue<'ctx>,
+        end: inkwell::values::IntValue<'ctx>,
+    ) {
+        let fn_val = self.current_fn.unwrap();
+        let i8_t = self.context.i8_type();
+        let check_bb = self.context.append_basic_block(fn_val, "ss.chk");
+        let done_bb = self.context.append_basic_block(fn_val, "ss.chk.done");
+        self.builder
+            .build_conditional_branch(skip, done_bb, check_bb)
+            .unwrap();
+        self.builder.position_at_end(check_bb);
+        for (idx, which) in [(start, "start"), (end, "end")] {
+            let interior = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, idx, len, "ss.chk.lt")
+                .unwrap();
+            let byte_bb = self.context.append_basic_block(fn_val, "ss.chk.byte");
+            let next_bb = self.context.append_basic_block(fn_val, "ss.chk.next");
+            self.builder
+                .build_conditional_branch(interior, byte_bb, next_bb)
+                .unwrap();
+            self.builder.position_at_end(byte_bb);
+            let slot = unsafe {
+                self.builder
+                    .build_gep(i8_t, data, &[idx], "ss.chk.p")
+                    .unwrap()
+            };
+            let b = self
+                .builder
+                .build_load(i8_t, slot, "ss.chk.b")
+                .unwrap()
+                .into_int_value();
+            let masked = self
+                .builder
+                .build_and(b, i8_t.const_int(0xC0, false), "ss.chk.mask")
+                .unwrap();
+            let is_cont = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    masked,
+                    i8_t.const_int(0x80, false),
+                    "ss.chk.cont",
+                )
+                .unwrap();
+            let bad_bb = self.context.append_basic_block(fn_val, "ss.chk.bad");
+            self.builder
+                .build_conditional_branch(is_cont, bad_bb, next_bb)
+                .unwrap();
+            self.builder.position_at_end(bad_bb);
+            self.emit_panic(&format!(
+                "String.substring: {which} byte index is not a UTF-8 codepoint boundary — \
+                 substring takes BYTE offsets (like `bytes()`), so a multi-byte character \
+                 must be cut on its edge; use `char_at`/`chars()` to work in codepoints, or \
+                 `find` to locate a valid cut point"
+            ));
+            self.builder.build_unreachable().unwrap();
+            self.builder.position_at_end(next_bb);
+        }
+        self.builder.build_unconditional_branch(done_bb).unwrap();
+        self.builder.position_at_end(done_bb);
     }
 }
 

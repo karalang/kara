@@ -1203,46 +1203,77 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 
 // Split proto3 source into a flat token stream. `{` `}` `;` `=` are each their
 // own token; runs of any other non-whitespace are one token. `//` line comments
-// and `/* */` block comments are stripped. Uses `substring` for single-char
-// access so no byte→char conversion is needed.
+// and `/* */` block comments are stripped.
+//
+// SCANS BYTES, not one-byte substrings (B-2026-08-14-19). It used to peek with
+// `src.substring(i, i + 1)`, which reads as "the character at i" but is a BYTE
+// slice — so the first multi-byte character anywhere in the schema, an em-dash
+// in a comment in this repo's own example, cut a codepoint in half. That was
+// harmless only because every peek is compared against an ASCII literal and the
+// garbage was discarded; `substring` now rejects a non-boundary cut, which is
+// what surfaced it. Bytes are what the scanner actually wants: every delimiter
+// it looks for is ASCII, so a byte >= 0x80 is by definition ordinary token
+// content, and token text is still cut with `substring` at delimiter positions,
+// which are codepoint boundaries by construction. It also drops one String
+// allocation per character from a comptime path.
+//
+// The delimiters are spelled as code points because `char as u8` is rejected at
+// parse (design.md § `as` casts — it truncates a scalar value), so a byte
+// comparison cannot borrow a char literal's readability.
 comptime fn proto_tokenize(src: String) -> Vec[String] {
     let mut tokens = Vec.new();
     let n = src.len();
+    let b: Slice[u8] = src.bytes();
+    let slash = 47u8;
+    let star = 42u8;
+    let newline = 10u8;
     let mut i = 0;
     let mut start = 0 - 1;
     while i < n {
-        let ch = src.substring(i, i + 1);
-        let nx = if i + 1 < n { src.substring(i + 1, i + 2) } else { "" };
-        if ch == "/" and nx == "/" {
+        let ch = b[i];
+        // A non-ASCII byte is never a delimiter and never whitespace, so it is
+        // token content — and must not be inspected one byte at a time.
+        if ch >= 128u8 {
+            if start < 0 {
+                start = i;
+            }
+            i = i + 1;
+            continue;
+        }
+        let nx = if i + 1 < n { b[i + 1] } else { 0u8 };
+        if ch == slash and nx == slash {
             // Line comment: flush any pending token, skip to end of line.
             if start >= 0 {
                 tokens.push(src.substring(start, i));
                 start = 0 - 1;
             }
-            while i < n and src.substring(i, i + 1) != "\n" {
+            while i < n and b[i] != newline {
                 i = i + 1;
             }
-        } else if ch == "/" and nx == "*" {
+        } else if ch == slash and nx == star {
             // Block comment: flush, skip past the closing `*/`.
             if start >= 0 {
                 tokens.push(src.substring(start, i));
                 start = 0 - 1;
             }
             i = i + 2;
-            while i + 1 < n and not (src.substring(i, i + 1) == "*" and src.substring(i + 1, i + 2) == "/") {
+            while i + 1 < n and not (b[i] == star and b[i + 1] == slash) {
                 i = i + 1;
             }
             i = i + 1;
-        } else if ch == "{" or ch == "}" or ch == ";" or ch == "=" or ch == "<" or ch == ">"
-            or ch == "," {
-            // `<` `>` `,` are their own tokens too — they appear only in
+        } else if ch == 123u8 or ch == 125u8 or ch == 59u8 or ch == 61u8 or ch == 60u8
+            or ch == 62u8 or ch == 44u8 {
+            // `{` `}` `;` `=` `<` `>` `,`. The last three appear only in
             // `map<K, V>` field declarations within the v1 scope.
             if start >= 0 {
                 tokens.push(src.substring(start, i));
                 start = 0 - 1;
             }
-            tokens.push(ch);
-        } else if ch == " " or ch == "\t" or ch == "\n" or ch == "\r" {
+            // ASCII by the branch condition, so this one-byte cut is on a
+            // boundary by construction.
+            tokens.push(src.substring(i, i + 1));
+        } else if ch == 32u8 or ch == 9u8 or ch == newline or ch == 13u8 {
+            // space, tab, newline, carriage return
             if start >= 0 {
                 tokens.push(src.substring(start, i));
                 start = 0 - 1;
