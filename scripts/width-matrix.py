@@ -26,8 +26,25 @@ set, 14 of 15 shapes were wrong. So every source type here carries a value whose
 top bit is SET (unsigned) or which is NEGATIVE (signed): those are the only
 values that distinguish sext from zext.
 
+THREE AXES, because the rule has three halves and each has its own failure mode:
+
+    (default)    int -> wider int    must widen with the SOURCE's signedness
+    --floats     int -> f64 / f32    must convert with sitofp vs uitofp likewise
+                                     (B-2026-08-13-18's half, whose fix note
+                                     records a signedness-BLIND boundary sweep
+                                     turning a build failure into a wrong answer)
+    --narrowing  wide -> narrower    must be REJECTED at compile time; a site
+                                     that accepts one truncates silently, which
+                                     no runtime oracle can catch
+
+The narrowing mode is the inverse test: it asserts a compile ERROR, so it runs
+`karac check` per site and reports any site that accepts what the language says
+it refuses.
+
 Usage:
-    python3 scripts/width-matrix.py                 # full sweep
+    python3 scripts/width-matrix.py                 # int -> int sweep
+    python3 scripts/width-matrix.py --floats        # int -> float sweep
+    python3 scripts/width-matrix.py --narrowing     # rejection sweep
     python3 scripts/width-matrix.py --quick         # one value per source type
     python3 scripts/width-matrix.py --site vec_push # filter to matching sites
     python3 scripts/width-matrix.py --keep DIR      # keep generated .kara files
@@ -60,10 +77,33 @@ SOURCES = [
 RANK = {"i8": 1, "u8": 1, "i16": 2, "u16": 2, "i32": 3, "u32": 3, "i64": 4}
 
 
+FLOAT_DSTS = ("f64", "f32")
+
+# Legitimately inapplicable to a float destination: kāra refuses `Set[f64]` /
+# `Map[f64, _]` because floats are not `Hash + Eq`. That is correct language
+# behaviour, so these are excluded rather than reported as skips.
+FLOAT_NA = {"set_roundtrip", "set_remove", "map_roundtrip"}
+
+# Wide sources for the narrowing sweep, paired with a destination they must NOT
+# implicitly reach and a value outside that destination's range — so that if a
+# site does accept the coercion, the truncation is observable rather than
+# theoretical.
+NARROWING = [
+    ("300i64", "u8"),
+    ("300i64", "i8"),
+    ("70000i64", "u16"),
+    ("70000i64", "i16"),
+    ("5000000000i64", "i32"),
+    ("-1i64", "u8"),
+]
+
+
 def widens_to(src, dst):
     """Is src -> dst a widening this language permits implicitly?"""
     if src == dst:
         return False
+    if dst in FLOAT_DSTS:
+        return True
     if dst == "i64":
         return RANK[src] < 4
     if dst == "i32":
@@ -114,9 +154,9 @@ fn ret_{D}(x: {D}) -> {D} {{ return x; }}
 """
 
 
-def gen(dst, value, sites):
+def gen(dst, value, sites, preamble=""):
     body = "\n    ".join(SITES[s].format(D=dst, V=value) for s in sites)
-    return PRELUDE.format(D=dst) + "\nfn main() {\n    " + body + "\n}\n"
+    return PRELUDE.format(D=dst) + "\nfn main() {\n    " + preamble + body + "\n}\n"
 
 
 def run(cmd, cwd=None, env=None):
@@ -160,8 +200,44 @@ def surfaces(path, workdir):
     return out, bad
 
 
+def narrowing_sweep(workdir, groups):
+    """Every site must REFUSE an implicit narrowing. One site per program, so a
+    rejection is attributable; `karac check` only, since nothing should build."""
+    sites = [s for g in groups for s in g]
+    holes, checked = [], 0
+    for site in sites:
+        for value, dst in NARROWING:
+            # The value must arrive through a VARIABLE, not as a literal at the
+            # site. A literal is range-checked against the destination directly
+            # ("integer literal 300 out of range for 'u8'"), which is a correct
+            # but DIFFERENT rejection and never exercises the coercion path this
+            # sweep is about. Binding it first is what makes the site decide.
+            preamble = f"let nsrc = {value};\n    "
+            src = gen(dst, "nsrc", [site], preamble)
+            path = workdir / f"n_{site}_{dst}_{value.replace('-', 'neg')}.kara"
+            path.write_text(src, encoding="utf-8")
+            rc, so, se = run(["karac", "check", str(path)])
+            checked += 1
+            blob = (se or "") + (so or "")
+            if rc == 0:
+                holes.append((site, value, dst, "ACCEPTED — no diagnostic"))
+            elif not any(k in blob for k in ("narrow", "sign", "out of range", "mix integer types")):
+                first = blob.strip().splitlines()[:1]
+                holes.append((site, value, dst, f"rejected for another reason: {first}"))
+
+    print(f"width-matrix --narrowing: {checked} site/pair checks, {len(holes)} holes")
+    print(f"generated sources: {workdir}")
+    if holes:
+        print("\nHOLES (the language says narrowing is refused; these did not refuse it):")
+        for site, value, dst, why in holes:
+            print(f"  {site:<16} {value:>16} -> {dst:<4}  {why}")
+    return 1 if holes else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--floats", action="store_true", help="sweep int -> f64/f32 instead of int -> int")
+    ap.add_argument("--narrowing", action="store_true", help="assert every site REJECTS a narrowing")
     ap.add_argument("--quick", action="store_true", help="one value per source type")
     ap.add_argument("--site", default=None, help="only groups containing a site matching this substring")
     ap.add_argument("--keep", default=None, help="directory to keep generated .kara files in")
@@ -181,20 +257,54 @@ def main():
     workdir = Path(args.keep) if args.keep else Path(tempfile.mkdtemp(prefix="widthmatrix-"))
     workdir.mkdir(parents=True, exist_ok=True)
 
+    if args.narrowing:
+        return narrowing_sweep(workdir, groups)
+
     divergences, skips, compiled, cases = [], [], 0, 0
-    for dst in ("i64", "i32"):
+    for dst in (FLOAT_DSTS if args.floats else ("i64", "i32")):
         for src, values in SOURCES:
             if not widens_to(src, dst):
                 continue
             vals = values[:1] if args.quick else values
             for value in vals:
                 for gi, group in enumerate(groups):
+                    if dst in FLOAT_DSTS:
+                        group = [g for g in group if g not in FLOAT_NA]
+                        if not group:
+                            continue
                     name = f"w_{dst}_{src}_{gi}_{value.replace('-', 'neg')}"
                     path = workdir / f"{name}.kara"
                     path.write_text(gen(dst, value, group), encoding="utf-8")
                     out, bad = surfaces(path, workdir)
                     if out is None:
-                        skips.append((dst, src, value, group, "interp", bad["interp"]))
+                        # One unusable site must not blank its group. Retry the
+                        # members individually so the rest still get swept —
+                        # otherwise a single inapplicable construct silently
+                        # costs four sites of coverage, which is exactly the
+                        # kind of hole this tool exists to close.
+                        if len(group) > 1:
+                            for one in group:
+                                p1 = workdir / f"{name}_{one}.kara"
+                                p1.write_text(gen(dst, value, [one]), encoding="utf-8")
+                                o1, b1 = surfaces(p1, workdir)
+                                if o1 is None:
+                                    skips.append((dst, src, value, [one], "interp", b1["interp"]))
+                                    continue
+                                compiled += 1
+                                r1 = o1["interp"].splitlines()
+                                cases += len(r1)
+                                for lbl, rsn in b1.items():
+                                    skips.append((dst, src, value, [one], lbl, rsn))
+                                for lbl, txt in o1.items():
+                                    if lbl == "interp":
+                                        continue
+                                    g1 = txt.splitlines()
+                                    for i, line in enumerate(r1):
+                                        gg = g1[i] if i < len(g1) else "<missing>"
+                                        if gg != line:
+                                            divergences.append((dst, src, value, lbl, line, gg))
+                        else:
+                            skips.append((dst, src, value, group, "interp", bad["interp"]))
                         continue
                     compiled += 1
                     ref = out["interp"].splitlines()

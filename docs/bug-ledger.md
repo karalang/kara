@@ -95,14 +95,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 244 | 1 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 108 | 0 |
+| run-vs-build | 109 | 1 |
 | codegen-gap | 107 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
 | crash | 45 | 0 |
-| soundness | 42 | 0 |
+| soundness | 43 | 1 |
 | other | 30 | 0 |
 | use-after-free | 18 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 843 | 1 |
-| typecheck | 162 | 0 |
-| interp | 142 | 0 |
+| codegen | 844 | 2 |
+| typecheck | 163 | 1 |
+| interp | 143 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
@@ -124,13 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1167 surfaced · 1 open · 1154 fixed · 2 wontfix** (2026-05-20 → 2026-08-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1169 surfaced · 3 open · 1154 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-13-22 | 2026-08-13 | codegen | high | An ANNOTATED ARRAY literal ignores its annotation the way B-2026-08-13-17's tuple did: `let a: Array[i64, 2] = [v, v]` with `v: u8 = 200` lays the aggregate out at the ELEMENT's width and sign-extends on read, printing -56 on all three compiled surfaces while `--interp` prints 200. Unsigned sources only (u8/u16/u32); signed sources are correct, because sign-extension is what they wanted. | src/codegen/collections.rs `compile_array_literal` (~L1265): it consults `literal_pending_elem_hint()` and would coerce via `coerce_literal_elem_to_type_from`, but the hint is None for an `Array[T, N]` annotation — the staging in src/codegen/stmts.rs (~L3880) keys off `vec_elem_types` / `var_elem_type_exprs`, which an Array binding does not populate. With no hint the function falls through to `let elem_ty = vals[0].get_type()`, i.e. layout from the VALUES rather than the annotation — the same shape B-2026-08-13-17 fixed for tuples via `pending_let_tuple_te`. |
+| B-2026-08-14-1 | 2026-08-14 | typecheck+codegen | high | FIVE SITES ACCEPT AN IMPLICIT NARROWING the language says it refuses — Vec.push, Vec.contains, Set.insert/contains, Set.remove and the annotated tuple take an i64 where a u8 is declared, with NO diagnostic. The two surfaces then disagree: `Vec[u8]` + `push(300i64)` reads back 300 under --interp and 44 compiled. Map and Vec index-assign reject the same shape, so this is per-site, not a missing rule. | The rejecting sites go through `check_int_widening_coercion` (src/typechecker/exprs.rs, B-2026-07-09-7 decision B); the five leaking sites are container-argument and annotated-aggregate paths that never call it. Compare Map.insert/contains_key (rejects) against Set.insert/contains (accepts) — same shape, different answer — and Vec index-assign (rejects) against Vec.push (accepts), which is a disagreement INSIDE one container's method set. |
+| B-2026-08-14-2 | 2026-08-14 | interp | high | INTERPRETER-SIDE: the implicit int-to-float widening is not performed at all, so an int source bound to a float destination stays an Int. At an annotated `let` this makes a program that `karac check`s clean and runs correctly compiled DIE AT RUNTIME under --interp ("operator 'Eq' is not defined for operands of type 'Int' and 'Float'"), with a diagnostic that blames a typecheck error which does not exist. At `Vec[f64].push` it is silent instead: `contains` answers the exact inverse of the compiled backends. | The interpreter's coercion at a float-typed binding/argument position: it stores the incoming `Value::Int` unchanged where the declared type is a float, and the later operator dispatch has no Int/Float arm. The compiled backends convert correctly at these boundaries (B-2026-08-13-18 did that work for codegen), so the fix is the interpreter's side of the same rule. The runtime error text is separately wrong and should not survive the fix — it asserts the typechecker reports this as a hard error, and `karac check` on the repro prints "All checks passed." |
 
 ### Wontfix (2)
 
