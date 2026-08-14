@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 247 | 0 |
-| leak | 173 | 1 |
+| leak | 173 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 117 | 0 |
 | codegen-gap | 108 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 855 | 1 |
+| codegen | 855 | 0 |
 | typecheck | 169 | 0 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
@@ -124,13 +124,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1184 surfaced · 1 open · 1171 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1184 surfaced · 0 open · 1172 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-14-15 | 2026-08-14 | codegen | high | Two leaks that share one polarity: a NESTED CONTAINER read into a `let` BINDING and then consumed leaks, while the identical read consumed INLINE is clean. LEG A -- a `Map` read out of a `Vec[Map[..]]` element and queried with `.get()` leaks the WHOLE Map (602 B / 4 allocs per element). LEG B -- an `Option`/`Result[Vec[Struct]]` `let`-bound then matched leaks every element's heap field. Both scale linearly with data size. | the drop/ownership decision for a `let` binding whose initializer reads a nested container out of a Vec ELEMENT (leg A) or out of an Option/Result payload (leg B). Same let-vs-inline polarity as B-2026-08-11-30 leg A (fixed, 19d0e9a) -- worth checking whether that fix's `nonescaping_param_names` gate has a binding-site sibling. |
+_None — the ledger is fully drained._
 
 ### Wontfix (2)
 
@@ -143,9 +141,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1184 surfaced
 
 </details>
 
-### Fixed (1171)
+### Fixed (1172)
 
-<details><summary>1171 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1172 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6083,6 +6081,89 @@ is the author's and no longer a disagreement.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-14-15 | codegen | high | Two leaks that share one polarity: a NESTED CONTAINER read into a `let` BINDING and then consumed leaks, while the identical read consumed INLINE is… | FIXED by 1282910 (legs A + B `Option`) and b0fac23 (leg B's `Result` half;
+`69edd19` after rebase). Both legs reproduce at exactly the row's numbers —
+LEG A 602 (72 direct, 530 indirect) bytes, LEG B 8 bytes in 1 block — and both
+are valgrind-clean after, with interp / JIT / AOT / `KARAC_AUTO_PAR=0` agreeing
+throughout.
+
+THE ROW'S QUESTION — "whether one fix covers both" — HAS A MEASURED ANSWER: NO.
+They are two independent cleanup gates in two different families, and the fix
+for one does nothing for the other. What they share is not a mechanism but the
+SHAPE OF THE MISTAKE: a cleanup gate keyed on the RHS *spelling* rather than on
+what codegen actually emitted. That is why binding-vs-inline was the visible
+axis in both.
+
+LEG A. The element deep-clone is correct and intended — the binding owns a COPY,
+which is what both backends observe. Nothing owned it. The `let` site's Map/Set
+cleanup arm arms a `FreeMapHandle` only for RHS shapes it reads as fresh
+(`Call`, `.clone()`, `union`/`intersection`/`difference`) and treats a bare
+`v[i]` as a caller-retains ALIAS — which is true *only while the clone is
+elided*. The fix records the clone's actual emission (`vec_index_cloned_sites`)
+and has the gate consult it.
+
+THE ROW'S DISCRIMINATOR IS NARROWER THAN IT LOOKED, and finding the real one is
+what pointed at the gate. Measured, leg A fires for Map/Set methods that take a
+KEY ARGUMENT (`get`, `contains_key`, `Set.contains`) and is clean for `len` /
+`is_empty`, for index `cur["n"]`, and when the binding is unused. Key type is
+irrelevant (String and i64 behave alike) and Set is identical to Map. The reason
+is `borrow_elision.rs::is_read_only_vec_method`, whose whitelist is exactly
+`len | is_empty`: every clean row in the row's control table is a row where the
+CLONE WAS ELIDED, not a row where the leak was absent. So the honest statement
+is not "the binding form leaks" but "the binding form leaks whenever the clone
+is not elided" — and the clean half of the table was the elision doing its job.
+
+RECORDING THE EMISSION MATTERS RATHER THAN RE-DERIVING IT from `!borrow_elided`,
+which was the obvious shortcut: the clone self-gates further (a
+trivially-copyable element, a `weak` element, a mis-typed generic-monomorph
+read), so `!borrow_elided` is strictly WIDER than "cloned" and would arm a
+handle free for a binding that owns nothing.
+
+LEG B is a different gate entirely. A bound `Option[Vec[P]]` keeps its payload
+on the binding's own tag-guarded overlay free, which releases the element ARRAY
+and recurses only into elements that are THEMSELVES `{ptr,len,cap}`
+(`Vec[String]`, `Vec[Vec[_]]`). An AGGREGATE element's own heap — the `String`
+inside `struct P { tag: String }` — had nothing to free it. The inline
+`match mk()` form binds `v` as an owned `Vec[P]` and takes `FreeVecOfAggs`,
+which drains per element: the two spellings were genuinely using two different
+cleanup families. `FreeInlineOptionPayload` now carries the same per-element
+drop fn the direct `Vec[P]` binding uses (`vec_elem_agg_drop_for_type_expr`) and
+runs it before releasing the buffer.
+
+THE 8-BYTE FIGURE IS ITSELF THE DIAGNOSIS and worth keeping: it is one element's
+`String` buffer, not the Vec's. The outer 24-byte array WAS freed. That is why
+leg B's number is two orders of magnitude below leg A's 602 — a whole Map
+control block plus buckets — despite the row presenting them side by side.
+
+THE ROW NAMED `Option`/`Result` AND THE `Result` HALF IS REAL. The first commit
+wired only `Option`; the `Result` sibling was then measured leaking the same 8
+bytes on the `Ok` side and fixed in b0fac23. Each half is gated independently
+(a boxed side stays suppressed exactly as its overlay element type is), so the
+pin uses `Result[Vec[P], Vec[P]]` to exercise both.
+
+PINS AND THEIR HONEST STATUS. The two ASAN pins
+(`asan_nested_map_bound_out_of_vec_then_probed_is_freed`,
+`asan_bound_option_vec_of_aggregates_drains_elements`) FAIL 2 of 2 against the
+stashed compiler under LSan — they are the bug pins. The E2E value pin
+(`test_e2e_bound_nested_container_reads`) PASSES pre-fix, and that is stated in
+its own doc comment rather than left to be discovered: NEITHER LEAK EVER CHANGED
+AN OUTPUT, so that pin is a semantics regression guard on the fix (both
+spellings must keep agreeing with the interpreter twin), not evidence of the
+bug.
+
+MEASURED BEYOND THE REPROS, because both fixes ADD frees and the failure mode of
+a wrong one is a double free, not a leak: moving the cloned handle onward
+(`out.push(cur)`, `take(cur)`, `H { m: cur }`) — the three shapes where the new
+`FreeMapHandle` would double-free if the existing move-out suppression missed
+it; `Vec[Set[String]]`; `Vec[Map[String, Vec[i64]]]`; a loop that binds and
+probes each element; a `None` payload; `Option[Vec[String]]` (the control whose
+element IS a `{ptr,len,cap}` and must keep using the pre-existing recursion, not
+the new drain); `Option[Vec[(String, i64)]]`; `.unwrap()`; `.is_some()`; and
+`Result` with a taken `Err` arm. All clean, all agreeing across backends.
+
+Full `--features llvm` suite green (2961 codegen, 1515 interpreter, 1069
+memory_sanitizer, 255 par_codegen, 7218 across everything else), fmt and clippy
+`--all-targets` clean. |
 | B-2026-08-14-16 | codegen | high | THE AUTO-PAR TABULATE REWRITE STORES A COMPUTED SUB-WORD ELEMENT AT 8 BYTES: a `while` loop whose body is `v.push(<computed u8>)` is rewritten to a h… | FIXED by fc266fa (committed under the id this row was first allocated,
 B-2026-08-14-15; renumbered to -16 on rebase after a concurrent session filed
 its own -15 in the same window). `emit_tabulate_store` now takes the pushed argument expression
