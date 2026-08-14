@@ -95,14 +95,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 249 | 1 |
 | leak | 176 | 2 |
 | double-free | 128 | 1 |
-| run-vs-build | 118 | 1 |
+| run-vs-build | 118 | 0 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
 | perf | 67 | 2 |
 | false-positive | 62 | 1 |
 | diagnostics | 53 | 0 |
+| crash | 46 | 1 |
 | soundness | 45 | 0 |
-| crash | 45 | 0 |
 | other | 30 | 0 |
 | use-after-free | 19 | 1 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 864 | 7 |
+| codegen | 865 | 7 |
 | typecheck | 171 | 2 |
-| interp | 145 | 1 |
+| interp | 145 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 41 | 1 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1196 surfaced · 10 open · 1174 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced · 10 open · 1175 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-19 | 2026-08-14 | interp+codegen | medium | `String.substring` AT A NON-CODEPOINT BOUNDARY DIVERGES BETWEEN `karac run` AND `karac build`: the interpreter replaces each invalid byte with U+FFFD, codegen returns the raw bytes. The two results have DIFFERENT LENGTHS, so the divergence is not confined to what gets printed — `.len()`, `.bytes().len()` and `.chars().len()` all disagree. | `String.substring` is byte-indexed on both surfaces (both agree that `"\u65e5\u672c\u8a9e".len()` is 9), and both agree on every slice that lands on a codepoint boundary. They differ only in what they do with a slice that does not: the interpreter runs a LOSSY UTF-8 conversion over the byte range, codegen hands back the bytes verbatim. |
 | B-2026-08-14-20 | 2026-08-14 | typecheck | low | THE `String -> bytes -> String` ROUND TRIP DOES NOT TYPECHECK: `String.from_utf8(s.bytes())` fails with "expected 'Vec<u8>', found 'Slice[u8]'", and `Slice` has no `to_vec()`, so the only way back is a hand-rolled push loop. | `String.bytes()` returns `Slice[u8]`; `String.from_utf8` is signed `(Vec[u8]) -> Result[String, Utf8Error]`. Nothing bridges them — no implicit borrow-to-owned at the argument, and no `Slice.to_vec()` / `Vec.from_slice()`. |
 | B-2026-08-14-22 | 2026-08-14 | codegen | high | `s += x` ON A LOCAL `String` LEAKS THE ENTIRE PREVIOUS BUFFER ON EVERY APPEND: building a 160 KB string with 20,000 appends peaks at 1.5 GB of RSS — the exact sum of every intermediate — where `push_str` and `s = s + x` both peak at 2.5 MB. | The `+=` compound-assignment lowering for `String`. It evidently allocates a fresh concatenation and stores it over the binding without releasing the buffer the binding held. `s = s + x`, which produces the same value through an explicit assignment, DOES release — so the drop of the overwritten value exists and the `+=` path does not reach it. |
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
@@ -140,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1196 surfaced
 | B-2026-08-14-27 | 2026-08-14 | codegen | high | BINDING AN INNER `Vec` ELEMENT OF A `ref Vec[Vec[i64]]` TO A LOCAL DOUBLE-FREES ITS BUFFER: `let first = m[0i64];` copies the row header without a retain, so the local's scope-exit cleanup and the outer Vec's element drop both free the same pointer. ASAN-confirmed double-free of the 8-byte row buffer; the interpreter is correct. | The `let` binding of an INDEXED element of a `ref`-mode `Vec[Vec[T]]` parameter. Replacing `let first = m[0i64]; first.len()` with the direct read `m[0i64].len()` makes the same program clean, so the defect is in the binding's ownership classification and not in the index read. |
 | B-2026-08-14-28 | 2026-08-14 | codegen | high | A `shared struct` LINKED LIST BUILT THROUGH A DUMMY-HEAD CURSOR IS READ AFTER FREE: `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTS under `karac build` and prints six lines of GARBAGE DIGITS under an ASAN build, while the interpreter is correct. The plain-build crash and the ASAN-build wrong answer are the same defect landing on different heap layouts. | The interaction between consuming an input `Option[shared]` chain with `if let Some(n) = a { a = n.next; }` and simultaneously BUILDING a result chain through a `tail` cursor (`tail.next = Some(node); tail = node;`) returned as `dummy.next`. Consuming without building is clean; building without the surrounding call structure is clean. |
 | B-2026-08-14-29 | 2026-08-14 | typecheck | medium | COMPOUND ASSIGNMENT IS NOT OPERAND-TYPE-CHECKED AT ALL: `s += 1i64` on a String, `n += "a"` on an i64, and `p += 1i64` on a struct all report "All checks passed", then fail at codegen with an internal-sounding error that itself says "likely a typechecker gap". The PLAIN spelling of the same expression (`s = s + 1i64`) is rejected correctly, so the check exists and the compound form simply does not reach it. | The `StmtKind::CompoundAssign` arm of the typechecker. The `BinOp` arithmetic-operand check that rejects `s + 1i64` ("arithmetic operator requires numeric type, found 'String'") is evidently not run for the desugared compound form -- the target and value are each checked, but the implied binary operation between them is not. |
+| B-2026-08-14-30 | 2026-08-14 | codegen | high | Interpolating a DECODED `repeated string` protobuf field SEGFAULTS under `karac build` — `println(f"{rt.members}")` on a `Team.decode(...)` result dies while `--interp` prints `[Ada, Grace, Alan]`. The `repeated int64` and `repeated double` siblings are fine, and `.len()` on the same field is fine, so it is whole-Vec formatting of the STRING-element case specifically. | Formatting a `Vec[String]` produced by a comptime-generated protobuf `decode`. The decode itself is fine (len is right, and the i64/f64 repeated siblings round-trip and print), so suspect the element Strings' shape — an unset capacity, or elements borrowed into the wire buffer where the per-element formatter expects owned ones. NOT minimal: a two-line `message X { repeated string xs = 1; }` schema was not tried. |
 
 ### Wontfix (2)
 
@@ -152,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1196 surfaced
 
 </details>
 
-### Fixed (1174)
+### Fixed (1175)
 
-<details><summary>1174 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1175 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6363,6 +6363,110 @@ problem — the store is silently DROPPED under `karac build` while `--interp`
 applies it, for a scalar field as well as a container. Measured on four shapes
 and verified pre-existing; filed as B-2026-08-14-26. It is a lost write rather
 than a leak, in a different branch, so this row's release does not apply to it. |
+| B-2026-08-14-19 | interp+codegen | medium | `String.substring` AT A NON-CODEPOINT BOUNDARY DIVERGES BETWEEN `karac run` AND `karac build`: the interpreter replaces each invalid byte with U+FFFD… | FIXED by 0d8a18d. A `String.substring` cut that lands inside a codepoint now faults, on both
+surfaces, with the same diagnosis.
+
+THE ROW OFFERED THREE RESOLUTIONS AND design.md ALREADY RULES OUT TWO OF THEM.
+
+  * Option 3 (interpreter adopts codegen's raw bytes) is refused by the type.
+    design.md's `String` section opens "Internal representation: UTF-8 encoded"
+    and builds `char_at`, `chars()`, `StringSlice` and the `Hash`/`==` contract
+    on that invariant — it even says the UTF-8 invariant "lives in the type"
+    where a raw byte slice would lose it. Handing back arbitrary bytes puts a
+    `String` in a state the rest of the language is written to assume cannot
+    exist, and it was already visible as INVALID UTF-8 ON STDOUT.
+  * Option 2 (codegen adopts the interpreter's U+FFFD) is the wrapping-vs-
+    trapping trade the overflow rule settled the other way, for reasons that
+    transfer verbatim: "silent two's-complement wrapping is a live logic-bug
+    class … an overflowed count yields a PLAUSIBLE WRONG NUMBER", and the
+    trapping default "converts a silent-corruption class into a machine-fixable
+    failure, which is load-bearing for the dogfooding story". Lossy replacement
+    does exactly the thing that rule refuses: it returns a plausible-looking
+    string whose LENGTH has silently changed under the caller.
+
+That leaves option 1, which is also what the language already does one level up:
+`s[i]` on a `String` is a COMPILE error precisely to stop byte-vs-character
+confusion from being silent, and this is the same confusion at runtime. Rust's
+`&s[a..b]` panics for the same reason, as the row notes.
+
+THE ROW'S "MEDIUM, NOT LOW" ARGUMENT IS THE LOAD-BEARING ONE and it survives
+scrutiny. The tempting dismissal — "slicing mid-codepoint is already a bug, who
+cares which garbage comes back" — misses that the two garbages have DIFFERENT
+LENGTHS, and length is what the next line branches on. A loop that slices and
+measures terminated differently under `karac run` than under `karac build`.
+
+ORDERED TO MATCH THE INTERPRETER EXACTLY, which is the part that needed care
+rather than the check itself:
+
+  * an out-of-range START keeps the established empty-String contract and is NOT
+    boundary-checked, so only a slice that would really have been taken can
+    fault (`"日本語".substring(20)` is still `""`, on both);
+  * an EMPTY range still is checked — `"日本語".substring(1, 1)` faults on both,
+    because index 1 is just as invalid whether or not any bytes come back. In
+    codegen that meant splitting the existing `out_of_range` predicate, which
+    ORs the empty-range case in, so the check sits between the two.
+
+THE COMPILED CHECK is `str::is_char_boundary`'s: index `len` is always a
+boundary, and any other index is one unless the byte there is a UTF-8
+CONTINUATION byte (`b & 0xC0 == 0x80`). Two loads and two compares behind one
+guard branch, on a method that already mallocs and memcpys — not measurable
+against what it guards.
+
+VERIFIED BY THE SWEEP THAT FOUND IT. `scripts/string-matrix.py` now reports
+420 cases · 0 divergences · 0 invalid-UTF-8 outputs, against the row's 6
+divergences. The two mid-codepoint cases (`cjk`, `emoji`) are reported as "not
+accepted by the interpreter", which is the correct new classification: the
+operation is refused, and checked by hand to be refused identically on
+`--interp`, the JIT and `karac build`, with a nonzero exit from the binary.
+
+THE ROW'S `chars()` RESIDUAL IS NO LONGER REACHABLE THROUGH EITHER MEASURED
+DOOR. It notes that compiled `chars()` counted the two truncated bytes as two
+codepoints, and that this is wrong on its own terms whatever resolution is
+chosen. It is: but a `String` can only hold those bytes if something puts them
+there, and both ways of doing so are now closed — `substring` faults, and
+`String.from_utf8` rejects invalid bytes on both surfaces (measured). So the
+mis-count is not left latent behind this fix through either path; it is left
+unreachable through them. That is a weaker claim than "fixed", deliberately —
+no audit was done of every other producer.
+
+design.md UPDATED. `substring`'s contract was not written down anywhere: not the
+byte-vs-codepoint indexing, not the saturating out-of-range behaviour, and not
+this. All three are now in the `String` § API-consequences list beside
+`char_at`'s, with the reasoning tied to the two rules it follows from.
+
+PINNED by four tests, twinned across the surfaces: the fault (message, location,
+and that no value is returned before it) and an over-reach guard carrying every
+aligned slice plus both out-of-range contracts, on each of the interpreter and
+codegen. The guards passed before the check and must keep passing — a boundary
+test firing one byte early would make `substring` useless rather than safe.
+
+IT FOUND A REAL BUG ON THE FIRST RUN, which is the trapping rationale doing its
+job rather than a cost of it. `runtime/stdlib/protobuf.kara`'s proto3 tokenizer
+peeked with `src.substring(i, i + 1)` — spelled and commented as single-CHARACTER
+access, but a one-BYTE slice — so the first multi-byte character anywhere in a
+schema cut a codepoint in half. This repo's own `examples/protobuf_schema.kara`
+has an em-dash in a comment, at byte 262 of its 1820-byte schema, and the
+tokenizer had been silently slicing it for as long as it has existed. It was
+harmless only because every peek is compared against an ASCII literal and the
+garbage was thrown away — exactly the "it's already a bug, who cares what comes
+back" reasoning the row anticipated, holding by luck rather than by design.
+
+The tokenizer now scans BYTES, which is what it always wanted: every delimiter it
+looks for is ASCII, so a byte >= 0x80 is by definition token content, and token
+TEXT is still cut with `substring` at delimiter positions, which are codepoint
+boundaries by construction. It also drops one String allocation per character
+from a comptime path — the roadmap's #1 real-world lever names `substring`
+copies in a scanner loop specifically.
+
+A SECOND, UNRELATED BUG SURFACED FROM PUTTING THAT EXAMPLE UNDER `karac build`,
+which the corpus had never done (its own header says `karac run`): the compiled
+binary SEGFAULTS while `--interp` prints all nine lines correctly. Bisected to a
+single interpolation of a decoded `repeated string` field — the `int64` and
+`double` siblings and `.len()` on the same field are all fine — and confirmed
+pre-existing against the stashed compiler. Filed as B-2026-08-14-30.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean. |
 | B-2026-08-14-21 | codegen | high | `s += x` ON A `mut ref String` PARAMETER IS SILENTLY DROPPED IN COMPILED CODE: the callee's append never reaches the caller's binding | FIXED by e6605e9. The row's three-spelling repro reproduces exactly as written
 — `plus_eq` printed `X` under JIT / build / `KARAC_AUTO_PAR=0` while the
 interpreter printed `Xabc` — and all four surfaces now agree, with the loop
