@@ -2781,6 +2781,86 @@ fn test_disjoint_write_declined_when_body_materializes_shared_handle() {
 /// payload to race), and `frozen T` lowers to a borrow (no refcount traffic,
 /// hence no header to race).
 #[test]
+fn test_nested_and_tail_position_loops_are_considered() {
+    // B-2026-08-14-24. A loop reachable only through a block's TAIL EXPRESSION
+    // was never CONSIDERED: `analyze_function` early-returned an all-empty
+    // decision on `stmts.is_empty()`, and a body that is one `if` has zero
+    // STATEMENTS and one tail expression. The loop then produced no entry
+    // anywhere — not a decline with a reason, absent — which reads exactly like
+    // a function containing no loop at all.
+    //
+    // Every arm here is a shape whose loop must be VISIBLE to the analysis. What
+    // the gates then decide about each is a separate question; the point of the
+    // row is that a loop nobody considered can't be reasoned about by the author
+    // reading `--concurrency-report`.
+    for (label, src) in [
+        (
+            "tail `if`",
+            "fn f(out: mut ref Vec[i64], n: i64, go: bool) {
+                 if go { for i in 0..n { out[i] = i * 2; } }
+             }",
+        ),
+        (
+            "tail bare block",
+            "fn f(out: mut ref Vec[i64], n: i64) {
+                 { for i in 0..n { out[i] = i * 2; } }
+             }",
+        ),
+        (
+            "`else` arm",
+            "fn f(out: mut ref Vec[i64], n: i64, go: bool) {
+                 if go { } else { for i in 0..n { out[i] = i * 2; } }
+             }",
+        ),
+        (
+            "`else if` arm",
+            "fn f(out: mut ref Vec[i64], n: i64, k: i64) {
+                 if k == 0 { } else if k == 1 { for i in 0..n { out[i] = i * 2; } }
+             }",
+        ),
+        (
+            "`match` arm",
+            "fn f(out: mut ref Vec[i64], n: i64, k: i64) {
+                 match k { 0 => { for i in 0..n { out[i] = i * 2; } } _ => { } }
+             }",
+        ),
+    ] {
+        let analysis = analyze(&format!("{src}\nfn main() {{ println(1); }}"));
+        let fc = get_function(&analysis, "f");
+        assert!(
+            fc.disjoint_write_loops.iter().any(|d| d.loop_var == "i"),
+            "{label}: the loop was never considered — got {:?}. A loop with no \
+             entry is indistinguishable from one that does not exist.",
+            fc.disjoint_write_loops
+        );
+    }
+}
+
+#[test]
+fn test_tail_position_reduction_is_considered() {
+    // B-2026-08-14-24, the reduction lane. The row was filed against the
+    // disjoint-write lane and attributed the difference to the two lanes using
+    // different statement walks; measured, both walks are the same shape and
+    // both were reached only through the same early return, so a reduction whose
+    // `if` is the body's tail was equally invisible.
+    let analysis = analyze(
+        r#"
+        fn f(v: ref Vec[i64], go: bool) {
+            let mut sum = 0;
+            if go { for x in v { sum = sum + x; } }
+        }
+        fn main() { println(1); }
+        "#,
+    );
+    let fc = get_function(&analysis, "f");
+    assert!(
+        fc.loop_reductions.iter().any(|r| r.accumulator == "sum"),
+        "the reduction in a tail `if` was never considered — got {:?}",
+        fc.loop_reductions
+    );
+}
+
+#[test]
 fn test_disjoint_write_admitted_for_frozen_param() {
     let analysis = analyze_typed(
         r#"

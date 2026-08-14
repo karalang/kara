@@ -1823,7 +1823,22 @@ impl<'a> ConcurrencyChecker<'a> {
         // back to the sequential lowering, which drains defers correctly. See
         // `block_has_user_defer` for the full rationale. (Explicit `par {}` is
         // a separate codegen path and is unaffected.)
-        if total_statements == 0 || block_has_user_defer(&func.body) {
+        // B-2026-08-14-24 — `stmts.is_empty()` is NOT "the body is empty". A
+        // block's TAIL EXPRESSION is part of the body, so a function written as
+        // `fn f(..) { if go { for .. } }` has zero STATEMENTS and one tail `if`,
+        // and this early return handed back an all-empty decision before any
+        // lane ran. That is the `total_statements: 0` a `karac query
+        // concurrency` reported for a function that plainly contains a loop, and
+        // why its loop was ABSENT from `--concurrency-report` rather than listed
+        // with a decline reason — indistinguishable, to an author, from a
+        // function with no loop in it.
+        //
+        // `total_statements` itself keeps counting statements: the parallel-group
+        // lane indexes into `stmts`, and a tail expression is not one of those.
+        // Only the "nothing here at all" test is corrected.
+        if (total_statements == 0 && func.body.final_expr.is_none())
+            || block_has_user_defer(&func.body)
+        {
             return FunctionConcurrency {
                 parallel_groups: Vec::new(),
                 total_statements,
@@ -2382,39 +2397,86 @@ impl<'a> ConcurrencyChecker<'a> {
             let StmtKind::Expr(expr) = &stmt.kind else {
                 continue;
             };
-            match &expr.kind {
-                ExprKind::If {
-                    then_block,
-                    else_branch,
-                    ..
-                } => {
-                    self.recognize_disjoint_writes_in_block(func, then_block, out);
-                    if let Some(else_expr) = else_branch {
-                        if let ExprKind::Block(else_block) = &else_expr.kind {
-                            self.recognize_disjoint_writes_in_block(func, else_block, out);
+            self.recognize_disjoint_writes_in_expr(func, expr, idx, out);
+        }
+        // B-2026-08-14-24 — a block's TAIL EXPRESSION is part of the block, and
+        // skipping it made an ordinary shape invisible: `fn f(..) { if go { for
+        // .. } }` has its `if` in tail position, so the loop inside was never
+        // CONSIDERED — absent from `--concurrency-report` entirely rather than
+        // listed with a decline reason, which reads exactly like a function with
+        // no loop in it. The same body with any statement after the `if` was
+        // reported, which is what pinned it to tail position rather than to
+        // nesting.
+        //
+        // Indexed at `stmts.len()`, its source-order position.
+        if let Some(tail) = block.final_expr.as_deref() {
+            self.recognize_disjoint_writes_in_expr(func, tail, block.stmts.len(), out);
+        }
+    }
+
+    /// One expression's worth of [`Self::recognize_disjoint_writes_in_block`],
+    /// so a block's statements and its TAIL EXPRESSION go through identical
+    /// logic instead of the tail being skipped (B-2026-08-14-24).
+    fn recognize_disjoint_writes_in_expr(
+        &self,
+        func: &Function,
+        expr: &Expr,
+        idx: usize,
+        out: &mut Vec<DisjointWriteLoop>,
+    ) {
+        match &expr.kind {
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.recognize_disjoint_writes_in_block(func, then_block, out);
+                if let Some(else_expr) = else_branch {
+                    match &else_expr.kind {
+                        // `else { .. }`
+                        ExprKind::Block(else_block) => {
+                            self.recognize_disjoint_writes_in_block(func, else_block, out)
                         }
+                        // `else if ..` — an If expression, not a block, so it
+                        // needs the expression walk rather than the block one.
+                        _ => self.recognize_disjoint_writes_in_expr(func, else_expr, idx, out),
                     }
-                    continue;
                 }
-                ExprKind::For { .. } | ExprKind::While { .. } | ExprKind::Loop { .. } => {}
-                _ => continue,
+                return;
             }
-            let body = match &expr.kind {
-                ExprKind::For { body, .. }
-                | ExprKind::While { body, .. }
-                | ExprKind::Loop { body, .. } => body,
-                _ => unreachable!("filtered above"),
-            };
-            match self.classify_disjoint_write_loop(func, expr, body, idx) {
-                // Not a candidate at all — no indexed write to an outer
-                // collection. Keep walking inward.
-                None => self.recognize_disjoint_writes_in_block(func, body, out),
-                Some(record) => {
-                    let proven = record.proven();
-                    out.push(record);
-                    if !proven {
-                        self.recognize_disjoint_writes_in_block(func, body, out);
-                    }
+            // B-2026-08-14-24 — a BARE BLOCK hid its loop the same way an `if`
+            // did, and for the same reason: nothing descended into it.
+            ExprKind::Block(inner) | ExprKind::Seq(inner) => {
+                self.recognize_disjoint_writes_in_block(func, inner, out);
+                return;
+            }
+            // ... and so did a MATCH arm. An arm body is an expression, not
+            // necessarily a block, so it goes through this walk rather than the
+            // block one.
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.recognize_disjoint_writes_in_expr(func, &arm.body, idx, out);
+                }
+                return;
+            }
+            ExprKind::For { .. } | ExprKind::While { .. } | ExprKind::Loop { .. } => {}
+            _ => return,
+        }
+        let body = match &expr.kind {
+            ExprKind::For { body, .. }
+            | ExprKind::While { body, .. }
+            | ExprKind::Loop { body, .. } => body,
+            _ => unreachable!("filtered above"),
+        };
+        match self.classify_disjoint_write_loop(func, expr, body, idx) {
+            // Not a candidate at all — no indexed write to an outer
+            // collection. Keep walking inward.
+            None => self.recognize_disjoint_writes_in_block(func, body, out),
+            Some(record) => {
+                let proven = record.proven();
+                out.push(record);
+                if !proven {
+                    self.recognize_disjoint_writes_in_block(func, body, out);
                 }
             }
         }
@@ -2703,10 +2765,25 @@ impl<'a> ConcurrencyChecker<'a> {
         out: &mut Vec<LoopReduction>,
         frozen: &HashSet<String>,
     ) {
-        for (idx, stmt) in block.stmts.iter().enumerate() {
-            let StmtKind::Expr(expr) = &stmt.kind else {
-                continue;
-            };
+        // B-2026-08-14-24 — the tail expression is walked with the statements.
+        // This lane has the same blind spot the disjoint-write one did: it
+        // descends into `if` arms correctly but only ever from `block.stmts`, so
+        // `fn f(..) { if go { for .. } }` — the `if` in TAIL position — was
+        // never reached. The row was filed against the disjoint lane alone and
+        // attributed the difference to the two lanes using different walks;
+        // measured, both walks are the same shape and both skipped the tail.
+        let tail = block.final_expr.as_deref();
+        let stmt_exprs =
+            block
+                .stmts
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, stmt)| match &stmt.kind {
+                    StmtKind::Expr(expr) => Some((idx, expr)),
+                    _ => None,
+                });
+        for (idx, expr) in stmt_exprs.chain(tail.map(|t| (block.stmts.len(), t))) {
+            let _ = idx;
             match &expr.kind {
                 ExprKind::If {
                     then_block,
@@ -2715,9 +2792,38 @@ impl<'a> ConcurrencyChecker<'a> {
                 } => {
                     self.recognize_reductions_in_block(then_block, out, frozen);
                     if let Some(else_expr) = else_branch {
-                        if let ExprKind::Block(else_block) = &else_expr.kind {
-                            self.recognize_reductions_in_block(else_block, out, frozen);
+                        match &else_expr.kind {
+                            ExprKind::Block(else_block) => {
+                                self.recognize_reductions_in_block(else_block, out, frozen)
+                            }
+                            // `else if ..` chains through as an If expression.
+                            ExprKind::If { .. } => {
+                                let chain = Block {
+                                    stmts: Vec::new(),
+                                    final_expr: Some(Box::new((**else_expr).clone())),
+                                    span: else_expr.span.clone(),
+                                };
+                                self.recognize_reductions_in_block(&chain, out, frozen);
+                            }
+                            _ => {}
                         }
+                    }
+                    continue;
+                }
+                // A BARE BLOCK hid its loop the same way.
+                ExprKind::Block(inner) | ExprKind::Seq(inner) => {
+                    self.recognize_reductions_in_block(inner, out, frozen);
+                    continue;
+                }
+                // ... and so did a MATCH arm.
+                ExprKind::Match { arms, .. } => {
+                    for arm in arms {
+                        let arm_block = Block {
+                            stmts: Vec::new(),
+                            final_expr: Some(Box::new(arm.body.clone())),
+                            span: arm.body.span.clone(),
+                        };
+                        self.recognize_reductions_in_block(&arm_block, out, frozen);
                     }
                     continue;
                 }
