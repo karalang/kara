@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
 | crash | 45 | 0 |
-| soundness | 43 | 1 |
+| soundness | 43 | 0 |
 | other | 30 | 0 |
 | use-after-free | 18 | 0 |
 
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 847 | 4 |
-| typecheck | 163 | 1 |
+| codegen | 847 | 3 |
+| typecheck | 163 | 0 |
 | interp | 143 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1172 surfaced · 5 open · 1155 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1172 surfaced · 4 open · 1156 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-1 | 2026-08-14 | typecheck+codegen | high | FIVE SITES ACCEPT AN IMPLICIT NARROWING the language says it refuses — Vec.push, Vec.contains, Set.insert/contains, Set.remove and the annotated tuple take an i64 where a u8 is declared, with NO diagnostic. The two surfaces then disagree: `Vec[u8]` + `push(300i64)` reads back 300 under --interp and 44 compiled. Map and Vec index-assign reject the same shape, so this is per-site, not a missing rule. | The rejecting sites go through `check_int_widening_coercion` (src/typechecker/exprs.rs, B-2026-07-09-7 decision B); the five leaking sites are container-argument and annotated-aggregate paths that never call it. Compare Map.insert/contains_key (rejects) against Set.insert/contains (accepts) — same shape, different answer — and Vec index-assign (rejects) against Vec.push (accepts), which is a disagreement INSIDE one container's method set. |
 | B-2026-08-14-2 | 2026-08-14 | interp | high | INTERPRETER-SIDE: the implicit int-to-float widening is not performed at all, so an int source bound to a float destination stays an Int. At an annotated `let` this makes a program that `karac check`s clean and runs correctly compiled DIE AT RUNTIME under --interp ("operator 'Eq' is not defined for operands of type 'Int' and 'Float'"), with a diagnostic that blames a typecheck error which does not exist. At `Vec[f64].push` it is silent instead: `contains` answers the exact inverse of the compiled backends. | The interpreter's coercion at a float-typed binding/argument position: it stores the incoming `Value::Int` unchanged where the declared type is a float, and the later operator dispatch has no Int/Float arm. The compiled backends convert correctly at these boundaries (B-2026-08-13-18 did that work for codegen), so the fix is the interpreter's side of the same rule. The runtime error text is separately wrong and should not survive the fix — it asserts the typechecker reports this as a hard error, and `karac check` on the repro prints "All checks passed." |
 | B-2026-08-14-3 | 2026-08-14 | codegen | high | GENERICS AT UNSIGNED NARROW WIDTHS RETURN SIGN-EXTENDED GARBAGE on both compiled backends: `fn idg[T](x: T) -> T` called as `idg(200u8)` yields -56, `idg(60000u16)` yields -5536, `idg(4000000000u32)` yields -294967296, and the generic struct `Boxg[T] { v: T }` at `Boxg[u8]` reads its field back as -56. Signed T is correct, and the same values held in a non-generic binding are correct. | The monomorphization path's extension of a narrow T: it appears to sign-extend unconditionally rather than choosing sext/zext from T's signedness. Both the generic FUNCTION return/argument and the generic STRUCT field read are affected, which points at one shared widen rather than two. Contrast with the non-generic control in the same program (a plain `let direct = 200u8` prints 200) and with `Vec[u8]`, which round-trips 200 correctly — so it is the generic instantiation, not narrow unsigned handling in general. |
 | B-2026-08-14-4 | 2026-08-14 | codegen | high | A STRUCT WITH UNSIGNED NARROW FIELDS IS CORRUPTED BY A Vec ROUND-TRIP: reading `v[0].a` where `a: u8 = 200` yields -56 on both compiled backends, while reading the SAME field off the same struct directly yields 200. u16 and u32 fields corrupt identically; the direct read is correct in the same program. | The Vec-element struct field read path, versus the direct field read which is correct. Likely the same signedness-blind extension as B-2026-08-14-3's generic instantiation (a `Vec[T]` element read is a monomorphized read), but filed separately because the direct-vs-through-Vec split is a distinct observable and may be a distinct site. |
@@ -147,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1172 surfaced
 
 </details>
 
-### Fixed (1155)
+### Fixed (1156)
 
-<details><summary>1155 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1156 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5085,6 +5084,81 @@ A FIFTH SITE THE SWEEP DOES NOT REACH, found by probing the array positions and 
 MEASURED. The row's own guard, `scripts/width-matrix.py --site array_elem`, goes from failing to 38 programs / 76 case-lines / 0 divergences. The FULL sweep -- which the row names as the family guard -- reports 190 programs, 608 case-lines, 0 divergences, 0 surface skips, against 30 raw / 15 distinct at 35fb7aec. Every one of the tuple family's fixtures re-verified unregressed on all four surfaces.
 
 A permanent cargo test (`test_e2e_annotated_array_uses_declared_element_width`) pins eight shapes: the row's repro; the signed source and the explicit-`as` control that were correct all along and must stay so; the four sibling positions; and the SIMD lane case. |
+| B-2026-08-14-1 | typecheck+codegen | high | FIVE SITES ACCEPT AN IMPLICIT NARROWING the language says it refuses — Vec.push, Vec.contains, Set.insert/contains, Set.remove and the annotated tupl… | FIXED by 1edb623. `python3 scripts/width-matrix.py --narrowing` reports 96
+site/pair checks, 0 holes, down from 30 holes over 5 sites.
+
+THE MECHANISM IS ONE MISSING CALL, and it explains the row's own puzzle. The
+row noted that `Map.insert` rejects while `Set.insert` accepts, and that `Vec`'s
+index-assign rejects while `Vec.push` accepts -- "a disagreement INSIDE one
+container's method set". The rule lives in `check_int_widening_coercion`, which
+only `check_expr` calls. `Map`'s slot args go through `check_expr` against the
+concrete slot (`check_map_slot_arg_inner`), so they get the rule for free. The
+five leaking sites hand-roll `infer_expr` + `check_assignable` instead, and
+`check_assignable` is permissive between integer types BY DESIGN -- that is
+correct when the argument itself fixes the slot, and wrong when the slot is
+already declared. So the disagreement is not per-container, it is per-site:
+whichever spelling happened to route through `check_expr` inherited the rule.
+
+THE HOLE CLASS IS WIDER THAN THE FIVE SITES the sweep names, because the sweep
+probes 16 sites and the shape appears at more:
+
+    Set.contains / insert / remove          (in the sweep)
+    SortedSet.contains / insert / remove    NOT probed -- same three arms, same hole
+    Vec.contains                            (in the sweep)
+    Vec.binary_search                       NOT probed -- same element slot
+    Slice.contains / binary_search          NOT probed -- same
+    Vec.push                                (in the sweep)
+
+All fixed. The sweep's "the other 11 sites reject correctly" is accurate about
+what it probes and should not be read as a survey of the compiler.
+
+THE TUPLE NEEDED A DIFFERENT FIX from the other four, and the reason is why it
+leaked. The gate compares an expected type against an actual one; for
+`let t: (u8, u8) = (nsrc, nsrc)` those are `(u8, u8)` and `(i64, i64)`, and
+neither is an integer, so the gate returns on its first guard. It was never
+skipped -- it ran and had nothing to say. The fix walks the element pairs at the
+same point in `check_expr`, using the element types already inferred, so nothing
+is re-inferred and the only programs whose acceptance changes are the ones that
+were silently truncating.
+
+A LIVE INSTANCE OF THE HOLE WAS IN THE TEST SUITE, which is the useful evidence
+that this was not a theoretical gap. `tests/cli.rs`'s wasm-browser marshalling
+fixture had
+
+    let mut o: Vec[i32] = Vec.new();
+    let mut i = 0;                      // defaults to i64
+    while i < n { o.push(i * i); ... }
+
+and `o.push(i * i)` is an i64 into a `Vec[i32]`. The identical expression was
+ALREADY rejected at an annotated `let`, at a call argument, and at `Vec`'s own
+index-assign -- measured, all three, on the same program -- so the fixture
+compiled only through the one slot that did not check. Annotating `i` fixes it
+and changes nothing about what the test is for. That is the whole corpus: the
+rest of the suite and every example is clean under the gate.
+
+WHICH SURFACE WAS RIGHT: neither, as the row said. Compiled truncates 300 to 44;
+the interpreter leaves 300 in a `Vec[u8]`, so the container's contents
+contradict its declared element type. Rejecting at typecheck is what makes both
+correct and is what the sites that already checked were doing, so no backend
+behaviour changed here at all.
+
+THE LITERAL EXEMPTION IS PRESERVED and matters more at these sites than
+elsewhere: `v.push(44)` on a `Vec[u8]` stays legal, because a literal was
+already range-checked against the destination. The row's repro is careful to use
+a VARIABLE for exactly this reason, and a literal-only probe would have reported
+all five sites as fine.
+
+MEASURED: the sweep's three axes, re-run on the tip this landed on.
+`--narrowing` 0 holes. `--quick` (int -> int) 0 divergences -- `array_elem`, the
+only site still failing that axis while this was in progress, was closed by
+B-2026-08-13-22 in the meantime. `--floats` has 18 left, all of them
+`arith_wide` / `cmp_wide` / `vec_contains` under `--interp`, i.e. B-2026-08-14-2
+in full and nothing else. None of the three axes moved because of this change
+except the one it targets. The
+new test pins all five sites plus the sign-changing `-1i64 -> u8` case, and
+pins the WIDENING direction and the literal form at the same sites as controls,
+since a gate that is too eager here would reject every program relying on
+implicit widening. |
 
 </details>
 
