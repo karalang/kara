@@ -3750,9 +3750,26 @@ impl<'a> super::TypeChecker<'a> {
                 self.assigning_lhs = saved;
                 self.check_expr(value, &target_ty);
             }
-            StmtKind::CompoundAssign { target, value, .. } => {
-                self.infer_expr(target);
-                self.infer_expr(value);
+            StmtKind::CompoundAssign { target, value, op } => {
+                // B-2026-08-14-29 — check the implied binary operation, not
+                // just the two operands in isolation. This arm used to infer
+                // each side and stop, so `s += 1i64` on a `String`, `n += "a"`
+                // on an `i64`, and `p += 1i64` on a struct all cleared `karac
+                // check` and then failed at CODEGEN with a message naming an
+                // LLVM type and no source span — one that says of itself
+                // "likely a typechecker gap". The plain spelling of the same
+                // expression (`s = s + 1i64`) was rejected properly, so the
+                // check existed and this statement form simply never reached
+                // it.
+                //
+                // `infer_binary` infers both operands itself (once each,
+                // exactly as the two calls it replaces did) and then applies
+                // the operator's own rules — numeric / String-concat /
+                // distinct-type / `T: Numeric` / operator-trait-bounded
+                // parameter — so every shape the plain form accepts stays
+                // accepted, including a `mut ref` operand on either side.
+                let binop = Self::compound_op_binop(op);
+                self.infer_binary(&binop, target, value, &stmt.span);
             }
             // Handled by the early return above; kept for exhaustiveness.
             StmtKind::Expr(_) => {}

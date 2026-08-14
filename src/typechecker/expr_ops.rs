@@ -1514,6 +1514,28 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The binary operator a compound assignment implies — `x += y` means
+    /// `x = x + y`, so `+=` checks under `Add`. B-2026-08-14-29: the
+    /// `CompoundAssign` arm needs this to route through [`Self::infer_binary`];
+    /// codegen (`src/codegen/stmts.rs`) and the interpreter
+    /// (`src/interpreter/eval_stmt.rs`) each carry the same table for their own
+    /// desugaring, and all three must agree on the mapping.
+    pub(super) fn compound_op_binop(op: &crate::ast::CompoundOp) -> BinOp {
+        use crate::ast::CompoundOp;
+        match op {
+            CompoundOp::Add => BinOp::Add,
+            CompoundOp::Sub => BinOp::Sub,
+            CompoundOp::Mul => BinOp::Mul,
+            CompoundOp::Div => BinOp::Div,
+            CompoundOp::Mod => BinOp::Mod,
+            CompoundOp::BitAnd => BinOp::BitAnd,
+            CompoundOp::BitOr => BinOp::BitOr,
+            CompoundOp::BitXor => BinOp::BitXor,
+            CompoundOp::Shl => BinOp::Shl,
+            CompoundOp::Shr => BinOp::Shr,
+        }
+    }
+
     pub(super) fn infer_binary(
         &mut self,
         op: &BinOp,

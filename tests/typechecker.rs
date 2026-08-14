@@ -38099,3 +38099,90 @@ fn test_user_trait_impl_on_fixed_array_still_rejected() {
         errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
     );
 }
+
+/// B-2026-08-14-29 — compound assignment must be checked as the binary
+/// operation it means, not as two operands in isolation.
+///
+/// `s += 1i64` on a `String`, `n += "a"` on an `i64`, and `p += 1i64` on a
+/// struct all reported "All checks passed" and then failed at CODEGEN with a
+/// message that names an LLVM type, carries no source span, and says of itself
+/// "likely a typechecker gap". The PLAIN spelling of each (`s = s + 1i64`) was
+/// rejected correctly, so the check existed and this statement form never
+/// reached it.
+///
+/// `karac check` passing is the contract the Mend loop is built on, which is
+/// why a check-green/backend-dead program matters more here than a bad message
+/// would elsewhere.
+#[test]
+fn compound_assign_checks_the_implied_binary_operation() {
+    for (src, want) in [
+        (
+            "fn main() { let mut s = \"a\"; s += 1i64; println(s); }",
+            "arithmetic operator requires numeric type, found 'String'",
+        ),
+        (
+            "fn main() { let mut n = 1i64; n += \"a\"; println(n); }",
+            "expected 'i64', found 'String'",
+        ),
+        (
+            "struct Pt { x: i64 }\n\
+             fn main() { let mut p = Pt { x: 1i64 }; p += 1i64; println(p.x); }",
+            "arithmetic operator requires numeric type, found 'Pt'",
+        ),
+        // The `mut ref` parameter spelling reaches a different inference path
+        // for the target, and was equally unchecked.
+        (
+            "struct Pt { x: i64 }\n\
+             fn bump(p: mut ref Pt) { p += 1i64; }\n\
+             fn main() { let mut p = Pt { x: 1i64 }; bump(mut p); println(p.x); }",
+            "arithmetic operator requires numeric type, found 'mut ref Pt'",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(want)),
+            "compound assignment must be rejected with {want:?} — accepting it is \
+             check-green/backend-dead; got: {:?}\nsource:\n{src}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The other half of B-2026-08-14-29, and the half that actually constrains the
+/// fix: routing `CompoundAssign` through the binary-operation check must not
+/// start rejecting anything the plain spelling accepts.
+///
+/// Every operator, every operand shape that reaches a distinct arm of
+/// `infer_binary` — numeric, String concat, narrow integer widths, a
+/// `#[derive(Arithmetic)]` distinct type, a `T: Numeric` parameter — plus the
+/// place forms (field, index, map entry, `mut ref` parameter, `mut ref self`
+/// receiver) whose targets infer differently from a bare local.
+#[test]
+fn compound_assign_still_accepts_every_valid_operand_shape() {
+    typecheck_ok(
+        "#[derive(Arithmetic)]\n\
+         distinct type Meters = i64;\n\
+         struct Ctr { n: i64, s: String, f: f64 }\n\
+         impl Ctr { fn bump(mut ref self) { self.n += 1i64; self.s += \"z\"; self.f += 0.5; } }\n\
+         fn gnum[T: Numeric](a: T, b: T) -> T { let mut x = a; x += b; x }\n\
+         fn refscalar(n: mut ref i64) { n += 5i64; }\n\
+         fn refstr(s: mut ref String) { s += \"x\"; }\n\
+         fn main() {\n\
+             let mut i = 1i64; i += 2i64; i -= 1i64; i *= 3i64; i /= 2i64; i %= 2i64;\n\
+             let mut b = 12i64; b &= 10i64; b |= 1i64; b ^= 3i64; b <<= 2i64; b >>= 1i64;\n\
+             let mut f = 1.5; f += 0.5; f *= 2.0;\n\
+             let mut s = \"a\"; s += \"b\"; let t = \"c\"; s += t;\n\
+             let mut u: u8 = 3; u += 4;\n\
+             let mut n32: i32 = 3; n32 += 4;\n\
+             let mut c = Ctr { n: 0i64, s: \"\", f: 0.0 };\n\
+             c.n += 2i64; c.s += \"q\"; c.f += 1.25; c.bump();\n\
+             let mut v: Vec[i64] = Vec.new(); v.push(1i64); v[0i64] += 5i64;\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             *m.entry(\"k\").or_insert(0i64) += 3i64;\n\
+             let mut d: Meters = Meters(4i64); d += Meters(6i64);\n\
+             let mut r = 1i64; refscalar(mut r);\n\
+             let mut rs = \"p\"; refstr(mut rs);\n\
+             println(f\"{i} {b} {f} {s} {u} {n32} {c.n} {v[0i64]} {r} {rs} {gnum(2i64, 3i64)}\");\n\
+         }",
+    );
+}
