@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 247 | 0 |
 | leak | 173 | 1 |
 | double-free | 127 | 0 |
-| run-vs-build | 117 | 1 |
+| run-vs-build | 117 | 0 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 855 | 2 |
+| codegen | 855 | 1 |
 | typecheck | 169 | 0 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1184 surfaced · 2 open · 1170 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1184 surfaced · 1 open · 1171 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-15 | 2026-08-14 | codegen | high | Two leaks that share one polarity: a NESTED CONTAINER read into a `let` BINDING and then consumed leaks, while the identical read consumed INLINE is clean. LEG A -- a `Map` read out of a `Vec[Map[..]]` element and queried with `.get()` leaks the WHOLE Map (602 B / 4 allocs per element). LEG B -- an `Option`/`Result[Vec[Struct]]` `let`-bound then matched leaks every element's heap field. Both scale linearly with data size. | the drop/ownership decision for a `let` binding whose initializer reads a nested container out of a Vec ELEMENT (leg A) or out of an Option/Result payload (leg B). Same let-vs-inline polarity as B-2026-08-11-30 leg A (fixed, 19d0e9a) -- worth checking whether that fix's `nonescaping_param_names` gate has a binding-site sibling. |
-| B-2026-08-14-17 | 2026-08-14 | codegen | medium | Indexing a tensor-valued TEMPORARY fails to build while `--interp` runs it: `(t * 2)[0]`, `(t + t)[0]`, `Tensor.from([1.0, 2.0])[0]` and `(0.0 - t)[0]` all typecheck, all print the right answer under `--interp`, and all die in codegen with a message that names a typechecker gap. Binding the same value to a local first (`let r = t * 2; r[0]`) compiles and runs. | Index lowering for a Tensor RECEIVER: the working path resolves through a named binding's recorded element type, the rvalue case reaches three different fallbacks (comparison, Index, float-convert) depending on how the temporary was produced. Compare B-2026-08-14-5's Array fix, which materialized via `compile_expr` on the object rather than adding new element-loading machinery. |
 
 ### Wontfix (2)
 
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1184 surfaced
 
 </details>
 
-### Fixed (1170)
+### Fixed (1171)
 
-<details><summary>1170 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1171 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6112,6 +6111,80 @@ bisect variants plus u8/i8/u16/i16/u32/i32/bool/i64 element types.
 
 Suite green: codegen 2958 passed, par_codegen 1067 passed, memory_sanitizer 255
 passed, non-llvm suites all green. fmt and clippy `--all --all-targets` clean. |
+| B-2026-08-14-17 | codegen | medium | Indexing a tensor-valued TEMPORARY fails to build while `--interp` runs it: `(t * 2)[0]`, `(t + t)[0]`, `Tensor.from([1.0, 2.0])[0]` and `(0.0 - t)[0… | FIXED by e734d98. Indexing a tensor-valued temporary compiles, at parity with the same read
+through a named binding.
+
+ONE CAUSE, THREE MESSAGES, AND THE MESSAGES ARE WHY IT LOOKED LIKE THREE BUGS.
+The row read the differing texts as a hint that "the index lowering is not asking
+'what is my receiver' in one place". It is asking in one place; the receiver had
+simply stopped being a tensor by the time anything asked. The parser stamps every
+postfix expression with its RECEIVER's span, so an `Index` and its object share
+one key in `expr_types` — and the index's scalar ELEMENT type is what ends up
+recorded there. `tensor_typed_exprs` is derived from that map, and it is what
+`compile_expr` consults to decide whether a `Binary` is element-wise tensor
+arithmetic. With the entry overwritten, `(t * 2)` was lowered as SCALAR
+arithmetic on two control-block pointers. The three texts are just the three
+guards that catch a pointer where a scalar was expected, one per producing shape:
+
+  (t * 2)[0]                  Binary op Mul: left operand has non-comparable
+                              type PointerType(…)
+  Tensor.from([1.0,2.0])[0]   Index operator applied to non-array type
+  (0.0 - t)[0]                Cannot convert PointerType(…) to float
+
+`let r = t * 2; r[0]` worked because those two spans do not collide — which is
+also why the workaround was one line.
+
+THE REMEDY IS THE ONE ALREADY ESTABLISHED FOR THIS COLLISION. `t.0[i]` failed
+codegen loud with "Index operator applied to non-array type" while the
+interpreter read the element, for the same reason, and was fixed by recording the
+receiver's element type in a span-keyed table the collision cannot reach
+(`temp_recv_elem_types`, B-2026-07-20-2). This adds the tensor sibling:
+`tensor_index_recv_types`, written in the typechecker's `Index` arm — where
+`obj_ty` is still the receiver's `Tensor[T, Shape]`, before the arm returns the
+element type that overwrites it — and keyed by the RECEIVER's span. The
+`Type` -> `TensorTypeInfo` conversion was factored out of the `tensor_typed_exprs`
+builder so both tables produce byte-identical entries rather than drifting.
+
+INSTALLED FOR EXACTLY THE DURATION OF COMPILING THE RECEIVER, then restored.
+Installing it permanently would be wrong in a way that would not show up for a
+while: after that call the span belongs to the `Index`, whose value is a scalar,
+and any later reader keyed on it would be told the expression is a tensor.
+
+OWNERSHIP IS THE OTHER HALF, AND IT IS WHY THIS IS NOT A ONE-LINE FIX. A
+temporary's control block has no other cleanup owner, so compiling the read
+without more would have traded a build failure for a leak. It gets the same
+`FreeTensor` a `let`-bound tensor gets — the fix is literally the workaround,
+emitted. `expr_yields_fresh_owned_temp` is the predicate the `ref`-param
+materialization already uses for this decision and it excludes borrow-returning
+calls, so a `ref Tensor` receiver is not double-freed; arithmetic and negation
+always allocate, so they are owned unconditionally. Pinned by
+`asan_tensor_temporary_index_no_leak`, which loops 50 times over all four
+producing shapes — LSan is live on Linux CI, and one stranded block would be
+caught, but 50 rules out a free-once-outside-the-loop bug too.
+
+A WRONG FIRST ATTEMPT, RECORDED BECAUSE THE MEASUREMENT THAT KILLED IT IS THE
+USEFUL PART. The first version resolved the receiver's `TensorVarInfo`
+STRUCTURALLY inside `compile_index` — walk a `Binary`/`Unary` to whichever
+operand is a tensor and borrow its shape (shape-preserving ops only, since the
+index offset is a Horner fold over `dims`) — then compiled the receiver and
+indexed it. Built it; all four cases failed with byte-identical errors. The
+resolver was correct and useless: recovering the type AT THE INDEX SITE does not
+help, because the failure happens INSIDE `compile_expr` on the receiver, which is
+gated on the same table. That is what pointed at the span collision rather than
+at the index lowering, and the structural helper was deleted rather than kept
+alongside.
+
+SCOPE, swept: seven spellings, all now agreeing with `--interp` — element-wise
+`*` and `+`, a scalar-on-the-left subtraction, a bare `Tensor.from(...)`, a
+NESTED temporary (`((t + t) * 2)[0]`), a 2-D multi-dim index (`(m + m)[1, 0]`,
+which exercises the Horner fold over real dims), and the named binding as the
+control. Integer and float elements both.
+
+BLAST RADIUS: none to migrate. No `.kara` in the tree used the shape — it could
+not have, since the build would have been broken.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean. |
 
 </details>
 
