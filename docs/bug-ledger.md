@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 246 | 0 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 113 | 2 |
+| run-vs-build | 114 | 2 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 850 | 1 |
-| typecheck | 165 | 1 |
-| interp | 144 | 1 |
+| codegen | 851 | 2 |
+| typecheck | 166 | 2 |
+| interp | 144 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1177 surfaced · 3 open · 1162 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1178 surfaced · 3 open · 1163 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-7 | 2026-08-14 | interp | medium | The interpreter performs f32 ARITHMETIC at f64 precision, so an `f32` result diverges from both compiled backends wherever the true f32 result would have rounded: `let a: f32 = 4000000000u32 as f32; a + 1.0` reads 4000000001 under `--interp` and 4000000000 compiled. The CAST itself rounds correctly — it is only the operators. | `Value::Float` is an f64 with no width tag, so every f32/f16/bf16 binop in eval_ops.rs computes and stores at f64. The narrowing CASTS were given explicit rounding (B-2026-07-22-4); the arithmetic path never was. |
 | B-2026-08-14-9 | 2026-08-14 | codegen | medium | EIGHT more `Slice[T]` methods typecheck and interpret but have no codegen: the mutators `fill`/`reverse`/`sort`/`sort_by_key`/`swap` and the view-producers `chunks`/`windows`/`split_at`. Split from B-2026-08-14-8, which fixed the four READ accessors by routing them through the Vec implementation — a route these eight cannot take | The `Slice` arm of the method dispatch in src/codegen/method_call.rs (~L5010). The four read accessors B-2026-08-14-8 fixed are ROUTED to `compile_vec_method` over a `{ptr,len,cap:0}` borrowed view; these eight cannot take that route, so each needs a real implementation over the 2-field header. |
 | B-2026-08-14-10 | 2026-08-14 | typecheck | high | NONDETERMINISTIC TYPECHECKING: a user enum declaring a variant named `None`, `Some` or `Ok` makes `karac check` return a COIN FLIP on identical input -- measured 15/30, 10/20 and 7/16 pass-vs-fail on three unchanged files. Root cause is a first-match `return` inside `for (enum_name, enum_info) in &self.env.enums` (src/typechecker/expr_ops.rs:352) over a `HashMap` whose iteration order is randomly seeded per process. On the runs that PASS, the JIT then fails LLVM `Module verification`. | src/typechecker/expr_ops.rs:352 -- `for (enum_name, enum_info) in &self.env.enums` returning the FIRST enum carrying a matching variant name; `self.env.enums` is `HashMap<String, EnumInfo>` (src/typechecker/env.rs:314). |
+| B-2026-08-14-11 | 2026-08-14 | typecheck+codegen | medium | An UNSUFFIXED float literal at a narrow-float annotation is never narrowed, on EITHER surface: `let a: f32 = 0.1` holds the f64 0.1 where `let b: f32 = 0.1f32` holds 0.10000000149011612, and `a == b` then answers false under `--interp` and true compiled — a run-vs-build split on a program with no arithmetic in it. | The float-literal path: `ExprKind::Float(f, sfx)` lowers through `const_float_for_suffix`, which reads the SUFFIX only — an unsuffixed literal is always a `double`, and nothing at the annotated `let` re-types or coerces it. Contrast the integer twin, which is correct (`let x: u8 = 200` stores an i8), and the same float literal at a struct field / fn param / `Vec` element, which codegen DOES narrow. So the gap is the scalar `let` specifically, in codegen; the typechecker's own `expr_types` already says f32 at that binding. |
 
 ### Wontfix (2)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1177 surfaced
 
 </details>
 
-### Fixed (1162)
+### Fixed (1163)
 
-<details><summary>1162 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1163 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5493,6 +5493,25 @@ container and the assignment, which must stay -5.0 and would read 251.0 under a
 blind zero-extension; and two no-coercion controls (a genuine float element, a
 genuine float field) that must be untouched. The other two sweep axes
 (`--quick`, `--narrowing`) are unchanged at 0. |
+| B-2026-08-14-7 | interp | medium | The interpreter performs f32 ARITHMETIC at f64 precision, so an `f32` result diverges from both compiled backends wherever the true f32 result would… | FIXED by 108f01b4 (the operator half) and c85a68d3 (the storage half).
+
+The row's FIX SHAPE offered two designs and asked which; the answer is neither of them, because the width the rounding needs is already reachable. `Value::Float` carries no tag, but `span_int_width` -- three functions up in the same file -- already resolves an INT binop's declared width from `expr_types` at the operator's own span, which is how narrow-int overflow and `1i32 << 31` were made to match codegen. The float sibling is the same lookup: `round_float_to_span_width` reads the binop span, peels a `Column` / `Tensor` / `Vector` container the way `span_int_width` does, and rounds an `f32` / `f16` / `bf16` result through the EXISTING helpers the cast path uses (`v as f32 as f64`, `round_f64_via_f16`, `round_f64_via_bf16`). No width tag on the value, no new typechecker table.
+
+ONE CHOKEPOINT, WHICH IS WHY THE ROW'S "only `+` was measured" NOTE COST NOTHING. `eval_binary` became a two-line wrapper over the old body, so every operator, every width and every container element got the rounding at once rather than one arm at a time. Measured across `+ - * /`, chained (`t + t + t`), compound assignment (`+=`, `*=`), a value returned from a function, a struct field, an `Array` element, a `Vec` element, `Vec.sum()`, a loop accumulator, a `Tensor` element, a `Vector[f32, 2]` lane product, and both narrow half formats: every one of those lines diverged from the compiled backends before and none does after, on all four surfaces and both optimization levels.
+
+ROUNDING ONCE AT THE END IS EXACT, not an approximation of computing at the narrow width. A single IEEE `+`/`-`/`*`/`/` is correctly rounded when the intermediate carries at least `2p+2` bits; f64's 53 clear f32 (50), f16 (24) and bf16 (18). Overflow to infinity survives the second rounding, and an f32-subnormal result is exact in f64 long before f64 itself underflows. So this is not a heuristic that gets close -- it is the same value.
+
+A SECOND SITE THE ROW DOES NOT NAME, and it is not an operator: the float-math METHODS. `t.sqrt()` read 0.3162277683729184 against codegen's 0.3162277638912201, and `sin` / `exp` / `ln` / `pow` / `atan2` the same, because they too compute at f64 and codegen calls the `f`-suffixed libm entry. Rounded through the same helper at the three return points in `method_call.rs`. One honest caveat, recorded because it differs in kind from the arithmetic: for the TRANSCENDENTALS this is a nearest-f32 of the f64 result, not a claim of bit-identity with `sinf`/`expf`/`logf`, which are not required to be correctly rounded. Every case measured agrees; unlike the `2p+2` argument above, that is evidence rather than proof.
+
+THE STORAGE HALF, which is the row's own SCOPE CORRECTION and not something the original title would have led to. `field_assign`, `vec_push` and `vec_idx_assign` diverge with no arithmetic anywhere in them: `Vec[f32].push(4294967295u32)` left 4294967295 in the interpreter against the compiled 4294967296, because 4294967295 is not representable in f32 and rounds up. An interpreter that widens the `u32` to f64 and stops is holding a value the slot's own declared type cannot express, so the operator fix alone would have left all three wrong.
+
+B-2026-08-14-6 had just built exactly the channel this needs -- the typechecker flags every integer expression sitting in a float slot, and the interpreter converts at the store and the probe. It recorded PRESENCE only. Carrying the declared `FloatSize` on the same entry is the whole change: `HashSet<SpanKey>` becomes `HashMap<SpanKey, FloatSize>`, the recording site already has the expected `Type` in hand, and the two consumers round through the shared helper instead of `n as f64`. No new table, no second traversal, and the two halves meet at one function so a value reaching an `f32` slot by coercion and one reaching it by an explicit `as` land on the same bits.
+
+TWO EXISTING TESTS CARRIED THE OLD BELIEF and were corrected rather than deleted. `tensor_f32_elements_round_to_f32_precision` (B-2026-08-05-31) asserted its scalar line as a control on the claim that "a plain `f32` local is f64 on BOTH backends, so this is a tensor-only narrowing" -- true when written, false now. `test_f16_bf16_arithmetic_tree_walk` documented the divergence as "a documented approximation". Both comments now say what is true.
+
+MEASURED ON THE ROW'S OWN GUARD, which the scope correction predicted would close outright: `width-matrix.py --floats` goes to 176 programs, 572 case-lines, 0 divergences, 0 surface skips -- from 60 divergences before this work and 30 after B-2026-08-14-6 alone. The operator half removed `arith_wide` and `cmp_wide`; the storage half removed the last 18 (`field_assign`, `vec_push`, `vec_idx_assign`, every one a `-> f32` case). The other three axes are unchanged and clean: main 190/608/0, `--roundtrip` 220/0, `--narrowing` 96 checks / 0 holes.
+
+ONE THING THIS DOES NOT REACH, checked rather than assumed: `let a: f32 = 0.1` holds the f64 0.1 on BOTH surfaces, because an unsuffixed float literal at a narrow annotation is never narrowed -- `record_float_coercion` fires only for an INTEGER in a float slot, and this is a float already. `a == b` against `let b: f32 = 0.1f32` then answers false under `--interp` and true compiled. Measured on the parent commit as well as after, so it is neither caused nor exposed by this change; filed separately as B-2026-08-14-11. |
 | B-2026-08-14-8 | codegen | medium | `Slice[T].contains` typechecks and interprets but has NO codegen: `karac check` passes, `karac run --interp` answers correctly, `karac build` dies wi… | FIXED by e803ba7 for `contains` and three siblings. The row's scope was wrong and
 the correction is the finding — see below; the remainder is filed separately
 rather than buried here.
