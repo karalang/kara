@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 118 | 0 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
-| perf | 67 | 2 |
+| perf | 67 | 1 |
 | false-positive | 62 | 1 |
 | diagnostics | 53 | 0 |
 | crash | 46 | 1 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 145 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
-| autopar | 41 | 1 |
+| autopar | 41 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced · 9 open · 1176 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced · 8 open · 1177 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-20 | 2026-08-14 | typecheck | low | THE `String -> bytes -> String` ROUND TRIP DOES NOT TYPECHECK: `String.from_utf8(s.bytes())` fails with "expected 'Vec<u8>', found 'Slice[u8]'", and `Slice` has no `to_vec()`, so the only way back is a hand-rolled push loop. | `String.bytes()` returns `Slice[u8]`; `String.from_utf8` is signed `(Vec[u8]) -> Result[String, Utf8Error]`. Nothing bridges them — no implicit borrow-to-owned at the argument, and no `Slice.to_vec()` / `Vec.from_slice()`. |
 | B-2026-08-14-22 | 2026-08-14 | codegen | high | `s += x` ON A LOCAL `String` LEAKS THE ENTIRE PREVIOUS BUFFER ON EVERY APPEND: building a 160 KB string with 20,000 appends peaks at 1.5 GB of RSS — the exact sum of every intermediate — where `push_str` and `s = s + x` both peak at 2.5 MB. | The `+=` compound-assignment lowering for `String`. It evidently allocates a fresh concatenation and stores it over the binding without releasing the buffer the binding held. `s = s + x`, which produces the same value through an explicit assignment, DOES release — so the drop of the overwritten value exists and the `+=` path does not reach it. |
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
-| B-2026-08-14-24 | 2026-08-14 | autopar | medium | a disjoint-write loop nested inside an `if` (or a bare block) is INVISIBLE to the auto-parallelisation analysis -- it is not declined with a reason, it is absent from `--concurrency-report` entirely, and it lowers sequentially with nothing to say so | the disjoint-write fan-out analysis walks only top-level statements of a function body — a loop nested in an `if` or a bare block is never reached |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-26 | 2026-08-14 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--interp` applies it — for a scalar field as well as a container, so this is not a heap-ownership gap but a lost write. `karac check` passes and nothing reports an error; the program simply keeps the old value. | The FieldAccess-rooted branch of `compile_field_store`: with a SHARED chain root, `nested_store_place_ptr` or `place_chain_type_name` declines and the branch exits through the no-op tail. Two prior fixes in that same branch (B-2026-07-28-6, B-2026-08-01-35) were for this same tail — instrument which resolution returns None before changing anything. |
 | B-2026-08-14-28 | 2026-08-14 | codegen | high | A `shared struct` LINKED LIST BUILT THROUGH A DUMMY-HEAD CURSOR IS READ AFTER FREE: `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTS under `karac build` and prints six lines of GARBAGE DIGITS under an ASAN build, while the interpreter is correct. The plain-build crash and the ASAN-build wrong answer are the same defect landing on different heap layouts. | The interaction between consuming an input `Option[shared]` chain with `if let Some(n) = a { a = n.next; }` and simultaneously BUILDING a result chain through a `tail` cursor (`tail.next = Some(node); tail = node;`) returned as `dummy.next`. Consuming without building is clean; building without the surrounding call structure is clean. |
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1197 surfaced
 
 </details>
 
-### Fixed (1176)
+### Fixed (1177)
 
-<details><summary>1176 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1177 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6539,6 +6538,58 @@ touched) — confirmed by running it against the stashed compiler.
 Full `--features llvm` suite green (2963 codegen, 1517 interpreter, 1074
 memory_sanitizer, 2218 typechecker, 427 ownership, 255 par_codegen, 4574 across
 everything else), fmt and clippy `--all-targets` clean. |
+| B-2026-08-14-24 | autopar | medium | a disjoint-write loop nested inside an `if` (or a bare block) is INVISIBLE to the auto-parallelisation analysis -- it is not declined with a reason,… | FIXED by 7360ad8.
+
+The cause was NOT the lane's statement walk. Both lanes already descended into
+`if` arms correctly; the analysis never reached them, because `analyze_function`
+early-returns an all-empty `FunctionConcurrency` when `func.body.stmts` is empty:
+
+    let total_statements = stmts.len();
+    if total_statements == 0 || block_has_user_defer(&func.body) { return <empty> }
+
+A block's TAIL EXPRESSION is part of the body, so `fn f(..) { if go { for .. } }`
+has zero STATEMENTS and one tail `if` and bailed before any lane ran. That is
+exactly the `total_statements: 0` the row quoted from `karac query concurrency`
+for a function that plainly contains a loop -- the symptom was in the row all
+along, and reading it as a walk-depth problem is what made the two lanes look
+different. Corrected to `stmts.is_empty() && final_expr.is_none()`;
+`total_statements` still counts statements, since the parallel-group lane indexes
+into `stmts` and a tail expression is not one of those.
+
+THE ROW'S ATTRIBUTION IS CORRECTED. It reported "REDUCTION inside `if` REPORTED"
+and inferred the disjoint lane used a different statement walk. Measured, the
+reduction lane has the identical blind spot: `fn f(v, go) { let mut sum = 0; if
+go { for x in v { sum = sum + x; } } }` is equally invisible. The row's probe
+had a statement after the `if` (a `return`), which put the `if` in STATEMENT
+position and hid the distinction. Both lanes are fixed and both are pinned.
+
+Also closed, in both lanes, since they are the same class and the row asked for
+them to be checked:
+
+    tail `if`            was ABSENT   now considered
+    tail bare block      was ABSENT   now considered
+    `else` arm           already OK   still OK
+    `else if` arm        was ABSENT   now considered (the old code matched only
+                                      `ExprKind::Block` for the else branch, so
+                                      an `else if` chain was dropped)
+    `match` arm          was ABSENT   now considered
+
+CORRECTNESS, not just visibility. Making a loop visible can make it actually
+parallelise, so the newly-reachable shapes were run rather than only reported: a
+guarded disjoint fill, a match-arm fill and a guarded reduction over 2000
+elements agree exactly with independently computed values, and agree across
+auto-par ON, `KARAC_AUTO_PAR=0`, and the interpreter.
+
+PINS: `test_nested_and_tail_position_loops_are_considered` (all five shapes) and
+`test_tail_position_reduction_is_considered` (the reduction lane) in
+tests/concurrency.rs. Both assert the loop is CONSIDERED rather than admitted --
+what the gates decide about a given loop is a separate question, and the row's
+point is that a loop nobody considered cannot be reasoned about at all.
+
+NOTE ON THE SOURCE CASE, unchanged: the Cumulus loop this came from is still
+declined once visible, for the sound reason the row records (`the body reads a
+collection it also writes`). The gain there is observability, which is what the
+row asked for. |
 | B-2026-08-14-27 | codegen | high | BINDING AN INNER `Vec` ELEMENT OF A `ref Vec[Vec[i64]]` TO A LOCAL DOUBLE-FREES ITS BUFFER: `let first = m[0i64];` copies the row header without a re… | FIXED by 0dc28cf4. THE ROW'S ABLATION HAS ONE WRONG LINE AND IT IS THE LOAD-BEARING ONE. "KARAC_AUTO_PAR=0 — same" is not what happens: this is an AUTO-PARALLELISATION bug, and a build with auto-par off is clean. The measurement went wrong at the stage, not the observation — auto-par is a COMPILE-time decision, so `KARAC_AUTO_PAR=0 ./binary` sets it after the parallelism is already in the object. Building the same kata as `KARAC_AUTO_PAR=0 karac build …` produces the correct twelve lines and the correct `sums:` fold. That is why the row's other ablations behaved so strangely: removing the reverse passes kept the crash, replacing the binding with a direct read killed it, and dropping the push loop killed it — all of them are edits to the DEPENDENCE GRAPH the parallelizer reads, not to ownership.
 
 THE BINDING IS INNOCENT ON ITS OWN, which the row half-saw when it recorded "the binding is necessary and not sufficient". The sequential path gets `let first = m[0]` exactly right: `borrow_elided` is computed from `vec_index_borrow_spans`, and the `track_vec_*` registration is guarded on `!borrow_elided` under a comment that states the reason in full — "this binding aliases the container element and does NOT own a buffer — registering a `track_vec_*` cleanup would double-free". The emitted IR bears that out: no cleanup for `first` at all.
