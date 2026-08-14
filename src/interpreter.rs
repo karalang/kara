@@ -629,6 +629,33 @@ pub enum DbgOutputMode {
 /// structured output mode. Kept private to interpreter.rs; the cli /
 /// doc modules each carry their own copies for the same reason
 /// (decoupling, tiny helper).
+/// Round `v` to a declared float width, for the narrow formats the interpreter
+/// has no separate representation for (B-2026-08-14-7).
+///
+/// `Value::Float` is an f64 and carries no width tag, so a value entering an
+/// `f32` / `f16` / `bf16` slot has to be rounded INTO that slot or the
+/// interpreter holds something the slot's own type cannot represent —
+/// `4294967295u32` widened to f64 stays 4294967295, where every compiled
+/// backend stores 4294967296 because that is the nearest f32. Shared by the
+/// store sites (assignment RHS, container element) and, through
+/// `round_float_to_span_width`, by the operator results.
+///
+/// f64 is the identity. f16 / bf16 route through the same helpers the cast
+/// path uses, so a value reaching a narrow slot by coercion and one reaching
+/// it by an explicit `as` land on the same bits.
+pub(crate) fn round_float_to_declared_size(
+    v: f64,
+    size: crate::typechecker::types::FloatSize,
+) -> value::Value {
+    use crate::typechecker::types::FloatSize;
+    value::Value::Float(match size {
+        FloatSize::F64 => v,
+        FloatSize::F32 => v as f32 as f64,
+        FloatSize::F16 => eval_expr::round_f64_via_f16(v),
+        FloatSize::BF16 => eval_expr::round_f64_via_bf16(v),
+    })
+}
+
 pub(crate) fn dbg_json_escape(s: &str) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(s.len() + 2);

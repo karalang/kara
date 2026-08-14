@@ -284,7 +284,7 @@ impl<'a> super::Interpreter<'a> {
     /// A no-op for f64, for a non-float result (every comparison, every
     /// integer op), and for a span the typechecker recorded nothing at.
     pub(super) fn round_float_to_span_width(&self, v: Value, span: &Span) -> Value {
-        use crate::typechecker::types::{FloatSize, Type};
+        use crate::typechecker::types::Type;
         let Value::Float(f) = v else {
             return v;
         };
@@ -306,9 +306,7 @@ impl<'a> super::Interpreter<'a> {
             other => other,
         };
         match ty {
-            Type::Float(FloatSize::F32) => Value::Float(f as f32 as f64),
-            Type::Float(FloatSize::F16) => Value::Float(super::eval_expr::round_f64_via_f16(f)),
-            Type::Float(FloatSize::BF16) => Value::Float(super::eval_expr::round_f64_via_bf16(f)),
+            Type::Float(size) => super::round_float_to_declared_size(f, *size),
             _ => Value::Float(f),
         }
     }

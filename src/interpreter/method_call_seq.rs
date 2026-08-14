@@ -63,15 +63,15 @@ impl<'a> super::Interpreter<'a> {
         let Some(arg) = arg else {
             return val.clone();
         };
-        if !self
+        let Some(size) = self
             .typecheck_result
             .float_coerced_arg_sites
-            .contains(&crate::resolver::SpanKey::from_span(&arg.value.span))
-        {
+            .get(&crate::resolver::SpanKey::from_span(&arg.value.span))
+        else {
             return val.clone();
-        }
+        };
         match val {
-            Value::Int(n) => Value::Float(*n as f64),
+            Value::Int(n) => super::round_float_to_declared_size(*n as f64, *size),
             other => other.clone(),
         }
     }

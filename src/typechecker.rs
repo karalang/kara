@@ -1403,7 +1403,7 @@ pub struct TypeCheckResult {
     /// checks that do not route through one) and consumed NARROWLY — only at
     /// the container store/probe sites listed in the fix. A span in this set is
     /// a fact about the program, not an instruction to convert.
-    pub float_coerced_arg_sites: std::collections::HashSet<SpanKey>,
+    pub float_coerced_arg_sites: std::collections::HashMap<SpanKey, types::FloatSize>,
     pub cast_source_unsigned: std::collections::HashSet<SpanKey>,
     pub weak_elem_store_sites: std::collections::HashSet<SpanKey>,
     pub weak_elem_read_sites: std::collections::HashSet<SpanKey>,
@@ -1867,7 +1867,7 @@ pub struct TypeChecker<'a> {
     /// the callee's body can look up `T`'s concrete binding.
     pub(super) call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
     /// B-2026-08-08-14 — see the public copies on `TypeCheckResult`.
-    pub(super) float_coerced_arg_sites: std::collections::HashSet<SpanKey>,
+    pub(super) float_coerced_arg_sites: std::collections::HashMap<SpanKey, types::FloatSize>,
     pub(super) cast_source_unsigned: std::collections::HashSet<SpanKey>,
     pub(super) weak_elem_store_sites: std::collections::HashSet<SpanKey>,
     pub(super) weak_elem_read_sites: std::collections::HashSet<SpanKey>,
@@ -2096,7 +2096,7 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: HashMap::new(),
             path_call_method_dispatch: HashSet::new(),
             call_type_subs: HashMap::new(),
-            float_coerced_arg_sites: std::collections::HashSet::new(),
+            float_coerced_arg_sites: std::collections::HashMap::new(),
             cast_source_unsigned: std::collections::HashSet::new(),
             weak_elem_store_sites: std::collections::HashSet::new(),
             weak_elem_read_sites: std::collections::HashSet::new(),

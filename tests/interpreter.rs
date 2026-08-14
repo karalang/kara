@@ -25935,6 +25935,63 @@ fn main() {
     );
 }
 
+/// B-2026-08-14-7, storage half — a value ENTERING a narrow-float slot must be
+/// rounded into it, before any operator runs.
+///
+/// The row was filed as an arithmetic bug and its scope was corrected once
+/// B-2026-08-14-6's sweep showed the identical divergence at `field_assign`,
+/// `vec_push` and `vec_idx_assign`, none of which computes anything. 4294967295
+/// is not representable in f32 — it rounds to 4294967296, which is what every
+/// compiled backend stores — so an interpreter that widened the `u32` to f64
+/// and stopped was holding a value the slot's own declared type cannot express.
+/// Fixing only the operators would have left all three of these wrong.
+///
+/// B-2026-08-14-6 built the channel this needs: the typechecker flags every
+/// integer expression sitting in a float slot. It recorded presence only; the
+/// declared WIDTH now rides along, which is the whole change on this half.
+///
+/// The `f64` lines are the controls — the same values are exact there, so a
+/// rounding applied indiscriminately would show up as a wrong answer on them.
+#[test]
+fn int_to_narrow_float_store_rounds_into_the_slot() {
+    let out = run_no_errors(
+        r#"
+struct H { mut f: f32 }
+struct G { mut f: f64 }
+
+fn main() {
+    let big = 4294967295u32;
+    let mid = 2147483647i32;
+    let mut h = H { f: 0 as f32 };
+    h.f = big;
+    println(f"01 {h.f}");
+    h.f = mid;
+    println(f"02 {h.f}");
+    let mut vf: Vec[f32] = Vec.new();
+    vf.push(big);
+    println(f"03 {vf[0i64]}");
+    vf[0i64] = mid;
+    println(f"04 {vf[0i64]}");
+    let mut g = G { f: 0.0 };
+    g.f = big;
+    println(f"05 {g.f}");
+    let mut vd: Vec[f64] = Vec.new();
+    vd.push(big);
+    println(f"06 {vd[0i64]}");
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "01 4294967296\n\
+         02 2147483648\n\
+         03 4294967296\n\
+         04 2147483648\n\
+         05 4294967295\n\
+         06 4294967295\n"
+    );
+}
+
 // ── critical_section (interrupt-mask RAII guard) ────────────────
 
 #[test]

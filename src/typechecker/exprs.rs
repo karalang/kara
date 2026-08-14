@@ -3312,9 +3312,14 @@ impl<'a> super::TypeChecker<'a> {
                 other => other.clone(),
             }
         };
-        if matches!(peel(expected), Type::Float(_)) && is_integer(&peel(actual)) {
+        if let (Type::Float(size), true) = (peel(expected), is_integer(&peel(actual))) {
+            // The declared WIDTH rides along, not just the fact of the
+            // coercion. `4294967295u32` is not representable in f32 and rounds
+            // to 4294967296 in every compiled backend, so an interpreter that
+            // widens to f64 and stops leaves a value the slot's own type cannot
+            // hold (B-2026-08-14-7's storage half).
             self.float_coerced_arg_sites
-                .insert(crate::resolver::SpanKey::from_span(&expr.span));
+                .insert(crate::resolver::SpanKey::from_span(&expr.span), size);
         }
     }
 

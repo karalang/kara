@@ -35,15 +35,15 @@ impl<'a> super::Interpreter<'a> {
     /// Non-flagged RHSs and already-`Float` values pass through, so it is inert
     /// everywhere else and idempotent where it fires.
     fn coerce_float_assign_rhs(&self, value: &crate::ast::Expr, val: Value) -> Value {
-        if !self
+        let Some(size) = self
             .typecheck_result
             .float_coerced_arg_sites
-            .contains(&crate::resolver::SpanKey::from_span(&value.span))
-        {
+            .get(&crate::resolver::SpanKey::from_span(&value.span))
+        else {
             return val;
-        }
+        };
         match val {
-            Value::Int(n) => Value::Float(n as f64),
+            Value::Int(n) => super::round_float_to_declared_size(n as f64, *size),
             other => other,
         }
     }
