@@ -4600,6 +4600,21 @@ impl<'a> super::TypeChecker<'a> {
                 let from_ty = self.infer_expr(inner);
                 let to_ty = self.lower_type_expr(ty, &[]);
                 self.check_cast_pair(&from_ty, &to_ty, &inner.span);
+                // B-2026-08-14-3 — record whether the SOURCE is unsigned, so
+                // codegen can pick zext over sext on the widening lane. It
+                // cannot read that off `expr_types`: the parser gives a `Cast`
+                // its operand's span verbatim, so the cast's own (target) type
+                // is the last write at that key and the operand's type is gone.
+                // Codegen's syntactic fallback covers a concretely-spelled
+                // operand; this table is what covers a GENERIC one, where the
+                // declared return type is a bare `T`.
+                if matches!(
+                    resolve_type_var_top(&from_ty, &self.env.substitutions),
+                    Type::UInt(_)
+                ) {
+                    self.cast_source_unsigned
+                        .insert(crate::resolver::SpanKey::from_span(&expr.span));
+                }
                 to_ty
             }
 

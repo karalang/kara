@@ -28388,6 +28388,43 @@ fn test_user_trait_bound_call_over_builtin_containers() {
     );
 }
 
+/// B-2026-08-14-3 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_generic_at_unsigned_width_zero_extends`, same source and expected
+/// string.
+///
+/// The interpreter was right on every one of these throughout — it carries the
+/// value's own type rather than an `iN` whose signedness has to be recovered —
+/// so this is the oracle the compiled backends now match. Pinning it keeps the
+/// pair from drifting.
+#[test]
+fn test_generic_at_unsigned_width_zero_extends() {
+    assert_eq!(
+        run("struct Boxg[T] { v: T }\n\
+             impl[T] Boxg[T] { fn get(ref self) -> T { return self.v; } }\n\
+             fn idg[T](x: T) -> T { return x; }\n\
+             fn main() {\n\
+                 println(idg(200u8));\n\
+                 println(idg(60000u16));\n\
+                 println(idg(4000000000u32));\n\
+                 println(idg(18446744073709551615u64));\n\
+                 println(idg(-56i8));\n\
+                 let g: Boxg[u8] = Boxg { v: 200u8 };\n\
+                 println(g.v);\n\
+                 println(g.get());\n\
+                 let k: Boxg[i8] = Boxg { v: -56i8 };\n\
+                 println(k.v);\n\
+                 let mut vg: Vec[Boxg[u8]] = Vec.new();\n\
+                 vg.push(Boxg { v: 200u8 });\n\
+                 println(vg[0i64].v);\n\
+                 println(idg(200u8) as i64);\n\
+                 println(idg(-56i8) as i64);\n\
+                 let direct = 200u8;\n\
+                 println(direct);\n\
+             }"),
+        "200\n60000\n4000000000\n18446744073709551615\n-56\n200\n200\n-56\n200\n200\n-56\n200\n"
+    );
+}
+
 /// B-2026-08-13-18 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_implicit_int_to_float_widening_at_every_boundary`, same source
 /// and expected string.

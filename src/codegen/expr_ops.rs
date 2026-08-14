@@ -3896,7 +3896,41 @@ impl<'ctx> super::Codegen<'ctx> {
     /// signed printing of a negative narrow signed int via raw `%lld`
     /// produces the unsigned representation in the high bits. Mirror
     /// of [`Self::expr_is_char`] for the int signedness signal.
+    /// Is this expression's value an UNSIGNED integer — i.e. must a widening
+    /// of it zero-extend rather than sign-extend?
+    ///
+    /// Two sources, in this order:
+    ///
+    ///  1. the SYNTACTIC walk in `expr_is_unsigned_int_syntactic` — a suffixed
+    ///     literal, a variable's declared type name, a callee's declared
+    ///     return-type name. Exact wherever the type is spelled concretely, and
+    ///     authoritative here because the parser gives a `MethodCall` and a
+    ///     `FieldAccess` their RECEIVER's span, so a span-keyed answer can
+    ///     describe an enclosing expression rather than this one;
+    ///  2. `unsigned_int_exprs`, the typechecker's own verdict carried across
+    ///     by the lowering pass, consulted only where the walk found nothing.
+    ///
+    /// (2) exists because the walk is blind through a GENERIC (B-2026-08-14-3):
+    /// `fn idg[T](x: T) -> T` registers its return-type name as `T`, which is
+    /// not a uint name, so `idg(200u8)` sign-extended and printed -56 while the
+    /// interpreter printed 200 — and `Boxg[T] { v: T }` at `Boxg[u8]` read its
+    /// field back the same way. Binding the result first (`let s = idg(200u8)`)
+    /// was already correct, because that gives the identifier arm a concrete
+    /// `var_type_names` entry to read; only the direct use was wrong, which is
+    /// what localizes this to the signedness question rather than to the
+    /// monomorphized call itself.
+    ///
+    /// Strictly additive: the fallback can only turn a `false` into a `true`,
+    /// never the reverse, so every site the walk already answered is unchanged.
     pub(super) fn expr_is_unsigned_int(&self, expr: &Expr) -> bool {
+        if self.expr_is_unsigned_int_syntactic(expr) {
+            return true;
+        }
+        self.unsigned_int_exprs
+            .contains(&(expr.span.offset, expr.span.length))
+    }
+
+    fn expr_is_unsigned_int_syntactic(&self, expr: &Expr) -> bool {
         fn is_uint_name(s: &str) -> bool {
             matches!(s, "u8" | "u16" | "u32" | "u64" | "u128" | "usize")
         }

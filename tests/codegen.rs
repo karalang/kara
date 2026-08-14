@@ -23618,6 +23618,66 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-3 — a generic instantiated at an UNSIGNED width must
+    /// zero-extend, not sign-extend.
+    ///
+    /// Codegen answers "is this value unsigned?" with a syntactic walk
+    /// (`expr_is_unsigned_int`): a suffixed literal, a variable's declared type
+    /// name, a callee's declared return-type name. That walk is exact wherever
+    /// the type is spelled concretely and BLIND through a generic —
+    /// `fn idg[T](x: T) -> T` registers its return type as `T`, which is not a
+    /// uint name, so the print path fell through to signed. Every generic shape
+    /// here printed a plausible negative number on both compiled backends while
+    /// the interpreter printed the right value, with `karac check` silent.
+    ///
+    /// The `u64` line is not redundant with the narrow ones. At 64 bits there
+    /// is no extension to get wrong; only the print FORMATTING is, and
+    /// `idg(u64::MAX)` rendered -1. That is the evidence the fault was the
+    /// signedness question rather than the widening, which is why the fix is a
+    /// type hint rather than a change to any extend site.
+    ///
+    /// The two `as i64` lines are the one shape the span-keyed hint cannot
+    /// serve on its own: the parser gives a `Cast` its OPERAND's span, so the
+    /// cast's target type is the last write at that key and the operand's
+    /// signedness is unrecoverable from it. They fail without the dedicated
+    /// `cast_source_unsigned` table even with the main hint in place.
+    ///
+    /// Controls, all of which were already correct and must stay so: every
+    /// signed instantiation (`i8`/`i16`), and the non-generic `direct` binding
+    /// whose concrete `u8` the syntactic walk resolves. A fix that flipped
+    /// signedness blindly would break these.
+    #[test]
+    fn test_e2e_generic_at_unsigned_width_zero_extends() {
+        assert_eq!(
+            run_program(
+                "struct Boxg[T] { v: T }\n\
+                 impl[T] Boxg[T] { fn get(ref self) -> T { return self.v; } }\n\
+                 fn idg[T](x: T) -> T { return x; }\n\
+                 fn main() {\n\
+                     println(idg(200u8));\n\
+                     println(idg(60000u16));\n\
+                     println(idg(4000000000u32));\n\
+                     println(idg(18446744073709551615u64));\n\
+                     println(idg(-56i8));\n\
+                     let g: Boxg[u8] = Boxg { v: 200u8 };\n\
+                     println(g.v);\n\
+                     println(g.get());\n\
+                     let k: Boxg[i8] = Boxg { v: -56i8 };\n\
+                     println(k.v);\n\
+                     let mut vg: Vec[Boxg[u8]] = Vec.new();\n\
+                     vg.push(Boxg { v: 200u8 });\n\
+                     println(vg[0i64].v);\n\
+                     println(idg(200u8) as i64);\n\
+                     println(idg(-56i8) as i64);\n\
+                     let direct = 200u8;\n\
+                     println(direct);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("200\n60000\n4000000000\n18446744073709551615\n-56\n200\n200\n-56\n200\n200\n-56\n200\n"),
+        );
+    }
+
     #[test]
     fn test_e2e_implicit_int_to_float_widening_at_every_boundary() {
         // B-2026-08-13-18. The typechecker admits int→float as an implicit

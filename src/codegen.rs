@@ -3362,6 +3362,15 @@ pub(super) struct Codegen<'ctx> {
     /// to pick the unsigned compare predicate (`ult`/`ugt`) over the signed
     /// default. Shared infra for the slice-3 mask comparisons.
     pub(crate) unsigned_vector_exprs: HashSet<(usize, usize)>,
+    /// B-2026-08-14-3 — scalar sibling of `unsigned_vector_exprs`. Populated
+    /// from `Program::unsigned_int_exprs`; see that field for why the
+    /// syntactic walk in `expr_is_unsigned_int` needs a fallback and why this
+    /// one is consulted last.
+    pub(crate) unsigned_int_exprs: HashSet<(usize, usize)>,
+    /// B-2026-08-14-3 — spans of `x as T` whose SOURCE is unsigned. See
+    /// `Program::cast_source_unsigned` for why the span-keyed type table
+    /// cannot answer this.
+    pub(crate) cast_source_unsigned: HashSet<(usize, usize)>,
     /// Spans of `Vector[T, N]` INSTANCE-METHOD calls, from
     /// `Program.vector_method_call_spans`. The vector dispatch in
     /// `compile_method_call` consults this when the span-keyed
@@ -8324,6 +8333,8 @@ impl<'ctx> Codegen<'ctx> {
             dataframe_var_infos: std::collections::HashSet::new(),
             mono_handle_param_infos: HashMap::new(),
             unsigned_vector_exprs: HashSet::new(),
+            unsigned_int_exprs: HashSet::new(),
+            cast_source_unsigned: HashSet::new(),
             vector_method_call_spans: HashSet::new(),
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),
@@ -9657,6 +9668,8 @@ impl<'ctx> Codegen<'ctx> {
         // Sibling: spans of unsigned-element vector expressions, so the SIMD
         // `reduce_min/max` codegen picks `ult`/`ugt` over the signed default.
         self.unsigned_vector_exprs = program.unsigned_vector_exprs.clone();
+        self.unsigned_int_exprs = program.unsigned_int_exprs.clone();
+        self.cast_source_unsigned = program.cast_source_unsigned.clone();
         self.vector_method_call_spans = program.vector_method_call_spans.clone();
         // Sibling to `string_typed_exprs` for `Type::Named` struct
         // expressions. Maps span → struct name. `emit_sort_by_key_inline_thunk`
@@ -10982,6 +10995,8 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_string_typed_exprs = tp.string_typed_exprs.clone();
         let mut t_borrow_vec_typed_exprs = tp.borrow_vec_typed_exprs.clone();
         let mut t_unsigned_vector_exprs = tp.unsigned_vector_exprs.clone();
+        let mut t_unsigned_int_exprs = tp.unsigned_int_exprs.clone();
+        let mut t_cast_source_unsigned = tp.cast_source_unsigned.clone();
         let mut t_vector_method_call_spans = tp.vector_method_call_spans.clone();
         let mut t_expr_struct_type_names = tp.expr_struct_type_names.clone();
         let mut t_user_ord_typed_exprs = tp.user_ord_typed_exprs.clone();
@@ -11022,6 +11037,8 @@ impl<'ctx> Codegen<'ctx> {
                     &mut self.unsigned_vector_exprs,
                     &mut t_unsigned_vector_exprs,
                 );
+                std::mem::swap(&mut self.unsigned_int_exprs, &mut t_unsigned_int_exprs);
+                std::mem::swap(&mut self.cast_source_unsigned, &mut t_cast_source_unsigned);
                 std::mem::swap(
                     &mut self.vector_method_call_spans,
                     &mut t_vector_method_call_spans,

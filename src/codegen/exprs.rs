@@ -1333,7 +1333,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // but reading the inner's shape before lowering keeps the
                 // dependency direction obvious. Drives sext vs zext in
                 // `compile_cast`'s widening lane.
-                let source_is_unsigned = self.expr_is_unsigned_int(inner);
+                // B-2026-08-14-3 — the span-keyed fallback inside
+                // `expr_is_unsigned_int` is blind here: a `Cast` carries its
+                // OPERAND's span, so the entry at that key is the cast's own
+                // target type. `cast_source_unsigned` is the typechecker's
+                // verdict on the operand, recorded at the cast itself, and is
+                // what makes `idg(200u8) as i64` widen to 200 rather than -56.
+                let source_is_unsigned = self.expr_is_unsigned_int(inner)
+                    || self
+                        .cast_source_unsigned
+                        .contains(&(expr.span.offset, expr.span.length));
                 // Target signedness drives `fptoui.sat` vs `fptosi.sat` for the
                 // float→int (saturating) lane — read from the target type name.
                 let target_is_unsigned = matches!(&ty.kind, TypeKind::Path(p)

@@ -560,6 +560,9 @@ pub type ColumnTypedExprsTable = std::collections::HashMap<(usize, usize), Colum
 /// receiver-vector expression's span. Shared infra for the slice-3 mask
 /// comparisons (phase-7 line 302).
 pub type UnsignedVectorExprsTable = std::collections::HashSet<(usize, usize)>;
+/// Spans of every expression whose Kāra type is a narrow UNSIGNED integer.
+/// See [`Program::unsigned_int_exprs`].
+pub type UnsignedIntExprsTable = std::collections::HashSet<(usize, usize)>;
 
 /// Spans of `Vector[T, N]` instance-method calls. See
 /// [`Program::vector_method_call_spans`].
@@ -830,6 +833,38 @@ pub struct Program {
     /// compare predicate (`ult`/`ugt`) — the LLVM lane type is signless, so
     /// the value alone can't tell signed from unsigned.
     pub unsigned_vector_exprs: UnsignedVectorExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
+    /// every expression whose Kāra type is an unsigned integer (`u8`..`usize`).
+    ///
+    /// The scalar sibling of `unsigned_vector_exprs`, and it exists for the
+    /// same reason: an LLVM `iN` is signless, so the value alone cannot say
+    /// whether widening it to print (or to fill a wider slot) should zero- or
+    /// sign-extend. Codegen answers that with `expr_is_unsigned_int`, which
+    /// walks the expression SYNTACTICALLY — a suffixed literal, a variable's
+    /// declared type name, a callee's declared return-type name. That walk is
+    /// exact for concrete types and blind through a GENERIC: `fn idg[T](x: T)
+    /// -> T` registers its return type as `T`, which is not a uint name, so
+    /// `idg(200u8)` printed -56 while the interpreter printed 200
+    /// (B-2026-08-14-3). The typechecker already knows the instantiated type;
+    /// this table carries it across, so the answer no longer depends on
+    /// whether the type is spelled concretely at the use site.
+    ///
+    /// Consulted as a FALLBACK, only where the syntactic walk finds nothing —
+    /// see `expr_is_unsigned_int`. That ordering is load-bearing: the parser
+    /// gives a `MethodCall` and a `FieldAccess` their RECEIVER's span, so a
+    /// key here can describe an enclosing expression rather than the one being
+    /// asked about, and the syntactic arms stay authoritative wherever they
+    /// have an answer.
+    pub unsigned_int_exprs: UnsignedIntExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.cast_source_unsigned`:
+    /// spans of `x as T` expressions whose SOURCE type is an unsigned integer.
+    ///
+    /// `unsigned_int_exprs` cannot answer this one. The parser gives a `Cast`
+    /// its operand's span verbatim, so the cast's own TARGET type is the last
+    /// write at that key — `idg(200u8) as i64` looks like an `i64`-typed
+    /// expression and the operand's unsignedness is gone. The typechecker has
+    /// both types in hand at the cast, so it records the verdict directly.
+    pub cast_source_unsigned: UnsignedIntExprsTable,
     /// Set by the lowering pass from `TypeCheckResult.vector_method_receivers`:
     /// the span of every `Vector[T, N]` INSTANCE-METHOD call. Presence-only —
     /// the receiver's `(element, lanes)` is not needed here, just the fact that

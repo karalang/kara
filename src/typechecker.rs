@@ -1381,6 +1381,15 @@ pub struct TypeCheckResult {
     /// Codegen needs neither set — it reads the element `TypeExpr` directly —
     /// so this exists to keep the two backends agreeing rather than to inform
     /// lowering.
+    /// B-2026-08-14-3 — spans of `x as T` expressions whose SOURCE type is an
+    /// unsigned integer, so codegen's widening lane picks zext over sext.
+    ///
+    /// A dedicated table rather than an `expr_types` read, because the parser
+    /// gives a `Cast` its operand's span verbatim: the cast's own target type
+    /// is the last write at that key, and the operand's type is unrecoverable
+    /// from it. Same collision `vector_method_receivers` exists to work around,
+    /// and the same remedy.
+    pub cast_source_unsigned: std::collections::HashSet<SpanKey>,
     pub weak_elem_store_sites: std::collections::HashSet<SpanKey>,
     pub weak_elem_read_sites: std::collections::HashSet<SpanKey>,
     pub call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
@@ -1843,6 +1852,7 @@ pub struct TypeChecker<'a> {
     /// the callee's body can look up `T`'s concrete binding.
     pub(super) call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
     /// B-2026-08-08-14 — see the public copies on `TypeCheckResult`.
+    pub(super) cast_source_unsigned: std::collections::HashSet<SpanKey>,
     pub(super) weak_elem_store_sites: std::collections::HashSet<SpanKey>,
     pub(super) weak_elem_read_sites: std::collections::HashSet<SpanKey>,
     /// Element-aware mono-mangle tokens per call site. See the public copy on
@@ -2070,6 +2080,7 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: HashMap::new(),
             path_call_method_dispatch: HashSet::new(),
             call_type_subs: HashMap::new(),
+            cast_source_unsigned: std::collections::HashSet::new(),
             weak_elem_store_sites: std::collections::HashSet::new(),
             weak_elem_read_sites: std::collections::HashSet::new(),
             call_type_subs_mangle: HashMap::new(),
@@ -2274,6 +2285,7 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             path_call_method_dispatch: self.path_call_method_dispatch,
             call_type_subs: self.call_type_subs,
+            cast_source_unsigned: self.cast_source_unsigned,
             weak_elem_store_sites: self.weak_elem_store_sites,
             weak_elem_read_sites: self.weak_elem_read_sites,
             call_type_subs_mangle: self.call_type_subs_mangle,

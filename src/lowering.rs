@@ -526,6 +526,22 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // Scalar sibling of the above (B-2026-08-14-3): spans of every
+    // unsigned-integer-typed expression. Codegen's `expr_is_unsigned_int`
+    // walks the expression syntactically and is blind through a generic —
+    // `fn idg[T](x: T) -> T` has return-type name `T`, so `idg(200u8)`
+    // sign-extended to -56 on both compiled backends. The typechecker has
+    // already solved `T = u8`; this carries that across the boundary as plain
+    // data, no LLVM type involved.
+    program.unsigned_int_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| matches!(ty, Type::UInt(_)).then_some((k.0, k.1)))
+        .collect();
+    // Cast sibling (B-2026-08-14-3): the table above cannot serve a cast, whose
+    // span is its operand's and whose entry is therefore the TARGET type. The
+    // typechecker recorded the source's signedness at the cast itself.
+    program.cast_source_unsigned = tc.cast_source_unsigned.iter().map(|k| (k.0, k.1)).collect();
     // The `expr_types` sweep alone misses method receivers: a MethodCall
     // node shares its receiver's span, and the call's *result* type is
     // the last write at that key — so `v.reduce_min()` erases `v`'s
