@@ -23,10 +23,10 @@ use super::inference::{
     substitute_type_params, unify_types, InstantiatedSignature,
 };
 use super::types::{
-    contains_type_param, impl_args_match, impl_table_key, int_coercion_is_widening,
-    int_signed_width, is_integer, lub_block_type, type_display, type_is_fully_concrete,
-    type_to_concrete_or_param_name, type_to_mono_mangle_token, ConstArg, DimArg, IntSize,
-    ScrutineeMode, SubstValue, Type, UIntSize,
+    contains_type_param, float_width_rank, impl_args_match, impl_table_key,
+    int_coercion_is_widening, int_signed_width, is_integer, lub_block_type, type_display,
+    type_is_fully_concrete, type_to_concrete_or_param_name, type_to_mono_mangle_token, ConstArg,
+    DimArg, IntSize, ScrutineeMode, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -1254,6 +1254,11 @@ impl<'a> super::TypeChecker<'a> {
             _ => actual,
         };
         self.check_int_widening_coercion(expr, expected, &actual);
+        // B-2026-08-14-12 — the float sibling of the gate above. Same call
+        // site, same shape: design.md's implicit-widening table says a float
+        // NARROWING needs an `as` exactly as an integer one does, and only the
+        // integer half was enforced.
+        self.check_float_narrowing_coercion(expr, expected, &actual);
         // B-2026-08-14-6 — the int-to-float sibling. Recording only; see the
         // helper. This is the boundary that covers an index-assign
         // (`v[i] = some_u8` on a `Vec[f64]`), a `let`, an argument and a
@@ -1278,6 +1283,7 @@ impl<'a> super::TypeChecker<'a> {
             if elems.len() == slots.len() && elems.len() == actuals.len() {
                 for ((e, slot), got) in elems.iter().zip(slots.iter()).zip(actuals.iter()) {
                     self.check_int_widening_coercion(e, slot, got);
+                    self.check_float_narrowing_coercion(e, slot, got);
                 }
             }
         }
@@ -1369,6 +1375,29 @@ impl<'a> super::TypeChecker<'a> {
                     for e in elem_exprs {
                         if let Some(v) = Self::unsuffixed_int_literal_value(e) {
                             all_fit &= self.check_int_literal_fits(v, elem, &e.span);
+                        }
+                        // B-2026-08-14-12 — and the same argument one step
+                        // further: a literal element is range-checked above,
+                        // but a VARIABLE element is not checked at all here,
+                        // and the adoption further up replaced the literal's
+                        // `Vec[<lub>]` with the contextual `Vec[<elem>]` before
+                        // either narrowing gate could compare them. So the one
+                        // spelling that reached neither check was a wide
+                        // variable inside a collection literal, and it split
+                        // the backends: `let v: Vec[f32] = [c, 1.0f32]` with
+                        // `c: f64` printed 0.1 under `--interp` and
+                        // 0.10000000149011612 compiled; the integer twin
+                        // (`let v: Vec[u8] = [n, 44u8]`, `n: i64 = 300`) read
+                        // 300 and 44. Per-ELEMENT is what makes this safe —
+                        // gating the adoption itself would reject
+                        // `let v: Vec[u16] = [1, 2, 3]`, whose elements infer
+                        // `i64` and are exactly what the adoption exists for.
+                        // Both gates exempt literals internally, so only a
+                        // typed element is ever reported.
+                        if let Some(et) = self.expr_types.get(&SpanKey::from_span(&e.span)).cloned()
+                        {
+                            self.check_int_widening_coercion(e, elem, &et);
+                            self.check_float_narrowing_coercion(e, elem, &et);
                         }
                     }
                     if !all_fit {
@@ -3443,6 +3472,109 @@ impl<'a> super::TypeChecker<'a> {
             expr.span.clone(),
             TypeErrorKind::TypeMismatch,
         );
+    }
+
+    /// B-2026-08-14-12 — the FLOAT sibling of `check_int_widening_coercion`.
+    ///
+    /// design.md's implicit-widening table already rules on this: `f16`/`bf16`
+    /// -> `f32` -> `f64` is implicit because it is lossless, and "Any
+    /// narrowing" needs an `as`. Only the integer half of that table was
+    /// enforced, so `let d: f32 = c` with `c: f64` silently left `d` holding a
+    /// value its own declared type cannot represent.
+    ///
+    /// Deliberately skipped, mirroring the integer gate:
+    ///   - COMPILE-TIME-CONSTANT float expressions — a bare literal (an
+    ///     unsuffixed one is INFERRED at the destination's width by
+    ///     B-2026-08-14-11, so it never narrows), and equally `-1.0`,
+    ///     `0.0 - 1.0` or `0.0 * (0.0 - 1.0)`, which are the same literal one
+    ///     `-` or one fold away. The integer gate exempts its literals for the
+    ///     value-is-known reason and `seeded_arg_narrows` extends that to
+    ///     const-evaluable arithmetic for exactly this case; the diagnostic's
+    ///     own justification ("the rounded value is not checked at compile
+    ///     time") does not apply when there is no runtime value to round.
+    ///     Measured, not assumed: without this, `Tensor.from([-1.0, 2.0])` at a
+    ///     `Tensor[f32]` and `Bf16 { value: 0.0 * (0.0 - 1.0) }` were both
+    ///     rejected, and neither involves a typed variable at all;
+    ///   - non-float or non-concrete types — the gate needs a concrete width on
+    ///     both sides, so generics, type vars and `Error` fall through.
+    ///
+    /// `f16` and `bf16` rank EQUAL and are not interchangeable: neither is a
+    /// subset of the other (`bf16` trades mantissa for `f32`'s exponent range),
+    /// so a coercion between them is caught by the `source != target` arm
+    /// rather than waved through as a same-rank move.
+    pub(super) fn check_float_narrowing_coercion(
+        &mut self,
+        expr: &Expr,
+        expected: &Type,
+        actual: &Type,
+    ) {
+        if *actual == Type::Error {
+            return;
+        }
+        if Self::float_expr_is_compile_time_constant(expr) {
+            return;
+        }
+        let peel = |t: &Type| -> Type {
+            match t {
+                Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                other => other.clone(),
+            }
+        };
+        let target = peel(expected);
+        let source = peel(actual);
+        if target == source {
+            return;
+        }
+        let (Some(target_rank), Some(source_rank)) =
+            (float_width_rank(&target), float_width_rank(&source))
+        else {
+            return;
+        };
+        // A strictly narrower source widens losslessly and needs no `as`.
+        if source_rank < target_rank {
+            return;
+        }
+        self.type_error(
+            format!(
+                "implicit coercion from '{}' to '{}' would lose precision; the \
+                 rounded value is not checked at compile time. Write an \
+                 explicit 'as {}' to acknowledge the rounding (widening \
+                 coercions such as f32 -> f64 remain implicit)",
+                type_display(&source),
+                type_display(&target),
+                type_display(&target),
+            ),
+            expr.span.clone(),
+            TypeErrorKind::TypeMismatch,
+        );
+    }
+
+    /// B-2026-08-14-12 — is this expression a float value the compiler already
+    /// knows, with no typed variable anywhere in it?
+    ///
+    /// Syntactic on purpose rather than a call into the const-evaluator. The
+    /// evaluator wants a target type to evaluate AT, and its `ConstValue` has
+    /// `F32`/`F64` arms but no `f16`/`bf16` ones — so asking it about a `bf16`
+    /// destination answers "not constant" for a reason that has nothing to do
+    /// with the question. What the exemption actually needs is the weaker,
+    /// decidable property: every leaf is a float literal. A typed variable is a
+    /// leaf that fails, which is precisely the narrowing this gate exists to
+    /// catch, so the exemption cannot swallow the bug.
+    fn float_expr_is_compile_time_constant(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Float(_, _) => true,
+            ExprKind::Unary { op, operand } => {
+                matches!(op, UnaryOp::Neg) && Self::float_expr_is_compile_time_constant(operand)
+            }
+            ExprKind::Binary { op, left, right } => {
+                matches!(
+                    op,
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+                ) && Self::float_expr_is_compile_time_constant(left)
+                    && Self::float_expr_is_compile_time_constant(right)
+            }
+            _ => false,
+        }
     }
 
     /// B-2026-08-08-9 — does this argument lose bytes flowing into a slot that

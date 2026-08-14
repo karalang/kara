@@ -889,6 +889,26 @@ pub(super) fn int_coercion_is_widening(from: &Type, to: &Type) -> bool {
     }
 }
 
+/// B-2026-08-14-12 — precision rank of a concrete float type, or `None` for
+/// anything that is not one. A STRICTLY smaller rank widens losslessly into a
+/// larger one, which is design.md's implicit-widening table for floats
+/// (`f16`/`bf16` -> `f32` -> `f64`).
+///
+/// `f16` and `bf16` share rank 0 deliberately: both widen into `f32` for free,
+/// but NEITHER widens into the other — `bf16` spends four mantissa bits to buy
+/// `f32`'s exponent range, so each can represent values the other cannot.
+/// Sharing a rank means a coercion between them is never mistaken for a
+/// widening; the caller's `source != target` guard is what admits the identity
+/// case, so equal rank alone never waves a conversion through.
+pub(super) fn float_width_rank(t: &Type) -> Option<u8> {
+    match t {
+        Type::Float(FloatSize::F16) | Type::Float(FloatSize::BF16) => Some(0),
+        Type::Float(FloatSize::F32) => Some(1),
+        Type::Float(FloatSize::F64) => Some(2),
+        _ => None,
+    }
+}
+
 /// Map a typechecked receiver type to the receiver-name segment used in the
 /// `Type.method` keys of `EffectCheckResult.{inferred,declared}_effects`
 /// (and therefore in `Program.callee_effectful`). Returns `None` for

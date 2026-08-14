@@ -30575,6 +30575,14 @@ fn container_slots_reject_an_implicit_narrowing() {
     narrows(
         "fn main() { let n = -1i64; let mut v: Vec[u8] = Vec.new(); v.push(n);          println(v.len()); }",
     );
+    // B-2026-08-14-12 — a sixth site, found while building the float sibling of
+    // this rule and closed with it because the two share one line. A wide
+    // VARIABLE inside a collection LITERAL reached neither check: the
+    // scalar-element adoption (B-2026-08-05-19) replaces the literal's inferred
+    // `Vec[i64]` with the contextual `Vec[u8]` before the whole-value gate runs,
+    // and the per-element loop below it only range-checked literal elements.
+    // Same split as the five above — `--interp` read 300, the binary read 44.
+    narrows("fn main() { let n: i64 = 300; let v: Vec[u8] = [n, 44u8]; println(v[0]); }");
 
     // WIDENING at the same sites must stay implicit — the gate is one-directional,
     // and rejecting these would break every program that relies on the rule.
@@ -30596,6 +30604,116 @@ fn container_slots_reject_an_implicit_narrowing() {
         "fn main() { let mut v: Vec[u8] = Vec.new(); v.push(44);          println(v.contains(44)); }",
     );
     typecheck_ok("fn main() { let t: (u8, u8) = (1, 2); println(t.0); }");
+    // The collection-literal site is the one that had to stay permissive for
+    // literal elements — `[1, 2, 3]` infers `i64`, and rejecting it is exactly
+    // what the adoption was added to prevent.
+    typecheck_ok("fn main() { let v: Vec[u16] = [1, 2, 3]; println(v[0]); }");
+    typecheck_ok("fn main() { let v: Vec[i8] = [1, 2]; println(v[0]); }");
+    typecheck_ok("fn main() { let b: u8 = 7u8; let v: Vec[i64] = [b, 1]; println(v[0]); }");
+}
+
+/// B-2026-08-14-12 — the FLOAT sibling of the rule above.
+///
+/// design.md's implicit-widening table already ruled on this: `f16`/`bf16` ->
+/// `f32` -> `f64` is implicit because it is lossless, "Any narrowing" needs an
+/// `as`, and the `as`-cast table spells the float row out ("Widen is implicit.
+/// **Narrow requires `as`**"). Only the INTEGER half of that table was
+/// enforced, so `let d: f32 = c` with `c: f64` was accepted with no diagnostic
+/// and no rounding — `d` held a value its own declared type cannot represent,
+/// and printed the f64 digits on both surfaces.
+///
+/// The source must be a typed VARIABLE, exactly as in the integer sibling. An
+/// unsuffixed LITERAL is inferred at the destination's width (B-2026-08-14-11),
+/// so it never narrows and is not what this gate is about; a literal-only probe
+/// would report every one of these positions as fine.
+#[test]
+fn float_slots_reject_an_implicit_narrowing() {
+    let narrows = |src: &str| {
+        assert!(
+            typecheck_errors(src)
+                .iter()
+                .any(|e| e.message.contains("would lose precision")),
+            "expected a float-narrowing rejection from: {src}"
+        );
+    };
+    // Every position a value can reach a declared float slot through. The
+    // sweep that produced this list found `Vec.push` leaking after the other
+    // seven were closed — it INFERS its argument and never reaches
+    // `check_expr`, the same reason it needed explicit reach in leg 1.
+    narrows("fn main() { let c: f64 = 0.1; let d: f32 = c; println(d); }");
+    narrows("fn takes(x: f32) -> f32 { x } fn main() { let c: f64 = 0.1; println(takes(c)); }");
+    narrows("fn ret(c: f64) -> f32 { c } fn main() { println(ret(0.1)); }");
+    narrows(
+        "struct S { a: f32 } fn main() { let c: f64 = 0.1; let s = S { a: c }; println(s.a); }",
+    );
+    narrows(
+        "fn main() { let c: f64 = 0.1; let mut v: Vec[f32] = Vec.new(); v.push(c); println(v[0]); }",
+    );
+    narrows("fn main() { let c: f64 = 0.1; let t: (f32, f32) = (c, c); println(t.0); }");
+    narrows("fn main() { let c: f64 = 0.1; let a: Array[f32, 2] = [c, c]; println(a[0]); }");
+    narrows(
+        "fn main() { let c: f64 = 0.1; let mut v: Vec[f32] = Vec.new(); v.push(1.0f32); \
+         v[0] = c; println(v[0]); }",
+    );
+    narrows("fn main() { let c: f64 = 0.1; let mut d: f32 = 1.0f32; d = c; println(d); }");
+    narrows(
+        "struct S { mut a: f32 } \
+         fn main() { let c: f64 = 0.1; let mut s = S { a: 1.0f32 }; s.a = c; println(s.a); }",
+    );
+    narrows(
+        "fn main() { let c: f64 = 0.1; let e: f32 = if true { c } else { 1.0f32 }; println(e); }",
+    );
+    narrows(
+        "fn main() { let c: f64 = 0.1; let g: f32 = match 1 { 1 => c, _ => 1.0f32 }; println(g); }",
+    );
+    // A wide VARIABLE inside a collection literal. The adoption that lets
+    // `let v: Vec[u16] = [1, 2, 3]` work replaces the literal's inferred
+    // `Vec[<lub>]` with the contextual type before the whole-value gates
+    // compare them, so this one spelling reached neither check and SPLIT the
+    // backends: `--interp` printed 0.1 where the binary printed
+    // 0.10000000149011612.
+    narrows("fn main() { let c: f64 = 0.1; let v: Vec[f32] = [c, 1.0f32]; println(v[0]); }");
+    // `f16` and `bf16` rank EQUAL and neither is a subset of the other —
+    // `bf16` spends four mantissa bits to buy `f32`'s exponent range — so BOTH
+    // directions are caught. A rank comparison alone would wave these through.
+    narrows("fn main() { let h: f16 = 1.5f16; let x: bf16 = h; println(x); }");
+    narrows("fn main() { let b: bf16 = 1.5bf16; let y: f16 = b; println(y); }");
+
+    // WIDENING stays implicit at every one of those positions. The gate is
+    // one-directional; rejecting these would break the implicit-widening table
+    // the same rule is derived from.
+    typecheck_ok("fn main() { let s: f32 = 1.5f32; let w: f64 = s; println(w); }");
+    typecheck_ok("fn main() { let h: f16 = 1.5f16; let w: f64 = h; println(w); }");
+    typecheck_ok("fn main() { let h: f16 = 1.5f16; let w: f32 = h; println(w); }");
+    typecheck_ok("fn main() { let b: bf16 = 1.5bf16; let w: f32 = b; println(w); }");
+    typecheck_ok(
+        "fn takes(x: f64) -> f64 { x } fn main() { let s: f32 = 1.5f32; println(takes(s)); }",
+    );
+    typecheck_ok(
+        "struct W { a: f64 } fn main() { let s: f32 = 1.5f32; let w = W { a: s }; println(w.a); }",
+    );
+    typecheck_ok(
+        "fn main() { let s: f32 = 1.5f32; let mut v: Vec[f64] = Vec.new(); v.push(s); println(v[0]); }",
+    );
+    // Same type is not a coercion at all.
+    typecheck_ok("fn main() { let s: f32 = 1.5f32; let t: f32 = s; println(t); }");
+    // An unsuffixed literal is INFERRED at the destination (B-2026-08-14-11),
+    // so no narrowing happens and demanding an `as` here would be wrong.
+    typecheck_ok("fn main() { let a: f32 = 0.1; let h: f16 = 0.1; println(a); println(h); }");
+    typecheck_ok("fn main() { let mut v: Vec[f32] = Vec.new(); v.push(0.1); println(v[0]); }");
+    typecheck_ok("fn main() { let v: Vec[f32] = [0.1, 0.2]; println(v[0]); }");
+    typecheck_ok("fn main() { let s: f32 = 1.5f32; let v: Vec[f64] = [s, 1.0]; println(v[0]); }");
+    // Arithmetic over float LITERALS is the same literal one fold away, so the
+    // exemption covers it too. Both of these were rejected by the first cut of
+    // the gate, and neither has a typed variable anywhere in it:
+    // `Bf16 { value: 0.0 * (0.0 - 1.0) }` is how the total-order tests build a
+    // negative zero, and `Tensor.from([-1.0, 2.0])` is a unary minus on a
+    // literal.
+    typecheck_ok("fn main() { let n: bf16 = 0.0 * (0.0 - 1.0); println(n); }");
+    typecheck_ok("fn main() { let n: f32 = 0.0 - 1.0; println(n); }");
+    typecheck_ok("fn main() { let v: Vec[f32] = [-1.0, 2.0]; println(v[0]); }");
+    // The escape hatch the diagnostic names.
+    typecheck_ok("fn main() { let c: f64 = 0.1; let d: f32 = c as f32; println(d); }");
 }
 
 /// B-2026-08-08-9 — a slot fixed by the EXPECTATION still owes the

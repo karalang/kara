@@ -539,7 +539,13 @@ impl TensorVar {
         let tp = self.tape;
         let sv = tp.values[self.idx];
         let v: Tensor[f32, [?]] = sv.map(|e| {
-            let c = 0.7978845608028654;
+            // B-2026-08-14-12: `c` is annotated so the whole kernel runs at the
+            // element width. Unannotated, the literal defaults to f64 and the
+            // chain below computes at whichever width happens to sit on the
+            // LEFT of each operator — `u` in f64, the final multiply in f32.
+            // The backward pass (op-code 12) carries the same annotation, so
+            // the gradient stays the exact derivative of this forward.
+            let c: f32 = 0.7978845608028654;
             let u = c * (e + 0.044715 * e * e * e);
             0.5 * e * (1.0 + u.tanh())
         });
@@ -752,7 +758,14 @@ impl TensorVar {
                     // GELU (tanh approx): per-element derivative on the INPUT x.
                     let xa = tp.values[a];
                     let dmask: Tensor[f32, [?]] = xa.map(|e| {
-                        let c = 0.7978845608028654;
+                        // B-2026-08-14-12 — annotated for the same reason as
+                        // the forward pass above: without it `c` is f64, the
+                        // tail's first term is computed in f64 while its second
+                        // is computed in f32 (operand order decides), and the
+                        // f64 result then narrowed silently into this f32
+                        // element. Annotating runs the whole derivative at the
+                        // element width, matching `gelu`'s forward.
+                        let c: f32 = 0.7978845608028654;
                         let u = c * (e + 0.044715 * e * e * e);
                         let t = u.tanh();
                         let du = c * (1.0 + 0.134145 * e * e);

@@ -7026,6 +7026,12 @@ fn test_total_order_wrapper_nan_canonicalized_interp_parity() {
     // of it collapses to a single answer. Same program + expected output as
     // the codegen E2E twin (`test_e2e_total_order_wrapper_nan_canonicalized`);
     // that pairing is the actual contract — run == build.
+    //
+    // B-2026-08-14-12: the `F32.from` line carries an explicit `as f32`, in
+    // both twins. `z` is `f64`, so `z / z` is a runtime f64 NaN and putting it
+    // in an f32 slot is a genuine narrowing — the only real one the float gate
+    // found in the suite. The cast preserves the behaviour (NaN narrows to
+    // NaN) and states it.
     let output = run("fn main() {\n\
             let n = env.args().len();\n\
             let z = (n as f64) - (n as f64);\n\
@@ -7056,7 +7062,7 @@ fn test_total_order_wrapper_nan_canonicalized_interp_parity() {
             println(n0 < p0);\n\
             println(n0 == p0);\n\
             let c32: F32 = F32 { value: 0.0 / 0.0 };\n\
-            let r32: F32 = F32.from(z / z);\n\
+            let r32: F32 = F32.from((z / z) as f32);\n\
             println(c32 == r32);\n\
         }");
     // The two `< one` lines are the crux: pre-fix they DISAGREED with each
@@ -28903,6 +28909,40 @@ fn test_float_literal_width_respects_f64_slots_and_suffixes() {
                  println(b);\n\
              }"),
         "0.1\n0.10000000149011612\n0.1\n"
+    );
+}
+
+/// B-2026-08-14-12 — the interpreter twin of
+/// `tests/codegen.rs::test_e2e_float_narrowing_as_cast_rounds_to_the_target_width`,
+/// same source and same expected string.
+///
+/// The row's complaint was "no diagnostic AND no rounding": before the gate,
+/// `let d: f32 = c` printed `0.1` here. The gate now rejects that spelling, and
+/// this pins that the `as` it recommends is not a no-op on the surface where
+/// the value is interpreted rather than compiled — the two backends must agree
+/// on the rounded value, or the fix-it would trade a silent narrowing for a
+/// run-vs-build split.
+#[test]
+fn test_float_narrowing_as_cast_rounds_to_the_target_width() {
+    assert_eq!(
+        run("fn takef(x: f32) -> f32 { x }\n\
+             fn main() {\n\
+                 let c: f64 = 0.1;\n\
+                 println(c);\n\
+                 let d: f32 = c as f32;\n\
+                 println(d);\n\
+                 println(takef(c as f32));\n\
+                 let mut v: Vec[f32] = Vec.new();\n\
+                 v.push(c as f32);\n\
+                 println(v[0]);\n\
+                 let h: f16 = c as f16;\n\
+                 println(h);\n\
+             }"),
+        "0.1\n\
+         0.10000000149011612\n\
+         0.10000000149011612\n\
+         0.10000000149011612\n\
+         0.0999755859375\n"
     );
 }
 

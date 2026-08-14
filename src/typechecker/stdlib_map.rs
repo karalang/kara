@@ -568,6 +568,8 @@ impl<'a> super::TypeChecker<'a> {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-12 — the float-narrowing sibling.
+                    self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Bool
@@ -982,6 +984,8 @@ impl<'a> super::TypeChecker<'a> {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-12 — the float-narrowing sibling.
+                    self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Bool

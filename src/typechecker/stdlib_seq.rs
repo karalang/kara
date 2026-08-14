@@ -1110,6 +1110,10 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-12 — and the float-narrowing sibling,
+                    // so an element slot rejects `f64 -> f32` exactly as a
+                    // scalar `let` does.
+                    self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-6 — the int-to-float sibling; see
                     // `Vec.push`. A lookup PROBE needs it as much as a store:
                     // an unconverted `Int` needle never matches a `Float`
@@ -1126,6 +1130,10 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-12 — and the float-narrowing sibling,
+                    // so an element slot rejects `f64 -> f32` exactly as a
+                    // scalar `let` does.
+                    self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-6 — the int-to-float sibling; see
                     // `Vec.push`. A lookup PROBE needs it as much as a store:
                     // an unconverted `Int` needle never matches a `Float`
@@ -1274,6 +1282,10 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-12 — and the float-narrowing sibling,
+                    // so an element slot rejects `f64 -> f32` exactly as a
+                    // scalar `let` does.
+                    self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-6 — the int-to-float sibling; see
                     // `Vec.push`. A lookup PROBE needs it as much as a store:
                     // an unconverted `Int` needle never matches a `Float`
@@ -1433,6 +1445,10 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-12 — and the float-narrowing sibling,
+                    // so an element slot rejects `f64 -> f32` exactly as a
+                    // scalar `let` does.
+                    self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-6 — the int-to-float sibling; see
                     // `Vec.push`. A lookup PROBE needs it as much as a store:
                     // an unconverted `Int` needle never matches a `Float`
@@ -1449,6 +1465,10 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-12 — and the float-narrowing sibling,
+                    // so an element slot rejects `f64 -> f32` exactly as a
+                    // scalar `let` does.
+                    self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-6 — the int-to-float sibling; see
                     // `Vec.push`. A lookup PROBE needs it as much as a store:
                     // an unconverted `Int` needle never matches a `Float`
@@ -1555,6 +1575,10 @@ impl<'a> super::TypeChecker<'a> {
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-12 — and the float-narrowing sibling,
+                    // so an element slot rejects `f64 -> f32` exactly as a
+                    // scalar `let` does.
+                    self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-6 — the int-to-float sibling; see
                     // `Vec.push`. A lookup PROBE needs it as much as a store:
                     // an unconverted `Int` needle never matches a `Float`

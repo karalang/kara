@@ -13918,6 +13918,13 @@ fn main() {
         // `cmp`/`eq`/`hash`/`sort` inherit the invariant rather than each
         // having to normalize (a site that forgot would fail SILENTLY, with
         // equal keys hashing apart).
+        //
+        // B-2026-08-14-12: the `F32.from` line carries an explicit `as f32`.
+        // `z` is `f64`, so `z / z` is a runtime f64 NaN and feeding it to an
+        // f32 slot is a genuine narrowing -- the one site in the whole suite
+        // where the float gate found a real one rather than a literal. The
+        // cast preserves what the line always did (NaN narrows to NaN) and
+        // states it.
         let out = run_program(
             "fn main() {\n\
                  let n = env.args().len();\n\
@@ -13949,7 +13956,7 @@ fn main() {
                  println(n0 < p0);\n\
                  println(n0 == p0);\n\
                  let c32: F32 = F32 { value: 0.0 / 0.0 };\n\
-                 let r32: F32 = F32.from(z / z);\n\
+                 let r32: F32 = F32.from((z / z) as f32);\n\
                  println(c32 == r32);\n\
              }",
         );
@@ -23480,6 +23487,45 @@ fn main() {
                  0.10000000149011612\n\
                  0.10000000149011612\n\
                  0.10000000149011612\n\
+                 0.10000000149011612\n\
+                 0.10000000149011612\n\
+                 0.10000000149011612\n\
+                 0.0999755859375\n"
+            ),
+        );
+    }
+
+    /// B-2026-08-14-12 — the `as` the float-narrowing diagnostic recommends
+    /// really does round, on this surface and under `--interp` alike.
+    ///
+    /// An OVER-REACH GUARD, not a regression witness: this source compiled and
+    /// printed these values before the gate landed too. It is here because the
+    /// gate's whole value rests on the fix-it being real — a diagnostic that
+    /// sends the author to a spelling which changes nothing would be worse than
+    /// silence, since it would launder the same unrounded value behind an
+    /// explicit cast. Each line is the f32 (or f16) neighbour of the f64 value
+    /// on its left, so a cast that was a no-op would print the f64 digits.
+    #[test]
+    fn test_e2e_float_narrowing_as_cast_rounds_to_the_target_width() {
+        assert_eq!(
+            run_program(
+                "fn takef(x: f32) -> f32 { x }\n\
+                 fn main() {\n\
+                     let c: f64 = 0.1;\n\
+                     println(c);\n\
+                     let d: f32 = c as f32;\n\
+                     println(d);\n\
+                     println(takef(c as f32));\n\
+                     let mut v: Vec[f32] = Vec.new();\n\
+                     v.push(c as f32);\n\
+                     println(v[0]);\n\
+                     let h: f16 = c as f16;\n\
+                     println(h);\n\
+                 }"
+            )
+            .as_deref(),
+            Some(
+                "0.1\n\
                  0.10000000149011612\n\
                  0.10000000149011612\n\
                  0.10000000149011612\n\
