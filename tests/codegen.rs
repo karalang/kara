@@ -62012,6 +62012,62 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-27 — the plain-build face of the par-join double-free.
+    ///
+    /// Its sibling `asan_borrow_elided_index_read_across_a_par_join` is the
+    /// authoritative gate; this one is here because the failure was not subtle
+    /// in the field. `leetcode/54-spiral-matrix/spiral_boundary.kara` aborted
+    /// with `free(): double free detected in tcache 2` on its third test case,
+    /// and the same shape reduced here dies the same way — an abort, so
+    /// `run_program` returns `None` and this asserts nothing about ordering or
+    /// leaks, only that the program still finishes.
+    ///
+    /// The 1x1 case is the one the kata actually died on: with a single 8-byte
+    /// row, the second free lands inside a live allocation rather than on a
+    /// block glibc has already recycled.
+    #[test]
+    fn test_e2e_borrow_elided_index_read_survives_a_par_join() {
+        let src = r#"
+fn spiral(m: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let rows = m.len();
+    let first = m[0];
+    let cols = first.len();
+    let mut r = 0i64;
+    while r < rows {
+        let mut c = 0i64;
+        while c < cols {
+            out.push(m[r][c]);
+            c = c + 1i64;
+        }
+        r = r + 1i64;
+    }
+    out
+}
+
+fn report(grid: Vec[Vec[i64]]) {
+    let m = grid;
+    let order = spiral(m);
+    let mut line: String = "";
+    let mut k = 0i64;
+    while k < order.len() {
+        line.push_str(f"{order[k]} ");
+        k = k + 1i64;
+    }
+    println(line);
+}
+
+fn main() {
+    report([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+    report([[1]]);
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("1 2 3 4 5 6 7 8 9 \n1 \n"),
+        );
+    }
+
     /// B-2026-08-14-9 — the eight `Slice[T]` methods that typechecked and (some
     /// of them) interpreted but had no codegen at all: the mutators
     /// `fill`/`reverse`/`sort`/`sort_by_key`/`swap` and the view-producers

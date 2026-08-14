@@ -1044,7 +1044,19 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let is_heap_env_vec = self
                                     .heap_env_vec_owners
                                     .contains(slot.binding_name.as_str());
-                                if is_heap_env_vec {
+                                // B-2026-08-14-27 — a BORROW-ELIDED slot owns
+                                // nothing. `let first = m[0]` over a
+                                // `ref Vec[Vec[T]]` copies the row header
+                                // verbatim, cap included, so any cleanup queued
+                                // here frees a buffer the caller's container
+                                // still owns and drops again. The sequential let
+                                // path skips its own `track_vec_*` on exactly
+                                // this predicate; the join had no equivalent and
+                                // registered one for every Vec-shaped slot.
+                                if slot.borrow_elided {
+                                    // Registered for dispatch above, owned by
+                                    // nobody here — no cleanup action.
+                                } else if is_heap_env_vec {
                                     let drop_fn = self.emit_vec_elem_closure_env_drop_fn();
                                     if let Some(et) = elem_ty {
                                         self.track_vec_of_aggs_var(alloca, et, drop_fn);
@@ -1550,10 +1562,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     branch_index: branch_idx,
                     llvm_ty,
                     var_type_name,
+                    borrow_elided: self.let_binding_is_borrow_elided(stmt),
                 });
             }
         }
         Some(slots)
+    }
+
+    /// True when this let-statement's RHS is a BORROW-ELIDED index read — the
+    /// same predicate the sequential let path computes inline, read from the
+    /// same `vec_index_borrow_spans` whitelist.
+    ///
+    /// Exists so a par branch's bind-back can make the ownership call the
+    /// sequential path already makes. The sequential path skips the
+    /// `track_vec_*` registration for this shape because the binding aliases a
+    /// container element it does not own; the join re-registered one for every
+    /// Vec-shaped slot and double-freed the element (B-2026-08-14-27).
+    pub(super) fn let_binding_is_borrow_elided(&self, stmt: &Stmt) -> bool {
+        let StmtKind::Let { value, .. } = &stmt.kind else {
+            return false;
+        };
+        matches!(&value.kind, ExprKind::Index { .. })
+            && self
+                .vec_index_borrow_spans
+                .contains(&crate::resolver::SpanKey::from_span(&value.span))
     }
 
     /// Surface type NAME from a let-statement's explicit annotation (the

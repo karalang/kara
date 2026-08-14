@@ -48290,4 +48290,65 @@ fn main() {
             "compound_append_through_mut_ref_param_is_balanced",
         );
     }
+
+    /// B-2026-08-14-27 — a borrow-elided index read must not acquire a cleanup
+    /// when it crosses a par join.
+    ///
+    /// `let first = m[0]` over a `ref Vec[Vec[i64]]` copies the row header
+    /// verbatim, CAP INCLUDED, and owns nothing: the caller's container still
+    /// owns that buffer. The sequential let path has always skipped its
+    /// `track_vec_*` registration for exactly this shape. The par bind-back had
+    /// no equivalent test and re-registered a cleanup for every Vec-shaped slot,
+    /// so the parent freed the row and the container's element drop freed it
+    /// again.
+    ///
+    /// The `let rows = m.len()` line is not decoration. Three independent
+    /// bindings is what makes the auto-parallelizer split this preamble into
+    /// branches at all; with two the group never forms and the same program is
+    /// clean, which is why the shape reads as unrelated to concurrency. The
+    /// second `report` call is the 1x1 case whose 8-byte row is the smallest
+    /// block glibc will hand back into a live allocation.
+    #[test]
+    fn asan_borrow_elided_index_read_across_a_par_join() {
+        assert_clean_asan_run(
+            r#"
+fn spiral(m: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let rows = m.len();
+    let first = m[0];
+    let cols = first.len();
+    let mut r = 0i64;
+    while r < rows {
+        let mut c = 0i64;
+        while c < cols {
+            out.push(m[r][c]);
+            c = c + 1i64;
+        }
+        r = r + 1i64;
+    }
+    out
+}
+
+fn report(grid: Vec[Vec[i64]]) {
+    let m = grid;
+    let order = spiral(m);
+    let mut line: String = "";
+    let mut k = 0i64;
+    while k < order.len() {
+        line.push_str(f"{order[k]} ");
+        k = k + 1i64;
+    }
+    println(line);
+}
+
+fn main() {
+    report([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+    report([[1]]);
+    println("end");
+}
+"#,
+            &["1 2 3 4 5 6 7 8 9 ", "1 ", "end"],
+            "borrow_elided_index_across_par_join",
+        );
+    }
 }

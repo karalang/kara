@@ -205,6 +205,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     branch_index: branch_idx,
                     llvm_ty,
                     var_type_name: Self::let_binding_annotation_type_name(stmt),
+                    borrow_elided: self.let_binding_is_borrow_elided(stmt),
                 });
             }
             // Un-inferrable RHS: conservatively drop. Sibling to the
@@ -309,7 +310,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         let agg_elem_drop = elem_te
                             .as_ref()
                             .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te));
-                        if is_tensor_elem {
+                        // B-2026-08-14-27, explicit-par sibling of the
+                        // auto-par bind-back: a borrow-elided slot aliases a
+                        // container element and owns no buffer, so queueing a
+                        // cleanup here double-frees it.
+                        if slot.borrow_elided {
+                            // Dispatch registration only; no cleanup action.
+                        } else if is_tensor_elem {
                             self.track_vec_of_tensors_var(alloca);
                         } else if let Some(map_drop) = map_elem_drop {
                             self.track_vec_of_maps_var(alloca, map_drop);

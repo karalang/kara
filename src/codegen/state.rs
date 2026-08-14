@@ -1427,6 +1427,19 @@ pub(crate) struct ReturnSlot<'ctx> {
     /// `expr_is_unsigned_int` falls back to signed and a `u8`/`u16`/`u32`
     /// slot binding prints as its negative signed view (B-2026-07-03-21).
     pub(crate) var_type_name: Option<String>,
+    /// True when the branch's let-binding is a BORROW-ELIDED index read
+    /// (`let first = m[0]` over a `ref Vec[Vec[T]]`) — the same predicate the
+    /// sequential let path computes from `vec_index_borrow_spans`.
+    ///
+    /// The parent-side bind-back re-registers a `track_vec_*` cleanup for every
+    /// Vec-shaped slot, which is right for a slot that OWNS its buffer
+    /// (`Vec.new()` filled in the branch) and a double-free for one that does
+    /// not: a borrow-elided read copies the container's element header verbatim,
+    /// cap included, so the parent's free and the container's element drop hit
+    /// the same pointer. The sequential path has always skipped the cleanup for
+    /// exactly this shape; carrying the flag is what lets the join make the same
+    /// call (B-2026-08-14-27).
+    pub(crate) borrow_elided: bool,
 }
 
 /// Phase 7 — Par codegen: cancellation and error propagation (slice 1a,
