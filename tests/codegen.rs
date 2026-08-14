@@ -23678,6 +23678,72 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-4, and B-2026-08-13-22's remainder — the two shapes of the
+    /// same signedness question that the sibling test above does not reach.
+    ///
+    /// That test's receivers are all GENERIC, so the syntactic walk resolves a
+    /// receiver name and then fails on the declared type (`v: T` is not a uint
+    /// name). These fail one step earlier: there is no name to resolve at all.
+    /// `v[0i64].a` is a field read whose receiver is an EXPRESSION, and the
+    /// walk resolves a field only through `var_type_names[receiver]`; `arr[0]`
+    /// on an `Array[T, N]` binding looks in `var_elem_type_exprs`, which only a
+    /// `Vec` binding populates. Both answered "signed" with confidence.
+    ///
+    /// The direct read is the diagnostic and is why line 01 has to be here:
+    /// `m.a` and `v[0i64].a` are the same field of the same struct in the same
+    /// program, and only the second was wrong. Nothing about the Vec round-trip
+    /// was involved — `let e = v[0i64]; e.a` was always correct, because that
+    /// receiver has a name again.
+    ///
+    /// Line 03's wide struct pins the boundary between the two answers: every
+    /// unsigned narrow field corrupts, every signed field is untouched, and the
+    /// `i64` field cannot be affected either way. Line 05 is the cast leg with
+    /// an INDEXED operand rather than the sibling test's generic-call operand.
+    /// Line 06's `Array[i8, 2]` and every signed value elsewhere are controls
+    /// that were already correct: an unconditional sign-extend is what a signed
+    /// source wants, which is exactly why this family reads as working until an
+    /// unsigned value with the high bit set goes through it.
+    #[test]
+    fn test_e2e_narrow_unsigned_survives_indexed_and_array_reads() {
+        let src = r#"
+struct Plain { a: u8, c: u16, e: u32 }
+struct Wide { a: u8, b: i64, c: u16, d: i8, e: u32, f: i32 }
+struct Boxg[T] { v: T }
+
+fn main() {
+    let m = Plain { a: 200u8, c: 60000u16, e: 4000000000u32 };
+    println(f"01 {m.a} {m.c} {m.e}");
+    let mut v: Vec[Plain] = Vec.new();
+    v.push(m);
+    println(f"02 {v[0i64].a} {v[0i64].c} {v[0i64].e}");
+    let w = Wide { a: 200u8, b: -7i64, c: 60000u16, d: -8i8, e: 4000000000u32, f: -9i32 };
+    let mut vw: Vec[Wide] = Vec.new();
+    vw.push(w);
+    println(f"03 {vw[0i64].a} {vw[0i64].b} {vw[0i64].c} {vw[0i64].d} {vw[0i64].e} {vw[0i64].f}");
+    let bp: Boxg[Plain] = Boxg { v: Plain { a: 200u8, c: 60000u16, e: 4000000000u32 } };
+    println(f"04 {bp.v.a}");
+    println(f"05 {v[0i64].a as i64}");
+    let arr: Array[u8, 2] = [200u8, 201u8];
+    let arrs: Array[i8, 2] = [-56i8, -57i8];
+    println(f"06 {arr[0i64]} {arr[1i64]} {arrs[0i64]}");
+    let e = v[0i64];
+    println(f"07 {e.a}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 200 60000 4000000000\n\
+                 02 200 60000 4000000000\n\
+                 03 200 -7 60000 -8 4000000000 -9\n\
+                 04 200\n\
+                 05 200\n\
+                 06 200 201 -56\n\
+                 07 200\n"
+            ),
+        );
+    }
+
     #[test]
     fn test_e2e_implicit_int_to_float_widening_at_every_boundary() {
         // B-2026-08-13-18. The typechecker admits int→float as an implicit

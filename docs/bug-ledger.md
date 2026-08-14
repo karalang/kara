@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 246 | 1 |
+| miscompile | 246 | 0 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 111 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 848 | 3 |
+| codegen | 848 | 2 |
 | typecheck | 164 | 1 |
 | interp | 144 | 1 |
 | ownership | 47 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced · 4 open · 1158 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced · 3 open · 1159 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-4 | 2026-08-14 | codegen | high | A STRUCT WITH UNSIGNED NARROW FIELDS IS CORRUPTED BY A Vec ROUND-TRIP: reading `v[0].a` where `a: u8 = 200` yields -56 on both compiled backends, while reading the SAME field off the same struct directly yields 200. u16 and u32 fields corrupt identically; the direct read is correct in the same program. | The Vec-element struct field read path, versus the direct field read which is correct. Likely the same signedness-blind extension as B-2026-08-14-3's generic instantiation (a `Vec[T]` element read is a monomorphized read), but filed separately because the direct-vs-through-Vec split is a distinct observable and may be a distinct site. |
 | B-2026-08-14-5 | 2026-08-14 | codegen | medium | A FIELD READ ON AN ARRAY-INDEXED STRUCT IS A HARD CODEGEN GAP: `arr[0].a` where `arr: Array[Plain, 1]` fails to build with "codegen: cannot resolve field 'a' on this receiver (its type was not recorded for codegen)". The same read through a `Vec[Plain]` compiles, and `--interp` runs it. | The receiver-type recording for an index expression whose base is an `Array[Struct, N]` — the Vec-indexed sibling records it, the array-indexed one does not. The message is the compiler's own self-report and names the gap precisely. |
 | B-2026-08-14-6 | 2026-08-14 | typecheck+codegen | medium | The int-to-float implicit widening is performed at NEITHER surface for a CONTAINER element: the interpreter stores an Int in a `Vec[f64]`, and the compiled backends store a float but never convert a lookup PROBE, so `Vec[f64].contains(some_int)` can never match on either. Split from B-2026-08-14-2, which fixed every position whose declared type is reachable from the AST. | Interpreter: the container-argument sites in method_call_seq.rs have no element type (a method call's receiver span carries the CALL's result type). Codegen: the lookup-probe conversion at the same sites' twins. Channel to add: a span set keyed by the argument, the `weak_elem_store_sites` pattern. |
 | B-2026-08-14-7 | 2026-08-14 | interp | medium | The interpreter performs f32 ARITHMETIC at f64 precision, so an `f32` result diverges from both compiled backends wherever the true f32 result would have rounded: `let a: f32 = 4000000000u32 as f32; a + 1.0` reads 4000000001 under `--interp` and 4000000000 compiled. The CAST itself rounds correctly — it is only the operators. | `Value::Float` is an f64 with no width tag, so every f32/f16/bf16 binop in eval_ops.rs computes and stores at f64. The narrowing CASTS were given explicit rounding (B-2026-07-22-4); the arithmetic path never was. |
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced
 
 </details>
 
-### Fixed (1158)
+### Fixed (1159)
 
-<details><summary>1158 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1159 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5344,6 +5343,17 @@ MEASURED, interp / JIT / AOT / `KARAC_AUTO_PAR=0` all agreeing: both repros, the
 nine shapes above, and the signed and non-generic controls. `width-matrix`'s
 three axes are unchanged by this — it does not vary generic instantiation, which
 is why it did not catch this and does not regress on it. |
+| B-2026-08-14-4 | codegen | high | A STRUCT WITH UNSIGNED NARROW FIELDS IS CORRUPTED BY A Vec ROUND-TRIP: reading `v[0].a` where `a: u8 = 200` yields -56 on both compiled backends, whi… | FIXED by 6f6256c, the commit that closed B-2026-08-14-3 — one cause, and this row's own guess names it: "likely the same signedness-blind extension as B-2026-08-14-3's generic instantiation, but filed separately because the direct-vs-through-Vec split is a distinct observable and may be a distinct site". Right on both counts. One cause, and it IS a distinct site of it, which is why it needed its own verification and its own regression guard rather than riding along on that row's.
+
+THE SPLIT THIS ROW NAMES IS THE WHOLE DIAGNOSTIC, and it rules out everything the title implicates. Nothing about the Vec, the round-trip, or the element read is involved: `v[0i64].a == 200u8` answers TRUE on the compiled backends, and `let e = v[0i64]; e.a` prints 200 in the same program that prints -56 for `v[0i64].a`. The struct is built right, stored right and read right; only the SIGN chosen when widening it out was wrong.
+
+`Codegen::expr_is_unsigned_int` resolves a field read by NAMING the receiver — `var_type_names[receiver]` -> the struct's field list -> the declared field type. `m` is a name and resolves. `v[0i64]` is an expression, so there was nothing to look up, and the walk fell through to a bare `false` that was indistinguishable from a resolved `i64`. B-2026-08-14-3's fix gives that walk a "cannot resolve" answer and falls back to the typechecker's per-span UInt verdict, which closes this site one step earlier than the generic one (no name at all, versus a name whose declared type is a type parameter).
+
+VERIFIED INDEPENDENTLY against 6f6256c rather than assumed from the shared cause, since the two sites fail in different arms. Both repros, on all four surfaces and both optimization levels, interpreter as oracle: the narrow struct, and the wide mixed struct this row describes (`{ a: u8, b: i64, c: u16, d: i8, e: u32, f: i32 }`) in which every unsigned narrow field corrupted and every signed field survived. `width-matrix.py --roundtrip`'s `struct_in_vec` site is exactly this row — wrong on 3 surfaces x u8/u16/u32 before, clean after, inside a sweep that goes 72 raw / 36 distinct divergences -> 220 case-lines / 0 divergences / 0 skips.
+
+PINNED SEPARATELY by `test_e2e_narrow_unsigned_survives_indexed_and_array_reads`, because 6f6256c's own E2E cannot cover this: its receivers are all generic, so they exercise the arm that resolves a name and then fails on `v: T`. This one has no name to resolve. The test keeps the direct read alongside the indexed one on the same field of the same struct — the pairing is what makes a future regression legible rather than just red — and pins the wide struct's signed fields as controls.
+
+NOTE ON PROVENANCE: this row and -3 were fixed concurrently by two sessions that converged on the same design independently (the same two side tables, the same fallback-only ordering, the same seven files). 6f6256c landed first and is the fix of record; the duplicate was discarded rather than rebased, and only the verification and the non-overlapping guard above were kept. |
 
 </details>
 
