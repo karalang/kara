@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 247 | 0 |
-| leak | 173 | 0 |
+| leak | 174 | 1 |
 | double-free | 127 | 0 |
 | run-vs-build | 117 | 0 |
 | codegen-gap | 108 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 855 | 0 |
+| codegen | 856 | 1 |
 | typecheck | 169 | 0 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1184 surfaced · 0 open · 1172 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1185 surfaced · 1 open · 1172 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-14-18 | 2026-08-14 | codegen | high | Reassigning a `mut` CONTAINER field (`Vec` / `Map` / `Set`) of a `shared struct` never frees the OLD container -- the whole thing leaks, scaling with its contents. The `String` field twin is handled, the scalar field is trivially fine, and the PLAIN-struct twin is handled for every type, so this is the `shared struct` field-assign path missing the container arm it already has for `String`. | the `shared struct` field-assignment drop path -- it releases the old value for a `String` field but not for a `Vec` / `Map` / `Set` field. Plain-struct field reassignment is already correct (B-2026-07-31-39 family), so the working arm to mirror is one type-class over. |
 
 ### Wontfix (2)
 
@@ -6081,8 +6083,7 @@ is the author's and no longer a disagreement.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
-| B-2026-08-14-15 | codegen | high | Two leaks that share one polarity: a NESTED CONTAINER read into a `let` BINDING and then consumed leaks, while the identical read consumed INLINE is… | FIXED by 1282910 (legs A + B `Option`) and b0fac23 (leg B's `Result` half;
-`69edd19` after rebase). Both legs reproduce at exactly the row's numbers —
+| B-2026-08-14-15 | codegen | high | Two leaks that share one polarity: a NESTED CONTAINER read into a `let` BINDING and then consumed leaks, while the identical read consumed INLINE is… | FIXED by 1282910 (legs A + B `Option`) and 69edd19 (leg B's `Result` half). Both legs reproduce at exactly the row's numbers —
 LEG A 602 (72 direct, 530 indirect) bytes, LEG B 8 bytes in 1 block — and both
 are valgrind-clean after, with interp / JIT / AOT / `KARAC_AUTO_PAR=0` agreeing
 throughout.
@@ -6137,7 +6138,7 @@ control block plus buckets — despite the row presenting them side by side.
 
 THE ROW NAMED `Option`/`Result` AND THE `Result` HALF IS REAL. The first commit
 wired only `Option`; the `Result` sibling was then measured leaking the same 8
-bytes on the `Ok` side and fixed in b0fac23. Each half is gated independently
+bytes on the `Ok` side and fixed in 69edd19. Each half is gated independently
 (a boxed side stays suppressed exactly as its overlay element type is), so the
 pin uses `Result[Vec[P], Vec[P]]` to exercise both.
 
