@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
 | crash | 45 | 0 |
-| soundness | 43 | 0 |
+| soundness | 44 | 1 |
 | other | 30 | 0 |
 | use-after-free | 18 | 0 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 850 | 1 |
-| typecheck | 164 | 0 |
+| typecheck | 165 | 1 |
 | interp | 144 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1176 surfaced · 2 open · 1162 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1177 surfaced · 3 open · 1162 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-7 | 2026-08-14 | interp | medium | The interpreter performs f32 ARITHMETIC at f64 precision, so an `f32` result diverges from both compiled backends wherever the true f32 result would have rounded: `let a: f32 = 4000000000u32 as f32; a + 1.0` reads 4000000001 under `--interp` and 4000000000 compiled. The CAST itself rounds correctly — it is only the operators. | `Value::Float` is an f64 with no width tag, so every f32/f16/bf16 binop in eval_ops.rs computes and stores at f64. The narrowing CASTS were given explicit rounding (B-2026-07-22-4); the arithmetic path never was. |
 | B-2026-08-14-9 | 2026-08-14 | codegen | medium | EIGHT more `Slice[T]` methods typecheck and interpret but have no codegen: the mutators `fill`/`reverse`/`sort`/`sort_by_key`/`swap` and the view-producers `chunks`/`windows`/`split_at`. Split from B-2026-08-14-8, which fixed the four READ accessors by routing them through the Vec implementation — a route these eight cannot take | The `Slice` arm of the method dispatch in src/codegen/method_call.rs (~L5010). The four read accessors B-2026-08-14-8 fixed are ROUTED to `compile_vec_method` over a `{ptr,len,cap:0}` borrowed view; these eight cannot take that route, so each needs a real implementation over the 2-field header. |
+| B-2026-08-14-10 | 2026-08-14 | typecheck | high | NONDETERMINISTIC TYPECHECKING: a user enum declaring a variant named `None`, `Some` or `Ok` makes `karac check` return a COIN FLIP on identical input -- measured 15/30, 10/20 and 7/16 pass-vs-fail on three unchanged files. Root cause is a first-match `return` inside `for (enum_name, enum_info) in &self.env.enums` (src/typechecker/expr_ops.rs:352) over a `HashMap` whose iteration order is randomly seeded per process. On the runs that PASS, the JIT then fails LLVM `Module verification`. | src/typechecker/expr_ops.rs:352 -- `for (enum_name, enum_info) in &self.env.enums` returning the FIRST enum carrying a matching variant name; `self.env.enums` is `HashMap<String, EnumInfo>` (src/typechecker/env.rs:314). |
 
 ### Wontfix (2)
 
