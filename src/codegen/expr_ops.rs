@@ -7232,6 +7232,32 @@ impl<'ctx> super::Codegen<'ctx> {
         src: &Expr,
     ) -> BasicValueEnum<'ctx> {
         let Some(te) = ty else { return val };
+        // B-2026-08-14-11 — an UNSUFFIXED FLOAT literal takes its width from
+        // the annotation, so `let a: f32 = 0.1` is the same value as
+        // `let a: f32 = 0.1f32`. `const_float_for_suffix` reads the SUFFIX
+        // only, so a bare literal materialized as a `double` and this was the
+        // ONE position codegen did not narrow it at — a struct field, a fn
+        // argument, a return, a `Vec` element, an `Array` element and a tuple
+        // element all already did, which is why the annotated `let` alone
+        // disagreed with them and, after the interpreter side of this row,
+        // with `--interp` too.
+        //
+        // Gated on the literal, not on the value: an f64-typed VALUE at an
+        // f32 annotation is an implicit NARROWING between two declared types,
+        // which the language refuses. Silently rounding that here would hide
+        // it — it belongs to the diagnostic leg of this row, not to this one.
+        if matches!(&src.kind, ExprKind::Float(_, None)) {
+            if let (BasicValueEnum::FloatValue(fv), BasicTypeEnum::FloatType(ft)) =
+                (val, self.llvm_type_for_type_expr(te))
+            {
+                if fv.get_type() != ft {
+                    return self
+                        .build_float_cast_bf16_safe(fv, ft, "let.fnarrow")
+                        .into();
+                }
+                return val;
+            }
+        }
         let BasicValueEnum::IntValue(iv) = val else {
             return val;
         };

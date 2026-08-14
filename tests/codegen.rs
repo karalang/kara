@@ -23438,6 +23438,56 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-11 — the compiled twin of
+    /// `tests/interpreter.rs::test_unsuffixed_float_literal_takes_the_destination_width`,
+    /// same source and same expected string.
+    ///
+    /// Codegen already narrowed a bare `0.1` at a struct field, a fn argument,
+    /// a return, a `Vec` element, an `Array` element and a tuple element — the
+    /// ANNOTATED `let` was the one position it did not, because
+    /// `const_float_for_suffix` reads the suffix only and nothing at the
+    /// binding re-typed the literal. So this pins the position that was wrong
+    /// AND the six that were right, since the whole failure was one position
+    /// disagreeing with its siblings and with the interpreter.
+    #[test]
+    fn test_e2e_unsuffixed_float_literal_takes_the_destination_width() {
+        assert_eq!(
+            run_program(
+                "struct Bx { f: f32 }\n\
+                 fn takef(x: f32) -> f32 { x }\n\
+                 fn retf() -> f32 { 0.1 }\n\
+                 fn main() {\n\
+                     let la: f32 = 0.1;\n\
+                     println(la);\n\
+                     let sl = Bx { f: 0.1 };\n\
+                     println(sl.f);\n\
+                     println(takef(0.1));\n\
+                     println(retf());\n\
+                     let mut v: Vec[f32] = Vec.new();\n\
+                     v.push(0.1);\n\
+                     println(v[0]);\n\
+                     let ar: Array[f32, 1] = [0.1];\n\
+                     println(ar[0]);\n\
+                     let tu: (f32, f32) = (0.1, 0.2);\n\
+                     println(tu.0);\n\
+                     let h: f16 = 0.1;\n\
+                     println(h);\n\
+                 }"
+            )
+            .as_deref(),
+            Some(
+                "0.10000000149011612\n\
+                 0.10000000149011612\n\
+                 0.10000000149011612\n\
+                 0.10000000149011612\n\
+                 0.10000000149011612\n\
+                 0.10000000149011612\n\
+                 0.10000000149011612\n\
+                 0.0999755859375\n"
+            ),
+        );
+    }
+
     /// B-2026-08-14-5 — a field read through a FIXED-SIZE ARRAY index compiles,
     /// at parity with the `Vec` spelling of the same read.
     ///

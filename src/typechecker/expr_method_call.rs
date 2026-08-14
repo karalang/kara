@@ -4437,6 +4437,12 @@ impl<'a> super::TypeChecker<'a> {
                 // ctor arg's entry with the RESOLVED type so the span-keyed
                 // table codegen consults carries the concrete K/V.
                 self.rerecord_resolved_ctor_arg(&args[0].value, &resolved_arg);
+                // B-2026-08-14-11 — the pushed ARGUMENT is inferred here, not
+                // checked, so `check_expr`'s narrow-float literal re-record
+                // never sees it: `Vec[f32].push(0.1)` left the literal typed
+                // `f64` and the interpreter stored the full double. Same
+                // re-record, applied where the element type is in hand.
+                self.record_narrow_float_literal(&args[0].value, &resolved_elem);
                 return Type::Unit;
             }
         }

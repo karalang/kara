@@ -237,6 +237,45 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-08-14-11 — record an UNSUFFIXED FLOAT literal at the width its
+    /// DESTINATION declares, so `let a: f32 = 0.1` is the same value as
+    /// `let a: f32 = 0.1f32`.
+    ///
+    /// Synthesis types a bare literal `f64` (`type_from_float_suffix`'s `None`
+    /// arm) and nothing moved it, so the literal's own span said `f64` while it
+    /// sat in a narrow-float slot. The interpreter reads that span, so it kept
+    /// the full double at every such position; codegen narrowed at all but the
+    /// annotated `let`. `a == b` against the suffixed spelling then answered
+    /// `false` under `--interp` and `true` compiled, on a program with no
+    /// arithmetic in it.
+    ///
+    /// Narrow floats ONLY — an `f64` context leaves the recording exactly as it
+    /// was. A SUFFIXED literal is untouched: the suffix is the author naming
+    /// the width. Tuples recurse per slot, because a tuple literal whose
+    /// elements are all plain values never checks its elements against their
+    /// slots (the element-wise arm above fires only for an inferred
+    /// constructor), so the recursion is where `let t: (f32, f32) = (0.1, 0.2)`
+    /// is reached.
+    pub(super) fn record_narrow_float_literal(&mut self, expr: &Expr, expected: &Type) {
+        let ctx = match expected {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        match (&expr.kind, ctx) {
+            (ExprKind::Float(_, None), Type::Float(size))
+                if !matches!(size, crate::typechecker::types::FloatSize::F64) =>
+            {
+                self.record_expr_type(&expr.span, ctx);
+            }
+            (ExprKind::Tuple(elems), Type::Tuple(slots)) if elems.len() == slots.len() => {
+                for (e, slot) in elems.iter().zip(slots.iter()) {
+                    self.record_narrow_float_literal(e, slot);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         // B-2026-07-02-7: an UNSUFFIXED integer literal (bare or negated) at
         // a narrow-int-typed position must fit that type's range — `let x:
@@ -1256,6 +1295,28 @@ impl<'a> super::TypeChecker<'a> {
         // Scalar-element `Vec`/`VecDeque` only: wider element types have
         // no width to mispack, and `Array`-expected literals already
         // record `expected` in their dedicated check-mode arm above.
+        // B-2026-08-14-11 — the SCALAR sibling of the collection re-record
+        // below: an UNSUFFIXED FLOAT literal takes its width from the
+        // DESTINATION, so `let a: f32 = 0.1` is the same value as
+        // `let a: f32 = 0.1f32`.
+        //
+        // Synthesis types a bare literal `f64` (`type_from_float_suffix`'s
+        // `None` arm) and nothing moved it, so the literal's own span said
+        // `f64` while it sat in a narrow-float slot. The interpreter reads that
+        // span and kept the full double; codegen narrowed at five of the six
+        // positions but not at an annotated `let`. `a == b` against the
+        // suffixed spelling then answered `false` under `--interp` and `true`
+        // compiled, on a program with no arithmetic in it.
+        //
+        // Recorded HERE rather than at the top of `check_expr`, because the
+        // fall-through above records the SYNTHESIZED type and would overwrite
+        // an earlier entry — the same ordering the collection arm below
+        // depends on. Narrow floats only: an `f64` context leaves the
+        // recording exactly as it was, and a SUFFIXED literal is untouched
+        // since the suffix is the author naming the width.
+        if actual != Type::Error {
+            self.record_narrow_float_literal(expr, expected);
+        }
         if actual != Type::Error
             && matches!(
                 &expr.kind,

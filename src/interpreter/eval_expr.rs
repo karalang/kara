@@ -51,12 +51,29 @@ impl<'a> super::Interpreter<'a> {
             // precision at creation (B-2026-07-22-4): codegen materializes
             // `2.7bf16` as the bfloat constant 2.703125, so an interpreter
             // that kept the full f64 would diverge on every inexact literal.
-            ExprKind::Float(f, suffix) => Value::Float(match suffix {
-                Some(crate::token::FloatSuffix::F16) => round_f64_via_f16(*f),
-                Some(crate::token::FloatSuffix::BF16) => round_f64_via_bf16(*f),
-                Some(crate::token::FloatSuffix::F32) => *f as f32 as f64,
-                _ => *f,
-            }),
+            //
+            // B-2026-08-14-11 — an UNSUFFIXED literal takes its width from the
+            // DESTINATION, which is what makes `let a: f32 = 0.1` the same
+            // value as `let a: f32 = 0.1f32`. The suffix arms above were the
+            // whole story here, so an unsuffixed literal stayed an f64 in every
+            // narrow-float slot: a struct field, a fn argument, a `Vec[f32]`
+            // element, an `Array`/tuple element and an annotated `let` all held
+            // 0.1 where codegen held 0.10000000149011612 — and `a == b` against
+            // the suffixed spelling then answered differently on the two
+            // surfaces, on a program containing no arithmetic at all.
+            //
+            // The typechecker already types the literal at its destination, so
+            // `round_float_to_span_width` — the same lookup B-2026-08-14-7's
+            // operator rounding uses — covers every one of those positions at
+            // once rather than one store site at a time. A suffix still wins:
+            // it is the author writing the width explicitly.
+            ExprKind::Float(f, suffix) => match suffix {
+                Some(crate::token::FloatSuffix::F16) => Value::Float(round_f64_via_f16(*f)),
+                Some(crate::token::FloatSuffix::BF16) => Value::Float(round_f64_via_bf16(*f)),
+                Some(crate::token::FloatSuffix::F32) => Value::Float(*f as f32 as f64),
+                Some(_) => Value::Float(*f),
+                None => self.round_float_to_span_width(Value::Float(*f), &expr.span),
+            },
             ExprKind::Bool(b) => Value::Bool(*b),
             ExprKind::CharLit(c) => Value::Char(*c),
             // `b'X'` evaluates as a u8 via the shared `Value::Int(i64)` carrier

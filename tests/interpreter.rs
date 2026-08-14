@@ -28805,6 +28805,77 @@ fn test_field_bound_out_of_local_is_a_copy() {
     );
 }
 
+/// B-2026-08-14-11 — an UNSUFFIXED float literal takes its width from the
+/// DESTINATION, so it is the same value as the suffixed spelling.
+///
+/// Synthesis types a bare literal `f64` and nothing moved it, so the literal's
+/// own span said `f64` while it sat in a narrow-float slot. The interpreter
+/// reads that span, so it kept the full double at EVERY such position, and
+/// codegen narrowed at all but the annotated `let` — which is how
+/// `let a: f32 = 0.1; let b: f32 = 0.1f32; a == b` came to answer `false` under
+/// `--interp` and `true` compiled, on a program containing no arithmetic.
+///
+/// Seven positions, all the ones a bare literal can reach, plus `f16` to show
+/// the rule is about the declared width rather than about f32. Each prints the
+/// SUFFIXED spelling's value; pre-fix the interpreter printed `0.1` on all
+/// seven.
+#[test]
+fn test_unsuffixed_float_literal_takes_the_destination_width() {
+    assert_eq!(
+        run("struct Bx { f: f32 }\n\
+             fn takef(x: f32) -> f32 { x }\n\
+             fn retf() -> f32 { 0.1 }\n\
+             fn main() {\n\
+                 let la: f32 = 0.1;\n\
+                 println(la);\n\
+                 let sl = Bx { f: 0.1 };\n\
+                 println(sl.f);\n\
+                 println(takef(0.1));\n\
+                 println(retf());\n\
+                 let mut v: Vec[f32] = Vec.new();\n\
+                 v.push(0.1);\n\
+                 println(v[0]);\n\
+                 let ar: Array[f32, 1] = [0.1];\n\
+                 println(ar[0]);\n\
+                 let tu: (f32, f32) = (0.1, 0.2);\n\
+                 println(tu.0);\n\
+                 let h: f16 = 0.1;\n\
+                 println(h);\n\
+             }"),
+        "0.10000000149011612\n\
+         0.10000000149011612\n\
+         0.10000000149011612\n\
+         0.10000000149011612\n\
+         0.10000000149011612\n\
+         0.10000000149011612\n\
+         0.10000000149011612\n\
+         0.0999755859375\n"
+    );
+}
+
+/// B-2026-08-14-11, the other direction: an `f64` destination and a SUFFIXED
+/// literal are both left exactly as they were.
+///
+/// The re-record is narrow-floats-only, so an `f64` slot keeps the full double;
+/// and a suffix is the author naming the width, so it wins over the
+/// destination — `let w: f64 = 0.1f32` holds the f32 value widened, not `0.1`.
+/// This passes before the fix as well: it is an over-reach guard, not a
+/// regression witness.
+#[test]
+fn test_float_literal_width_respects_f64_slots_and_suffixes() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let a: f64 = 0.1;\n\
+                 println(a);\n\
+                 let w: f64 = 0.1f32;\n\
+                 println(w);\n\
+                 let b = 0.1;\n\
+                 println(b);\n\
+             }"),
+        "0.1\n0.10000000149011612\n0.1\n"
+    );
+}
+
 /// B-2026-08-14-2 — an int at a FLOAT-declared destination is converted, at
 /// every position whose declared type the interpreter can reach.
 ///
