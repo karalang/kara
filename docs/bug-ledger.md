@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 249 | 1 |
-| leak | 176 | 2 |
+| leak | 177 | 3 |
 | double-free | 129 | 1 |
-| run-vs-build | 119 | 1 |
+| run-vs-build | 120 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
 | perf | 67 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 867 | 6 |
+| codegen | 869 | 7 |
 | typecheck | 171 | 1 |
 | interp | 145 | 0 |
 | ownership | 48 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1201 surfaced · 9 open · 1180 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced · 10 open · 1181 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,10 +135,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1201 surfaced
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-26 | 2026-08-14 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--interp` applies it — for a scalar field as well as a container, so this is not a heap-ownership gap but a lost write. `karac check` passes and nothing reports an error; the program simply keeps the old value. | The FieldAccess-rooted branch of `compile_field_store`: with a SHARED chain root, `nested_store_place_ptr` or `place_chain_type_name` declines and the branch exits through the no-op tail. Two prior fixes in that same branch (B-2026-07-28-6, B-2026-08-01-35) were for this same tail — instrument which resolution returns None before changing anything. |
-| B-2026-08-14-31 | 2026-08-14 | codegen | medium | Printing a whole `Map` or `Set` STRUCT FIELD emits a raw pointer address under `karac build` — `println(f"{b.m}")` gives `{aaaaaaaaaaaa: 1}` under `--interp` and `94924495492304` compiled. The bound-variable spelling is correct on both, so it is the place expression that falls through, and the fall-through prints an address rather than failing. | `compile_print`'s value-kind fall-through: the identifier arms key off per-variable side tables, and B-2026-07-28-12 added a span-typed non-identifier arm for `Vec` only. Mirror it for `Map`/`Set` with `emit_map_display_fn` / `emit_set_display_fn`, and reuse `print_vec_operand_is_owned_temp` for the drop decision — B-2026-08-14-30 is what happens when that arm takes ownership of a place expression. |
 | B-2026-08-14-32 | 2026-08-14 | codegen | high | an index read into a heap-owning Vec, used as the value of an `if`/`match` ARM, is freed by both the binding and the container -- `let w = if c { v[i] } else { .. }` aborts with a double free while `let w = v[i]` is correct | src/codegen/stmts.rs:4074 and let_binding_is_borrow_elided (stmts.rs:1581) test only the TOP-LEVEL RHS kind for ExprKind::Index; an index read reached through an If/Match arm is invisible to them, so the binding registers an owned cleanup over a pointer the container still owns. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
 | B-2026-08-14-34 | 2026-08-14 | resolver+ownership | medium | DIAGNOSTIC OUTPUT IS NONDETERMINISTIC RUN-TO-RUN on the same binary and the same input, in two independent places: a resolver "did you mean" suggestion picks a different candidate among equal-distance ties (7/7/6 three-way split over 20 runs), and two `perf[rc-fallback]` diagnostics are emitted in a different ORDER (10/10 over 20 runs). Both reach the `--output=json` surface the Mend loop consumes. | HashMap iteration order leaking into user-visible output, the same mechanism as B-2026-08-14-10 but on the diagnostics side rather than the typechecking side. LEG A: the resolver's suggestion search evidently walks a hash-ordered name table and keeps the first best candidate, so an edit-distance TIE resolves by hash. LEG B: the RC-fallback diagnostics are collected from a hash-ordered map and emitted in iteration order rather than sorted by span. |
+| B-2026-08-14-35 | 2026-08-14 | codegen | medium | `SortedMap` and `SortedSet` print with the WRONG PREFIX under `karac build` on every spelling, bound variable included: `SortedMap{kk: 1}` renders as `{kk: 1}` and `SortedSet{kk}` as `Set{kk}`, so a compiled program's output claims a different type than the one it holds and disagrees with `karac run`. | `emit_map_display_fn` / `emit_set_display_fn` in `src/codegen/synth_display.rs` hard-code the unsorted prefixes and have no Sorted* variant (grep the file for either name: nothing). Both call sites already know the surface type — the identifier arms from the per-variable registries, the span-keyed arm from `display_map_types`' source `Type::Named { name, .. }`, which discards `name` after matching it. |
+| B-2026-08-14-36 | 2026-08-14 | codegen | medium | A `Map` or `Set` TEMPORARY that is printed and not bound leaks its whole handle — `println(f"{mk()}")` in a 40-print loop strands 21440 bytes over 120 allocations, with no other owner to free it. | `try_compile_map_or_set_display` renders without registering a `FreeMapHandle`. Extract the binding path's drop-shape derivation (`src/codegen/maps.rs`, near the `track_map_var_with_val_drop` call — six call sites derive it near-identically today) into a helper over the key/value `TypeExpr`s, then gate the call on `print_vec_operand_is_owned_temp`. |
 
 ### Wontfix (2)
 
@@ -151,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1201 surfaced
 
 </details>
 
-### Fixed (1180)
+### Fixed (1181)
 
-<details><summary>1180 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1181 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6782,6 +6783,74 @@ already-labelled codegen refusal ("Display of a struct in an f-string … bind a
 struct literal or call result to a `let` first — user-struct Display, subtask-5
 follow-on"), and it refuses the LOCAL spelling identically, so it is a known
 deferral rather than a place-expression gap. |
+| B-2026-08-14-31 | codegen | medium | Printing a whole `Map` or `Set` STRUCT FIELD emits a raw pointer address under `karac build` — `println(f"{b.m}")` gives `{aaaaaaaaaaaa: 1}` under `-… | FIXED by 1062214. A `Map` or `Set` reached through anything but a bound name now renders
+like a bound one instead of printing its control pointer.
+
+THE ROW'S DIAGNOSIS WAS RIGHT AND ITS SCOPE WAS ONE OF FIVE. It reports a struct
+FIELD, and names the bound-variable spelling as the working control. The control
+is right; the field is one of five spellings that were all printing addresses,
+because the fall-through it lands in has nothing to do with fields:
+
+    spelling                              interp            karac build
+    struct field       f"{b.m}"           {kk: 1}           94259731420368
+    struct field       println(b.m)       {kk: 1}           94259731420368
+    call result        f"{mk()}"          {kk: 1}           94666111849680
+    tuple element      f"{t.0}"           {kk: 1}           94121203516624
+    Vec[Map] element   f"{v[0]}"          {kk: 1}           94240997000400
+    SortedMap field    f"{b.m}"           SortedMap{kk: 1}  94034838336720
+    bound local        f"{m}"             {kk: 1}           {kk: 1}
+
+The `Set` sibling behaves identically throughout. The addresses differ per run,
+so the output is not even stable across two runs of one binary.
+
+ONE ARM, MIRRORING THE ONE THAT ALREADY EXISTS FOR `Vec`. B-2026-07-28-12 closed
+exactly this for `Vec` — a span-keyed type table lowered from `expr_types`, and a
+render through the SAME per-element Display fn the identifier path uses so the
+two spellings cannot disagree — and left the siblings. This adds
+`display_map_types` (key/value) and `display_set_types` (element) beside
+`display_vec_types`, built by the same `filter_map` over `expr_types`, and routes
+through `emit_map_display_fn` / `emit_set_display_fn`. Both consumers are hooked:
+`compile_print` for the bare `println(x)` form and the f-string interpolation
+path for `f"{x}"`, which are separate lowerings and were separately wrong.
+
+IT TAKES NO OWNERSHIP, DELIBERATELY, and that is the one judgement call here.
+B-2026-08-14-30 — closed an hour earlier, in an arm of exactly this shape — is
+what happens when a display path assumes "not a bound identifier" means "a fresh
+temporary" and frees what it rendered: a hard double free on a struct field. So
+this arm renders and returns, and a materialized temporary is left alone.
+
+The cost of that choice is a pre-existing leak it does not repair rather than one
+it creates: a Map/Set returned from a call and printed strands its handle
+(21440 bytes over 120 allocations in a 40-print loop). MEASURED IDENTICALLY ON
+THE PRE-FIX COMPILER — the value was equally unfreed when it printed as an
+address — so this is untouched, not introduced, and it is filed as B-2026-08-14-36 rather
+than guessed at. Fixing it properly means `FreeMapHandle`'s seven-field drop shape
+(`key_is_vec`, `val_shared_heap_type`, per-side drop fns …), which the binding
+path derives across ~40 lines from per-variable tables; reproducing that from
+bare `TypeExpr`s at a display site is how the two drift apart. The direction is
+also the safe one, on the same argument the Vec fix used: a leaked handle is
+bounded and LSan-visible, a double-freed one is a crash in a user's program.
+
+`SortedMap` / `SortedSet` ARE ROUTED THROUGH THE SAME ARM AND ARE STILL WRONG,
+differently. They now print `{kk: 1}` / `Set{kk}` instead of an address — which
+is exactly what their BOUND spelling has always printed compiled, against
+`SortedMap{kk: 1}` / `SortedSet{kk}` from the interpreter. So the change moves
+them from a pointer to the same wrong prefix the identifier path already had:
+strictly better, internally consistent, and still divergent. That prefix bug is
+older and wider than this row (it hits the bound spelling, which this row lists
+as its control), so it is filed on its own as B-2026-08-14-35 rather than folded in — with a note
+to check the ITERATION ORDER while there, which this row's single-entry repro
+proves nothing about.
+
+PINNED by three tests. Twinned value tests carry every spelling in the table
+above, in both the f-string and bare-`println` forms, with the bound local as the
+control they must match — and with a field printed TWICE, which is the cheap
+standing check that this arm has not acquired the ownership bug the Vec one had.
+An LSan fixture loops the place spellings 20 times, asserting the render neither
+frees the owner's handle nor strands anything.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean. |
 
 </details>
 
