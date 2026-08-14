@@ -28589,6 +28589,36 @@ fn test_user_trait_bound_call_over_builtin_containers() {
     );
 }
 
+/// B-2026-08-14-10 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_user_enum_shadowing_builtin_variant_names`, same source and
+/// expected string.
+///
+/// The interpreter does its own resolution and ran these correctly even on the
+/// runs the typechecker rejected, which is what made the bug a three-way
+/// disagreement rather than a plain divergence. Pinning the twin holds the
+/// resolution rule across all three surfaces.
+#[test]
+fn test_user_enum_shadowing_builtin_variant_names() {
+    assert_eq!(
+        run("enum Sink { None, Open(i64) }\n\
+            enum Slot { Ok, Err, Eof }\n\
+            enum MyIoErr { Other(i64), Eof }\n\
+            fn make(x: i64) -> Option[i64] { if x > 0 { Some(x) } else { None } }\n\
+            fn div(x: i64) -> Result[i64, i64] { if x > 0 { Ok(x) } else { Err(0 - 1) } }\n\
+            fn main() {\n\
+                match make(1) { Some(v) => println(v), None => println(-1) }\n\
+                match make(0) { Some(v) => println(v), None => println(-1) }\n\
+                match div(2) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                match div(0) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                let s: Sink = Sink.None;\n\
+                match s { None => println(-2), Open(v) => println(v) }\n\
+                let e = Other(7);\n\
+                match e { Other(v) => println(v), Eof => println(-3) }\n\
+            }"),
+        "1\n-1\n2\n-1\n-2\n7\n"
+    );
+}
+
 /// B-2026-08-14-8 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_slice_read_accessors_have_codegen`, same source and expected
 /// string.

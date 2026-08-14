@@ -267,6 +267,25 @@ impl<'a> super::TypeChecker<'a> {
 
     // ── Identifier Resolution ───────────────────────────────────
 
+    /// The built-in enum that owns `name` as a bare constructor, if any.
+    ///
+    /// B-2026-08-14-10. `Option` and `Result` are ordinary prelude enums living
+    /// in `env.enums` next to the user's, so their variant names are not
+    /// reserved and a user enum may declare one. This says which enum a
+    /// COLLIDING bare name resolves to, and it is deliberately a fixed table
+    /// rather than a search: the whole bug was that the answer depended on
+    /// where in a hash map the two candidates happened to land.
+    ///
+    /// Only the bare form is affected. `Sink.None` goes through
+    /// `resolve_path_type`, which names its enum explicitly and runs first.
+    fn builtin_variant_owner(name: &str) -> Option<&'static str> {
+        match name {
+            "Some" | "None" => Some("Option"),
+            "Ok" | "Err" => Some("Result"),
+            _ => None,
+        }
+    }
+
     pub(super) fn resolve_identifier_type(&mut self, name: &str, span: &Span) -> Type {
         // Check local scope first. Resolve inference vars against the current
         // substitution map before returning: a binding recorded as `Vec[?T]` at
@@ -349,7 +368,56 @@ impl<'a> super::TypeChecker<'a> {
         // resolution. Variants are still reachable through the
         // qualified path form (`Json.String(...)`) — `resolve_path_type`
         // above runs before this fallback and finds them by enum name.
-        for (enum_name, enum_info) in &self.env.enums {
+        //
+        // **Order is load-bearing (B-2026-08-14-10).** `self.env.enums` is a
+        // `HashMap`, whose iteration order comes from a per-process
+        // `RandomState`, and this scan used to `return` on the FIRST match. The
+        // prelude's `Option`/`Result` live in that same map, so a user enum
+        // declaring a variant named `None`/`Some`/`Ok`/`Err` made a bare `None`
+        // type as `Option[T]` on some runs and as the user enum on others —
+        // `karac check` returning a coin flip on identical bytes, measured
+        // 15/30, 10/20 and 7/16. Scanning a SORTED key list makes the answer a
+        // function of the program alone; `builtin_variant_owner` then decides
+        // which enum wins, rather than leaving it to whichever the allocator
+        // handed over first.
+        //
+        // Two tiers, USER-declared before stdlib/prelude, each sorted by name.
+        // The tiering mirrors codegen's own bare-name preference and is needed
+        // for the same reason it gives: a user's `MyIoErr.Other` must not be
+        // hijacked by the seeded `IoError.Other`. Sorting alone would have
+        // decided that collision alphabetically, which is deterministic but
+        // wrong — and wrong in a way the old coin flip hid, since it got the
+        // user's enum half the time.
+        let mut enum_names: Vec<&String> = self.env.enums.keys().collect();
+        enum_names.sort_unstable_by_key(|n| {
+            // Prelude-visible by NAME as well as by the `stdlib_origin` flag:
+            // `IoError` and its siblings are listed in `PRELUDE_TYPES` but do
+            // not carry the flag, and keying on the flag alone let the seeded
+            // `IoError.Other` beat a user's `MyIoErr.Other` alphabetically —
+            // deterministic, and the wrong side of the very preference codegen
+            // documents.
+            (
+                self.env.enums[*n].defining_stdlib_origin || is_prelude_type_or_module_name(n),
+                (*n).clone(),
+            )
+        });
+        // The built-in owner of a colliding constructor name goes first, so a
+        // user enum can never retroactively hijack a bare `None` / `Some` /
+        // `Ok` / `Err`. This is the same call the Slice F rule above already
+        // makes for primitive TYPE names, for the same stated reason: those
+        // identifiers are overwhelmingly the built-in meaning at a use site,
+        // and the user's variant stays reachable through the qualified form
+        // (`Sink.None`), which `resolve_path_type` resolves before this
+        // fallback ever runs.
+        if let Some(owner) = Self::builtin_variant_owner(name) {
+            if self.env.enums.contains_key(owner) {
+                enum_names.retain(|n| n.as_str() != owner);
+                // Resolved by direct lookup below, ahead of every user enum.
+                enum_names.insert(0, self.env.enums.get_key_value(owner).unwrap().0);
+            }
+        }
+        for enum_name in enum_names {
+            let enum_info = &self.env.enums[enum_name];
             for (variant_name, variant_type) in &enum_info.variants {
                 if variant_name == name {
                     if is_prelude_type_or_module_name(name) {

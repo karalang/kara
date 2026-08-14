@@ -4460,7 +4460,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
-                user_match.or(seed_match)
+                // B-2026-08-14-10 — seeded wins for `Option`/`Result`'s four
+                // constructors only; see `seeded_variant_owner`. Every other
+                // colliding name keeps the user-first preference described
+                // above, which the `MyIoErr.Other` case still needs.
+                if Self::seeded_variant_owner(name).is_some() && seed_match.is_some() {
+                    seed_match
+                } else {
+                    user_match.or(seed_match)
+                }
             }
         };
 
@@ -8221,15 +8229,55 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The SEEDED enum that owns `name` as a bare constructor, if any —
+    /// codegen's mirror of the typechecker's `builtin_variant_owner`.
+    ///
+    /// B-2026-08-14-10. The bare-name scans below prefer a USER-declared enum
+    /// over a seeded one when a variant name collides, and for most names that
+    /// is right: a user's `MyIoErr.Other` must not be hijacked by the seeded
+    /// `TcpError.Other`. It is NOT right for `Option`/`Result`'s four
+    /// constructors, because the typechecker cannot make the same choice there
+    /// — measured, a user-declared `None` winning at check time makes even
+    /// `let x: Option[i64] = None` a type error, since check-mode does not push
+    /// the expected type into a bare constructor. The two phases must agree, so
+    /// these four names resolve to the seed on both sides and every other
+    /// colliding name keeps the user-first preference it already had.
+    ///
+    /// A program that means its own variant writes the qualified form
+    /// (`MyOption.None`), which resolves by enum name and never reaches a
+    /// bare-name scan.
+    fn seeded_variant_owner(name: &str) -> Option<&'static str> {
+        match name {
+            "Some" | "None" => Some("Option"),
+            "Ok" | "Err" => Some("Result"),
+            _ => None,
+        }
+    }
+
     /// Look up a unit enum variant by identifier name and construct its value.
     pub(super) fn try_unit_enum_variant(&self, name: &str) -> Option<BasicValueEnum<'ctx>> {
-        // Symmetric to `try_compile_enum_variant`'s user-declared-vs-
-        // seeded preference: when a variant name (`None` / `Some` /
-        // `Ok` / `Err`) collides between a user-defined enum and the
-        // seeded built-ins, pick the user-declared one. HashMap
-        // iteration order is non-deterministic otherwise, and the
-        // wider seeded `Option` layout would mis-construct a value
-        // for a user-defined `MyOption.None`.
+        // When a variant name (`None` / `Some` / `Ok` / `Err`) collides
+        // between a user-defined enum and the seeded built-ins, pick the
+        // SEEDED one. HashMap iteration order is non-deterministic otherwise,
+        // which is why the two candidates are separated at all.
+        //
+        // B-2026-08-14-10 REVERSED THE PREFERENCE, and it had to. This used to
+        // pick the user-declared enum while the typechecker's own scan picked
+        // whichever the hash map yielded first — so on the runs where check
+        // typed a bare `None` as `Option[i64]`, codegen constructed the user's
+        // one-word `Sink.None` and the module failed the LLVM verifier with
+        // `ret i64 0` against `{i64, i64, i64, i64}`. The two must agree, and
+        // the typechecker's side is not free to choose: measured, a
+        // user-declared `None` winning there makes even `let x: Option[i64] =
+        // None` a type error, because check-mode does not push the expected
+        // type into a bare constructor. So a user enum declaring `None` would
+        // poison every use of the real `Option` in the file.
+        //
+        // The old rationale — "the wider seeded `Option` layout would
+        // mis-construct a value for a user-defined `MyOption.None`" — is
+        // answered by the qualified form: `MyOption.None` resolves by enum name
+        // through `try_compile_enum_variant` and never reaches this bare-name
+        // scan, so a program that means its own variant still gets it.
         let (mut user_pick, mut seed_pick) = (None, None);
         for (enum_name, layout) in &self.enum_layouts {
             if let Some(&tag) = layout.tags.get(name) {
@@ -8242,7 +8290,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        let (enum_name, tag, layout) = user_pick.or(seed_pick)?;
+        let prefer_seed = Self::seeded_variant_owner(name).is_some() && seed_pick.is_some();
+        let (enum_name, tag, layout) = if prefer_seed {
+            seed_pick.or(user_pick)?
+        } else {
+            user_pick.or(seed_pick)?
+        };
         let i64_t = self.context.i64_type();
 
         // Shared enum: heap-allocate.

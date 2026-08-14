@@ -23817,6 +23817,68 @@ fn main() {
     /// `sort_by_key`/`swap`, `chunks`/`windows`/`split_at`). A `cap == 0`
     /// header is a lie to anything that would grow or reallocate. They keep the
     /// loud error and are filed.
+    /// B-2026-08-14-10 — a user enum may declare `None`/`Some`/`Ok`/`Err`
+    /// without making resolution a coin flip.
+    ///
+    /// `Option` and `Result` are ordinary prelude enums living in the same
+    /// `HashMap` as the user's, and both the typechecker's bare-name scan and
+    /// codegen's returned the FIRST match — so with a colliding variant name,
+    /// `karac check` disagreed with itself run to run (measured 15/30, 10/20,
+    /// 7/16 in the row), and on the runs it accepted, the module failed the
+    /// LLVM verifier because the two phases had picked DIFFERENT enums:
+    /// `ret i64 0` against `{i64, i64, i64, i64}`.
+    ///
+    /// Every line here is a resolution the two phases must agree on:
+    ///
+    /// * `Some`/`None` in a fn returning `Option[i64]`, with `Sink.None`
+    ///   declared — the built-in wins, so the program means what it reads as;
+    /// * `Ok`/`Err` in a fn returning `Result[i64, i64]`, with `Slot.Ok` and
+    ///   `Slot.Err` declared. This leg is here because the row's own `Err`
+    ///   probe reported 40 stable runs and could not explain it: that fixture
+    ///   DECLARED the colliding variant but never used a bare `Err`, so it
+    ///   never exercised the collision. Measured on the stashed compiler, a
+    ///   fixture that does use one is nondeterministic like the rest — 16/30
+    ///   and 11/30 for `Err` and `Ok` — against 30/30 for the declare-only
+    ///   shape;
+    /// * `Sink.None` qualified — still the user's variant, which is what makes
+    ///   the built-in-wins rule survivable;
+    /// * `Other(7)` with a user `MyIoErr.Other` against the seeded
+    ///   `IoError.Other(String)` — the USER's wins here, the opposite way, and
+    ///   deliberately: that preference is one codegen already documents, and
+    ///   inverting it would let a prelude type hijack a user's constructor.
+    ///   This line was a coin flip too (6/20 before the fix).
+    ///
+    /// The last two are why the rule is a fixed four-name table rather than
+    /// "prelude beats user": both directions are needed, and only the
+    /// `Option`/`Result` constructors go the built-in way. Determinism alone
+    /// would not have been enough — sorting the scan makes the answer stable,
+    /// and stably WRONG for `Other` unless the user/prelude tiering is there
+    /// too.
+    #[test]
+    fn test_e2e_user_enum_shadowing_builtin_variant_names() {
+        assert_eq!(
+            run_program(
+                "enum Sink { None, Open(i64) }\n\
+                enum Slot { Ok, Err, Eof }\n\
+                enum MyIoErr { Other(i64), Eof }\n\
+                fn make(x: i64) -> Option[i64] { if x > 0 { Some(x) } else { None } }\n\
+                fn div(x: i64) -> Result[i64, i64] { if x > 0 { Ok(x) } else { Err(0 - 1) } }\n\
+                fn main() {\n\
+                    match make(1) { Some(v) => println(v), None => println(-1) }\n\
+                    match make(0) { Some(v) => println(v), None => println(-1) }\n\
+                    match div(2) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                    match div(0) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                    let s: Sink = Sink.None;\n\
+                    match s { None => println(-2), Open(v) => println(v) }\n\
+                    let e = Other(7);\n\
+                    match e { Other(v) => println(v), Eof => println(-3) }\n\
+                }"
+            )
+            .as_deref(),
+            Some("1\n-1\n2\n-1\n-2\n7\n"),
+        );
+    }
+
     #[test]
     fn test_e2e_slice_read_accessors_have_codegen() {
         assert_eq!(
