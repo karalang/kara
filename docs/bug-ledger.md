@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 248 | 1 |
-| leak | 175 | 2 |
+| miscompile | 249 | 2 |
+| leak | 176 | 2 |
 | double-free | 127 | 0 |
 | run-vs-build | 118 | 1 |
 | codegen-gap | 108 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 860 | 5 |
+| codegen | 862 | 6 |
 | typecheck | 170 | 1 |
 | interp | 145 | 1 |
 | ownership | 47 | 0 |
@@ -124,19 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1191 surfaced · 7 open · 1172 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1193 surfaced · 8 open · 1173 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-18 | 2026-08-14 | codegen | high | Reassigning a `mut` CONTAINER field (`Vec` / `Map` / `Set`) of a `shared struct` never frees the OLD container -- the whole thing leaks, scaling with its contents. The `String` field twin is handled, the scalar field is trivially fine, and the PLAIN-struct twin is handled for every type, so this is the `shared struct` field-assign path missing the container arm it already has for `String`. | the `shared struct` field-assignment drop path -- it releases the old value for a `String` field but not for a `Vec` / `Map` / `Set` field. Plain-struct field reassignment is already correct (B-2026-07-31-39 family), so the working arm to mirror is one type-class over. |
 | B-2026-08-14-19 | 2026-08-14 | interp+codegen | medium | `String.substring` AT A NON-CODEPOINT BOUNDARY DIVERGES BETWEEN `karac run` AND `karac build`: the interpreter replaces each invalid byte with U+FFFD, codegen returns the raw bytes. The two results have DIFFERENT LENGTHS, so the divergence is not confined to what gets printed — `.len()`, `.bytes().len()` and `.chars().len()` all disagree. | `String.substring` is byte-indexed on both surfaces (both agree that `"\u65e5\u672c\u8a9e".len()` is 9), and both agree on every slice that lands on a codepoint boundary. They differ only in what they do with a slice that does not: the interpreter runs a LOSSY UTF-8 conversion over the byte range, codegen hands back the bytes verbatim. |
 | B-2026-08-14-20 | 2026-08-14 | typecheck | low | THE `String -> bytes -> String` ROUND TRIP DOES NOT TYPECHECK: `String.from_utf8(s.bytes())` fails with "expected 'Vec<u8>', found 'Slice[u8]'", and `Slice` has no `to_vec()`, so the only way back is a hand-rolled push loop. | `String.bytes()` returns `Slice[u8]`; `String.from_utf8` is signed `(Vec[u8]) -> Result[String, Utf8Error]`. Nothing bridges them — no implicit borrow-to-owned at the argument, and no `Slice.to_vec()` / `Vec.from_slice()`. |
 | B-2026-08-14-21 | 2026-08-14 | codegen | high | `s += x` ON A `mut ref String` PARAMETER IS SILENTLY DROPPED IN COMPILED CODE: the callee's append never reaches the caller's binding. `s.push_str(x)` and `s = s + x` through the SAME parameter both work, and the interpreter is correct on all three, so this is a run-vs-build divergence that produces a wrong answer with no diagnostic. | The `+=` compound-assignment lowering for `String` when the assignment target is a `mut ref` PARAMETER rather than a local. The value is evidently computed and stored somewhere that is not the referent — for a LOCAL target the same operator stores the right value (though it leaks the old buffer, B-2026-08-14-22), so the concatenation itself is fine and the store is not. |
 | B-2026-08-14-22 | 2026-08-14 | codegen | high | `s += x` ON A LOCAL `String` LEAKS THE ENTIRE PREVIOUS BUFFER ON EVERY APPEND: building a 160 KB string with 20,000 appends peaks at 1.5 GB of RSS — the exact sum of every intermediate — where `push_str` and `s = s + x` both peak at 2.5 MB. | The `+=` compound-assignment lowering for `String`. It evidently allocates a fresh concatenation and stores it over the binding without releasing the buffer the binding held. `s = s + x`, which produces the same value through an explicit assignment, DOES release — so the drop of the overwritten value exists and the `+=` path does not reach it. |
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 | B-2026-08-14-24 | 2026-08-14 | autopar | medium | a disjoint-write loop nested inside an `if` (or a bare block) is INVISIBLE to the auto-parallelisation analysis -- it is not declined with a reason, it is absent from `--concurrency-report` entirely, and it lowers sequentially with nothing to say so | the disjoint-write fan-out analysis walks only top-level statements of a function body — a loop nested in an `if` or a bare block is never reached |
+| B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
+| B-2026-08-14-26 | 2026-08-14 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--interp` applies it — for a scalar field as well as a container, so this is not a heap-ownership gap but a lost write. `karac check` passes and nothing reports an error; the program simply keeps the old value. | The FieldAccess-rooted branch of `compile_field_store`: with a SHARED chain root, `nested_store_place_ptr` or `place_chain_type_name` declines and the branch exits through the no-op tail. Two prior fixes in that same branch (B-2026-07-28-6, B-2026-08-01-35) were for this same tail — instrument which resolution returns None before changing anything. |
 
 ### Wontfix (2)
 
@@ -149,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1191 surfaced
 
 </details>
 
-### Fixed (1172)
+### Fixed (1173)
 
-<details><summary>1172 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1173 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6273,6 +6274,93 @@ not have, since the build would have been broken.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-14-18 | codegen | high | Reassigning a `mut` CONTAINER field (`Vec` / `Map` / `Set`) of a `shared struct` never frees the OLD container -- the whole thing leaks, scaling with… | FIXED by b0bc91d. A `shared struct` container-field assignment now releases the container it
+displaces.
+
+THE EXCLUSION WAS DELIBERATE AND ITS REASON WAS HALF-TRUE. The shared-struct
+field-store branch ends in a plain `build_store`, and the neighbouring code says
+why: "a shared parent keeps its raw store (its fields ride the RC node
+teardown)". That holds for the field's FINAL occupant and says nothing about one
+an assignment threw away — the teardown never sees that value. So the fix is a
+release BEFORE the store, in the one branch that lacked it. The plain-struct
+sibling has done exactly this for a year
+(`drop_old_plain_struct_field`, B-2026-07-15-25), which is the control that makes
+this a missing arm rather than a missing mechanism.
+
+DELIBERATELY NARROWER THAN THE PLAIN-STRUCT SIBLING, which drops any
+non-trivially-copyable field. On a shared node most fields DO ride the teardown,
+so dropping them here would double-free. The release fires for exactly the
+container family (`Vec` / `VecDeque` / `Map` / `Set` / `SortedMap` / `SortedSet`)
+and declines for everything else, each for its own reason:
+
+  * `String` — already released on this path (measured, see below);
+  * a bare `shared T` field — needs a refcount RELEASE, not a free, and an
+    aliasing RHS makes an unconditional one unsafe; that is why the
+    `Option[shared]` arm above returns before reaching here;
+  * a `weak T` field — intercepted by `try_emit_weak_field_store` earlier;
+  * scalars — own nothing.
+
+THE ROW'S BOUNDARY TABLE REPRODUCED, and the scaling claim with it. One fixture
+per row, Linux LSan, pre-fix:
+
+    shared struct, mut children: Vec[Node]        LEAK  88 B / 2
+    shared struct, mut tags: Vec[String]          LEAK  96 B / 1
+    shared struct, mut m: Map[String, i64]        LEAK 600 B / 3
+    shared struct, mut s: Set[String]             LEAK 472 B / 3
+    shared struct, mut label: String              clean
+    shared struct, mut n: i64                     clean
+    PLAIN struct, Vec[String] reassigned          clean
+
+A 30-iteration `Vec[i64]` reassign loop leaked 928 bytes in 29 allocations —
+one buffer per assignment, confirming the loss is per-assignment rather than a
+fixed header. The committed witness leaks 23456 bytes in 142 allocations
+pre-fix.
+
+THE SELF-ASSIGN OVERTURNED THE OBVIOUS REASONING, which is the part worth
+recording. Releasing before the store looks unsafe for `b.v = b.v`: free the
+buffer, then store a pointer to it back, and the next read is a use-after-free.
+That is precisely the hazard the `Option[shared]` field store's
+retain-then-store-then-release order exists to dodge ("also safe for
+`h.head = h.head`"), so the first version carried a guard declining whenever the
+RHS mentioned the base — the same `expr_mentions_name_deep` test
+`emit_displaced_field_bodies` uses. Measured, that guard LEAKED 96 bytes on
+`b.v = b.v` while the unconditional release was clean AND left the element
+readable. The hazard does not arise because reading a CONTAINER field out of a
+shared node yields an independent copy, so the RHS is never the value being
+freed. The guard was removed and the self-assign is now a committed fixture.
+
+ALIASING CHECKED IN BOTH DIRECTIONS, since an over-eager release fails as a
+double free rather than a leak and a leak-only fixture cannot see it. Self-assign
+(`b.v = b.v`), cross-node (`x.v = y.v`), a `ref self` method body
+(`self.v = fresh`), a moved-local RHS, and the `weak parent` tree this bug came
+from are all clean, each printing a value read AFTER the assignment so a
+freed-but-stored buffer is caught by the read as well as by LSan.
+
+THE ROW'S "`String` IS CLEAN" IS TRUE BUT NARROWER THAN IT READS, and finding
+that out cost the fixture a redesign. A String field is genuinely released here
+— a 30-iteration reassign loop over heap strings is clean, on the pre-fix
+compiler too, so this row's release correctly declines to touch it. But a
+FOUR-field `{Vec, Map, Set, String}` shared struct leaks 627 bytes over 19
+allocations on the same loop, identically before and after this fix. That is a
+separate, pre-existing, layout-dependent defect; it is filed as B-2026-08-14-25, and the
+String over-reach guard here was moved into its own single-field fixture so this
+row's witness asserts this row's bug and not that one.
+
+PINNED by three fixtures: the container witness (Vec[shared] / Vec[String] /
+Map / Set, refilled and reassigned 20 times so the loss scales with contents),
+the aliasing fixture above, and the String over-reach guard. The first two fail
+against the pre-fix compiler (23456 B / 142 allocs and 464 B / 6 allocs); the
+third passes on both by design.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean.
+
+NOT COVERED, and filed rather than folded in: the NESTED branch
+(`outer.inner.field = v` with a chained shared parent) has a different and worse
+problem — the store is silently DROPPED under `karac build` while `--interp`
+applies it, for a scalar field as well as a container. Measured on four shapes
+and verified pre-existing; filed as B-2026-08-14-26. It is a lost write rather
+than a leak, in a different branch, so this row's release does not apply to it. |
 
 </details>
 
