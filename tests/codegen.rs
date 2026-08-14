@@ -94956,6 +94956,12 @@ fn main() {
                      c.push(P { tag: f\"alpha{k}\" });\n\
                      Some(c)\n\
                  }\n\
+                 fn mkr(k: i64) -> Result[Vec[P], Vec[P]] {\n\
+                     let mut c: Vec[P] = Vec.new();\n\
+                     c.push(P { tag: f\"beta{k}\" });\n\
+                     if k > 100 { return Err(c); }\n\
+                     Ok(c)\n\
+                 }\n\
                  fn main() {\n\
                      let k = 1;\n\
                      let mut vms: Vec[Map[String, i64]] = Vec.new();\n\
@@ -94970,9 +94976,13 @@ fn main() {
                      let held = mk(k);\n\
                      match held { Some(v) => println(v[0].tag), None => println(\"none\") }\n\
                      match mk(k) { Some(v) => println(v[0].tag), None => println(\"none\") }\n\
+                     let okr = mkr(k);\n\
+                     match okr { Ok(v) => println(v[0].tag), Err(e) => println(e[0].tag) }\n\
+                     let err = mkr(200);\n\
+                     match err { Ok(v) => println(v[0].tag), Err(e) => println(e[0].tag) }\n\
                  }\n"
             ),
-            Some("1\ntrue\n1\n1\nalpha1\nalpha1\n".to_string())
+            Some("1\ntrue\n1\n1\nalpha1\nalpha1\nbeta1\nbeta200\n".to_string())
         );
     }
 }

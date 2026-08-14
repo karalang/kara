@@ -5626,7 +5626,18 @@ impl<'ctx> super::Codegen<'ctx> {
         option_te: &TypeExpr,
     ) -> Option<inkwell::values::FunctionValue<'ctx>> {
         let payload_te = Self::option_payload_te(option_te)?;
-        let elem_te = crate::codegen::helpers::vec_inner_type_expr(&payload_te)?;
+        self.vec_payload_elem_agg_drop(&payload_te)
+    }
+
+    /// The half-agnostic core of [`Self::option_payload_vec_elem_agg_drop`]:
+    /// given ONE payload type, the per-element aggregate drop fn if it is a
+    /// `Vec[<aggregate>]`. Shared with the `Result` sibling, whose two halves
+    /// are gated independently (a `Vec[P]` `Ok` beside a `String` `Err`).
+    pub(super) fn vec_payload_elem_agg_drop(
+        &mut self,
+        payload_te: &TypeExpr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let elem_te = crate::codegen::helpers::vec_inner_type_expr(payload_te)?;
         self.vec_elem_agg_drop_for_type_expr(&elem_te)
     }
 
@@ -6046,6 +6057,25 @@ impl<'ctx> super::Codegen<'ctx> {
         if is_nested {
             self.zero_init_option_slot_in_entry_block(result_slot, result_ty);
         }
+        // B-2026-08-14-15 leg B, `Result` half — the per-element drain for a
+        // `Vec[<aggregate>]` payload, gated per half and suppressed on a boxed
+        // side exactly like the overlay element type above.
+        let (ok_payload_elem_agg_drop, err_payload_elem_agg_drop) =
+            match Self::result_payload_tes(result_te) {
+                Some((ok_te, err_te)) => (
+                    if ok_boxed {
+                        None
+                    } else {
+                        self.vec_payload_elem_agg_drop(&ok_te)
+                    },
+                    if err_boxed {
+                        None
+                    } else {
+                        self.vec_payload_elem_agg_drop(&err_te)
+                    },
+                ),
+                None => (None, None),
+            };
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeInlineResultPayload {
                 result_slot,
@@ -6056,6 +6086,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 err_payload_elem_ty,
                 ok_payload_struct_drop,
                 err_payload_struct_drop,
+                ok_payload_elem_agg_drop,
+                err_payload_elem_agg_drop,
             });
         }
         self.inline_result_payload_vars.insert(var_name.to_string());
@@ -6107,6 +6139,14 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return false;
         };
+        let (ok_payload_elem_agg_drop, err_payload_elem_agg_drop) =
+            match Self::result_payload_tes(&te) {
+                Some((ok_te, err_te)) => (
+                    self.vec_payload_elem_agg_drop(&ok_te),
+                    self.vec_payload_elem_agg_drop(&err_te),
+                ),
+                None => (None, None),
+            };
         let slot = self.create_entry_alloca(cur_fn, "__owned_res_tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
@@ -6119,6 +6159,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 err_payload_elem_ty,
                 ok_payload_struct_drop,
                 err_payload_struct_drop,
+                ok_payload_elem_agg_drop,
+                err_payload_elem_agg_drop,
             });
             return true;
         }
@@ -9028,6 +9070,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 err_payload_elem_ty,
                 ok_payload_struct_drop,
                 err_payload_struct_drop,
+                ok_payload_elem_agg_drop,
+                err_payload_elem_agg_drop,
             } => {
                 // `Result[T, E]` shares the tagged-union layout `{tag, w0,
                 // w1, w2}` — the `Ok` and `Err` payloads OVERLAY the same
@@ -9085,7 +9129,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             *result_slot,
                             *result_ty,
                             *ok_payload_elem_ty,
-                            None,
+                            *ok_payload_elem_agg_drop,
                             fn_val,
                             vec_ty,
                             ptr_ty,
@@ -9118,7 +9162,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             *result_slot,
                             *result_ty,
                             *err_payload_elem_ty,
-                            None,
+                            *err_payload_elem_agg_drop,
                             fn_val,
                             vec_ty,
                             ptr_ty,

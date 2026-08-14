@@ -1224,6 +1224,16 @@ pub(crate) enum CleanupAction<'ctx> {
         ok_payload_struct_drop: Option<FunctionValue<'ctx>>,
         /// `Err`-side twin of [`Self::FreeInlineResultPayload::ok_payload_struct_drop`].
         err_payload_struct_drop: Option<FunctionValue<'ctx>>,
+        /// B-2026-08-14-15 leg B, `Result` half — per-element aggregate drop
+        /// for a `Vec[<aggregate>]` `Ok` payload. Exactly the
+        /// `FreeInlineOptionPayload::payload_elem_agg_drop` mechanism, gated
+        /// per half: `Result[Vec[P], String]` leaked its elements' heap on the
+        /// `Ok` side while the `Err` side was already correct. Only consulted
+        /// on the overlay branch — an `ok_payload_struct_drop` payload takes
+        /// the full struct drop instead and never reaches the overlay.
+        ok_payload_elem_agg_drop: Option<FunctionValue<'ctx>>,
+        /// `Err`-side twin of [`Self::FreeInlineResultPayload::ok_payload_elem_agg_drop`].
+        err_payload_elem_agg_drop: Option<FunctionValue<'ctx>>,
     },
     /// `Option[Map[K,V]]` / `Option[Set[T]]` inline payload free. Unlike the
     /// `{ptr,len,cap}` Vec/String payload, the `Some` payload is a single

@@ -48069,6 +48069,10 @@ fn main() {
     /// heap (the `String` inside `P`) was stranded. The inline `match mk()`
     /// form binds `v` as an owned `Vec[P]` and drains per element, so the two
     /// spellings of the same program disagreed.
+    ///
+    /// The `Result` half is here too, and it is not symmetry-by-assumption: it
+    /// was measured leaking the same 8 bytes on the `Ok` side, and each half is
+    /// gated independently, so `Result[Vec[P], Vec[P]]` exercises both.
     #[test]
     fn asan_bound_option_vec_of_aggregates_drains_elements() {
         assert_clean_asan_run(
@@ -48080,15 +48084,27 @@ fn mk(k: i64) -> Option[Vec[P]] {
     c.push(P { tag: s });
     Some(c)
 }
+fn mkr(k: i64) -> Result[Vec[P], Vec[P]] {
+    let mut c: Vec[P] = Vec.new();
+    let mut s = String.new(); s.push_str("beta"); s.push_str(k.to_string());
+    c.push(P { tag: s });
+    if k > 100 { return Err(c); }
+    Ok(c)
+}
 fn main() {
     let k = env.args().len() as i64;
     let held = mk(k);
     match held { Some(v) => println(v[0].tag.len()), None => println(0) }
+    let ok = mkr(k);
+    match ok { Ok(v) => println(v[0].tag.len()), Err(e) => println(e.len()) }
+    let er = mkr(200);
+    match er { Ok(v) => println(v[0].tag.len()), Err(e) => println(e[0].tag.len()) }
 }
 "#,
-            // "alpha1" — `k` is a stable 1, appended so the payload string is
+            // "alpha1" / "beta1" / "beta200" — `k` is a stable 1 (the binary
+            // runs with no args), appended so each payload string is
             // heap-allocated rather than a static literal.
-            &["6"],
+            &["6", "5", "7"],
             "bound_option_vec_of_aggregates_drains_elements",
         );
     }

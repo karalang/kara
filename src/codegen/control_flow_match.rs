@@ -9669,6 +9669,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let result_ty = layout.llvm_type;
         let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
         let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
+        // B-2026-08-14-15 leg B, `Result` half — per-element drain for a
+        // `Vec[<aggregate>]` payload, per half.
+        let (ok_payload_elem_agg_drop, err_payload_elem_agg_drop) =
+            match Self::result_payload_tes(&te) {
+                Some((ok_te, err_te)) => (
+                    self.vec_payload_elem_agg_drop(&ok_te),
+                    self.vec_payload_elem_agg_drop(&err_te),
+                ),
+                None => (None, None),
+            };
         let fn_val = self.current_fn?;
         let alloca = self.create_entry_alloca(fn_val, "__freshtemp_inline_res", result_ty.into());
         let _ = self.builder.build_store(alloca, sv);
@@ -9683,6 +9693,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     err_payload_elem_ty,
                     ok_payload_struct_drop,
                     err_payload_struct_drop,
+                    ok_payload_elem_agg_drop,
+                    err_payload_elem_agg_drop,
                 },
             );
         }
