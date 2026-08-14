@@ -5567,7 +5567,7 @@ MEASURED, interp / JIT / AOT all agreeing: `contains` hit and miss; `first` /
 `last` / `get` in range and `get` out of range (the `None` arm); the same over a
 `Vec[String]` slice, which is what catches the element-type default; and the two
 source-container controls. The codegen pin fails against the stashed compiler. |
-| B-2026-08-14-9 | codegen | medium | EIGHT more `Slice[T]` methods typecheck and interpret but have no codegen: the mutators `fill`/`reverse`/`sort`/`sort_by_key`/`swap` and the view-pro… | FIXED by 6bc8dcfa. All eight, plus a correction to what the row says about the interpreter.
+| B-2026-08-14-9 | codegen | medium | EIGHT more `Slice[T]` methods typecheck and interpret but have no codegen: the mutators `fill`/`reverse`/`sort`/`sort_by_key`/`swap` and the view-pro… | FIXED by 8339a6d. All eight, plus a correction to what the row says about the interpreter.
 
 THE ROW'S SURVEY IS WRONG ABOUT FOUR OF THEM, and the correction matters because it inverts which surface was worse. "Every entry `karac check`-clean and interp-correct" holds for `swap` and the three view-producers. It does not hold for `fill`, `reverse`, `sort` or `sort_by_key`: under `--interp` each was a SILENT NO-OP. `fn go(xs: mut Slice[i64]) { xs.sort(); }` over [3,1,2,5] left [3,1,2,5], reading through the slice itself as much as through the vector. So the codegen gap was the loud half of this row and the interpreter was the quiet half — a build error tells you to stop, `xs.sort()` doing nothing does not. `sort_by` has the same defect and is not in the row's list at all.
 
@@ -5668,7 +5668,7 @@ row recorded "there is no run in which all three agree"; the qualified
 determinism alone gets right. The codegen pin was additionally run across 25
 process seeds, since a single green run proves nothing about a bug whose whole
 character is that it passes half the time. |
-| B-2026-08-14-11 | typecheck+codegen | medium | An UNSUFFIXED float literal at a narrow-float annotation is never narrowed, on EITHER surface: `let a: f32 = 0.1` holds the f64 0.1 where `let b: f32… | FIXED by 254fc47, leg 1 of two. The second leg is split out as B-2026-08-14-12
+| B-2026-08-14-11 | typecheck+codegen | medium | An UNSUFFIXED float literal at a narrow-float annotation is never narrowed, on EITHER surface: `let a: f32 = 0.1` holds the f64 0.1 where `let b: f32… | FIXED by 039d204, leg 1 of two. The second leg is split out as B-2026-08-14-12
 after its blast radius was measured.
 
 LEG 1 IS ONE BUG WITH ONE CAUSE ON BOTH SURFACES, exactly as the row says.
