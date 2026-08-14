@@ -617,7 +617,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // byte-identical (it returns before reaching here for the shapes it
         // covers).
         if let ExprKind::Index { object: inner, .. } = &object.kind {
-            if !matches!(inner.kind, ExprKind::Identifier(_)) {
+            // B-2026-08-14-5 — an ARRAY root is admitted here alongside the
+            // non-identifier roots this branch was written for. The
+            // identifier-rooted branch above resolves its element pointer
+            // through `lower_indexed_elem_ptr_vec` / `_slice`, which have no
+            // Array sibling; this branch needs only the RC handle BY VALUE,
+            // which `compile_expr` on the Index already produces (the same read
+            // `let e = sa[0]` performs). Vec and Slice identifier roots stay
+            // excluded, so the branch above is byte-identical for every shape it
+            // already covered.
+            let array_root = matches!(&inner.kind, ExprKind::Identifier(n)
+                if self.array_elem_type_exprs.contains_key(n.as_str()));
+            if !matches!(inner.kind, ExprKind::Identifier(_)) || array_root {
                 if let Some(type_name) = self.type_name_of_expr(object) {
                     if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
                         if !info.is_enum {
@@ -725,6 +736,49 @@ impl<'ctx> super::Codegen<'ctx> {
                                             return Ok(self
                                                 .builder
                                                 .build_extract_value(elem, fidx as u32, field)
+                                                .unwrap());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // B-2026-08-14-5 — the fixed-size ARRAY sibling of the Vec arm above.
+        // `arr[0].a` where `arr: Array[Plain, 1]` reached the loud
+        // "cannot resolve field" gap while the identical read through a
+        // `Vec[Plain]` compiled and `--interp` ran it, because the two element
+        // types live in DIFFERENT tables: `var_elem_type_exprs` for a Vec and
+        // `array_elem_type_exprs` for an Array. That split is deliberate (~170
+        // readers treat a `var_elem_type_exprs` entry as "this is a
+        // Vec/Slice/Map"), so the arm has to be written rather than the gate
+        // widened.
+        //
+        // The whole-element read (`let el = arr[0]; el.a`) already compiles
+        // correctly, narrow unsigned fields included, so this materializes the
+        // element through that same path and extracts the field — no new
+        // element-loading machinery, and the two spellings cannot disagree.
+        if let ExprKind::Index { object: inner, .. } = &object.kind {
+            if let ExprKind::Identifier(arr_name) = &inner.kind {
+                if let Some(elem_te) = self.array_elem_type_exprs.get(arr_name.as_str()).cloned() {
+                    if let TypeKind::Path(path) = &elem_te.kind {
+                        if let Some(seg) = path.segments.last() {
+                            if self.struct_types.contains_key(seg.as_str())
+                                && !self.shared_types.contains_key(seg.as_str())
+                            {
+                                if let Some(names) = self.struct_field_names.get(seg).cloned() {
+                                    if let Some(fidx) = names.iter().position(|n| n == field) {
+                                        let elem = self.compile_expr(object)?;
+                                        if elem.is_struct_value() {
+                                            return Ok(self
+                                                .builder
+                                                .build_extract_value(
+                                                    elem.into_struct_value(),
+                                                    fidx as u32,
+                                                    field,
+                                                )
                                                 .unwrap());
                                         }
                                     }
@@ -3376,9 +3430,23 @@ impl<'ctx> super::Codegen<'ctx> {
             // arm `field_index_for(self.toks[i], "off")` found no element layout,
             // so `compile_field_access`'s generic tail returned the `i64 0`
             // placeholder — a silent miscompile of `self.field[i].subfield`.
+            //
+            // B-2026-08-14-5 — a fixed-size ARRAY resolves here too, on BOTH
+            // roots. Its element type lives in `array_elem_type_exprs` rather
+            // than `var_elem_type_exprs` (that split is deliberate — ~170
+            // readers treat a `var_elem_type_exprs` entry as "this is a
+            // Vec/Slice/Map"), so the Array had to be added as a FALLBACK read
+            // rather than by widening the table. Without it three shapes the
+            // Vec spelling handles failed to build: `arr[0].f.g` (this arm
+            // types the receiver of the second field), `h.arr[0].f` (an array
+            // held in a struct field), and an array of `shared struct`.
             ExprKind::Index { object, .. } => match &object.kind {
                 ExprKind::Identifier(n) => {
-                    match self.var_elem_type_exprs.get(n.as_str()).map(|te| &te.kind) {
+                    let te = self
+                        .var_elem_type_exprs
+                        .get(n.as_str())
+                        .or_else(|| self.array_elem_type_exprs.get(n.as_str()));
+                    match te.map(|te| &te.kind) {
                         Some(TypeKind::Path(p)) => p.segments.last().cloned(),
                         _ => None,
                     }
@@ -3398,7 +3466,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(obj_ty.as_str())?
                         .get(idx)?;
                     let elem_te = vec_inner_type_expr(field_te)
-                        .or_else(|| slice_inner_type_expr(field_te))?;
+                        .or_else(|| slice_inner_type_expr(field_te))
+                        .or_else(|| super::helpers::array_inner_type_expr(field_te))?;
                     match &elem_te.kind {
                         TypeKind::Path(p) => p.segments.last().cloned(),
                         _ => None,

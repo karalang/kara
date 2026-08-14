@@ -23438,6 +23438,65 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-5 — a field read through a FIXED-SIZE ARRAY index compiles,
+    /// at parity with the `Vec` spelling of the same read.
+    ///
+    /// `arr[0].a` failed to build with codegen's own "cannot resolve field …
+    /// (its type was not recorded for codegen)" while `v[0].a` on a `Vec` of
+    /// the same struct compiled and `--interp` ran it. Two tables, one split
+    /// deliberately: an Array binding's element type lives in
+    /// `array_elem_type_exprs`, not `var_elem_type_exprs`, because ~170 readers
+    /// treat an entry in the latter as "this binding is a Vec/Slice/Map". So
+    /// the Array had to be added as a fallback READ at each resolution point,
+    /// not by widening the table.
+    ///
+    /// FOUR SHAPES, because the row's single repro understated the gap — the
+    /// Vec arm has three siblings the Array path also lacked, each failing the
+    /// same way while its Vec twin compiled:
+    ///
+    ///   arr[0].f          the reported one (and with a variable index)
+    ///   arr[0].f.g        the receiver of the SECOND field needs typing too
+    ///   h.arr[0].f        an array held in a struct FIELD
+    ///   sa[0].f           an array of `shared struct`, which resolves its RC
+    ///                     handle by value rather than through the
+    ///                     Vec/Slice-only element-pointer helpers
+    ///
+    /// Every line is a loud build failure pre-fix, never a wrong answer, which
+    /// is why the row was medium rather than high — and why this test asserts
+    /// values rather than needing a sanitizer twin.
+    #[test]
+    fn test_e2e_field_read_through_an_array_index_compiles() {
+        assert_eq!(
+            run_program(
+                "struct Plain { a: u8, n: i64 }\n\
+                 struct Inner { q: i64 }\n\
+                 struct Outer { i: Inner }\n\
+                 struct HolderA { arr: Array[Plain, 2] }\n\
+                 shared struct Sh { v: i64 }\n\
+                 fn main() {\n\
+                     let m = Plain { a: 200, n: 7 };\n\
+                     let m2 = Plain { a: 5, n: 9 };\n\
+                     let arr: Array[Plain, 2] = [m, m2];\n\
+                     println(f\"{arr[0].a} {arr[0].n}\");\n\
+                     let i = 1;\n\
+                     println(f\"{arr[i].a} {arr[i].n}\");\n\
+                     let o = Outer { i: Inner { q: 5 } };\n\
+                     let oa: Array[Outer, 1] = [o];\n\
+                     println(f\"{oa[0].i.q}\");\n\
+                     let m3 = Plain { a: 9, n: 6 };\n\
+                     let m4 = Plain { a: 4, n: 2 };\n\
+                     let h = HolderA { arr: [m3, m4] };\n\
+                     println(f\"{h.arr[0].a} {h.arr[1].n}\");\n\
+                     let s = Sh { v: 42 };\n\
+                     let sa: Array[Sh, 1] = [s];\n\
+                     println(f\"{sa[0].v}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("200 7\n5 9\n5\n9 2\n42\n"),
+        );
+    }
+
     /// B-2026-08-13-20 — a Vec whose `cap` has been zeroed must not walk its
     /// ELEMENTS either, not just skip the buffer free.
     ///
