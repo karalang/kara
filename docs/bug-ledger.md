@@ -95,9 +95,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 247 | 0 |
 | leak | 174 | 1 |
 | double-free | 127 | 0 |
-| run-vs-build | 117 | 0 |
+| run-vs-build | 118 | 1 |
 | codegen-gap | 108 | 0 |
-| missing-feature | 95 | 0 |
+| missing-feature | 96 | 1 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 856 | 1 |
-| typecheck | 169 | 0 |
-| interp | 144 | 0 |
+| codegen | 857 | 2 |
+| typecheck | 170 | 1 |
+| interp | 145 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
 | autopar | 40 | 0 |
@@ -124,13 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1185 surfaced · 1 open · 1172 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1187 surfaced · 3 open · 1172 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-18 | 2026-08-14 | codegen | high | Reassigning a `mut` CONTAINER field (`Vec` / `Map` / `Set`) of a `shared struct` never frees the OLD container -- the whole thing leaks, scaling with its contents. The `String` field twin is handled, the scalar field is trivially fine, and the PLAIN-struct twin is handled for every type, so this is the `shared struct` field-assign path missing the container arm it already has for `String`. | the `shared struct` field-assignment drop path -- it releases the old value for a `String` field but not for a `Vec` / `Map` / `Set` field. Plain-struct field reassignment is already correct (B-2026-07-31-39 family), so the working arm to mirror is one type-class over. |
+| B-2026-08-14-19 | 2026-08-14 | interp+codegen | medium | `String.substring` AT A NON-CODEPOINT BOUNDARY DIVERGES BETWEEN `karac run` AND `karac build`: the interpreter replaces each invalid byte with U+FFFD, codegen returns the raw bytes. The two results have DIFFERENT LENGTHS, so the divergence is not confined to what gets printed — `.len()`, `.bytes().len()` and `.chars().len()` all disagree. | `String.substring` is byte-indexed on both surfaces (both agree that `"\u65e5\u672c\u8a9e".len()` is 9), and both agree on every slice that lands on a codepoint boundary. They differ only in what they do with a slice that does not: the interpreter runs a LOSSY UTF-8 conversion over the byte range, codegen hands back the bytes verbatim. |
+| B-2026-08-14-20 | 2026-08-14 | typecheck | low | THE `String -> bytes -> String` ROUND TRIP DOES NOT TYPECHECK: `String.from_utf8(s.bytes())` fails with "expected 'Vec<u8>', found 'Slice[u8]'", and `Slice` has no `to_vec()`, so the only way back is a hand-rolled push loop. | `String.bytes()` returns `Slice[u8]`; `String.from_utf8` is signed `(Vec[u8]) -> Result[String, Utf8Error]`. Nothing bridges them — no implicit borrow-to-owned at the argument, and no `Slice.to_vec()` / `Vec.from_slice()`. |
 
 ### Wontfix (2)
 
