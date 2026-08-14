@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
 | other | 30 | 0 |
-| use-after-free | 19 | 1 |
+| use-after-free | 19 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 867 | 7 |
+| codegen | 867 | 6 |
 | typecheck | 171 | 1 |
 | interp | 145 | 0 |
 | ownership | 48 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1201 surfaced · 10 open · 1179 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1201 surfaced · 9 open · 1180 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1201 surfaced
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-26 | 2026-08-14 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--interp` applies it — for a scalar field as well as a container, so this is not a heap-ownership gap but a lost write. `karac check` passes and nothing reports an error; the program simply keeps the old value. | The FieldAccess-rooted branch of `compile_field_store`: with a SHARED chain root, `nested_store_place_ptr` or `place_chain_type_name` declines and the branch exits through the no-op tail. Two prior fixes in that same branch (B-2026-07-28-6, B-2026-08-01-35) were for this same tail — instrument which resolution returns None before changing anything. |
-| B-2026-08-14-28 | 2026-08-14 | codegen | high | A `shared struct` LINKED LIST BUILT THROUGH A DUMMY-HEAD CURSOR IS READ AFTER FREE: `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTS under `karac build` and prints six lines of GARBAGE DIGITS under an ASAN build, while the interpreter is correct. The plain-build crash and the ASAN-build wrong answer are the same defect landing on different heap layouts. | The interaction between consuming an input `Option[shared]` chain with `if let Some(n) = a { a = n.next; }` and simultaneously BUILDING a result chain through a `tail` cursor (`tail.next = Some(node); tail = node;`) returned as `dummy.next`. Consuming without building is clean; building without the surrounding call structure is clean. |
 | B-2026-08-14-31 | 2026-08-14 | codegen | medium | Printing a whole `Map` or `Set` STRUCT FIELD emits a raw pointer address under `karac build` — `println(f"{b.m}")` gives `{aaaaaaaaaaaa: 1}` under `--interp` and `94924495492304` compiled. The bound-variable spelling is correct on both, so it is the place expression that falls through, and the fall-through prints an address rather than failing. | `compile_print`'s value-kind fall-through: the identifier arms key off per-variable side tables, and B-2026-07-28-12 added a span-typed non-identifier arm for `Vec` only. Mirror it for `Map`/`Set` with `emit_map_display_fn` / `emit_set_display_fn`, and reuse `print_vec_operand_is_owned_temp` for the drop decision — B-2026-08-14-30 is what happens when that arm takes ownership of a place expression. |
 | B-2026-08-14-32 | 2026-08-14 | codegen | high | an index read into a heap-owning Vec, used as the value of an `if`/`match` ARM, is freed by both the binding and the container -- `let w = if c { v[i] } else { .. }` aborts with a double free while `let w = v[i]` is correct | src/codegen/stmts.rs:4074 and let_binding_is_borrow_elided (stmts.rs:1581) test only the TOP-LEVEL RHS kind for ExprKind::Index; an index read reached through an If/Match arm is invisible to them, so the binding registers an owned cleanup over a pointer the container still owns. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1201 surfaced
 
 </details>
 
-### Fixed (1179)
+### Fixed (1180)
 
-<details><summary>1179 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1180 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6607,6 +6606,19 @@ MEASURED. The kata itself (`leetcode/1-100/54-spiral-matrix/spiral_boundary.kara
 NOT THE SAME BUG AS B-2026-08-14-28, checked rather than assumed. The two were filed by one probe commit and share a "value bound out of a container" description, so it was worth testing: `leetcode/1-100/2-add-two-numbers/iterative.kara` still SEGFAULTs after this fix. That row stands on its own.
 
 GATES: fmt / clippy / the full `--features llvm` suite (103 targets) all clean. The asan `-O0` leg reports one failure, `asan_shared_struct_string_field_reassign_no_leak` — checked against the parent commit rather than waved through, and it fails there identically. That is B-2026-08-14-25's fixture and is untouched by this change. |
+| B-2026-08-14-28 | codegen | high | A `shared struct` LINKED LIST BUILT THROUGH A DUMMY-HEAD CURSOR IS READ AFTER FREE: `leetcode/1-100/2-add-two-numbers/iterative.kara` SEGFAULTS under… | FIXED by be32e463. SAME WRONG ABLATION LINE AS B-2026-08-14-27, AND THE SAME SUBSYSTEM. "KARAC_AUTO_PAR=0 SIGSEGV" is not what happens; auto-par is a COMPILE-time decision, so setting it on an already-built binary changes nothing. `KARAC_AUTO_PAR=0 karac build` produces all six correct lines. Both rows came from one probe session and carry the same measurement error, which is worth naming once: an env var that selects a codegen strategy has to be set on the BUILD, and an ablation that reads "same" for it should be re-run before it is trusted.
+
+THE ROW'S OTHER TWO ABLATIONS ARE ALSO WRONG, and correcting them is what shrank the repro. "Consume both lists, build NO result chain — CLEAN" is false: a function that only walks and sums both lists SEGFAULTs identically. "Build the chain, consume no input — CLEAN" is true but for the wrong reason — `from_array` builds a chain from a `Slice`, not from a let-bound `Option[shared]`. What is actually required is two `Option[shared]` locals LET-BOUND before the call; the dummy head, the result chain, the `report` frame and `to_string` are all removable. The row's one correct signal is the inline-versus-let-bound contrast, and it points at the parallelizer: three independent `let`s in a row is what makes a par group form at all.
+
+THE MECHANISM. A `let l = from_array(a)` returning an `Option[shared]` linked chain queues a `FreeClusterWalkOption` cleanup — follow the `next` links, free every node. Auto-par hoists the two `from_array` calls into branches. Each branch publishes its chain into the parent's return slot and then, on exit, RUNS THE WALK on the local it just published, freeing the entire list the parent is about to read. The publish-time suppression scan in `emit_par_branch_fn` has arms for `RcDec`, `RcDecOption`, `FreeInlineOptionPayload`, `FreeInlineOptionMapPayload` and `FreeInlineResultPayload`, and the transfer loop below it handles Map / File / Enum / Struct / UserDrop / Soa / Column / DataFrame / Tensor. Neither knew about the cluster walk. Every one of those arms exists because this exact failure was found once before at a different shape; this is the shape nobody had reached yet.
+
+TRANSFERRED, NOT SUPPRESSED, AND THE DIFFERENCE IS INVISIBLE TO OUTPUT. The first fix added the cluster walk to the sentinel-suppression scan: store a tag the guard treats as "nothing to drop". Every surface then agreed and every value printed correctly — and LeakSanitizer reported 400 bytes across 25 allocations, because suppressing the branch's walk left NOBODY freeing the list. The auto-par-off build of the same program is clean, so that would have traded a use-after-free for a leak and called it fixed. `SlotOwnership` gains `ClusterWalkOption` / `ClusterWalk` variants instead: the action is REMOVED from the branch frame and re-registered against the parent's alloca, making the parent the unique owner — which is what every other ownership-bearing slot shape has always done. `SlotOwnership` loses `Copy` (the variants carry the member struct's name); every consumer already took a reference.
+
+MEASURED. `leetcode/1-100/2-add-two-numbers/iterative.kara` now prints its six lines identically on `--interp`, JIT, JIT at -O0, AOT, AOT at -O0 and AOT with auto-par off, and runs clean under ASAN with LeakSanitizer live. The five reductions from the bisection re-run clean. `spiral_boundary.kara` — the sibling kata from B-2026-08-14-27, the other row this par machinery touches — is re-verified unregressed.
+
+A permanent ASAN test (`asan_shared_cluster_published_from_a_par_branch`) and its plain-build twin pin the shape. The ASAN one is the gate that matters: it is the only one that can tell a correct transfer from the suppression-only version, since both print the same numbers.
+
+GATES: fmt / clippy / the full `--features llvm` suite (103 targets) clean. The asan `-O0` leg flags one fixture, `asan_shared_struct_string_field_reassign_no_leak`, which is B-2026-08-14-25's and fails identically on the parent commit; both tests added here pass at `-O0` as well. |
 | B-2026-08-14-29 | typecheck | medium | COMPOUND ASSIGNMENT IS NOT OPERAND-TYPE-CHECKED AT ALL: `s += 1i64` on a String, `n += "a"` on an i64, and `p += 1i64` on a struct all report "All ch… | FIXED by 0fea7d1. All four shapes in the row now report a proper typecheck
 error with a source span, and every valid compound assignment still checks.
 
