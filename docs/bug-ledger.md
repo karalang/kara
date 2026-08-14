@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 246 | 0 |
-| leak | 172 | 0 |
+| leak | 173 | 1 |
 | double-free | 127 | 0 |
 | run-vs-build | 116 | 1 |
 | codegen-gap | 108 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 852 | 1 |
+| codegen | 853 | 2 |
 | typecheck | 169 | 1 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1181 surfaced · 1 open · 1168 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1182 surfaced · 2 open · 1168 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-14 | 2026-08-14 | typecheck+codegen | medium | A TENSOR-scalar operation never checks its scalar operand against the element type: `Tensor[f16] * some_f64` silently narrows the f64 to `f16`, and `Tensor[f64] + some_i64` — which design.md's own worked example specifies as a compile error — runs under `--interp` and FAILS TO BUILD with codegen's "likely a typechecker gap" message. | The tensor-scalar broadcast arm, wherever it resolves a scalar operand against the element type; B-2026-08-14-13's gate keys on both operands being `Type::Float`, so a `Tensor[E, …]` operand never enters it. Message family already exists in `src/typechecker/expr_ops.rs`. |
+| B-2026-08-14-15 | 2026-08-14 | codegen | high | Two leaks that share one polarity: a NESTED CONTAINER read into a `let` BINDING and then consumed leaks, while the identical read consumed INLINE is clean. LEG A -- a `Map` read out of a `Vec[Map[..]]` element and queried with `.get()` leaks the WHOLE Map (602 B / 4 allocs per element). LEG B -- an `Option`/`Result[Vec[Struct]]` `let`-bound then matched leaks every element's heap field. Both scale linearly with data size. | the drop/ownership decision for a `let` binding whose initializer reads a nested container out of a Vec ELEMENT (leg A) or out of an Option/Result payload (leg B). Same let-vs-inline polarity as B-2026-08-11-30 leg A (fixed, 19d0e9a) -- worth checking whether that fix's `nonescaping_param_names` gate has a binding-site sibling. |
 
 ### Wontfix (2)
 
