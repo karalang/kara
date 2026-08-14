@@ -48108,4 +48108,151 @@ fn main() {
             "bound_option_vec_of_aggregates_drains_elements",
         );
     }
+
+    #[test]
+    fn asan_shared_struct_container_field_reassign_no_leak() {
+        // B-2026-08-14-18: reassigning a `mut` CONTAINER field of a
+        // `shared struct` never freed the container it displaced. The plain
+        // `build_store` on that path was deliberate — "a shared parent keeps its
+        // raw store (its fields ride the RC node teardown)" — and that reasoning
+        // holds for the field's FINAL occupant while saying nothing about one an
+        // assignment threw away: the teardown never sees that value.
+        //
+        // LOOPED 20 times because the loss is PER ASSIGNMENT, not a fixed
+        // header. Pre-fix a single `Vec[Node]` reassign stranded 88 bytes in 2
+        // allocations and a one-entry `Map[String, i64]` 600 in 3; the loop
+        // multiplies that per container, so a partial fix cannot hide in the
+        // noise. The containers are re-filled each iteration so every displaced
+        // one owns element heap, which is what makes the loss scale with
+        // CONTENTS rather than stopping at the control block.
+        //
+        // The `label: String` reassign is an OVER-REACH GUARD, not a witness: a
+        // String field on this path was already released correctly (measured
+        // against the pre-fix compiler), so a fix that released it a second time
+        // shows up here as a double free rather than a pass. It is declared
+        // FIRST deliberately — the four-field order `Vec, Map, Set, String` has
+        // a separate, pre-existing, layout-dependent String leak that is not
+        // this row's and would make the fixture assert two things at once.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { name: String, mut size: i64, mut children: Vec[Node] }
+shared struct Reg { mut label: String, mut tags: Vec[String], mut m: Map[String, i64], mut s: Set[String] }
+fn main() {
+    let root = Node { name: "rootrootrootroot", size: 1, children: Vec.new() };
+    let kid = Node { name: "kidkidkidkidkidk", size: 2, children: Vec.new() };
+    root.children.push(kid);
+    let r = Reg { label: "seedseedseedseedseed", tags: Vec.new(), m: Map.new(), s: Set.new() };
+    let mut k = 0;
+    while k < 20 {
+        r.tags.push("alphabetalphabetalphabet");
+        let _ = r.m.insert("gammagammagammagammagam", k);
+        let _ = r.s.insert("deltadeltadeltadeltadel");
+
+        let fresh_t: Vec[String] = Vec.new();
+        let fresh_m: Map[String, i64] = Map.new();
+        let fresh_s: Set[String] = Set.new();
+
+        r.tags = fresh_t;
+        r.m = fresh_m;
+        r.s = fresh_s;
+        k = k + 1;
+    }
+    let kept: Vec[Node] = Vec.new();
+    root.children = kept;
+    println(f"{r.tags.len()} {r.m.len()} {r.s.len()} {root.children.len()}");
+}
+"#,
+            &["0 0 0 0"],
+            "asan_shared_struct_container_field_reassign_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_shared_struct_container_field_reassign_aliasing() {
+        // B-2026-08-14-18, the other direction: freeing the displaced container
+        // must not free one that is still reachable. Three shapes, each of which
+        // an over-eager release turns into a double free or a use-after-free
+        // rather than a leak — and each printing a value read AFTER the
+        // assignment, so a freed-but-stored buffer is caught by the read and not
+        // only by LSan.
+        //
+        // The SELF-ASSIGN is the one that overturned the obvious reasoning.
+        // Releasing before the store looks unsafe for `b.v = b.v` — free the
+        // buffer, then store a pointer to it back — which is the hazard the
+        // `Option[shared]` field store's retain-then-store-then-release order
+        // exists to dodge. It does not arise for a container, because reading
+        // one out of a shared node yields an independent copy. A guard that
+        // declined when the RHS mentioned the base was written first and LEAKED
+        // 96 bytes here; the unconditional release is clean and leaves the
+        // element readable, which is why the guard was removed.
+        //
+        // The last shape is the tree this bug came from: `shared struct Node`
+        // with a `weak parent` back-edge, pruned by replacing `children`
+        // wholesale — the ordinary way to filter a container field, and the one
+        // statement that leaked the entire discarded subtree.
+        assert_clean_asan_run(
+            r#"
+shared struct B { mut v: Vec[String] }
+shared struct Node { name: String, mut size: i64, mut children: Vec[Node], mut parent: weak Node }
+fn main() {
+    let b = B { v: Vec.new() };
+    b.v.push("alphabetalphabetalphabet");
+    b.v = b.v;
+    println(f"{b.v.len()} {b.v[0].len()}");
+    let x = B { v: Vec.new() };
+    let y = B { v: Vec.new() };
+    x.v.push("gammagammagammagammagam");
+    y.v.push("deltadeltadeltadeltadel");
+    x.v = y.v;
+    println(f"{x.v.len()} {x.v[0].len()}");
+    let root = Node { name: "rootrootrootroot", size: 10, children: Vec.new(), parent: None };
+    let a = Node { name: "aaaaaaaaaaaaaaaaaaa", size: 20, children: Vec.new(), parent: None };
+    let c = Node { name: "cccccccccccccccccc", size: 30, children: Vec.new(), parent: None };
+    a.parent = root;
+    c.parent = root;
+    root.children.push(a);
+    root.children.push(c);
+    let mut kept: Vec[Node] = Vec.new();
+    kept.push(c);
+    root.children = kept;
+    println(f"{root.children.len()} {root.children[0].size}");
+}
+"#,
+            &["1 24", "1 23", "1 30"],
+            "asan_shared_struct_container_field_reassign_aliasing",
+        );
+    }
+
+    #[test]
+    fn asan_shared_struct_string_field_reassign_no_leak() {
+        // B-2026-08-14-18's over-reach guard, kept in its own fixture and its
+        // own struct shape. A `String` field of a `shared struct` was ALREADY
+        // released on reassignment before this row — measured against the
+        // pre-fix compiler with exactly this program — so the container release
+        // must not touch it. A second release would show up here as a double
+        // free, which is the failure mode a leak-only fixture cannot see.
+        //
+        // One field on purpose. A four-field `Vec, Map, Set, String` shared
+        // struct has a SEPARATE, pre-existing, layout-dependent String leak
+        // (627 bytes over 19 allocations on a 20-iteration loop, identical on
+        // the pre-fix compiler); folding a String reassign into the container
+        // fixture made it assert that unrelated bug instead of this one.
+        assert_clean_asan_run(
+            r#"
+shared struct P { mut label: String }
+fn main() {
+    let p = P { label: "seedseedseedseedseed" };
+    let mut k = 0;
+    while k < 20 {
+        let fresh: String = "epsilonepsilonepsilon" + "zetazetazeta";
+        p.label = fresh;
+        k = k + 1;
+    }
+    println(f"{p.label.len()}");
+}
+"#,
+            &["33"],
+            "asan_shared_struct_string_field_reassign_no_leak",
+        );
+    }
 }

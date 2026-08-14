@@ -2084,6 +2084,39 @@ impl<'ctx> super::Codegen<'ctx> {
                                             return Ok(());
                                         }
                                     }
+                                    // B-2026-08-14-18 — release the DISPLACED
+                                    // old CONTAINER before clobbering the slot.
+                                    //
+                                    // Everything else on this path was already
+                                    // accounted for: an `Option[shared]` field
+                                    // returns above through the retain-aware
+                                    // store, a `weak` field is intercepted
+                                    // before the store reaches here, a scalar is
+                                    // a no-op, and a `String` field is released
+                                    // (measured — a 30-iteration reassign loop
+                                    // of heap strings is LSan-clean). A
+                                    // `Vec`/`Map`/`Set` field was simply
+                                    // overwritten, so the old container and
+                                    // everything it owned was stranded: 88 B for
+                                    // a one-element `Vec[Node]`, 600 B over 3
+                                    // allocations for a one-entry
+                                    // `Map[String, i64]`, and once per
+                                    // assignment — a 30-iteration loop leaked
+                                    // 29 buffers.
+                                    //
+                                    // "Its fields ride the RC node teardown" is
+                                    // true of the field's FINAL occupant and
+                                    // says nothing about one an assignment
+                                    // displaced; the teardown never sees that
+                                    // value. The plain-struct sibling has
+                                    // dropped the old field for a year
+                                    // (`drop_old_plain_struct_field`,
+                                    // B-2026-07-15-25), which is the control
+                                    // that makes this a missing arm rather than
+                                    // a missing mechanism.
+                                    self.release_old_shared_container_field(
+                                        &type_name, idx, field_ptr,
+                                    );
                                     // Field-store width coercion — see
                                     // `coerce_to_struct_field_ty`.
                                     let new_val = self.coerce_to_struct_field_ty_src(
@@ -2315,6 +2348,73 @@ impl<'ctx> super::Codegen<'ctx> {
     /// plain-owned-struct-field fall-through in `compile_field_store` — every
     /// special-cased field shape returns before reaching it and manages its own
     /// old-side release, so this never double-drops them.
+    /// B-2026-08-14-18 — free the container a `shared struct` field assignment
+    /// is about to displace.
+    ///
+    /// Deliberately narrower than [`Self::drop_old_plain_struct_field`], which
+    /// drops ANY non-trivially-copyable field. A shared node's fields ride the
+    /// RC teardown, so the only values that need freeing here are ones the
+    /// teardown will never see — and dropping more than that on this path would
+    /// double-free. So it fires for exactly the `Vec` / `Map` / `Set` family,
+    /// which the measurements name, and declines for everything else:
+    ///
+    ///   * `String`, which is already released on this path (verified: a
+    ///     30-iteration reassign loop over heap strings is LSan-clean, and
+    ///     adding a second release here would be a double free, not a fix);
+    ///   * a bare `shared T` field, which needs a refcount RELEASE, not a free —
+    ///     a different operation, and one an aliasing RHS makes unsafe to do
+    ///     unconditionally (the `Option[shared]` arm above exists for exactly
+    ///     that reason and returns before reaching here);
+    ///   * a `weak T` field, intercepted by `try_emit_weak_field_store` before
+    ///     the store ever arrives;
+    ///   * scalars, which own nothing.
+    ///
+    /// The drop is the same per-type machinery struct teardown uses, run
+    /// in-place through the field GEP BEFORE the new value is stored, so it
+    /// reads the live old `{ptr,len,cap}` / handle and frees exactly the
+    /// displaced value. The free inside the emitted drop fn is cap-guarded, so a
+    /// field that was moved out or is already empty no-ops.
+    ///
+    /// UNCONDITIONAL, INCLUDING A SELF-ASSIGN — measured, and the measurement
+    /// is worth recording because the obvious reasoning points the other way.
+    /// Freeing before the store looks unsafe for `b.v = b.v`: free the buffer,
+    /// then store a pointer to it back, and the next read is a use-after-free.
+    /// That is the hazard `Option[shared]`'s retain-then-store-then-release
+    /// order exists to dodge ("also safe for `h.head = h.head`"). It does not
+    /// arise here, because reading a CONTAINER field out of a shared node
+    /// yields an independent copy rather than the node's own buffer — so the
+    /// RHS is never the value being freed. A guard that declined when the RHS
+    /// mentioned the base was written first, and it LEAKED 96 bytes on
+    /// `b.v = b.v` while the unconditional release was clean and left the
+    /// element readable. Both directions were run under LSan; the guard was
+    /// removed.
+    fn release_old_shared_container_field(
+        &mut self,
+        type_name: &str,
+        idx: usize,
+        field_ptr: PointerValue<'ctx>,
+    ) {
+        let Some(field_te) = self
+            .struct_field_type_exprs
+            .get(type_name)
+            .and_then(|tes| tes.get(idx))
+            .cloned()
+        else {
+            return;
+        };
+        let is_container = crate::codegen::helpers::vec_inner_type_expr(&field_te).is_some()
+            || matches!(&field_te.kind, TypeKind::Path(p)
+                if p.segments.last().is_some_and(|n| n == "Map" || n == "Set"
+                    || n == "VecDeque" || n == "SortedMap" || n == "SortedSet"));
+        if !is_container || self.is_string_type_expr(&field_te) {
+            return;
+        }
+        let drop_fn = self.emit_drop_fn_for_type_expr(&field_te);
+        self.builder
+            .build_call(drop_fn, &[field_ptr.into()], "")
+            .unwrap();
+    }
+
     fn drop_old_plain_struct_field(
         &mut self,
         object: &Expr,
