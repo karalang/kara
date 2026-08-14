@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 246 | 0 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 111 | 2 |
+| run-vs-build | 112 | 2 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 848 | 1 |
-| typecheck | 164 | 1 |
+| codegen | 849 | 1 |
+| typecheck | 164 | 0 |
 | interp | 144 | 1 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced · 2 open · 1160 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1175 surfaced · 2 open · 1161 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-6 | 2026-08-14 | typecheck+codegen | medium | The int-to-float implicit widening is performed at NEITHER surface for a CONTAINER element: the interpreter stores an Int in a `Vec[f64]`, and the compiled backends store a float but never convert a lookup PROBE, so `Vec[f64].contains(some_int)` can never match on either. Split from B-2026-08-14-2, which fixed every position whose declared type is reachable from the AST. | Interpreter: the container-argument sites in method_call_seq.rs have no element type (a method call's receiver span carries the CALL's result type). Codegen: the lookup-probe conversion at the same sites' twins. Channel to add: a span set keyed by the argument, the `weak_elem_store_sites` pattern. |
 | B-2026-08-14-7 | 2026-08-14 | interp | medium | The interpreter performs f32 ARITHMETIC at f64 precision, so an `f32` result diverges from both compiled backends wherever the true f32 result would have rounded: `let a: f32 = 4000000000u32 as f32; a + 1.0` reads 4000000001 under `--interp` and 4000000000 compiled. The CAST itself rounds correctly — it is only the operators. | `Value::Float` is an f64 with no width tag, so every f32/f16/bf16 binop in eval_ops.rs computes and stores at f64. The narrowing CASTS were given explicit rounding (B-2026-07-22-4); the arithmetic path never was. |
+| B-2026-08-14-8 | 2026-08-14 | codegen | medium | `Slice[T].contains` typechecks and interprets but has NO codegen: `karac check` passes, `karac run --interp` answers correctly, `karac build` dies with "no handler for slice method 'contains'". `Slice.binary_search` on the same receiver builds fine, so it is a single missing dispatch arm, not a slice-wide gap | `compile_slice_method` (src/codegen/vec_method.rs / method_call.rs slice dispatch) has no `contains` arm, so it falls through to the catch-all error. The `Vec` twin at vec_method.rs's `"contains"` is the model — same loop, same element compare — and `Slice.binary_search` already has its slice arm, which is what shows this is one missing method rather than a slice-wide deferral. |
 
 ### Wontfix (2)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1174 surfaced
 
 </details>
 
-### Fixed (1160)
+### Fixed (1161)
 
-<details><summary>1160 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1161 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5418,6 +5418,80 @@ on every shape.
 
 Suite green with `--features llvm` (13587 passed, 0 failed); clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-14-6 | typecheck+codegen | medium | The int-to-float implicit widening is performed at NEITHER surface for a CONTAINER element: the interpreter stores an Int in a `Vec[f64]`, and the co… | FIXED by 780a1d6. `width-matrix --floats` loses every f64 divergence; the codegen
+and interpreter pins both fail against the stashed compiler, with the pre-fix
+output reproducing the row's own control table exactly.
+
+THE ROW'S CONTROL WAS RIGHT AND IS THE WHOLE DESIGN OF THE FIX. It measured
+`vd.push(200.0); vd.contains(some_u8)` as FALSE on both surfaces and concluded
+the compiled backend does not convert the probe either. That held, and it is
+what rules out the tempting one-sided fix: converting only the interpreter's
+store would have made the two surfaces agree on that `false`, which is agreement
+on the wrong answer. Four sub-fixes, two per surface:
+
+  CODEGEN, the probe. `Vec.contains` compiled its needle at whatever width and
+  class the argument had and compared it against the elements raw, so an `iN`
+  needle was matched against `double` elements. `coerce_literal_elem_to_type_from`
+  at the needle carries both the int-width and the int->float legs and picks
+  zext/uitofp from the SOURCE's signedness.
+
+  INTERPRETER, the store and the probe. It stores whatever `Value` the argument
+  evaluated to and keeps no declared element type, so a `Vec[f64]` held an
+  `Int`. The row's prescription -- a typechecker-recorded span set, the
+  `weak_elem_store_sites` pattern -- is what landed: `float_coerced_arg_sites`,
+  recorded wherever an integer expression sits in a float slot, consumed at the
+  container store, the container probe, and the assignment store.
+
+  The recording is BROAD and the consumption is NARROW, deliberately. A span in
+  that set is a fact about the program, not a standing instruction to convert;
+  three call sites convert, and every other reader of the set is free to ignore
+  it. Both consumers are idempotent (an already-`Float` value passes through)
+  and inert on unflagged spans.
+
+TWO MORE SITES, FOUND BY PROBING PAST THE ROW, both silent and both compiled-side:
+
+  * `Array[f64, N]` index-assign wrote the INTEGER'S BYTES into a double slot.
+    LLVM types a store by its value, so `store i8 %v, ptr %elem` into an
+    `[N x double]` is not an error -- it writes one byte and the next read comes
+    back as a denormal near zero. Same failure mode as the enum-payload and
+    map-value positions in B-2026-08-13-18, and invisible for the same reason:
+    the verifier has nothing to object to.
+
+  * a plain `x = some_u8` on an `f64` local took `coerce_scalar_to_type`, the
+    signedness-BLIND form, so the int->float leg B-2026-08-13-18 added chose
+    `sitofp` and `200u8` landed as -56.0. One word (`_from`); the RHS
+    expression was already in hand at that store.
+
+    Worth stating plainly: that second one is partly downstream of my own
+    earlier change. Before B-2026-08-13-18 the site fell through to a raw bit
+    write; after it, it converted with the wrong sign. Both are wrong answers,
+    but the arm is what put it on the float path, so fixing it here rather than
+    filing it is the honest call.
+
+WHAT REMAINS ON THE `--floats` AXIS IS NOT THIS ROW. 30 divergences, and every
+single one is a `-> f32` case where the interpreter keeps f64 precision and the
+compiled backends round correctly (`4294967295u32` -> f32 is 4294967296, and the
+compiled answer is the right one). That is B-2026-08-14-7. NOTE FOR THAT ROW:
+its title says f32 ARITHMETIC, and the sweep shows the same divergence at
+`field_assign`, `vec_push` and `vec_idx_assign`, where no arithmetic happens at
+all -- it is f32 STORAGE too, so the fix is the interpreter's float
+representation rather than its operators.
+
+`Set[f64]` / `Map[f64, _]` stayed out of scope exactly as the row said: the
+typechecker rejects a float key outright, which is the correct call.
+
+FILED SEPARATELY: `Slice[T].contains` typechecks and interprets but has no
+codegen arm at all (`karac build` dies with "no handler for slice method
+'contains'") -- hit because a `Slice[f64]` probe was in the sweep program, and
+nothing to do with floats. `Slice.binary_search` on the same receiver builds, so
+it is one missing arm.
+
+MEASURED, interp / JIT / AOT all agreeing: the row's five-line control table;
+the `Array` index-assign and the plain assign; a SIGNED `-5i8` through the
+container and the assignment, which must stay -5.0 and would read 251.0 under a
+blind zero-extension; and two no-coercion controls (a genuine float element, a
+genuine float field) that must be untouched. The other two sweep axes
+(`--quick`, `--narrowing`) are unchanged at 0. |
 
 </details>
 
