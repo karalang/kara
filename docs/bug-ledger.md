@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 246 | 0 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 114 | 2 |
+| run-vs-build | 114 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 851 | 2 |
+| codegen | 851 | 1 |
 | typecheck | 166 | 2 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1178 surfaced · 3 open · 1163 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1178 surfaced · 2 open · 1164 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-9 | 2026-08-14 | codegen | medium | EIGHT more `Slice[T]` methods typecheck and interpret but have no codegen: the mutators `fill`/`reverse`/`sort`/`sort_by_key`/`swap` and the view-producers `chunks`/`windows`/`split_at`. Split from B-2026-08-14-8, which fixed the four READ accessors by routing them through the Vec implementation — a route these eight cannot take | The `Slice` arm of the method dispatch in src/codegen/method_call.rs (~L5010). The four read accessors B-2026-08-14-8 fixed are ROUTED to `compile_vec_method` over a `{ptr,len,cap:0}` borrowed view; these eight cannot take that route, so each needs a real implementation over the 2-field header. |
 | B-2026-08-14-10 | 2026-08-14 | typecheck | high | NONDETERMINISTIC TYPECHECKING: a user enum declaring a variant named `None`, `Some` or `Ok` makes `karac check` return a COIN FLIP on identical input -- measured 15/30, 10/20 and 7/16 pass-vs-fail on three unchanged files. Root cause is a first-match `return` inside `for (enum_name, enum_info) in &self.env.enums` (src/typechecker/expr_ops.rs:352) over a `HashMap` whose iteration order is randomly seeded per process. On the runs that PASS, the JIT then fails LLVM `Module verification`. | src/typechecker/expr_ops.rs:352 -- `for (enum_name, enum_info) in &self.env.enums` returning the FIRST enum carrying a matching variant name; `self.env.enums` is `HashMap<String, EnumInfo>` (src/typechecker/env.rs:314). |
 | B-2026-08-14-11 | 2026-08-14 | typecheck+codegen | medium | An UNSUFFIXED float literal at a narrow-float annotation is never narrowed, on EITHER surface: `let a: f32 = 0.1` holds the f64 0.1 where `let b: f32 = 0.1f32` holds 0.10000000149011612, and `a == b` then answers false under `--interp` and true compiled — a run-vs-build split on a program with no arithmetic in it. | The float-literal path: `ExprKind::Float(f, sfx)` lowers through `const_float_for_suffix`, which reads the SUFFIX only — an unsuffixed literal is always a `double`, and nothing at the annotated `let` re-types or coerces it. Contrast the integer twin, which is correct (`let x: u8 = 200` stores an i8), and the same float literal at a struct field / fn param / `Vec` element, which codegen DOES narrow. So the gap is the scalar `let` specifically, in codegen; the typechecker's own `expr_types` already says f32 at that binding. |
 
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1178 surfaced
 
 </details>
 
-### Fixed (1163)
+### Fixed (1164)
 
-<details><summary>1163 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1164 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5569,6 +5568,25 @@ MEASURED, interp / JIT / AOT all agreeing: `contains` hit and miss; `first` /
 `last` / `get` in range and `get` out of range (the `None` arm); the same over a
 `Vec[String]` slice, which is what catches the element-type default; and the two
 source-container controls. The codegen pin fails against the stashed compiler. |
+| B-2026-08-14-9 | codegen | medium | EIGHT more `Slice[T]` methods typecheck and interpret but have no codegen: the mutators `fill`/`reverse`/`sort`/`sort_by_key`/`swap` and the view-pro… | FIXED by 6bc8dcfa. All eight, plus a correction to what the row says about the interpreter.
+
+THE ROW'S SURVEY IS WRONG ABOUT FOUR OF THEM, and the correction matters because it inverts which surface was worse. "Every entry `karac check`-clean and interp-correct" holds for `swap` and the three view-producers. It does not hold for `fill`, `reverse`, `sort` or `sort_by_key`: under `--interp` each was a SILENT NO-OP. `fn go(xs: mut Slice[i64]) { xs.sort(); }` over [3,1,2,5] left [3,1,2,5], reading through the slice itself as much as through the vector. So the codegen gap was the loud half of this row and the interpreter was the quiet half — a build error tells you to stop, `xs.sort()` doing nothing does not. `sort_by` has the same defect and is not in the row's list at all.
+
+THE INTERPRETER CAUSE IS ONE LINE OF DISPATCH ORDER. `eval_method_call` normalizes a `Value::Slice` receiver into a fresh `Value::Array` snapshot so the read-only methods see a uniform shape, and a "mut-Slice mutation methods" fence sits above it to exempt anything that must write through. That fence contained exactly one name: `swap`. Everything else ran against the copy and the copy was dropped. This is the failure the `split_at_mut` exemption note calls invisible — and four methods were living in it while the note was being written.
+
+FIXED BY SNAPSHOT-RUN-WRITE-BACK rather than four hand-written loops. All five are in-place permutations or overwrites that cannot change the LENGTH, so running the existing sequence implementation over a detached copy and copying the result back into `storage[start..start+len]` is equivalent — and it inherits the comparator machinery `sort` / `sort_by` / `sort_by_key` need (unsigned ordering, key closures, user `Ord`) instead of reimplementing it. The copy is also what makes the closures safe: a `sort_by_key` body that reads the same collection runs while no lock is held, where a loop mutating under a write guard would deadlock against its own receiver.
+
+CODEGEN: FOUR OF THE EIGHT ARE ROUTED, and the row's reason for excluding them does not survive checking. B-2026-08-14-8 held the mutators back because a `cap == 0` borrowed Vec header "is a lie to anything that could grow or reallocate". True — and exactly why `push` / `insert` / `extend` must never take that route. But `reverse`, `sort`, `sort_by` and `sort_by_key` cannot change the length: each permutes `[0, len)`, reading `ptr` and `len` and writing through `ptr`. Checked arm by arm in `compile_vec_method` — none of the four GEPs field 2 — so the borrowed view is as valid for them as for the reads, and the write lands in the caller's buffer precisely because the view aliases it. The comparator concern was real and is answered by the publish-and-restore that arm already performs: `sort` picks unsigned ordering via `vec_elem_type_name` and `sort_by_key` recovers its key shape via `var_elem_type_exprs`, both keyed by variable NAME, and a slice binding already registers its element `TypeExpr` under that name.
+
+THE OTHER FOUR HAVE NO VEC ANALOGUE and are implemented over the 2-field header. `swap` is element-type agnostic — it exchanges two whole values, so ownership never moves and a load/load/store/store is as correct for a `String` as for an `i64`; an out-of-range index is a no-op, matching the interpreter's `if i < len && j < len` rather than inventing a trap. `chunks` / `windows` allocate `count` slice headers and fill each with a view into the receiver's buffer, differing only in count and stride (chunks tile, `ceil(len/n)`, last one short; windows overlap, `len-n+1`); nothing is copied and nothing is owned, which is why the outer `Vec` needs no element drop. `split_at` now shares the `split_at_mut` arm, answering the question that arm's comment left open: the read-only halves MAY alias, because immutable views cannot observe the sharing, it is what the interpreter has always done, and copying would silently change the semantics of a `Slice[String]` half.
+
+`fill` IS THE ONLY ONE THAT CHANGES WHAT A SLOT OWNS, and it is where the memory bugs would have been. A trivially-copyable element is one store per slot. A heap element has to DROP what is already there and clone into it, through the memory-ABI helpers (`clone(src,dst)`, `drop(ptr)`) the repeat-literal path uses, or the fill leaks every overwritten value. The argument is CONSUMED, exactly as `Vec.filled` consumes its value — moved into slot 0, cloned into the rest — and dropped explicitly when the slice is empty, since there is then no slot to move it into and `empty.fill(x)` would otherwise leak `x`. `asan_slice_mutators_and_views_on_heap_elements` covers all three shapes; it is a Linux run, so LeakSanitizer is live and this is the authoritative gate rather than an output comparison.
+
+ONE REGISTRATION GAP FOUND BY USING THE RESULT. `chunks`/`windows` return `Vec[Slice[T]]`, and `let c = cs[0]` did not register `c` as a slice — `c.len()` then found no dispatcher, so the new builders produced a value that could not be consumed. The container's element `TypeExpr` is the only thing that can say so: the LLVM element type is the slice header struct, indistinguishable from any other two-field aggregate. `infer_slice_elem_from_rhs` now reads it.
+
+THE WHOLE `Slice` SURFACE NOW BUILDS. All twenty names in `SLICE_BUILTIN_METHODS` compile — which is why `test_codegen_rejects_unsupported_slice_method` no longer has a real method to probe with. That test has now cycled through `first()` and `windows()`, each time on its own comment's instruction to swap in another unsupported name; it probes a name the TYPECHECKER rejects instead, which still reaches the dispatcher (the harness drives codegen past typecheck errors) and still pins the only thing it was ever about — the fall-through must `Err` naming the method, never return a silent zero.
+
+MEASURED against the interpreter as oracle on all four surfaces and both optimization levels: a 16-line fixture covering every method, a partial window (a `split_at_mut` second half, where a fix that wrote from index 0 would corrupt the untouched first half), narrow-element stride, the degenerate counts (`n` wider than the slice, an empty receiver, a zero-length half), and a `String`-element pass. Zero divergences. |
 
 </details>
 
