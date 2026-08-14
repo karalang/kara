@@ -553,23 +553,21 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Bool
             }
-            "contains" => {
+            // B-2026-08-14-1 — `check_assignable` alone admits an implicit
+            // NARROWING into the element slot, which the language refuses
+            // everywhere else it is checked. These infer-then-compare arms
+            // never reached `check_int_widening_coercion`, so `Set[u8]` took a
+            // `300i64` with no diagnostic; the compiled build then truncated to
+            // 44 while the interpreter stored 300, leaving a `Set[u8]` holding
+            // a value its element type cannot represent. The `Map` sibling
+            // routes its slot args through `check_expr`, which is why
+            // `Map.insert` rejected the same shape all along. Applied to
+            // `SortedSet` too — same arms, same hole, and the sweep only
+            // probed the hashed one.
+            "contains" | "insert" | "remove" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
-                }
-                Type::Bool
-            }
-            "insert" => {
-                for arg in args {
-                    let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
-                }
-                Type::Bool
-            }
-            "remove" => {
-                for arg in args {
-                    let at = self.infer_expr(&arg.value);
+                    self.check_int_widening_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Bool
@@ -969,23 +967,21 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Bool
             }
-            "contains" => {
+            // B-2026-08-14-1 — `check_assignable` alone admits an implicit
+            // NARROWING into the element slot, which the language refuses
+            // everywhere else it is checked. These infer-then-compare arms
+            // never reached `check_int_widening_coercion`, so `Set[u8]` took a
+            // `300i64` with no diagnostic; the compiled build then truncated to
+            // 44 while the interpreter stored 300, leaving a `Set[u8]` holding
+            // a value its element type cannot represent. The `Map` sibling
+            // routes its slot args through `check_expr`, which is why
+            // `Map.insert` rejected the same shape all along. Applied to
+            // `SortedSet` too — same arms, same hole, and the sweep only
+            // probed the hashed one.
+            "contains" | "insert" | "remove" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
-                }
-                Type::Bool
-            }
-            "insert" => {
-                for arg in args {
-                    let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
-                }
-                Type::Bool
-            }
-            "remove" => {
-                for arg in args {
-                    let at = self.infer_expr(&arg.value);
+                    self.check_int_widening_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Bool

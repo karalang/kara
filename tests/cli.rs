@@ -16057,7 +16057,13 @@ pub fn shout(s: String) -> String { return s + "!"; }
 #[target(wasm_browser)]
 pub fn squares(n: i32) -> Vec[i32] {
     let mut o: Vec[i32] = Vec.new();
-    let mut i = 0;
+    // `i` is annotated because `let mut i = 0` defaults to `i64`, and pushing
+    // an `i64` into a `Vec[i32]` is an implicit NARROWING the language refuses
+    // (B-2026-08-14-1). It compiled here only because `Vec.push` was one of
+    // five slots that never ran the narrowing gate — the same `i * i` was
+    // already rejected at an annotated `let`, a call argument, and `Vec`'s own
+    // index-assign. Nothing about the wasm marshalling changes.
+    let mut i: i32 = 0;
     while i < n { o.push(i * i); i += 1; }
     return o;
 }

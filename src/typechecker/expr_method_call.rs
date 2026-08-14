@@ -4370,6 +4370,15 @@ impl<'a> super::TypeChecker<'a> {
                 // B-2026-08-08-2 — a `frozen` parameter reads as `ref T`; the
                 // ownership pass decides whether this store is legal.
                 let arg_ty = self.deref_frozen_param_arg(&args[0].value, arg_ty, &elem);
+                // B-2026-08-14-1 — reject an implicit NARROWING into the
+                // element slot. This gate is a hand-written slot check rather
+                // than a `check_expr` (see the `weak` comment above for why),
+                // and the narrowing rule rode on `check_expr`, so `Vec[u8]`
+                // accepted a `300i64` with no diagnostic — while `Vec`'s OWN
+                // index-assign, `v[i] = nsrc`, rejected it. Placed after the
+                // `frozen` deref so a `ref T` argument compares peeled, which
+                // is what the gate's own peel expects.
+                self.check_int_widening_coercion(&args[0].value, &elem, &arg_ty);
                 // Unify so an unsolved element typevar bound to the
                 // receiver (e.g. `let mut v = Vec.new(); v.push(x);`)
                 // gets pinned to the first push's value type. Otherwise

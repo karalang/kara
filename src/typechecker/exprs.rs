@@ -1215,6 +1215,28 @@ impl<'a> super::TypeChecker<'a> {
             _ => actual,
         };
         self.check_int_widening_coercion(expr, expected, &actual);
+        // B-2026-08-14-1 — an ANNOTATED TUPLE checks element-wise, which the
+        // whole-value gate above cannot do: it compares `(i64, i64)` against
+        // `(u8, u8)`, and neither side is an integer, so the gate returns
+        // immediately. `let t: (u8, u8) = (nsrc, nsrc)` with `nsrc: i64` was
+        // therefore accepted with no diagnostic while every scalar position
+        // rejected the same coercion.
+        //
+        // Additive by construction: it reports only narrowings, using element
+        // types already inferred above, so no expression is re-inferred and no
+        // previously-accepted program changes except the ones that were
+        // silently truncating. The per-element span is the element's own, so
+        // the diagnostic points at the offending component rather than the
+        // whole tuple.
+        if let (ExprKind::Tuple(elems), Type::Tuple(slots), Type::Tuple(actuals)) =
+            (&expr.kind, expected, &actual)
+        {
+            if elems.len() == slots.len() && elems.len() == actuals.len() {
+                for ((e, slot), got) in elems.iter().zip(slots.iter()).zip(actuals.iter()) {
+                    self.check_int_widening_coercion(e, slot, got);
+                }
+            }
+        }
         self.check_assignable(expected, &actual, expr.span.clone());
         // B-2026-07-02-6: a collection literal admitted against a
         // differently-widthed scalar element context (`total([10, 20, 30])`
@@ -3284,7 +3306,12 @@ impl<'a> super::TypeChecker<'a> {
     ///   - non-integer or non-concrete types (floats, generics, type vars,
     ///     `Error`) — the gate needs a concrete signed/unsigned width on both
     ///     sides, so those fall through untouched.
-    fn check_int_widening_coercion(&mut self, expr: &Expr, expected: &Type, actual: &Type) {
+    pub(super) fn check_int_widening_coercion(
+        &mut self,
+        expr: &Expr,
+        expected: &Type,
+        actual: &Type,
+    ) {
         if *actual == Type::Error {
             return;
         }

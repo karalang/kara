@@ -30523,6 +30523,81 @@ fn pass_two_resolves_the_argument_type_it_checks() {
     .is_empty());
 }
 
+/// B-2026-08-14-1 — five container/aggregate slots accepted an implicit
+/// NARROWING that every scalar position already refused.
+///
+/// The rule is B-2026-07-09-7 decision (B): only WIDENING coercions stay
+/// implicit. It rides on `check_int_widening_coercion`, which every
+/// `check_expr` boundary reaches — so the sites that hand-roll an
+/// infer-then-`check_assignable` slot check never got it. `check_assignable`
+/// is permissive between integer types by design, which is correct when the
+/// argument itself fixes the slot and wrong when the slot is already declared.
+///
+/// Why this is `soundness` and not a missing diagnostic: the two surfaces then
+/// DISAGREE. `Vec[u8]` + `push(300i64)` reads back 44 compiled and 300 under
+/// `--interp`, so the interpreter leaves a `Vec[u8]` holding a value its
+/// element type cannot represent. Rejecting at typecheck is what makes both
+/// correct, and is what the eleven sites that already checked were doing.
+///
+/// The source must be a VARIABLE. A literal is range-checked against the
+/// destination directly — a correct but different rejection that never
+/// exercises this path, which is why a literal-only probe would have reported
+/// these sites as fine.
+#[test]
+fn container_slots_reject_an_implicit_narrowing() {
+    let narrows = |src: &str| {
+        assert!(
+            typecheck_errors(src)
+                .iter()
+                .any(|e| e.message.contains("would narrow or change sign")),
+            "expected a narrowing rejection from: {src}"
+        );
+    };
+    // The five sites the sweep found leaking.
+    narrows(
+        "fn main() { let n = 300i64; let mut v: Vec[u8] = Vec.new(); v.push(n);          println(v.len()); }",
+    );
+    narrows(
+        "fn main() { let n = 300i64; let mut v: Vec[u8] = Vec.new(); v.push(44u8);          println(v.contains(n)); }",
+    );
+    narrows(
+        "fn main() { let n = 300i64; let mut s: Set[u8] = Set.new(); let _ = s.insert(n);          println(s.len()); }",
+    );
+    narrows(
+        "fn main() { let n = 300i64; let mut s: Set[u8] = Set.new();          println(s.contains(n)); }",
+    );
+    narrows(
+        "fn main() { let n = 300i64; let mut s: Set[u8] = Set.new();          println(s.remove(n)); }",
+    );
+    narrows("fn main() { let n = 300i64; let t: (u8, u8) = (n, n); println(t.0); }");
+    // Sign-changing at the same width is a narrowing under this rule too, and
+    // is the case a width-only check would miss.
+    narrows(
+        "fn main() { let n = -1i64; let mut v: Vec[u8] = Vec.new(); v.push(n);          println(v.len()); }",
+    );
+
+    // WIDENING at the same sites must stay implicit — the gate is one-directional,
+    // and rejecting these would break every program that relies on the rule.
+    typecheck_ok(
+        "fn main() { let n = 200u8; let mut v: Vec[i64] = Vec.new(); v.push(n);          println(v.contains(n)); }",
+    );
+    typecheck_ok(
+        "fn main() { let n = 200u8; let mut s: Set[i64] = Set.new(); let _ = s.insert(n);          println(s.contains(n)); }",
+    );
+    typecheck_ok("fn main() { let n = 200u8; let t: (i64, i64) = (n, n); println(t.0); }");
+    // Same element type is not a coercion at all.
+    typecheck_ok(
+        "fn main() { let n = 44u8; let mut v: Vec[u8] = Vec.new(); v.push(n);          println(v.contains(n)); }",
+    );
+    // A LITERAL that fits keeps the deliberate exemption: it was already
+    // range-checked against the destination, so re-flagging it here would be a
+    // spurious "needs `as`" on a value that provably fits.
+    typecheck_ok(
+        "fn main() { let mut v: Vec[u8] = Vec.new(); v.push(44);          println(v.contains(44)); }",
+    );
+    typecheck_ok("fn main() { let t: (u8, u8) = (1, 2); println(t.0); }");
+}
+
 /// B-2026-08-08-9 — a slot fixed by the EXPECTATION still owes the
 /// narrowing check.
 ///

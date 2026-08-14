@@ -1106,6 +1106,10 @@ impl<'a> super::TypeChecker<'a> {
             "contains" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
+                    // B-2026-08-14-1 — reject an implicit NARROWING into the
+                    // element slot. See the `Set` arms in `stdlib_map.rs` for
+                    // why infer-then-compare misses it.
+                    self.check_int_widening_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Bool
@@ -1113,6 +1117,10 @@ impl<'a> super::TypeChecker<'a> {
             "binary_search" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
+                    // B-2026-08-14-1 — reject an implicit NARROWING into the
+                    // element slot. See the `Set` arms in `stdlib_map.rs` for
+                    // why infer-then-compare misses it.
+                    self.check_int_widening_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 // B-2026-08-11-7 — binary search is only meaningful over a
@@ -1252,6 +1260,10 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
+                    // B-2026-08-14-1 — reject an implicit NARROWING into the
+                    // element slot. See the `Set` arms in `stdlib_map.rs` for
+                    // why infer-then-compare misses it.
+                    self.check_int_widening_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Unit
@@ -1402,6 +1414,10 @@ impl<'a> super::TypeChecker<'a> {
             "contains" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
+                    // B-2026-08-14-1 — reject an implicit NARROWING into the
+                    // element slot. See the `Set` arms in `stdlib_map.rs` for
+                    // why infer-then-compare misses it.
+                    self.check_int_widening_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Bool
@@ -1409,6 +1425,10 @@ impl<'a> super::TypeChecker<'a> {
             "binary_search" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
+                    // B-2026-08-14-1 — reject an implicit NARROWING into the
+                    // element slot. See the `Set` arms in `stdlib_map.rs` for
+                    // why infer-then-compare misses it.
+                    self.check_int_widening_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 // B-2026-08-11-7 — binary search is only meaningful over a
@@ -1506,6 +1526,10 @@ impl<'a> super::TypeChecker<'a> {
             "fill" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
+                    // B-2026-08-14-1 — reject an implicit NARROWING into the
+                    // element slot. See the `Set` arms in `stdlib_map.rs` for
+                    // why infer-then-compare misses it.
+                    self.check_int_widening_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
                 Type::Unit
