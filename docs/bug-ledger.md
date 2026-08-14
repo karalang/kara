@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 246 | 0 |
+| miscompile | 247 | 0 |
 | leak | 173 | 1 |
 | double-free | 127 | 0 |
 | run-vs-build | 116 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 853 | 2 |
+| codegen | 854 | 2 |
 | typecheck | 169 | 1 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1182 surfaced · 2 open · 1168 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1183 surfaced · 2 open · 1169 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1182 surfaced
 
 </details>
 
-### Fixed (1168)
+### Fixed (1169)
 
-<details><summary>1168 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1169 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5978,6 +5978,34 @@ what the old behaviour got wrong.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-14-16 | codegen | high | THE AUTO-PAR TABULATE REWRITE STORES A COMPUTED SUB-WORD ELEMENT AT 8 BYTES: a `while` loop whose body is `v.push(<computed u8>)` is rewritten to a h… | FIXED by fc266fa (committed under the id this row was first allocated,
+B-2026-08-14-15; renumbered to -16 on rebase after a concurrent session filed
+its own -15 in the same window). `emit_tabulate_store` now takes the pushed argument expression
+and narrows through `coerce_scalar_to_type_from(v, elem_ty, src)` before the
+store — the same call the push arm it replaces has always made. All four call
+sites (stmt-position and final-expr-position, in both the `try_emit_seq_tabulate_
+lowering` and collect-rewrite paths) already had the argument `Expr` in hand, so
+the change is the coercion plus threading that expression through.
+
+The `_from` form rather than the bare one because signedness matters on the
+WIDENING leg, and this store site can widen as well as narrow (a `u8`-typed value
+into a `Vec[i64]`); the source expression's Kāra type is what says zext vs sext.
+Truncation — the direction that was corrupting — is signedness-blind, and the
+coercion is a no-op at equal widths, so every shape that already worked is
+bit-identical.
+
+The allocation was never wrong, so nothing else in the lowering moved.
+
+PINNED by two new E2E tests beside the existing push-arm pair:
+`e2e_subword_vec_tabulate_store_narrows_to_elem_width` (the u8 nested-loop shape,
+which aborts against the pre-fix compiler) and
+`e2e_subword_vec_tabulate_store_narrows_u16_and_u32` (the width-family peers,
+pinned on values since they never crashed). Verified across all four surfaces —
+`--interp`, JIT, default `karac build`, and `KARAC_AUTO_PAR=0` — on fifteen
+bisect variants plus u8/i8/u16/i16/u32/i32/bool/i64 element types.
+
+Suite green: codegen 2958 passed, par_codegen 1067 passed, memory_sanitizer 255
+passed, non-llvm suites all green. fmt and clippy `--all --all-targets` clean. |
 
 </details>
 
