@@ -139,6 +139,100 @@ impl std::fmt::Debug for ExitPath {
     }
 }
 
+/// Convert an integer value sitting at a FLOAT-typed destination into the
+/// float it is declared to be (B-2026-08-14-2).
+///
+/// Kāra's widening coercions are implicit — `check_int_widening_coercion`
+/// rejects only narrowing — so an `i32` may legally appear wherever an `f64` is
+/// declared, with no `as` in the source. Codegen performs that conversion at
+/// every boundary (B-2026-08-13-18); the interpreter performed it NOWHERE, so
+/// the int simply stayed an int in a float slot. That is not a cosmetic
+/// difference: the operator dispatch has no mixed Int/Float arm, so
+/// `let x: f64 = some_u8; x == 200.0` did not answer wrong — it ABORTED, with a
+/// message asserting a typecheck error that `karac check` does not report.
+///
+/// Routed through `cast_value` so the destination's real storage precision
+/// applies: an `f32` slot rounds through `f32`, `f16`/`bf16` through their own
+/// helpers. Without that, `2147483647i32` into an `f32` would read back exactly
+/// on this surface and as `2147483648` on every compiled one.
+///
+/// Deliberately narrow. Only `Value::Int` at a float-named destination is
+/// touched — a value that is already a Float, a non-float destination, and
+/// every non-path type expression all pass through unchanged, so nothing that
+/// works today can change. Tuples recurse element-wise so an annotated
+/// `(f64, f64)` binding converts both halves.
+pub(crate) fn coerce_int_value_to_declared_float(val: Value, te: &TypeExpr) -> Value {
+    /// The element type of a fixed-size array annotation, in either spelling
+    /// the parser produces: the dedicated `TypeKind::Array` node, and the
+    /// `Array[T, N]` PATH form that Kāra's `[]` generic syntax yields.
+    /// `Vec[T]` is deliberately NOT accepted — see the call site.
+    fn array_elem_te(te: &TypeExpr) -> Option<TypeExpr> {
+        match &te.kind {
+            TypeKind::Array { element, .. } => Some((**element).clone()),
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Array") => {
+                match p.generic_args.as_ref()?.first()? {
+                    GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+    fn float_head(te: &TypeExpr) -> Option<&str> {
+        match &te.kind {
+            TypeKind::Path(p) if p.generic_args.is_none() => {
+                match p.segments.last().map(|s| s.as_str()) {
+                    Some(h @ ("f16" | "bf16" | "f32" | "f64" | "float")) => Some(h),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+    match (&val, &te.kind) {
+        (Value::Int(_), _) => match float_head(te) {
+            Some(head) => super::eval_expr::cast_value(val, head),
+            None => val,
+        },
+        (Value::Tuple(_), TypeKind::Tuple(elem_tes)) => {
+            let Value::Tuple(items) = val else {
+                unreachable!()
+            };
+            if items.len() != elem_tes.len() {
+                return Value::Tuple(items);
+            }
+            Value::Tuple(
+                items
+                    .into_iter()
+                    .zip(elem_tes.iter())
+                    .map(|(v, t)| coerce_int_value_to_declared_float(v, t))
+                    .collect(),
+            )
+        }
+        // `let a: Array[f64, 2] = [v, v]` — a fixed-size array annotation names
+        // its element type, so every slot converts. `Vec[f64]` deliberately does
+        // NOT appear here: a Vec's element type is not reachable from any
+        // annotation at the mutation site (`vp.push(v)` is a method call whose
+        // receiver span the typechecker overwrites with the call's own `Unit`
+        // result), which is why that half is filed separately.
+        (Value::Array(_), _) if array_elem_te(te).is_some() => {
+            let element = array_elem_te(te).unwrap();
+            let Value::Array(rc) = &val else {
+                unreachable!()
+            };
+            let converted: Vec<Value> = rc
+                .read()
+                .unwrap()
+                .iter()
+                .map(|v| coerce_int_value_to_declared_float(v.clone(), &element))
+                .collect();
+            *rc.write().unwrap() = converted;
+            val
+        }
+        _ => val,
+    }
+}
+
 /// Deep-clone a `Value`, materializing independent storage for the
 /// by-value collection variants (`Array`, `Map`, `Set`, `Tuple`,
 /// `Struct`, `EnumVariant`, `Slice`). The derived `Clone` on `Value`

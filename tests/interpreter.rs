@@ -28483,6 +28483,77 @@ fn test_field_bound_out_of_local_is_a_copy() {
     );
 }
 
+/// B-2026-08-14-2 — an int at a FLOAT-declared destination is converted, at
+/// every position whose declared type the interpreter can reach.
+///
+/// Kāra's widening coercions are implicit (`check_int_widening_coercion`
+/// rejects only narrowing), so an int may legally appear wherever a float is
+/// declared, with no `as` in the source. Codegen converts at every such
+/// boundary (B-2026-08-13-18); the interpreter converted at NONE, so the int
+/// stayed an int in a float slot — and because the operator dispatch has no
+/// mixed Int/Float arm, the program did not answer wrong, it ABORTED. On source
+/// `karac check` passes and `karac build` runs correctly, with a runtime
+/// message asserting a typecheck error that does not exist.
+///
+/// Every line is `true`, and every one of them aborted before the fix. They are
+/// in ONE program on purpose: each abort kills the run, so a reader who breaks
+/// the first position sees it immediately rather than a subtly wrong number.
+///
+/// The comparison against a float literal is what makes the conversion
+/// observable at all — printing `Int(200)` and `Float(200.0)` both render
+/// "200", which is why several of these positions look fine under any
+/// print-based oracle and were latently broken for as long as they were.
+#[test]
+fn test_int_at_a_float_destination_is_converted() {
+    assert_eq!(
+        run("struct Bx { mut f: f64 }\n\
+             fn takef(x: f64) -> bool { x == 200.0 }\n\
+             fn retf(v: u8) -> f64 { v }\n\
+             impl Bx { fn echo(self, x: f64) -> bool { x == 200.0 } }\n\
+             fn main() {\n\
+                 let v = 200u8;\n\
+                 let la: f64 = v;\n\
+                 println(la == 200.0);\n\
+                 println(takef(v));\n\
+                 println(retf(v) == 200.0);\n\
+                 let sl = Bx { f: v };\n\
+                 println(sl.f == 200.0);\n\
+                 let mut fa = Bx { f: 0.0 };\n\
+                 fa.f = v;\n\
+                 println(fa.f == 200.0);\n\
+                 let mb = Bx { f: 0.0 };\n\
+                 println(mb.echo(v));\n\
+                 let ta: (f64, f64) = (v, v);\n\
+                 println(ta.0 == 200.0);\n\
+                 let ae: Array[f64, 2] = [v, v];\n\
+                 println(ae[0] == 200.0);\n\
+             }"),
+        "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"
+    );
+}
+
+/// B-2026-08-14-2, the precision half: the conversion goes through the
+/// destination's real storage width, not straight to `f64`.
+///
+/// `Value::Float` is an f64, so a naive `i as f64` would let an `f32` slot hold
+/// a value it cannot represent — `2147483647i32` would read back exactly here
+/// and as `2147483648` on every compiled surface, trading one divergence for
+/// another. Routing through the existing `cast_value` table is what makes the
+/// `f32` / `f16` / `bf16` slots round the way their storage does.
+#[test]
+fn test_int_to_float_conversion_rounds_at_the_declared_width() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let big = 2147483647i32;\n\
+                 let wide: f64 = big;\n\
+                 let narrow: f32 = big;\n\
+                 println(wide);\n\
+                 println(narrow);\n\
+             }"),
+        "2147483647\n2147483648\n"
+    );
+}
+
 /// B-2026-08-13-16 — the MUTATION half of the pair above. Its sibling pinned
 /// that a field READ leaves the source intact; this pins that a WRITE through
 /// the new binding is not visible through the old one.

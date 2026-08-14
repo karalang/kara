@@ -1786,6 +1786,13 @@ impl<'a> super::Interpreter<'a> {
                         self.env.define(k.clone(), v.clone());
                     }
                 }
+                // B-2026-08-14-2 — an int argument at a FLOAT-declared parameter
+                // is an implicit widening the language permits; performing it
+                // here is what keeps `fn f(x: f64)` called with a `u8` from
+                // binding an Int that the body's first float comparison then
+                // ABORTS on. Looked up once per call, and `None` for a closure
+                // or builtin leaves those untouched.
+                let declared_tys = self.declared_param_tys_of_fn(&fn_name);
                 for (i, pat) in param_patterns.iter().enumerate() {
                     let val = if let Some(v) = arg_vals.get(i) {
                         v.clone()
@@ -1793,6 +1800,10 @@ impl<'a> super::Interpreter<'a> {
                         self.eval_expr_inner(default_expr)
                     } else {
                         continue;
+                    };
+                    let val = match declared_tys.as_ref().and_then(|tys| tys.get(i)) {
+                        Some(te) => super::exec::coerce_int_value_to_declared_float(val, te),
+                        None => val,
                     };
                     self.bind_pattern(pat, val);
                 }
@@ -2076,9 +2087,16 @@ impl<'a> super::Interpreter<'a> {
                 // the body when the callee returns that very arg.
                 self.record_passthrough_arg_moves(&fn_name, args);
 
+                // B-2026-08-14-2 — the RETURN half of the same widening rule:
+                // `fn f(v: u8) -> f64 { v }` hands back a float. Applied to the
+                // tail value and to an explicit `return` alike, so the two exits
+                // cannot disagree.
+                let ret_te = self.declared_return_ty_of_fn(&fn_name);
                 match result {
-                    Ok(v) => v,
-                    Err(ControlFlow::Return(v)) => v,
+                    Ok(v) | Err(ControlFlow::Return(v)) => match ret_te.as_ref() {
+                        Some(te) => super::exec::coerce_int_value_to_declared_float(v, te),
+                        None => v,
+                    },
                     Err(cf) => self.set_cf(cf),
                 }
             }
@@ -2112,6 +2130,71 @@ impl<'a> super::Interpreter<'a> {
     /// for the let-destructure gate (B-2026-08-01-12). A `ref T` /
     /// `mut ref T` param takes no ownership and stays out of the set; a
     /// name with no program-level fn (a closure) yields the empty set.
+    /// The callee's DECLARED parameter types, for the int-to-float coercion at
+    /// an argument position (B-2026-08-14-2).
+    ///
+    /// `Value::Function` carries patterns and defaults but not types, so the
+    /// declared type has to be read back off the program item. Same scan (and
+    /// same per-call cost) as [`Self::owned_param_names_of_fn`], which every
+    /// user-fn call already performs. `None` for a closure or a builtin, which
+    /// leaves those calls exactly as they are.
+    fn declared_param_tys_of_fn(&self, fn_name: &str) -> Option<Vec<crate::ast::TypeExpr>> {
+        if let Some(tys) = self.program.items.iter().find_map(|item| match item {
+            crate::ast::Item::Function(f) if f.name == fn_name => {
+                Some(f.params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>())
+            }
+            _ => None,
+        }) {
+            return Some(tys);
+        }
+        // An IMPL METHOD reaches this arm under its bare name — the env key is
+        // `Type.method` but `Value::Function` carries only `name`. Resolving by
+        // name alone would be unsound if two types both defined it, so this is
+        // FAIL-CLOSED: a name that matches more than one impl method yields
+        // `None` and leaves the call exactly as it is. Converting an Int to a
+        // Float against the wrong signature would be a miscompile, which is
+        // strictly worse than the crash it would be papering over.
+        let mut found: Option<Vec<crate::ast::TypeExpr>> = None;
+        for item in &self.program.items {
+            let crate::ast::Item::ImplBlock(imp) = item else {
+                continue;
+            };
+            for m in imp.items.iter().filter_map(|it| match it {
+                crate::ast::ImplItem::Method(f) => Some(f),
+                _ => None,
+            }) {
+                if m.name != fn_name {
+                    continue;
+                }
+                if found.is_some() {
+                    return None;
+                }
+                // A receiver occupies `param_patterns[0]`, so the type list has
+                // to be padded to keep the caller's index arithmetic honest.
+                // `Unit` is not a float, so the self slot never converts.
+                let mut tys: Vec<crate::ast::TypeExpr> = Vec::new();
+                if m.self_param.is_some() {
+                    tys.push(crate::ast::TypeExpr {
+                        kind: crate::ast::TypeKind::Tuple(Vec::new()),
+                        span: m.span.clone(),
+                    });
+                }
+                tys.extend(m.params.iter().map(|p| p.ty.clone()));
+                found = Some(tys);
+            }
+        }
+        found
+    }
+
+    /// The callee's DECLARED return type — the `ret_coerce` half of the same
+    /// rule: `fn f(v: u8) -> f64 { v }` must hand back a float.
+    fn declared_return_ty_of_fn(&self, fn_name: &str) -> Option<crate::ast::TypeExpr> {
+        self.program.items.iter().find_map(|item| match item {
+            crate::ast::Item::Function(f) if f.name == fn_name => f.return_type.clone(),
+            _ => None,
+        })
+    }
+
     fn owned_param_names_of_fn(&self, fn_name: &str) -> std::collections::HashSet<String> {
         self.program
             .items

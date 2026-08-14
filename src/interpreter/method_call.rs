@@ -182,6 +182,15 @@ pub(super) fn is_numeric_try_from_target(name: &str) -> bool {
 }
 
 impl<'a> super::Interpreter<'a> {
+    /// Head type name of an `impl` block's target (`impl Bx { … }` -> `Bx`),
+    /// for matching a method against its OWNING type rather than by bare name.
+    pub(super) fn impl_target_head(te: &crate::ast::TypeExpr) -> Option<String> {
+        match &te.kind {
+            crate::ast::TypeKind::Path(p) => p.segments.last().cloned(),
+            _ => None,
+        }
+    }
+
     /// Run a refinement type's `try_from` at runtime if `type_name` names a
     /// refinement (phase-9 step 5b): evaluate the predicate against the
     /// argument and return `Some(Ok(v))` / `Some(Err(msg))`. Returns `None`
@@ -374,6 +383,37 @@ impl<'a> super::Interpreter<'a> {
                 // `param_patterns` already includes the `self` binding for
                 // self-taking methods (prepended at impl-registration time),
                 // so a straight in-order bind handles both receiver and args.
+                // B-2026-08-14-2 — an int argument at a FLOAT-declared method
+                // parameter is the implicit widening the language permits, and
+                // this dispatch path knows the receiver's type NAME, so the
+                // signature can be resolved exactly rather than by bare method
+                // name (two impls may both define `echo`). The self slot is
+                // padded with a non-float placeholder so the index arithmetic
+                // matches `param_patterns`, which carries the receiver.
+                let declared_tys: Option<Vec<crate::ast::TypeExpr>> =
+                    self.program.items.iter().find_map(|item| {
+                        let crate::ast::Item::ImplBlock(imp) = item else {
+                            return None;
+                        };
+                        imp.items.iter().find_map(|it| match it {
+                            crate::ast::ImplItem::Method(m)
+                                if m.name == method
+                                    && Self::impl_target_head(&imp.target_type).as_deref()
+                                        == Some(type_name.as_str()) =>
+                            {
+                                let mut tys: Vec<crate::ast::TypeExpr> = Vec::new();
+                                if m.self_param.is_some() {
+                                    tys.push(crate::ast::TypeExpr {
+                                        kind: crate::ast::TypeKind::Tuple(Vec::new()),
+                                        span: m.span.clone(),
+                                    });
+                                }
+                                tys.extend(m.params.iter().map(|p| p.ty.clone()));
+                                Some(tys)
+                            }
+                            _ => None,
+                        })
+                    });
                 for (i, pat) in param_patterns.iter().enumerate() {
                     let val = if let Some(v) = arg_vals.get(i) {
                         v.clone()
@@ -381,6 +421,10 @@ impl<'a> super::Interpreter<'a> {
                         self.eval_expr_inner(default_expr)
                     } else {
                         continue;
+                    };
+                    let val = match declared_tys.as_ref().and_then(|tys| tys.get(i)) {
+                        Some(te) => super::exec::coerce_int_value_to_declared_float(val, te),
+                        None => val,
                     };
                     self.bind_pattern(pat, val);
                 }

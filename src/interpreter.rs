@@ -2280,8 +2280,25 @@ impl<'a> Interpreter<'a> {
                 _ => {}
             }
         }
+        // B-2026-08-14-2 — an int initializer at a FLOAT-declared field is an
+        // implicit widening the language permits; the struct definition names
+        // the type, so it converts here rather than staying an Int that the
+        // first float comparison on the field then aborts on.
+        let field_tys: HashMap<String, TypeExpr> = self
+            .find_struct_def(&name)
+            .map(|sd| {
+                sd.fields
+                    .iter()
+                    .map(|f| (f.name.clone(), f.ty.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
         for field in fields {
             let val = self.eval_expr_inner(&field.value);
+            let val = match field_tys.get(&field.name) {
+                Some(te) => exec::coerce_int_value_to_declared_float(val, te),
+                None => val,
+            };
             field_vals.insert(field.name.clone(), val);
         }
         // B-2026-07-22-11: the total-order float wrappers `F32 { value: x }` /
@@ -2642,6 +2659,36 @@ impl<'a> Interpreter<'a> {
                 true
             }
             ExprKind::FieldAccess { object, field } => {
+                // B-2026-08-14-2 — an int stored into a FLOAT-declared field is
+                // the same implicit widening the struct-literal path performs;
+                // doing it only there would leave `s.f = v` holding an Int in a
+                // slot the constructor would have made a Float.
+                //
+                // The receiver's struct name comes from the value already bound
+                // to a named receiver, so nothing is re-evaluated and no side
+                // effect repeats. A chained or computed receiver falls through
+                // unconverted rather than being evaluated twice to find out.
+                let new_val = match &object.kind {
+                    ExprKind::Identifier(_) | ExprKind::SelfValue => {
+                        let recv_name = match &object.kind {
+                            ExprKind::Identifier(n) => n.as_str(),
+                            _ => "self",
+                        };
+                        let sname = match self.env.get(recv_name) {
+                            Some(Value::Struct { name, .. }) => Some(name),
+                            _ => None,
+                        };
+                        match sname
+                            .and_then(|sn| self.find_struct_def(&sn))
+                            .and_then(|sd| sd.fields.iter().find(|f| &f.name == field))
+                            .map(|f| f.ty.clone())
+                        {
+                            Some(te) => exec::coerce_int_value_to_declared_float(new_val, &te),
+                            None => new_val,
+                        }
+                    }
+                    _ => new_val,
+                };
                 self.set_field(object, field, new_val);
                 true
             }

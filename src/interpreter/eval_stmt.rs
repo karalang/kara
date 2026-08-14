@@ -2796,6 +2796,16 @@ impl<'a> super::Interpreter<'a> {
                 // note above says. Reference-semantics values (`shared struct`,
                 // channel ends, `SharedCell`, `Atomic`) are shared BY DESIGN and
                 // keep aliasing for free: `deep_clone_value` Arc-bumps them.
+                // B-2026-08-14-2 — an int RHS at a FLOAT-annotated binding is an
+                // implicit widening the language permits and the interpreter
+                // did not perform, so the slot kept an Int. Not a cosmetic
+                // divergence: `let x: f64 = some_u8; x == 200.0` ABORTED here
+                // (no mixed Int/Float operator arm) on a program `karac check`
+                // passes and `karac build` runs correctly.
+                let val = match ty.as_ref() {
+                    Some(te) => super::exec::coerce_int_value_to_declared_float(val, te),
+                    None => val,
+                };
                 let rhs_is_place = matches!(
                     &value.kind,
                     ExprKind::Identifier(_)
