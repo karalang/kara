@@ -14336,13 +14336,21 @@ false
 
     #[test]
     fn test_e2e_f16_widens_to_f32_in_mixed_add() {
-        // `f16 + f32` widens the half up to f32 (fpext) before the add — the
-        // module-verifier regression this guards (was `fadd half, float`).
+        // `f16` widened to f32 (fpext) before the add — the module-verifier
+        // regression this guards (was `fadd half, float`).
+        //
+        // B-2026-08-14-13: the widen is now spelled `as f32` in the source. The
+        // bare `a + b` this test used to carry is rejected, because mixing
+        // float widths in arithmetic let an operand's POSITION pick the result
+        // type. The codegen path under test is unchanged and is still the only
+        // one that can produce the bad IR — the cast is what feeds `fadd` its
+        // widened operand — so the guard survives the language change intact;
+        // only the spelling that reaches it moved.
         let out = run_program(
             "fn main() {\n\
                  let a: f16 = 2.0f16;\n\
                  let b: f32 = 3.0f32;\n\
-                 println(a + b);\n\
+                 println((a as f32) + b);\n\
              }",
         );
         if let Some(out) = out {
@@ -23531,6 +23539,41 @@ fn main() {
                  0.10000000149011612\n\
                  0.0999755859375\n"
             ),
+        );
+    }
+
+    /// B-2026-08-14-13 — the compiled twin of
+    /// `tests/interpreter.rs::test_mixed_float_arithmetic_as_cast_computes_at_the_stated_width`,
+    /// same source and same expected string.
+    ///
+    /// An OVER-REACH GUARD, not a regression witness — every line here is
+    /// explicitly cast, so both operands already matched and this source
+    /// compiled to these values before the gate landed. It is here because the
+    /// gate's whole remedy is the `as`, and the two directions it offers give
+    /// GENUINELY DIFFERENT answers: 1.2100000262260437 at f64 against
+    /// 1.2100000381469727 at f32. That difference is what the old implicit
+    /// behaviour was silently choosing by operand order, so a reader needs to
+    /// see that the choice is real, that the source now makes it, and that both
+    /// backends agree on each. The rejection of the UNCAST spelling is asserted
+    /// in `tests/typechecker.rs::mixed_width_float_arithmetic_is_rejected`.
+    #[test]
+    fn test_e2e_mixed_float_arithmetic_as_cast_computes_at_the_stated_width() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let a: f32 = 1.1f32;\n\
+                     let b: f64 = 1.1;\n\
+                     let wide: f64 = (a as f64) * b;\n\
+                     println(wide);\n\
+                     let narrow: f32 = a * (b as f32);\n\
+                     println(narrow);\n\
+                     let h: f16 = 1.5f16;\n\
+                     let up: f32 = (h as f32) * a;\n\
+                     println(up);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1.2100000262260437\n1.2100000381469727\n1.6500000953674316\n"),
         );
     }
 

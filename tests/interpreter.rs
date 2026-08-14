@@ -28946,6 +28946,37 @@ fn test_float_narrowing_as_cast_rounds_to_the_target_width() {
     );
 }
 
+/// B-2026-08-14-13 — the interpreter twin of
+/// `tests/codegen.rs::test_e2e_mixed_float_arithmetic_as_cast_computes_at_the_stated_width`,
+/// same source and same expected string.
+///
+/// An OVER-REACH GUARD, not a regression witness: every line is explicitly
+/// cast, so it ran to these values before the gate too. This surface is the one
+/// that made the old behaviour a run-vs-build split rather than merely an
+/// order-dependence — `b * a` with `b: f64`, `a: f32` took `f64`, and the
+/// interpreter KEPT the double where the binary rounded to f32 — so it is worth
+/// pinning that with the width named in the source the two backends agree, and
+/// that the two spellings still give different answers, because the width is a
+/// real choice and not a formality. The rejection of the uncast spelling is
+/// asserted in `tests/typechecker.rs::mixed_width_float_arithmetic_is_rejected`.
+#[test]
+fn test_mixed_float_arithmetic_as_cast_computes_at_the_stated_width() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let a: f32 = 1.1f32;\n\
+                 let b: f64 = 1.1;\n\
+                 let wide: f64 = (a as f64) * b;\n\
+                 println(wide);\n\
+                 let narrow: f32 = a * (b as f32);\n\
+                 println(narrow);\n\
+                 let h: f16 = 1.5f16;\n\
+                 let up: f32 = (h as f32) * a;\n\
+                 println(up);\n\
+             }"),
+        "1.2100000262260437\n1.2100000381469727\n1.6500000953674316\n"
+    );
+}
+
 /// B-2026-08-14-2 — an int at a FLOAT-declared destination is converted, at
 /// every position whose declared type the interpreter can reach.
 ///

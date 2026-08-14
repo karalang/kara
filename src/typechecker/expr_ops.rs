@@ -29,9 +29,9 @@ use crate::token::Span;
 
 use super::inference::{resolve_type_var_top, resolve_type_vars};
 use super::types::{
-    is_integer, is_numeric, is_prelude_type_or_module_name, is_string_concat_operand,
-    strip_refinement, type_display, types_compatible, ConstArg, DimArg, Type, UIntSize,
-    VariantTypeInfo,
+    float_width_rank, is_integer, is_numeric, is_prelude_type_or_module_name,
+    is_string_concat_operand, strip_refinement, type_display, types_compatible, ConstArg, DimArg,
+    Type, UIntSize, VariantTypeInfo,
 };
 use super::TypeErrorKind;
 
@@ -1704,6 +1704,61 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(&right_ty),
                                 type_display(int_side),
                                 type_display(float_side),
+                            ),
+                            right.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    } else if matches!(left_ty, Type::Float(_))
+                        && matches!(right_ty, Type::Float(_))
+                        && left_ty != right_ty
+                    {
+                        // B-2026-08-14-13 — the FLOAT sibling of the
+                        // mixed-integer rejection above. Two floats of
+                        // different widths used to fall through to the
+                        // `types_compatible` arm below, which answers `true`
+                        // for any float pair, and the result took `left_ty` —
+                        // so `a * b` was `f32` and `b * a` was `f64` for the
+                        // same two bindings, and on the `f64` spelling the
+                        // interpreter kept the double while the binary rounded
+                        // to f32. An operand's POSITION decided the precision,
+                        // and then the two backends disagreed about what that
+                        // precision was.
+                        //
+                        // design.md settles the direction in two places: the
+                        // literal-promotion rule exists to buy `arr + 1`
+                        // "without opening the door to implicit widening
+                        // between typed variables … There is no 'numerics
+                        // dialect' where typed variables silently widen", and
+                        // the mixed-precision section spells the ML pattern
+                        // (store `bf16`, compute `f32`, store back) with an
+                        // explicit `as` in BOTH directions. Literal promotion
+                        // ran above, so a surviving mismatch is between two
+                        // concrete typed expressions — which is exactly the
+                        // case both passages name.
+                        //
+                        // Arithmetic only, matching the integer rule. A
+                        // COMPARISON has no result width for operand order to
+                        // decide, so mixing widths there is well-defined
+                        // (the narrower widens losslessly) and stays legal —
+                        // as it does for integers.
+                        let (wide, narrow) =
+                            if float_width_rank(&left_ty) > float_width_rank(&right_ty) {
+                                (&left_ty, &right_ty)
+                            } else {
+                                (&right_ty, &left_ty)
+                            };
+                        self.type_error(
+                            format!(
+                                "cannot mix float types '{}' and '{}' in arithmetic — they must \
+                                 match; cast explicitly with `as` (e.g. the '{}' operand as '{}' \
+                                 to compute at the wider width, or the '{}' operand as '{}' to \
+                                 compute at the narrower)",
+                                type_display(&left_ty),
+                                type_display(&right_ty),
+                                type_display(narrow),
+                                type_display(wide),
+                                type_display(wide),
+                                type_display(narrow),
                             ),
                             right.span.clone(),
                             TypeErrorKind::TypeMismatch,

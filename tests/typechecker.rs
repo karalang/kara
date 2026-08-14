@@ -4560,7 +4560,10 @@ fn volatile_read_pointee_type_mismatch_errors() {
 //
 // `f16` (IEEE half) and `bf16` (bfloat16) are primitive float types with the
 // same arithmetic/compare/Copy surface as `f32`/`f64` but NOT `Eq`/`Ord`/`Hash`.
-// Implicit widening `f16`/`bf16` → `f32` (lossless).
+// Implicit widening `f16`/`bf16` → `f32` (lossless) AT A BOUNDARY — an
+// assignment, an argument, a return. Not between two typed operands of one
+// arithmetic operator, which needs an `as` exactly as the integer widths do
+// (B-2026-08-14-13).
 
 #[test]
 fn f16_bf16_types_and_literals_typecheck() {
@@ -4573,12 +4576,35 @@ fn f16_bf16_types_and_literals_typecheck() {
 }
 
 #[test]
-fn f16_widens_to_f32_in_mixed_arithmetic() {
-    // `f16 + f32` widens the half to f32; result is f32.
-    typecheck_ok("fn f(a: f16, b: f32) -> f32 { a + b }");
-    typecheck_ok("fn f(a: bf16, b: f32) -> f32 { a + b }");
-    // Direct assignment widening.
+fn f16_widens_to_f32_at_a_boundary_but_not_in_arithmetic() {
+    // B-2026-08-14-13 renamed and corrected this test, because what it asserted
+    // was not what the compiler did. It read "`f16 + f32` widens the half to
+    // f32; result is f32" and checked only that
+    // `fn f(a: f16, b: f32) -> f32 { a + b }` TYPECHECKS — which it did, but
+    // for the wrong reason, and the claim in the name was false in two ways.
+    //
+    // Measured on the parent commit: `a + b` had type **f16**, not f32 (the
+    // mixed-width arm returned the LEFT operand's type, so the sibling
+    // `b + a` was f32). It typechecked only because f16 then widened to f32 at
+    // the RETURN. And the two backends disagreed about the value —
+    // `let r: f32 = a + b` with `a: f16 = 0.1f16`, `b: f32 = 0.1f32` printed
+    // 0.199951171875 under `--interp`, where the half-precision add is real,
+    // against 0.19997557997703552 from the binary, where codegen had already
+    // `fpext`ed the half to f32 before the `fadd`. So the declared type, the
+    // interpreted value and the compiled value were three different answers to
+    // one expression.
+    //
+    // Mixing widths in arithmetic is now rejected; the widen is spelled. What
+    // survives unchanged is the part that was always true:
+    typecheck_ok("fn f(a: f16, b: f32) -> f32 { (a as f32) + b }");
+    typecheck_ok("fn f(a: bf16, b: f32) -> f32 { (a as f32) + b }");
+    // Widening at a BOUNDARY stays implicit — that is design.md's
+    // implicit-widening table, and it is a different rule from operand
+    // unification (the integer half has always drawn the same distinction:
+    // `i8` -> `i64` is implicit at a boundary, `i64 + u8` is refused).
     typecheck_ok("fn f(a: f16) -> f32 { a }");
+    typecheck_ok("fn f(a: f16) -> f64 { a }");
+    typecheck_ok("fn f(a: bf16) -> f32 { a }");
 }
 
 #[test]
@@ -30714,6 +30740,72 @@ fn float_slots_reject_an_implicit_narrowing() {
     typecheck_ok("fn main() { let v: Vec[f32] = [-1.0, 2.0]; println(v[0]); }");
     // The escape hatch the diagnostic names.
     typecheck_ok("fn main() { let c: f64 = 0.1; let d: f32 = c as f32; println(d); }");
+}
+
+/// B-2026-08-14-13 — mixed-width float ARITHMETIC between two typed operands,
+/// the sibling of the mixed-INTEGER rejection that has been in place all along.
+///
+/// Two floats of different widths fell through to the `types_compatible` arm,
+/// which answers `true` for any float pair, and the result took the LEFT
+/// operand's type. So `a * b` was `f32` and `b * a` was `f64` for the same two
+/// bindings — an operand's POSITION decided the precision — and on the `f64`
+/// spelling the surfaces then disagreed about the answer: `--interp` printed
+/// 1.2100000262260437 where the binary printed 1.2100000381469727, with no cast
+/// and no diagnostic in the program.
+///
+/// design.md rules on it twice. The literal-promotion rule exists to buy
+/// `arr + 1` "without opening the door to implicit widening between typed
+/// variables … There is no 'numerics dialect' where typed variables silently
+/// widen", and the mixed-precision section writes the ML pattern (store `bf16`,
+/// compute `f32`, store back) with an explicit `as` in both directions.
+#[test]
+fn mixed_width_float_arithmetic_is_rejected() {
+    let mixes = |src: &str| {
+        assert!(
+            typecheck_errors(src)
+                .iter()
+                .any(|e| e.message.contains("cannot mix float types")),
+            "expected a mixed-float rejection from: {src}"
+        );
+    };
+    // All five arithmetic operators, and BOTH operand orders — the order is the
+    // whole point, since it is what used to pick the result width.
+    for op in ["+", "-", "*", "/", "%"] {
+        mixes(&format!(
+            "fn main() {{ let a: f32 = 1.5f32; let b: f64 = 1.5; println(a {op} b); }}"
+        ));
+        mixes(&format!(
+            "fn main() {{ let a: f32 = 1.5f32; let b: f64 = 1.5; println(b {op} a); }}"
+        ));
+    }
+    // Every pair of distinct widths, not just f32/f64.
+    mixes("fn main() { let h: f16 = 1.5f16; let a: f32 = 1.5f32; println(h + a); }");
+    mixes("fn main() { let h: f16 = 1.5f16; let d: f64 = 1.5; println(h + d); }");
+    mixes("fn main() { let b: bf16 = 1.5bf16; let a: f32 = 1.5f32; println(b + a); }");
+    // `f16` and `bf16` are not interchangeable — neither is a subset of the
+    // other — so mixing them is caught here as well as at a declared slot.
+    mixes("fn main() { let h: f16 = 1.5f16; let b: bf16 = 1.5bf16; println(h + b); }");
+
+    // SAME width is not a mix.
+    typecheck_ok("fn main() { let a: f32 = 1.5f32; let b: f32 = 2.5f32; println(a * b); }");
+    typecheck_ok("fn main() { let a: f64 = 1.5; let b: f64 = 2.5; println(a * b); }");
+    // Literal promotion is the ergonomic escape design.md already grants, in
+    // BOTH operand orders: an unsuffixed literal takes the other operand's
+    // type, so these are same-width by the time this check runs. Rejecting them
+    // would break the rule the mixed-variable ban was written to protect.
+    typecheck_ok("fn main() { let a: f32 = 1.5f32; println(a * 0.1); }");
+    typecheck_ok("fn main() { let a: f32 = 1.5f32; println(0.1 * a); }");
+    typecheck_ok("fn main() { let h: f16 = 1.5f16; println(h * 0.1); }");
+    // COMPARISON keeps mixing, exactly as it does for integers. There is no
+    // result width for operand order to decide — the answer is a `bool` and the
+    // narrower side widens losslessly — so the defect this gate exists for
+    // cannot arise.
+    typecheck_ok("fn main() { let a: f32 = 1.5f32; let b: f64 = 1.5; println(a == b); }");
+    typecheck_ok("fn main() { let a: f32 = 1.5f32; let b: f64 = 1.5; println(a < b); }");
+    typecheck_ok("fn main() { let a: f32 = 1.5f32; let b: f64 = 1.5; println(b >= a); }");
+    // The escape hatches the diagnostic names, one per direction.
+    typecheck_ok("fn main() { let a: f32 = 1.5f32; let b: f64 = 1.5; println((a as f64) * b); }");
+    typecheck_ok("fn main() { let a: f32 = 1.5f32; let b: f64 = 1.5; println(a * (b as f32)); }");
 }
 
 /// B-2026-08-08-9 — a slot fixed by the EXPECTATION still owes the
