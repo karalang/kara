@@ -2427,7 +2427,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.unwrap();
         let slot = self.create_entry_alloca(fn_val, "vec.disp.tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
-        self.track_vec_var(slot, Some(self.llvm_type_for_type_expr(&elem_te)));
+        // B-2026-08-14-30 — register the slot for cleanup only when this
+        // expression PRODUCED the Vec. The identifier arm above handles a bound
+        // one, and the reasoning here was that everything else must therefore be
+        // a materialized temporary with no other owner. A PLACE expression is
+        // neither: `b.xs`, `v[i]`, `t.0` and `*p` read storage something else
+        // owns, and `compile_expr` hands back that container's own
+        // `{ptr, len, cap}` rather than a copy. Tracking it scheduled a
+        // `FreeVecBuffer` on a buffer the owner also frees, so `f"{b.xs}"` on a
+        // `struct B { xs: Vec[i64] }` was a hard double free, and a
+        // `Vec[String]` / nested `Vec` SEGFAULTED because the drain walked
+        // elements it did not own. Correct on `--interp` throughout, so this
+        // was compiled-only.
+        if self.print_vec_operand_is_owned_temp(e) {
+            self.track_vec_var(slot, Some(self.llvm_type_for_type_expr(&elem_te)));
+        }
         let disp = self.emit_vec_display_fn_te(&elem_te);
         Ok(Some(self.render_via_display_fn(disp, slot)))
     }

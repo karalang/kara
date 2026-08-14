@@ -29009,6 +29009,41 @@ fn test_element_wise_scalar_as_cast_agrees_across_backends() {
     );
 }
 
+/// B-2026-08-14-30 — the interpreter twin of
+/// `tests/codegen.rs::test_e2e_print_a_vec_place_expression`, same source and
+/// same expected string.
+///
+/// This surface printed every one of these correctly the whole time — the bug
+/// was compiled-only, a double free and then a SEGV on a shape as ordinary as
+/// printing a struct field. So this test's job is to be the ORACLE the compiled
+/// twin is checked against: the two assert one string, so a codegen fix that
+/// stopped crashing but printed something else would fail the pair rather than
+/// quietly redefine what printing a Vec field means.
+#[test]
+fn test_print_a_vec_place_expression() {
+    assert_eq!(
+        run(
+            "struct B { xs: Vec[String], ns: Vec[i64], nested: Vec[Vec[i64]] }\n\
+             shared struct S { xs: Vec[String] }\n\
+             fn mk() -> Vec[String] { [\"x\", \"y\"] }\n\
+             fn main() {\n\
+                 let b = B { xs: [\"a\", \"b\"], ns: [1, 2, 3], nested: [[1, 2], [3]] };\n\
+                 let s = S { xs: [\"p\", \"q\"] };\n\
+                 println(b.xs);\n\
+                 println(f\"{b.xs}\");\n\
+                 println(b.ns);\n\
+                 println(f\"{b.nested}\");\n\
+                 println(f\"{b.nested[0]}\");\n\
+                 println(f\"{s.xs}\");\n\
+                 println([9, 8]);\n\
+                 println(mk());\n\
+                 println(f\"{b.xs}\");\n\
+             }"
+        ),
+        "[a, b]\n[a, b]\n[1, 2, 3]\n[[1, 2], [3]]\n[1, 2]\n[p, q]\n[9, 8]\n[x, y]\n[a, b]\n"
+    );
+}
+
 /// B-2026-08-14-19 — the interpreter half of the `String.substring` boundary
 /// fault, twin of `tests/codegen.rs::test_e2e_substring_non_codepoint_boundary_panics`.
 ///

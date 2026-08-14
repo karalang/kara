@@ -48351,4 +48351,96 @@ fn main() {
             "borrow_elided_index_across_par_join",
         );
     }
+
+    #[test]
+    fn asan_print_a_vec_place_expression_does_not_free_it() {
+        // B-2026-08-14-30: printing a `Vec` read out of a PLACE — a struct
+        // field, an element, a shared node's field — used to register that
+        // container's own `{ptr, len, cap}` for cleanup, because both Vec
+        // display paths took "not a bound identifier" to mean "a materialized
+        // temporary with no other owner". A place expression is neither, so the
+        // buffer was freed twice: `println(b.xs)` on a `struct B { xs: Vec[i64] }`
+        // aborted with `free(): double free detected`, and a `Vec[String]` or a
+        // nested `Vec` SEGFAULTED because the drain walked elements it did not
+        // own.
+        //
+        // This is the ASAN half; the value half is the codegen/interpreter
+        // twin. LOOPED 20 times because the failure this guards against is a
+        // double free on the FIRST iteration but the fix's risk is the opposite
+        // — a place expression whose buffer nobody frees — and only repetition
+        // makes a per-print leak large enough to be unmistakable.
+        assert_clean_asan_run(
+            r#"
+struct B { xs: Vec[String], ns: Vec[i64], nested: Vec[Vec[i64]] }
+shared struct S { xs: Vec[String] }
+fn main() {
+    let b = B { xs: ["alphabetalphabet", "gammagammagamma"], ns: [1, 2, 3], nested: [[1, 2], [3]] };
+    let s = S { xs: ["deltadeltadeltad", "epsilonepsilonep"] };
+    let mut k = 0;
+    while k < 20 {
+        println(f"{b.xs}");
+        println(b.ns);
+        println(f"{b.nested}");
+        println(f"{b.nested[0]}");
+        println(f"{s.xs}");
+        k = k + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "[alphabetalphabet, gammagammagamma]",
+                "[1, 2, 3]",
+                "[[1, 2], [3]]",
+                "[1, 2]",
+                "[deltadeltadeltad, epsilonepsilonep]",
+            ]
+            .iter()
+            .cycle()
+            .take(100)
+            .copied()
+            .chain(std::iter::once("done"))
+            .collect::<Vec<_>>(),
+            "asan_print_a_vec_place_expression_does_not_free_it",
+        );
+    }
+
+    #[test]
+    fn asan_print_an_owned_vec_temporary_still_frees_it() {
+        // B-2026-08-14-30's other direction, and the reason the fix enumerates
+        // PRODUCERS rather than excluding places. A collection literal and a
+        // call result really are materialized temporaries with no other owner:
+        // if the narrowed gate stopped tracking them, the double free would
+        // become a leak of every printed temporary. Looped so that leak would
+        // be 80 buffers rather than four.
+        assert_clean_asan_run(
+            r#"
+fn mk() -> Vec[String] { ["alphabetalphabet", "gammagammagamma"] }
+fn main() {
+    let mut k = 0;
+    while k < 20 {
+        println([9, 8]);
+        println(f"{[7, 6]}");
+        println(mk());
+        println(f"{mk()}");
+        k = k + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "[9, 8]",
+                "[7, 6]",
+                "[alphabetalphabet, gammagammagamma]",
+                "[alphabetalphabet, gammagammagamma]",
+            ]
+            .iter()
+            .cycle()
+            .take(80)
+            .copied()
+            .chain(std::iter::once("done"))
+            .collect::<Vec<_>>(),
+            "asan_print_an_owned_vec_temporary_still_frees_it",
+        );
+    }
 }

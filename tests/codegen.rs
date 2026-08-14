@@ -48256,6 +48256,51 @@ fn main() {
     // the bare `panic: <msg>` form is preserved — see the existing
     // `test_e2e_vec_indexed_write_oob_panics` above.
 
+    /// B-2026-08-14-30 — printing a `Vec` read out of a PLACE prints it, instead
+    /// of freeing the container's buffer out from under it.
+    ///
+    /// Both Vec display paths materialized the value into a temp and then took
+    /// ownership of it, on the reasoning that the identifier arm handles a bound
+    /// `Vec` so everything else must be a fresh temporary. A place expression is
+    /// neither: `b.xs`, `b.nested[0]` and a shared node's field all read storage
+    /// something else owns, and `compile_expr` yields that container's own
+    /// `{ptr, len, cap}`. So the buffer was freed twice — `println(b.xs)` on a
+    /// `Vec[i64]` field aborted with `free(): double free detected`, and a
+    /// `Vec[String]` or nested `Vec` SEGFAULTED because the deep drain walked
+    /// elements it did not own.
+    ///
+    /// Every line here is a shape that crashed, plus the two PRODUCERS (a
+    /// literal and a call result) that must still be dropped — the fix
+    /// enumerates producers rather than excluding places, so this asserts both
+    /// halves. The last line repeats the first: printing a place TWICE was the
+    /// shape that turned the double free into a segfault, and it proves the
+    /// field is still intact after the first print.
+    #[test]
+    fn test_e2e_print_a_vec_place_expression() {
+        assert_eq!(
+            run_program(
+                "struct B { xs: Vec[String], ns: Vec[i64], nested: Vec[Vec[i64]] }\n\
+                 shared struct S { xs: Vec[String] }\n\
+                 fn mk() -> Vec[String] { [\"x\", \"y\"] }\n\
+                 fn main() {\n\
+                     let b = B { xs: [\"a\", \"b\"], ns: [1, 2, 3], nested: [[1, 2], [3]] };\n\
+                     let s = S { xs: [\"p\", \"q\"] };\n\
+                     println(b.xs);\n\
+                     println(f\"{b.xs}\");\n\
+                     println(b.ns);\n\
+                     println(f\"{b.nested}\");\n\
+                     println(f\"{b.nested[0]}\");\n\
+                     println(f\"{s.xs}\");\n\
+                     println([9, 8]);\n\
+                     println(mk());\n\
+                     println(f\"{b.xs}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("[a, b]\n[a, b]\n[1, 2, 3]\n[[1, 2], [3]]\n[1, 2]\n[p, q]\n[9, 8]\n[x, y]\n[a, b]\n"),
+        );
+    }
+
     /// B-2026-08-14-19 — a `String.substring` cut that lands INSIDE a codepoint
     /// faults, instead of handing back the raw bytes.
     ///

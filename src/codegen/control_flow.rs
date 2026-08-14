@@ -1313,6 +1313,34 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(after);
     }
 
+    /// B-2026-08-14-30 — did this `println` operand PRODUCE the `Vec` it
+    /// printed, or merely read one that something else owns?
+    ///
+    /// The materialize-and-render branch has to drop what it printed when the
+    /// value was made for it and must not when it was borrowed, and "not a bare
+    /// identifier" — the test it used — answers neither question. A PLACE
+    /// expression is not an identifier: `b.xs`, `v[i]`, `t.0` and `*p` all read
+    /// storage owned by something with its own cleanup, and the `Vec` they yield
+    /// is that container's `{ptr, len, cap}` rather than a copy of it.
+    ///
+    /// So this enumerates the PRODUCERS instead, which is the short and stable
+    /// list: a collection literal, and a call whose return is owned.
+    /// `expr_yields_fresh_owned_temp` is the same predicate the `ref`-param
+    /// materialization uses to decide this, and it already excludes a
+    /// borrow-returning callee — a `ref Vec` return must not be freed either.
+    /// Anything not on the list keeps its value un-dropped, which is the
+    /// identifier path's behaviour and the safe direction: a missed drop is a
+    /// leak the LSan corpus catches, an extra one is a double free in a user's
+    /// program.
+    pub(super) fn print_vec_operand_is_owned_temp(&self, expr: &Expr) -> bool {
+        matches!(
+            &expr.kind,
+            ExprKind::ArrayLiteral(_)
+                | ExprKind::PrefixCollectionLiteral { .. }
+                | ExprKind::RepeatLiteral { .. }
+        ) || self.expr_yields_fresh_owned_temp(expr)
+    }
+
     pub(super) fn compile_print(
         &mut self,
         name: &str,
@@ -1506,15 +1534,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     let display_fn = self.emit_vec_display_fn_te(&elem_te);
                     let (_acc, sval) = self.render_via_display_fn(display_fn, tmp);
                     self.emit_print_and_free_string(sval, nl);
-                    // The temp owns everything this expression produced (a
-                    // fresh literal / call result), so drop it here — the
-                    // identifier path leaves that to the binding's own cleanup.
-                    // A DEEP drop, not just the buffer: a `Vec[String]` /
-                    // `Vec[Vec[_]]` temp also owns each element's heap, which a
-                    // buffer-only free strands (measured: 24 bytes over two
-                    // `Vec[String]` prints).
-                    let drop_fn = self.emit_vec_drop_fn(&elem_te);
-                    self.builder.build_call(drop_fn, &[tmp.into()], "").unwrap();
+                    // Drop the temp only when this expression really PRODUCED
+                    // the value — a fresh literal or a call result owns
+                    // everything it made, and the identifier path leaves that
+                    // to the binding's own cleanup. A DEEP drop, not just the
+                    // buffer: a `Vec[String]` / `Vec[Vec[_]]` temp also owns
+                    // each element's heap, which a buffer-only free strands
+                    // (measured: 24 bytes over two `Vec[String]` prints).
+                    //
+                    // B-2026-08-14-30 — this used to drop UNCONDITIONALLY, on
+                    // the reasoning that "not a bare identifier" means "a fresh
+                    // temporary". It does not: a PLACE expression is not an
+                    // identifier either, and a `Vec` read out of one is the
+                    // container's own `{ptr, len, cap}`, not a copy. So
+                    // `println(b.xs)` on a `struct B { xs: Vec[i64] }` freed the
+                    // struct's buffer and the struct's own drop freed it again
+                    // — a hard double free at runtime, on a shape as ordinary
+                    // as printing a field. `Vec[String]` and nested `Vec` went
+                    // further and SEGFAULTED, because the deep drop walked
+                    // elements it did not own. The interpreter printed all of
+                    // them correctly, so this was compiled-only.
+                    if self.print_vec_operand_is_owned_temp(&args[0].value) {
+                        let drop_fn = self.emit_vec_drop_fn(&elem_te);
+                        self.builder.build_call(drop_fn, &[tmp.into()], "").unwrap();
+                    }
                     return Ok(zero.into());
                 }
             }
