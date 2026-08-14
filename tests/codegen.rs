@@ -48256,6 +48256,59 @@ fn main() {
     // the bare `panic: <msg>` form is preserved — see the existing
     // `test_e2e_vec_indexed_write_oob_panics` above.
 
+    /// B-2026-08-14-31 — a `Map` or `Set` reached through anything but a bound
+    /// name renders like a bound one, instead of printing its control pointer.
+    ///
+    /// The identifier arms key off per-variable side tables, so a field, a call
+    /// result, a tuple element and an element of a `Vec[Map[..]]` all fell
+    /// through to the value-kind arms — where a Map/Set is one pointer and
+    /// nothing distinguishes it from any other pointer, so it printed AS one.
+    /// `f"{b.m}"` rendered `94259731420368` where `--interp` rendered
+    /// `{k: 1}`, with no diagnostic anywhere and a different number each run.
+    /// `compile_print`'s own header comment predicted this ("Map gets printed
+    /// as a raw address"); B-2026-07-28-12 closed it for `Vec` and left the
+    /// siblings open.
+    ///
+    /// Every spelling that printed an address is here, in both the f-string and
+    /// the bare-`println` form, plus the bound local as the control they have
+    /// to match. The last line repeats the first — B-2026-08-14-30 is what
+    /// happens when a display arm takes ownership of a place expression, so a
+    /// field printed TWICE is the cheap standing check that this one does not.
+    #[test]
+    fn test_e2e_print_a_map_or_set_place_expression() {
+        assert_eq!(
+            run_program(
+                "struct B { m: Map[String, i64], s: Set[String] }\n\
+                 fn mkm() -> Map[String, i64] { let mut m: Map[String, i64] = Map.new(); m.insert(\"k\", 1); m }\n\
+                 fn mks() -> Set[String] { let mut s: Set[String] = Set.new(); s.insert(\"e\"); s }\n\
+                 fn main() {\n\
+                     let mut m: Map[String, i64] = Map.new();\n\
+                     m.insert(\"k\", 1);\n\
+                     let mut st: Set[String] = Set.new();\n\
+                     st.insert(\"e\");\n\
+                     let b = B { m: m, s: st };\n\
+                     println(f\"{b.m}\");\n\
+                     println(b.m);\n\
+                     println(f\"{b.s}\");\n\
+                     println(b.s);\n\
+                     println(f\"{mkm()}\");\n\
+                     println(f\"{mks()}\");\n\
+                     let mut m2: Map[String, i64] = Map.new();\n\
+                     m2.insert(\"k\", 1);\n\
+                     let t = (m2, 1);\n\
+                     println(f\"{t.0}\");\n\
+                     let mut m3: Map[String, i64] = Map.new();\n\
+                     m3.insert(\"k\", 1);\n\
+                     let v: Vec[Map[String, i64]] = [m3];\n\
+                     println(f\"{v[0]}\");\n\
+                     println(f\"{b.m}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("{k: 1}\n{k: 1}\nSet{e}\nSet{e}\n{k: 1}\nSet{e}\n{k: 1}\n{k: 1}\n{k: 1}\n"),
+        );
+    }
+
     /// B-2026-08-14-30 — printing a `Vec` read out of a PLACE prints it, instead
     /// of freeing the container's buffer out from under it.
     ///

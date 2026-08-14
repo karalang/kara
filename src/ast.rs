@@ -384,6 +384,12 @@ pub type DisplayTupleTypesTable = std::collections::HashMap<(usize, usize), Type
 /// its span-addressed sibling, exactly as `display_option_result_types` is for
 /// `var_option_payload_te` (B-2026-07-28-12).
 pub type DisplayVecTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+/// B-2026-08-14-31 — the `(key, value)` `TypeExpr`s of every `Map`-family
+/// expression, keyed by span, so a non-identifier Map renders like a bound one
+/// instead of falling through to the value-kind arms and printing its control
+/// pointer. The `Set` sibling is [`DisplayVecTypesTable`]-shaped (one element
+/// type) and reuses that alias.
+pub type DisplayMapTypesTable = std::collections::HashMap<(usize, usize), (TypeExpr, TypeExpr)>;
 
 /// Side-table populated by the lowering pass from `TypeCheckResult.expr_types`:
 /// for every expression whose Kāra type is a function type (`Fn(...)` /
@@ -773,6 +779,13 @@ pub struct Program {
     /// non-identifier Vec renders like a bound one. See
     /// [`DisplayVecTypesTable`].
     pub display_vec_types: DisplayVecTypesTable,
+    /// Key/value types of every `Map`/`SortedMap`-typed expression, keyed by
+    /// span, so a non-identifier Map renders like a bound one. See
+    /// [`DisplayMapTypesTable`] (B-2026-08-14-31).
+    pub display_map_types: DisplayMapTypesTable,
+    /// Element type of every `Set`/`SortedSet`-typed expression, keyed by span
+    /// — the `Set` sibling of `display_map_types` (B-2026-08-14-31).
+    pub display_set_types: DisplayVecTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: the inner
     /// `T` of every expression typed `Secret[T]` (`std.secret`), keyed by span.
     /// Lets codegen resolve a `Secret[T]` receiver's inner type at a

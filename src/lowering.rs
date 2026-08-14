@@ -284,6 +284,43 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // B-2026-08-14-31 — the Map/Set siblings of the table above, for exactly
+    // the same reason and with the same failure when absent. A non-identifier
+    // Map/Set fell through to codegen's value-kind arms, where its single
+    // control pointer printed AS a pointer: `f"{b.m}"` on a struct field
+    // rendered `94259731420368` where the interpreter rendered `{kk: 1}`.
+    // `SortedMap`/`SortedSet` are included — they share the control-block
+    // layout and the same fall-through.
+    program.display_map_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { name, args }
+                if (name == "Map" || name == "SortedMap") && args.len() == 2 =>
+            {
+                Some((
+                    (k.0, k.1),
+                    (
+                        TypeChecker::type_to_type_expr(&args[0]),
+                        TypeChecker::type_to_type_expr(&args[1]),
+                    ),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    program.display_set_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { name, args }
+                if (name == "Set" || name == "SortedSet") && args.len() == 1 =>
+            {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(&args[0])))
+            }
+            _ => None,
+        })
+        .collect();
     // Inner `T` of every `Secret[T]`-typed expression, keyed by span. A
     // `.ct_eq(...)` call's result is a plain `bool`, so — unlike a borrow
     // accessor — it leaves no entry in `ref_return_inner_types` for codegen to

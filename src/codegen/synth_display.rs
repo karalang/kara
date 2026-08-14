@@ -2445,4 +2445,66 @@ impl<'ctx> super::Codegen<'ctx> {
         let disp = self.emit_vec_display_fn_te(&elem_te);
         Ok(Some(self.render_via_display_fn(disp, slot)))
     }
+
+    /// B-2026-08-14-31 — the `Map`/`Set` sibling of [`Self::try_compile_vec_display`].
+    ///
+    /// The identifier arms key off per-variable side tables
+    /// (`map_key_type_exprs`, `set_elem_type_exprs`), so a Map or Set reached
+    /// any other way — a struct field, a call result, a tuple element, an
+    /// element of a `Vec[Map[..]]` — had no entry and fell through to the
+    /// value-kind arms. A Map/Set is a single control POINTER, so it printed as
+    /// one: `f"{b.m}"` rendered `94259731420368` where the interpreter rendered
+    /// `{kk: 1}`, with no diagnostic on either surface and a different address
+    /// each run. `compile_print`'s own header comment predicted this ("Map gets
+    /// printed as a raw address"); B-2026-07-28-12 closed it for `Vec` and left
+    /// the siblings.
+    ///
+    /// Resolution is the span-keyed `display_map_types` / `display_set_types`,
+    /// lowered from `expr_types` exactly as `display_vec_types` is, and the
+    /// render goes through the SAME `emit_map_display_fn` / `emit_set_display_fn`
+    /// the identifier path uses, so the two spellings cannot disagree.
+    ///
+    /// A bound collection returns through its own slot and takes no ownership,
+    /// mirroring the Vec arm. A materialized temporary is NOT drop-tracked here
+    /// even when it is a producer: `FreeMapHandle` needs the key/value drop
+    /// shape the binding path records, and B-2026-08-14-30 is what over-eager
+    /// ownership on this kind of arm costs. A leaked temporary handle is a
+    /// bounded, LSan-visible loss; a double-freed one is a crash in a user's
+    /// program. Tracked as the residual on this row rather than guessed at.
+    pub(super) fn try_compile_map_or_set_display(
+        &mut self,
+        e: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        let key = (e.span.offset, e.span.length);
+        let map_kv = self.display_map_types.get(&key).cloned();
+        let set_elem = if map_kv.is_some() {
+            None
+        } else {
+            self.display_set_types.get(&key).cloned()
+        };
+        if map_kv.is_none() && set_elem.is_none() {
+            return Ok(None);
+        }
+        // A bound collection already has a slot and an owner.
+        if let ExprKind::Identifier(n) = &e.kind {
+            if self.variables.contains_key(n.as_str()) {
+                return Ok(None);
+            }
+        }
+        let val = self.compile_expr(e)?;
+        // The runtime value is one control pointer; anything else is a shape
+        // this arm does not understand, so leave it to the existing paths.
+        if !val.is_pointer_value() {
+            return Ok(None);
+        }
+        let fn_val = self.current_fn.unwrap();
+        let slot = self.create_entry_alloca(fn_val, "mapset.disp.tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        let disp = match (&map_kv, &set_elem) {
+            (Some((k, v)), _) => self.emit_map_display_fn(k, v),
+            (_, Some(el)) => self.emit_set_display_fn(el),
+            _ => unreachable!("guarded above"),
+        };
+        Ok(Some(self.render_via_display_fn(disp, slot)))
+    }
 }

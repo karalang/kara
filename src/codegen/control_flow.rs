@@ -1479,6 +1479,14 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_print_and_free_string(sval, nl);
             return Ok(zero.into());
         }
+        // B-2026-08-14-31 — the Map/Set sibling, for the same reason one step
+        // over: a Map/Set reached through anything but a bound name printed its
+        // CONTROL POINTER, because the value-kind arms see one pointer and have
+        // nothing to distinguish it from any other.
+        if let Some((_acc, sval)) = self.try_compile_map_or_set_display(&args[0].value)? {
+            self.emit_print_and_free_string(sval, nl);
+            return Ok(zero.into());
+        }
 
         // User `impl Display` (a compiled `<Type>.to_string`) wins over every
         // built-in renderer below — render `println(x)` via the user method,

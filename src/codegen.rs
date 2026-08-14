@@ -3234,6 +3234,13 @@ pub(super) struct Codegen<'ctx> {
     /// the identifier path uses, instead of falling through to the value-kind
     /// arms where a Vec is indistinguishable from a String (B-2026-07-28-12).
     pub(crate) display_vec_types: HashMap<(usize, usize), TypeExpr>,
+    /// B-2026-08-14-31 — key/value types of every `Map`/`SortedMap` expression
+    /// and element types of every `Set`/`SortedSet` one, keyed by span
+    /// (`Program.display_map_types` / `display_set_types`). The Map/Set
+    /// siblings of `display_vec_types`, letting a non-identifier collection
+    /// render like a bound one instead of printing its control pointer.
+    pub(crate) display_map_types: HashMap<(usize, usize), (TypeExpr, TypeExpr)>,
+    pub(crate) display_set_types: HashMap<(usize, usize), TypeExpr>,
     /// Bare names of USER-defined impl methods whose declared return type is
     /// a borrow (`-> ref T`). Gates the method-ref caller path (let-bind +
     /// direct-use rejection) so it fires ONLY for user accessors — builtin
@@ -8335,6 +8342,8 @@ impl<'ctx> Codegen<'ctx> {
             display_option_result_types: HashMap::new(),
             display_tuple_types: HashMap::new(),
             display_vec_types: HashMap::new(),
+            display_map_types: HashMap::new(),
+            display_set_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             user_ref_method_inner: std::collections::HashMap::new(),
             heuristic_inline_hints: std::collections::HashMap::new(),
@@ -9752,6 +9761,8 @@ impl<'ctx> Codegen<'ctx> {
         self.display_option_result_types = program.display_option_result_types.clone();
         self.display_tuple_types = program.display_tuple_types.clone();
         self.display_vec_types = program.display_vec_types.clone();
+        self.display_map_types = program.display_map_types.clone();
+        self.display_set_types = program.display_set_types.clone();
         // Bare names of user impl methods that return a borrow — gates the
         // method-ref caller path away from builtin ref-returning methods.
         for item in &program.items {

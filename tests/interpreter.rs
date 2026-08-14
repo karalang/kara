@@ -29009,6 +29009,47 @@ fn test_element_wise_scalar_as_cast_agrees_across_backends() {
     );
 }
 
+/// B-2026-08-14-31 — the interpreter twin of
+/// `tests/codegen.rs::test_e2e_print_a_map_or_set_place_expression`, same source
+/// and same expected string.
+///
+/// This surface rendered every one of these correctly the whole time; the
+/// compiled backends printed pointers. So this test is the ORACLE the compiled
+/// twin is checked against — the two assert one string, so a codegen fix that
+/// stopped printing addresses but printed something else would fail the pair
+/// rather than quietly redefine what printing a Map means.
+#[test]
+fn test_print_a_map_or_set_place_expression() {
+    assert_eq!(
+        run("struct B { m: Map[String, i64], s: Set[String] }\n\
+             fn mkm() -> Map[String, i64] { let mut m: Map[String, i64] = Map.new(); m.insert(\"k\", 1); m }\n\
+             fn mks() -> Set[String] { let mut s: Set[String] = Set.new(); s.insert(\"e\"); s }\n\
+             fn main() {\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 m.insert(\"k\", 1);\n\
+                 let mut st: Set[String] = Set.new();\n\
+                 st.insert(\"e\");\n\
+                 let b = B { m: m, s: st };\n\
+                 println(f\"{b.m}\");\n\
+                 println(b.m);\n\
+                 println(f\"{b.s}\");\n\
+                 println(b.s);\n\
+                 println(f\"{mkm()}\");\n\
+                 println(f\"{mks()}\");\n\
+                 let mut m2: Map[String, i64] = Map.new();\n\
+                 m2.insert(\"k\", 1);\n\
+                 let t = (m2, 1);\n\
+                 println(f\"{t.0}\");\n\
+                 let mut m3: Map[String, i64] = Map.new();\n\
+                 m3.insert(\"k\", 1);\n\
+                 let v: Vec[Map[String, i64]] = [m3];\n\
+                 println(f\"{v[0]}\");\n\
+                 println(f\"{b.m}\");\n\
+             }"),
+        "{k: 1}\n{k: 1}\nSet{e}\nSet{e}\n{k: 1}\nSet{e}\n{k: 1}\n{k: 1}\n{k: 1}\n"
+    );
+}
+
 /// B-2026-08-14-30 — the interpreter twin of
 /// `tests/codegen.rs::test_e2e_print_a_vec_place_expression`, same source and
 /// same expected string.

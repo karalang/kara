@@ -48538,4 +48538,47 @@ fn main() {
             "shared_cluster_published_from_par_branch",
         );
     }
+
+    #[test]
+    fn asan_print_a_map_or_set_place_expression_does_not_free_it() {
+        // B-2026-08-14-31's memory half. The row itself is a wrong ANSWER — a
+        // Map/Set place expression printed its control pointer — but the arm
+        // that fixes it is the same SHAPE as the one B-2026-08-14-30 had to
+        // repair: materialize a value into a temp and render it. That row's
+        // lesson is that such an arm must not take ownership of a place
+        // expression, or the container's handle is freed twice.
+        //
+        // So this guards the fix rather than the bug: every place spelling the
+        // new arm serves, looped 20 times, asserting that rendering a Map or Set
+        // field neither frees the owner's handle (a double free on the first
+        // iteration) nor strands anything (a leak that only 20 iterations makes
+        // unmistakable). The value half is the codegen/interpreter twin.
+        assert_clean_asan_run(
+            r#"
+struct B { m: Map[String, i64], s: Set[String] }
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("keykeykeykeykey", 1);
+    let mut st: Set[String] = Set.new();
+    st.insert("elemelemelemelem");
+    let b = B { m: m, s: st };
+    let mut k = 0;
+    while k < 20 {
+        println(f"{b.m}");
+        println(b.s);
+        k = k + 1;
+    }
+    println("done");
+}
+"#,
+            &["{keykeykeykeykey: 1}", "Set{elemelemelemelem}"]
+                .iter()
+                .cycle()
+                .take(40)
+                .copied()
+                .chain(std::iter::once("done"))
+                .collect::<Vec<_>>(),
+            "asan_print_a_map_or_set_place_expression_does_not_free_it",
+        );
+    }
 }
