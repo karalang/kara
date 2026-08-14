@@ -95,13 +95,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 246 | 0 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
-| run-vs-build | 114 | 0 |
+| run-vs-build | 115 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 95 | 0 |
 | perf | 65 | 0 |
 | false-positive | 61 | 0 |
 | diagnostics | 53 | 0 |
-| soundness | 45 | 1 |
+| soundness | 45 | 0 |
 | crash | 45 | 0 |
 | other | 30 | 0 |
 | use-after-free | 18 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 851 | 0 |
-| typecheck | 167 | 1 |
+| typecheck | 168 | 1 |
 | interp | 144 | 0 |
 | ownership | 47 | 0 |
 | other | 41 | 0 |
@@ -124,13 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1179 surfaced · 1 open · 1166 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1180 surfaced · 1 open · 1167 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-12 | 2026-08-14 | typecheck | medium | An implicit float NARROWING between two declared types is accepted with no diagnostic and no rounding on either surface — `let c: f64 = 0.1; let d: f32 = c;` leaves `d` holding a value its own declared type cannot represent. The integer sibling of this rule is enforced; enforcing the float one breaks 13 existing tests and the shipped `std.autograd` source, so it is a language decision with a migration, not a one-line gate. | A `check_float_narrowing_coercion` sibling of `check_int_widening_coercion` (typechecker/exprs.rs), called beside it in `check_expr`'s fall-through. Written and measured during B-2026-08-14-11; the blocker is the 20 sites it fires on, not the gate. |
+| B-2026-08-14-13 | 2026-08-14 | typecheck | medium | Mixed-width float arithmetic between two TYPED operands is accepted and takes the LEFT operand's width, so `a * b` is `f32` and `b * a` is `f64` for the same two bindings — and the f64 spelling then SPLITS THE BACKENDS, printing 1.2100000262260437 under `--interp` against 1.2100000381469727 compiled. The integer twin is refused outright, and design.md's "two typed expressions always follow the same rules everywhere" invariant forbids it. | The float arm of the numeric binop match in `src/typechecker/expr_ops.rs` that rejects `both_ints && left_ty != right_ty`; its own comment records the gap ("Same-domain floats keep the looser `types_compatible` check"). Literal promotion is already correct and must stay. |
 
 ### Wontfix (2)
 
@@ -143,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1179 surfaced
 
 </details>
 
-### Fixed (1166)
+### Fixed (1167)
 
-<details><summary>1166 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1167 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5739,6 +5739,145 @@ guard, not a regression witness, and its doc says so.
 
 Suite green with `--features llvm` (13597 passed, 0 failed); clippy
 `--all --all-targets --features llvm` and fmt clean. |
+| B-2026-08-14-12 | typecheck | medium | An implicit float NARROWING between two declared types is accepted with no diagnostic and no rounding on either surface — `let c: f64 = 0.1; let d: f… | FIXED by 6b891bf. An implicit float narrowing now needs an `as`, at every position an
+integer narrowing already did.
+
+THE DECISION THE ROW ASKED FOR WAS ALREADY MADE — IN design.md, TWICE. The row
+framed this as an open language question ("whether float arithmetic should mix
+widths at all"), and that framing is what made it look large. The spec answers
+it. The implicit-widening table lists `f16`/`bf16` -> `f32` -> `f64` as implicit
+because lossless and then "Any narrowing | **No** — `as` required"; the
+`as`-cast table's float row spells the same thing out ("Widen is implicit.
+**Narrow requires `as`**"). And the literal-promotion section states the
+invariant the mixed-arithmetic question turns on: "two typed expressions always
+follow the same rules everywhere … There is no 'numerics dialect' where typed
+variables silently widen." So the implementation was BEHIND the spec, not the
+spec undecided, and enforcing was the only answer consistent with the document.
+Nothing in design.md changed for this fix.
+
+THE ROW'S BLAST RADIUS WAS AN ARTIFACT OF AN INCOMPLETE LITERAL EXEMPTION, and
+this is the finding that made the row small. Re-measured with the same gate, the
+13 failures became 7, and 6 of those 7 contained NO TYPED VARIABLE AT ALL:
+
+  Tensor.from([-1.0, 2.0, 3.0])        unary minus on a literal
+  Bf16 { value: 0.0 * (0.0 - 1.0) }    how the total-order tests build -0.0
+  F64  { value: 0.0 / 0.0 }            and a NaN
+
+The first cut exempted a bare `ExprKind::Float` only, so an expression one `-`
+or one fold away from a literal was reported as a narrowing between declared
+types. Widening the exemption to "every leaf is a float literal" — the same
+value-is-known reason the integer gate exempts its literals, and what
+`seeded_arg_narrows` reaches for `eval_const_expr` to express — drops all six.
+It is syntactic rather than a call into the const-evaluator on purpose: the
+evaluator needs a target type to evaluate AT and its `ConstValue` has no
+`f16`/`bf16` arms, so it would answer "not constant" about a `bf16` destination
+for a reason unrelated to the question. A typed variable is a leaf that fails
+the predicate, which is exactly the narrowing being caught, so the exemption
+cannot swallow the bug.
+
+THE SHIPPED STDLIB IS NOT AN f64 KERNEL — IT IS A PRECISION MONGREL. The row
+reads `autograd.kara`'s GELU backward as "computing in f64 throughout" and
+concludes every such kernel would need suffixed constants. Measured, that is not
+what it does. Mixed-width float arithmetic takes the LEFT operand's type, so
+inside ONE expression
+
+    0.5 * (1.0 + t) + 0.5 * e * (1.0 - t * t) * du
+
+`0.5 * (1.0 + t)` is f64 (t is f64) while `0.5 * e` is f32 (e is f32) — the
+width is decided by which operand was typed first, not by any intent. The f64
+half is an artifact of operand order, not a deliberate higher-precision
+accumulation, which is why annotating ONE binding per kernel fixes it with no
+cast at all:
+
+    let c: f32 = 0.7978845608028654;   // was: let c = 0.797…
+
+Leg 1 (B-2026-08-14-11) is what makes that work — the literal now takes the
+annotation's width — and from there the whole derivative runs at the element
+width. Both the forward `gelu` and the backward op-code-12 arm are annotated,
+not just the one the gate flagged, so the gradient stays the exact derivative of
+the forward rather than the two drifting apart. Measured against the f64-mongrel
+original the values agree to f32 for every input tried and differ in the last
+ulp for some (gelu'(-2) 0.08609927 vs 0.08609923); the autograd E2E tests choose
+f32-exact inputs deliberately and none moved.
+
+BOTH OF THE ROW'S TWO DECISION ITEMS RESOLVED DIFFERENTLY THAN IT EXPECTED,
+which is the practical payoff of re-measuring:
+
+  1. "If mixed-width float arithmetic stays legal, the narrowing gate has to
+     exempt a result whose operands include the destination's width." It does
+     not. No such exemption was written and none was needed — once the literal
+     exemption was scoped correctly, the only surviving report in the whole
+     suite was a genuine narrowing. Mixed arithmetic is left legal HERE and
+     filed as its own row; the gate does not depend on the answer.
+  2. "The stdlib and the 13 tests migrate — either suffixed constants
+     throughout, or an `as f32` at the closure's tail." Neither. ONE ANNOTATED
+     BINDING per kernel, because leg 1 already makes an annotation reach the
+     literal — `let c: f32 = 0.797…` and the rest of the kernel follows.
+
+FINAL MIGRATION COST: 2 stdlib lines + 1 test line. Not a stdlib rewrite. The
+one test line is the only REAL narrowing the gate found in a 13000-test suite —
+`F32.from(z / z)` in the NaN-canonicalization twins, where `z` is an f64 built
+from `env.args().len()` so `z / z` is a runtime f64 NaN going into an f32 slot.
+It now reads `F32.from((z / z) as f32)`, which preserves the behaviour (NaN
+narrows to NaN) and states it.
+
+THIRTEEN POSITIONS, SWEPT RATHER THAN ASSUMED, and two of them were leaking
+after the row's own call site was wired:
+
+  let annotation · fn argument · return · struct-literal field · field assign ·
+  plain assign · Vec.push · index-assign · tuple element · Array-literal
+  element · Vec-literal element · if-branch · match arm
+
+`Vec.push` INFERS its argument and never reaches `check_expr` — the same
+position that needed explicit reach in leg 1, for the same reason. The other is
+worth its own paragraph.
+
+A WIDE VARIABLE INSIDE A COLLECTION LITERAL REACHED NEITHER GATE, AND THAT HOLE
+IS THE INTEGER RULE'S TOO. The scalar-element adoption (B-2026-08-05-19)
+replaces a literal's inferred `Vec[<lub>]` with the CONTEXTUAL `Vec[<elem>]`
+before acceptance is judged — which is what lets `let v: Vec[u16] = [1, 2, 3]`
+work — and the per-element loop under it only range-checked LITERAL elements. So
+a typed element was laundered by the adoption and skipped by the loop, and both
+backends disagreed about the result:
+
+    let c: f64 = 0.1;  let v: Vec[f32] = [c, 1.0f32];   interp 0.1   build 0.10000000149011612
+    let n: i64 = 300;  let v: Vec[u8]  = [n, 44u8];     interp 300   build 44
+
+The second is B-2026-08-14-1's rule, not this one — a SIXTH container slot,
+beside the five that row closed. One line in that per-element loop closes both,
+so it is fixed here rather than filed: gating the adoption itself would have
+rejected `let v: Vec[u16] = [1, 2, 3]`, so the check has to be per-element,
+where both gates' literal exemptions already apply.
+
+`f16` AND `bf16` RANK EQUAL AND BOTH DIRECTIONS ARE REJECTED. Neither is a
+subset of the other — `bf16` spends four mantissa bits to buy `f32`'s exponent
+range — so each can represent values the other cannot. Sharing a rank means
+neither is mistaken for a widening TARGET of the other, and the caller's
+`source != target` guard is what admits the identity case, so equal rank alone
+never waves a conversion through.
+
+THE FIX-IT IS REAL, WHICH IS THE WHOLE POINT. The row's complaint was "no
+diagnostic AND no rounding", so a diagnostic sending the author to a spelling
+that changes nothing would be worse than silence — it would launder the same
+unrounded value behind an explicit cast. `as f32` rounds on both surfaces
+(0.1 -> 0.10000000149011612, and 0.0999755859375 at `f16`), pinned by twinned
+E2E tests that assert the same string from `--interp` and from the binary.
+
+PINNED by `float_slots_reject_an_implicit_narrowing` (all thirteen positions,
+both `f16`/`bf16` directions, plus the over-reach guards: widening at each
+position, unsuffixed literals, literal arithmetic, and the `as` escape), the
+sixth-container-slot case added to `container_slots_reject_an_implicit_narrowing`,
+and the two `..._as_cast_rounds_to_the_target_width` twins.
+
+RESIDUAL, filed rather than folded in: mixed-width float arithmetic between two
+TYPED operands is still accepted, and takes the LEFT operand's type — `a * b` is
+f32 and `b * a` is f64 for the same two bindings. That is the mechanism that
+MANUFACTURES the wrong width which this gate then catches at a boundary far from
+the cause, and design.md's "two typed expressions always follow the same rules"
+invariant refuses it for integers. Separate rule, separate blast radius.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean. |
 
 </details>
 
