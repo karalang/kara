@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 246 | 3 |
+| miscompile | 246 | 2 |
 | leak | 172 | 0 |
 | double-free | 127 | 0 |
 | run-vs-build | 109 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 847 | 5 |
+| codegen | 847 | 4 |
 | typecheck | 163 | 1 |
 | interp | 143 | 1 |
 | ownership | 47 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1172 surfaced · 6 open · 1154 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1172 surfaced · 5 open · 1155 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-13-22 | 2026-08-13 | codegen | high | An ANNOTATED ARRAY literal ignores its annotation the way B-2026-08-13-17's tuple did: `let a: Array[i64, 2] = [v, v]` with `v: u8 = 200` lays the aggregate out at the ELEMENT's width and sign-extends on read, printing -56 on all three compiled surfaces while `--interp` prints 200. Unsigned sources only (u8/u16/u32); signed sources are correct, because sign-extension is what they wanted. | src/codegen/collections.rs `compile_array_literal` (~L1265): it consults `literal_pending_elem_hint()` and would coerce via `coerce_literal_elem_to_type_from`, but the hint is None for an `Array[T, N]` annotation — the staging in src/codegen/stmts.rs (~L3880) keys off `vec_elem_types` / `var_elem_type_exprs`, which an Array binding does not populate. With no hint the function falls through to `let elem_ty = vals[0].get_type()`, i.e. layout from the VALUES rather than the annotation — the same shape B-2026-08-13-17 fixed for tuples via `pending_let_tuple_te`. |
 | B-2026-08-14-1 | 2026-08-14 | typecheck+codegen | high | FIVE SITES ACCEPT AN IMPLICIT NARROWING the language says it refuses — Vec.push, Vec.contains, Set.insert/contains, Set.remove and the annotated tuple take an i64 where a u8 is declared, with NO diagnostic. The two surfaces then disagree: `Vec[u8]` + `push(300i64)` reads back 300 under --interp and 44 compiled. Map and Vec index-assign reject the same shape, so this is per-site, not a missing rule. | The rejecting sites go through `check_int_widening_coercion` (src/typechecker/exprs.rs, B-2026-07-09-7 decision B); the five leaking sites are container-argument and annotated-aggregate paths that never call it. Compare Map.insert/contains_key (rejects) against Set.insert/contains (accepts) — same shape, different answer — and Vec index-assign (rejects) against Vec.push (accepts), which is a disagreement INSIDE one container's method set. |
 | B-2026-08-14-2 | 2026-08-14 | interp | high | INTERPRETER-SIDE: the implicit int-to-float widening is not performed at all, so an int source bound to a float destination stays an Int. At an annotated `let` this makes a program that `karac check`s clean and runs correctly compiled DIE AT RUNTIME under --interp ("operator 'Eq' is not defined for operands of type 'Int' and 'Float'"), with a diagnostic that blames a typecheck error which does not exist. At `Vec[f64].push` it is silent instead: `contains` answers the exact inverse of the compiled backends. | The interpreter's coercion at a float-typed binding/argument position: it stores the incoming `Value::Int` unchanged where the declared type is a float, and the later operator dispatch has no Int/Float arm. The compiled backends convert correctly at these boundaries (B-2026-08-13-18 did that work for codegen), so the fix is the interpreter's side of the same rule. The runtime error text is separately wrong and should not survive the fix — it asserts the typechecker reports this as a hard error, and `karac check` on the repro prints "All checks passed." |
 | B-2026-08-14-3 | 2026-08-14 | codegen | high | GENERICS AT UNSIGNED NARROW WIDTHS RETURN SIGN-EXTENDED GARBAGE on both compiled backends: `fn idg[T](x: T) -> T` called as `idg(200u8)` yields -56, `idg(60000u16)` yields -5536, `idg(4000000000u32)` yields -294967296, and the generic struct `Boxg[T] { v: T }` at `Boxg[u8]` reads its field back as -56. Signed T is correct, and the same values held in a non-generic binding are correct. | The monomorphization path's extension of a narrow T: it appears to sign-extend unconditionally rather than choosing sext/zext from T's signedness. Both the generic FUNCTION return/argument and the generic STRUCT field read are affected, which points at one shared widen rather than two. Contrast with the non-generic control in the same program (a plain `let direct = 200u8` prints 200) and with `Vec[u8]`, which round-trips 200 correctly — so it is the generic instantiation, not narrow unsigned handling in general. |
@@ -148,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1172 surfaced
 
 </details>
 
-### Fixed (1154)
+### Fixed (1155)
 
-<details><summary>1154 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1155 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -5073,6 +5072,19 @@ DECLARED TYPES COME FROM THE AST, not from the LLVM signature, at every site. `c
 MEASURED against the interpreter as oracle on all four surfaces AND both optimization levels, twelve shapes in one program: both return spellings; a NESTED tuple return (inner gets its own declared widths); a `(String, i64)` return (heap element keeps the compiled value's layout); an already-matching `(1, 2)` return (must be untouched); a tuple argument alone and between two scalar args; a plain struct field; a SHARED struct field (the GEP+store builder); the `let` position from the parent row; a `ref (i64, i64)` parameter (must keep taking the pointer path); and the unannotated control.
 
 Values carry the high bit (200, 4000000000) throughout, for the reason B-2026-08-13-15 and -17 both give: sext and zext agree below 128, so a small-value probe reports every one of these as working. |
+| B-2026-08-13-22 | codegen | high | An ANNOTATED ARRAY literal ignores its annotation the way B-2026-08-13-17's tuple did: `let a: Array[i64, 2] = [v, v]` with `v: u8 = 200` lays the ag… | FIXED by 6b74cb11. THE ROW ASKED THE RIGHT DESIGN QUESTION AND THE ANSWER IS "NO THIRD FIELD". It proposed either staging the Array annotation the way `pending_let_tuple_te` stages the tuple one, or making aggregate layout consult the declared type generically -- and asked that the generic option be considered first. It should be, and the reason is that NOTHING ABOUT THE ARRAY COERCION WAS BROKEN.
+
+`compile_array_literal` already coerced every element through `coerce_literal_elem_to_type_from`, which takes the element EXPRESSION and therefore picks zext over sext from the source's signedness. That is exactly why the row's own sweep found signed sources correct and an explicit `as i64` correct: the coercion was right whenever it ran. It simply never ran, because it is gated on an element hint that was never set -- an `Array[T, N]` binding registers in `array_elem_type_exprs`, not `vec_elem_types`, and only the latter seeded `pending_let_elem_type`. With no hint the coercion is skipped entirely and `elem_ty = vals[0].get_type()` makes the aggregate `[2 x i8]`.
+
+So the `let` leg is one lookup, reusing the EXISTING element-hint channel. No new carrier.
+
+THE FAMILY IS CLOSED AT THE POSITION AXIS TOO, by generalizing rather than duplicating. B-2026-08-13-21 had just wired four staging sites for the tuple literal (function-body tail, explicit `return`, call argument, struct field -- both struct builders). An annotated ARRAY literal fails at those same four positions, and loudly: `ret [2 x i8]` against a `[2 x i64]` signature, a mismatched call parameter, an `insertvalue` into a differently-shaped field. Rather than add a parallel set of array stagings, `stage_declared_tuple_te` became `stage_declared_aggregate_te`, dispatching on the literal form: a tuple literal against a declared tuple stages `pending_let_tuple_te`, an array literal against a declared `Array[T, N]` stages `pending_let_elem_type`. One helper, one restore, the same four call sites -- so a fifth position added later gets both forms for free.
+
+A FIFTH SITE THE SWEEP DOES NOT REACH, found by probing the array positions and worth naming because it is SILENT where the other four are loud: `Vector[T, N].from_array` widened each lane with `coerce_scalar_to_type`, the signedness-BLIND variant. `Vector[i64, 2].from_array([v, v])` with `v: u8 = 200` reduced to -112 (two lanes of -56) against the interpreter's 400. Fixed by pairing each lane with its source expression and calling `coerce_scalar_to_type_src`; the aggregate arm's extracts have no expression, pass `None`, and keep the old behaviour. This is the same one-word mistake the whole family is made of -- a widening boundary that forgot to ask what it was widening FROM.
+
+MEASURED. The row's own guard, `scripts/width-matrix.py --site array_elem`, goes from failing to 38 programs / 76 case-lines / 0 divergences. The FULL sweep -- which the row names as the family guard -- reports 190 programs, 608 case-lines, 0 divergences, 0 surface skips, against 30 raw / 15 distinct at 35fb7aec. Every one of the tuple family's fixtures re-verified unregressed on all four surfaces.
+
+A permanent cargo test (`test_e2e_annotated_array_uses_declared_element_width`) pins eight shapes: the row's repro; the signed source and the explicit-`as` control that were correct all along and must stay so; the four sibling positions; and the SIMD lane case. |
 
 </details>
 
