@@ -17175,11 +17175,15 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err("from_array: lowered type is not an LLVM vector".to_string());
         };
         let n = vt.get_size();
-        let lanes: Vec<BasicValueEnum<'ctx>> =
+        // Each lane is paired with its SOURCE EXPRESSION where one exists, so
+        // the widening coercion below can tell a `u8` from an `i8`
+        // (B-2026-08-13-22). The aggregate arm's extracts have no expression and
+        // are already `T`-typed, so they pass `None` and keep the old behaviour.
+        let lanes: Vec<(BasicValueEnum<'ctx>, Option<&Expr>)> =
             if let ExprKind::ArrayLiteral(elems) = &args[0].value.kind {
                 elems
                     .iter()
-                    .map(|e| self.compile_expr(e))
+                    .map(|e| self.compile_expr(e).map(|v| (v, Some(e))))
                     .collect::<Result<_, _>>()?
             } else {
                 let arr = self.compile_expr(&args[0].value)?;
@@ -17188,17 +17192,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     .map(|i| {
                         self.builder
                             .build_extract_value(agg, i, "from_array.lane")
+                            .map(|v| (v, None))
                             .map_err(|e| format!("from_array extractvalue failed: {e}"))
                     })
                     .collect::<Result<_, _>>()?
             };
         let i32_ty = self.context.i32_type();
         let mut acc = vt.get_undef();
-        for (i, val) in lanes.iter().enumerate() {
+        for (i, (val, src)) in lanes.iter().enumerate() {
             // Literal-width boundary coercion for the array-literal arm
             // (a bare `0.5` element lowers as f64); no-op for the
             // aggregate arm's already-`T`-typed extracts.
-            let val = self.coerce_scalar_to_type(*val, vt.get_element_type());
+            //
+            // B-2026-08-13-22 — this was the signedness-BLIND
+            // `coerce_scalar_to_type`, so a `u8` lane widening to an `i64`
+            // vector element sign-extended: `Vector[i64, 2].from_array([v, v])`
+            // with `v: u8 = 200` reduced to -112 (two lanes of -56) on both
+            // compiled backends while the interpreter said 400. Passing the
+            // source expression selects zext, exactly as every other widening
+            // boundary in the compiler does.
+            let val = self.coerce_scalar_to_type_src(*val, vt.get_element_type(), *src);
             acc = self
                 .builder
                 .build_insert_element(

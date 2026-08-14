@@ -2576,10 +2576,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // the wrong answer and would overwrite a `let`'s own annotation
         // (`let x: (u8, u32) = { (b, d) }` inside a tuple-returning fn). Only
         // the function body's own final expression is unambiguously the return.
-        let saved_tuple_te = self
-            .stage_declared_tuple_te(func.body.final_expr.as_deref(), func.return_type.as_ref());
+        let saved_agg_te = self.stage_declared_aggregate_te(
+            func.body.final_expr.as_deref(),
+            func.return_type.as_ref(),
+        );
         let mut result = self.compile_function_body(&func.body)?;
-        self.pending_let_tuple_te = saved_tuple_te;
+        self.restore_declared_aggregate_te(saved_agg_te);
         self.tail_ret_inner = None;
 
         if self

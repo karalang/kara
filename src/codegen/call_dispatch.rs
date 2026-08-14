@@ -1688,9 +1688,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(&name)
                 .and_then(|f| f.params.get(i))
                 .map(|p| p.ty.clone());
-            let saved_tuple_te = self.stage_declared_tuple_te(Some(&a.value), param_te.as_ref());
+            let saved_agg_te = self.stage_declared_aggregate_te(Some(&a.value), param_te.as_ref());
             let val = self.compile_expr(&a.value)?;
-            self.pending_let_tuple_te = saved_tuple_te;
+            self.restore_declared_aggregate_te(saved_agg_te);
             // `Option[shared T]` ref-share at the call site: when
             // the arg is a tracked Identifier binding whose static
             // type is Option[shared T], emit a discriminant- and

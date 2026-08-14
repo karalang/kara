@@ -3230,35 +3230,70 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `fn_return_option_inner_shared`, so nested-fn compiles (closures,
     /// par branch fns, monos) resolve to `None` without flag threading —
     /// same discipline as `current_fn_ret_is_niche`.
-    /// Stage the DECLARED tuple type of an expression that is about to be
-    /// compiled into a slot of that type, so `compile_tuple` lays the aggregate
-    /// out at the declared element widths instead of at its values' widths.
+    /// Stage the DECLARED type of an AGGREGATE LITERAL that is about to be
+    /// compiled into a slot of that type, so the aggregate is laid out at the
+    /// declared element widths instead of at its values' widths.
     ///
-    /// B-2026-08-13-21 — the shared half of B-2026-08-13-17's fix. That row
-    /// wired the `let` position; the same value-derived layout applies wherever
-    /// a tuple literal meets a declared tuple type, and at every OTHER position
-    /// the mismatch is a module-verification failure rather than a wrong answer
-    /// (`ret { i8, i32 }` against a `{ i64, i64 }` signature, a call parameter
-    /// that does not match, an `insertvalue` into a differently-shaped field).
+    /// Covers both members of this family, because they are the same bug:
     ///
-    /// A no-op unless BOTH the expression is a tuple literal and the declared
-    /// type is a tuple, which is what keeps every other program's codegen
-    /// byte-identical. Returns the previous hint so the caller can restore it —
-    /// these positions nest (a tuple argument inside a returned tuple).
-    pub(super) fn stage_declared_tuple_te(
+    ///   * a TUPLE literal against a declared tuple type (B-2026-08-13-17 in
+    ///     `let` position, B-2026-08-13-21 everywhere else) — staged as a
+    ///     `TypeExpr` in `pending_let_tuple_te`, which `compile_tuple` consumes;
+    ///   * an ARRAY literal against a declared `Array[T, N]` (B-2026-08-13-22) —
+    ///     staged as the element's LLVM type in the pre-existing
+    ///     `pending_let_elem_type`, which `compile_array_literal` already reads
+    ///     and already coerces through with the element EXPRESSION in hand.
+    ///
+    /// The array leg deliberately reuses that existing channel rather than
+    /// minting a third `pending_*` carrier: nothing about the array coercion was
+    /// wrong — it picks zext over sext from the source's signedness, which is
+    /// why a signed source and an explicit `as i64` were both correct — only the
+    /// hint was missing.
+    ///
+    /// A no-op unless the expression is one of those two literal forms AND the
+    /// declared type is the matching aggregate, which is what keeps every other
+    /// program's codegen byte-identical. Returns the previous hints so the
+    /// caller can restore them: these positions nest (an array argument inside a
+    /// returned tuple).
+    pub(super) fn stage_declared_aggregate_te(
         &mut self,
         expr: Option<&crate::ast::Expr>,
         declared: Option<&TypeExpr>,
-    ) -> Option<TypeExpr> {
-        let prev = self.pending_let_tuple_te.take();
-        if let (Some(e), Some(te)) = (expr, declared) {
-            if matches!(&e.kind, crate::ast::ExprKind::Tuple(_))
-                && matches!(te.kind, TypeKind::Tuple(_))
-            {
+    ) -> (Option<TypeExpr>, Option<BasicTypeEnum<'ctx>>) {
+        let prev = (
+            self.pending_let_tuple_te.take(),
+            self.pending_let_elem_type.take(),
+        );
+        let (Some(e), Some(te)) = (expr, declared) else {
+            return prev;
+        };
+        match &e.kind {
+            crate::ast::ExprKind::Tuple(_) if matches!(te.kind, TypeKind::Tuple(_)) => {
                 self.pending_let_tuple_te = Some(te.clone());
             }
+            crate::ast::ExprKind::ArrayLiteral(_) => {
+                // Scalars only. `literal_pending_elem_hint` filters to
+                // int/float anyway, and a heap element already carries the
+                // layout its consumers expect.
+                if let Some(elem_te) = super::helpers::array_inner_type_expr(te) {
+                    let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                    if elem_ty.is_int_type() || elem_ty.is_float_type() {
+                        self.pending_let_elem_type = Some(elem_ty);
+                    }
+                }
+            }
+            _ => {}
         }
         prev
+    }
+
+    /// Restore what [`Self::stage_declared_aggregate_te`] displaced.
+    pub(super) fn restore_declared_aggregate_te(
+        &mut self,
+        prev: (Option<TypeExpr>, Option<BasicTypeEnum<'ctx>>),
+    ) {
+        self.pending_let_tuple_te = prev.0;
+        self.pending_let_elem_type = prev.1;
     }
 
     /// The declared return `TypeExpr` of the function currently being compiled.

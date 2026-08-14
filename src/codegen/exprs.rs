@@ -841,8 +841,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `ret { i8, i32 }` against a `{ i64, i64 }` signature.
                     // A no-op unless the operand is a tuple literal AND the
                     // return type is a tuple.
-                    let saved_tuple_te =
-                        self.stage_declared_tuple_te(Some(e), self.current_fn_return_te().as_ref());
+                    let saved_agg_te = self
+                        .stage_declared_aggregate_te(Some(e), self.current_fn_return_te().as_ref());
                     let v = if returns_borrow_call {
                         let prev = self.compiling_ref_return_let_rhs;
                         self.compiling_ref_return_let_rhs = true;
@@ -892,7 +892,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.compile_expr(e)?
                     };
-                    self.pending_let_tuple_te = saved_tuple_te;
+                    self.restore_declared_aggregate_te(saved_agg_te);
                     // Owned String/Vec PARAM returned by value (`return s;`
                     // where `s: String` is a parameter): the caller that
                     // passed `s` still owns its buffer (by-value header
@@ -2571,10 +2571,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(name)
                         .and_then(|tes| tes.get(idx))
                         .cloned();
-                    let saved_tuple_te =
-                        self.stage_declared_tuple_te(Some(&field_init.value), field_te.as_ref());
+                    let saved_agg_te = self
+                        .stage_declared_aggregate_te(Some(&field_init.value), field_te.as_ref());
                     let val = self.compile_expr(&field_init.value)?;
-                    self.pending_let_tuple_te = saved_tuple_te;
+                    self.restore_declared_aggregate_te(saved_agg_te);
                     // Owned String/Vec PARAM captured into a field
                     // (`Node { name: s }` where `s: String` is a param):
                     // deep-copy — the caller retains the buffer's free
@@ -2827,10 +2827,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(name)
                     .and_then(|tes| tes.get(idx))
                     .cloned();
-                let saved_tuple_te =
-                    self.stage_declared_tuple_te(Some(&field_init.value), tuple_field_te.as_ref());
+                let saved_agg_te = self
+                    .stage_declared_aggregate_te(Some(&field_init.value), tuple_field_te.as_ref());
                 let val = self.compile_expr(&field_init.value)?;
-                self.pending_let_tuple_te = saved_tuple_te;
+                self.restore_declared_aggregate_te(saved_agg_te);
                 // Owned String/Vec PARAM captured into a field — deep-copy,
                 // same rationale as the shared-struct branch above.
                 let val = self.maybe_defensive_copy_param_arg(&field_init.value, val);

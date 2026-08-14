@@ -3881,6 +3881,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {
                         self.pending_let_elem_type = Some(elem_ty);
                     }
+                    // B-2026-08-13-22 — an `Array[T, N]` binding registers in
+                    // `array_elem_type_exprs`, NOT `vec_elem_types`, so the
+                    // lookup above left the hint unset and `compile_array_literal`
+                    // skipped its element coercion entirely: the aggregate took
+                    // the elements' own width (`[2 x i8]` for `[v, v]` with
+                    // `v: u8`) while every read trusted the declared `i64` and
+                    // sign-extended, printing 200 as -56 on all three compiled
+                    // surfaces.
+                    //
+                    // Nothing about the coercion needed fixing — it already
+                    // takes the element EXPRESSION and so picks zext over sext
+                    // from the source's signedness, which is why a signed source
+                    // and an explicit `as i64` were both correct throughout.
+                    // Only the hint was missing, so this reuses the existing
+                    // channel rather than adding a third `pending_*` carrier
+                    // beside the tuple one (B-2026-08-13-17).
+                    //
+                    // Scalars only: `literal_pending_elem_hint` filters to
+                    // int/float anyway, and a heap element already carries the
+                    // layout its consumers expect.
+                    if self.pending_let_elem_type.is_none() {
+                        if let Some(elem_te) = ty.as_ref().and_then(array_inner_type_expr) {
+                            let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                            if elem_ty.is_int_type() || elem_ty.is_float_type() {
+                                self.pending_let_elem_type = Some(elem_ty);
+                            }
+                        }
+                    }
                     // TypeExpr sibling — lets `Vec.filled` deep-clone heap-backed
                     // slot values (`Vec[Vec[_]]` / `Vec[String]`).
                     if let Some(te) = self.var_elem_type_exprs.get(var_name.as_str()) {

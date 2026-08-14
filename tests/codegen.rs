@@ -12869,6 +12869,81 @@ fn main() {
         assert_eq!(got[8], "0", "Set[String].contains found an absent key");
     }
 
+    /// B-2026-08-13-22 — an ANNOTATED ARRAY literal must lay its aggregate out at
+    /// the DECLARED element width, the third member of the family after the
+    /// tuple in `let` position (B-2026-08-13-17) and everywhere else
+    /// (B-2026-08-13-21).
+    ///
+    /// `let a: Array[i64, 2] = [v, v]` with `v: u8 = 200` built `[2 x i8]` and
+    /// every read trusted the declared `i64`, so it printed -56 on all three
+    /// compiled surfaces while the interpreter printed 200.
+    ///
+    /// NOTHING WAS WRONG WITH THE COERCION. `compile_array_literal` already
+    /// coerced through `coerce_literal_elem_to_type_from`, which takes the
+    /// element EXPRESSION and so picks zext over sext from the source's
+    /// signedness — that is why lines 02 (signed source) and 03 (explicit `as`)
+    /// were correct all along, and why only unsigned sources diverged. The hint
+    /// that gates that coercion was simply never set for an `Array[T, N]`
+    /// binding, which registers in `array_elem_type_exprs` rather than
+    /// `vec_elem_types`. The fix seeds the existing element-hint channel; no
+    /// third `pending_*` carrier was needed.
+    ///
+    /// Lines 04-07 are the sibling POSITIONS, which fail loudly rather than
+    /// silently (`ret [2 x i8]` against a `[2 x i64]` signature, and so on) —
+    /// the array half of B-2026-08-13-21, closed here by generalizing that row's
+    /// staging helper to both aggregate literal forms.
+    ///
+    /// Line 08 is a fifth site the family sweep does not reach: `Vector[T, N]
+    /// .from_array` widened each lane with the signedness-BLIND coercion, so two
+    /// `u8` lanes of 200 reduced to -112 instead of 400. Silent, like the `let`
+    /// case, and fixed the same way — by handing the coercion the lane's source
+    /// expression.
+    #[test]
+    fn test_e2e_annotated_array_uses_declared_element_width() {
+        let src = r#"
+struct P { a: Array[i64, 2] }
+fn take(a: Array[i64, 2]) -> i64 { return a[0i64]; }
+fn give() -> Array[i64, 2] { let v = 200u8; return [v, v]; }
+fn givetail() -> Array[i64, 2] { let v = 200u8; [v, v] }
+
+fn main() {
+    let v = 200u8;
+
+    let a: Array[i64, 2] = [v, v];
+    println(f"01 {a[0i64]}");
+
+    let s = 100i8;
+    let b: Array[i64, 2] = [s, s];
+    println(f"02 {b[0i64]}");
+
+    let c: Array[i64, 2] = [v as i64, v as i64];
+    println(f"03 {c[0i64]}");
+
+    let r1 = give();     println(f"04 {r1[0i64]}");
+    let r2 = givetail(); println(f"05 {r2[0i64]}");
+    println(f"06 {take([v, v])}");
+    let p = P { a: [v, v] };
+    println(f"07 {p.a[0i64]}");
+
+    let w: Vector[i64, 2] = Vector[i64, 2].from_array([v, v]);
+    println(f"08 {w.reduce_sum()}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 200\n\
+                 02 100\n\
+                 03 200\n\
+                 04 200\n\
+                 05 200\n\
+                 06 200\n\
+                 07 200\n\
+                 08 400\n"
+            ),
+        );
+    }
+
     /// B-2026-08-13-21 — the same declared-widths rule at every OTHER position a
     /// tuple literal can appear in: RETURN (both spellings), ARGUMENT, and
     /// STRUCT FIELD. B-2026-08-13-17 fixed the `let` position and left the
