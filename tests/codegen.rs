@@ -94985,6 +94985,45 @@ fn main() {
             Some("1\ntrue\n1\n1\nalpha1\nalpha1\nbeta1\nbeta200\n".to_string())
         );
     }
+
+    /// B-2026-08-14-21 — `s += x` on a `mut ref String` PARAMETER must reach
+    /// the caller. The compiled program silently printed the pre-call value:
+    /// the compound-assign arm handled only a SCALAR `mut ref` target, so an
+    /// aggregate one fell through to a store into the 8-byte alloca holding the
+    /// borrow POINTER instead of a store through it. Its plain-`Assign` twin was
+    /// widened past scalars by B-2026-08-05-39 and this arm was left behind,
+    /// which is exactly why `s = s + x` through the same parameter worked.
+    ///
+    /// All five lines are the pin, not just the first: `push_str` and `s = s + x`
+    /// are the two spellings that already worked (a fix that broke either would
+    /// be trading one miscompile for another), the loop returned the EMPTY string
+    /// rather than a short one, and the scalar `mut ref` is the control for the
+    /// branch this change did not touch. Oracle: the interpreter twin
+    /// `tests/interpreter.rs::test_compound_assign_through_mut_ref_param`, which
+    /// was right on all of them.
+    #[test]
+    fn test_e2e_compound_assign_through_mut_ref_param() {
+        assert_eq!(
+            run_program(
+                "fn append_plus_eq(s: mut ref String) { s += \"abc\"; }\n\
+                 fn append_push(s: mut ref String) { s.push_str(\"abc\"); }\n\
+                 fn append_assign(s: mut ref String) { s = s + \"abc\"; }\n\
+                 fn append_loop(s: mut ref String) {\n\
+                     let mut i = 0i64;\n\
+                     while i < 3i64 { s += \"z\"; i = i + 1i64; }\n\
+                 }\n\
+                 fn bump(n: mut ref i64) { n += 5i64; }\n\
+                 fn main() {\n\
+                     let mut a = \"X\"; append_plus_eq(mut a); println(a);\n\
+                     let mut b = \"X\"; append_push(mut b); println(b);\n\
+                     let mut c = \"X\"; append_assign(mut c); println(c);\n\
+                     let mut d = \"X\"; append_loop(mut d); println(d);\n\
+                     let mut n = 1i64; bump(mut n); println(n);\n\
+                 }\n"
+            ),
+            Some("Xabc\nXabc\nXabc\nXzzz\n6\n".to_string())
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

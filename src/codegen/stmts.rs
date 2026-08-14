@@ -9060,6 +9060,33 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.builder.build_store(ptr, cval).unwrap();
                                 return Ok(());
                             }
+                        } else if let Some(ptr) = self.get_data_ptr(name) {
+                            // B-2026-08-14-21 — the AGGREGATE `mut ref` param,
+                            // which until now only the plain-`Assign` arm
+                            // handled (B-2026-08-05-39 widened that one and
+                            // this twin was left behind). `s += "abc"` on a
+                            // `mut ref String` fell through to the generic
+                            // `build_store(slot.ptr, …)` below, which writes a
+                            // 24-byte `{ptr,len,cap}` into the 8-byte alloca
+                            // holding the borrow POINTER: the caller's string
+                            // never changed and the compiled program silently
+                            // printed the pre-call value, while `s.push_str(x)`
+                            // and `s = s + x` through the SAME parameter both
+                            // wrote through correctly and the interpreter was
+                            // right on all three.
+                            //
+                            // The displaced pointee is reclaimed BEFORE the
+                            // store and AFTER `result` is computed, exactly as
+                            // the plain-Assign arm does: the concatenation has
+                            // already built its fresh buffer out of the old
+                            // contents, and the caller's binding would
+                            // otherwise be the only thing that could free the
+                            // buffer this store overwrites. (`+=` on a LOCAL
+                            // String still leaks its displaced buffer — that is
+                            // B-2026-08-14-22, a different arm.)
+                            self.reclaim_displaced_ref_param_pointee(name, inner_ty, ptr);
+                            self.builder.build_store(ptr, result).unwrap();
+                            return Ok(());
                         }
                     }
                     if let Some(slot) = self.variables.get(name).copied() {

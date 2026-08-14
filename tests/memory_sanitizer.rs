@@ -48255,4 +48255,39 @@ fn main() {
             "asan_shared_struct_string_field_reassign_no_leak",
         );
     }
+
+    /// B-2026-08-14-21, second half — the miscompile was also a leak, and the
+    /// value pin alone would not have caught that.
+    ///
+    /// Pre-fix, each `s += x` on a `mut ref String` built a fresh concatenated
+    /// buffer and stored it into the 8-byte alloca holding the borrow pointer:
+    /// the caller never saw it AND nothing ever freed it. Routing the store
+    /// through the borrow reclaims the buffer it displaces, so an appending loop
+    /// through a `mut ref` parameter now holds one buffer rather than one per
+    /// iteration. (The LOCAL `+=` still leaks its displaced buffer — that is
+    /// B-2026-08-14-22, a different arm, deliberately not touched here.)
+    #[test]
+    fn asan_compound_append_through_mut_ref_param_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+fn append(s: mut ref String, x: String) {
+    let mut i = 0i64;
+    while i < 200i64 { s += x; i = i + 1i64; }
+}
+fn main() {
+    let k = env.args().len() as i64;
+    let mut acc = String.new(); acc.push_str("seed"); acc.push_str(k.to_string());
+    let mut piece = String.new(); piece.push_str("abcdefgh");
+    append(mut acc, piece);
+    println(acc.len());
+}
+"#,
+            // "seed1" (5) + 200 * 8. `k` is a stable 1 — the binary runs with no
+            // args — and is appended so the seed is a heap buffer rather than a
+            // static literal, whose `cap == 0` would make the reclaim a no-op and
+            // hide the thing being asserted.
+            &["1605"],
+            "compound_append_through_mut_ref_param_is_balanced",
+        );
+    }
 }

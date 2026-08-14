@@ -33124,3 +33124,29 @@ fn test_bound_nested_container_reads() {
         "1\ntrue\n1\n1\nalpha1\nalpha1\nbeta1\nbeta200\n"
     );
 }
+
+/// B-2026-08-14-21 — the interpreter oracle for compound assignment through a
+/// `mut ref` parameter. This backend was right on all five lines already; what
+/// makes it the oracle is that codegen silently disagreed on exactly one of
+/// them (`s += x` on the aggregate `mut ref`), with no diagnostic and no crash.
+#[test]
+fn test_compound_assign_through_mut_ref_param() {
+    assert_eq!(
+        run("fn append_plus_eq(s: mut ref String) { s += \"abc\"; }\n\
+             fn append_push(s: mut ref String) { s.push_str(\"abc\"); }\n\
+             fn append_assign(s: mut ref String) { s = s + \"abc\"; }\n\
+             fn append_loop(s: mut ref String) {\n\
+                 let mut i = 0i64;\n\
+                 while i < 3i64 { s += \"z\"; i = i + 1i64; }\n\
+             }\n\
+             fn bump(n: mut ref i64) { n += 5i64; }\n\
+             fn main() {\n\
+                 let mut a = \"X\"; append_plus_eq(mut a); println(a);\n\
+                 let mut b = \"X\"; append_push(mut b); println(b);\n\
+                 let mut c = \"X\"; append_assign(mut c); println(c);\n\
+                 let mut d = \"X\"; append_loop(mut d); println(d);\n\
+                 let mut n = 1i64; bump(mut n); println(n);\n\
+             }\n"),
+        "Xabc\nXabc\nXabc\nXzzz\n6\n"
+    );
+}
