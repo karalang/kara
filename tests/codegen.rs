@@ -94896,6 +94896,45 @@ fn main() {
             Some("3\n")
         );
     }
+
+    /// B-2026-08-14-15 — the VALUE side of the two leaks. Both spellings of
+    /// each program must agree with the interpreter twin
+    /// (`tests/interpreter.rs::test_bound_nested_container_reads`); the leaks
+    /// themselves are pinned under LSan in `tests/memory_sanitizer.rs`.
+    ///
+    /// Leg A binds a `Map` element out of a `Vec` and probes it with a key;
+    /// leg B binds an `Option[Vec[P]]` and matches it. Each is paired with the
+    /// inline form that was already clean, so a fix that changed the binding
+    /// form's OUTPUT would fail here rather than pass quietly.
+    #[test]
+    fn test_e2e_bound_nested_container_reads() {
+        assert_eq!(
+            run_program(
+                "struct P { tag: String }\n\
+                 fn mk(k: i64) -> Option[Vec[P]] {\n\
+                     let mut c: Vec[P] = Vec.new();\n\
+                     c.push(P { tag: f\"alpha{k}\" });\n\
+                     Some(c)\n\
+                 }\n\
+                 fn main() {\n\
+                     let k = 1;\n\
+                     let mut vms: Vec[Map[String, i64]] = Vec.new();\n\
+                     let mut inner: Map[String, i64] = Map.new();\n\
+                     let _ = inner.insert(\"n\", k);\n\
+                     vms.push(inner);\n\
+                     let cur = vms[0];\n\
+                     match cur.get(\"n\") { Some(x) => println(x), None => println(-1) }\n\
+                     println(cur.contains_key(\"n\"));\n\
+                     println(cur.len());\n\
+                     match vms[0].get(\"n\") { Some(x) => println(x), None => println(-1) }\n\
+                     let held = mk(k);\n\
+                     match held { Some(v) => println(v[0].tag), None => println(\"none\") }\n\
+                     match mk(k) { Some(v) => println(v[0].tag), None => println(\"none\") }\n\
+                 }\n"
+            ),
+            Some("1\ntrue\n1\n1\nalpha1\nalpha1\n".to_string())
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

@@ -47990,4 +47990,70 @@ fn main() {
             "slice_mutators_heap_elements",
         );
     }
+
+    /// B-2026-08-14-15 leg A — a nested container read into a `let` binding
+    /// and then probed with a key-taking method.
+    ///
+    /// `let cur = vms[0]` over `Vec[Map[..]]` deep-clones the element (the
+    /// binding owns a COPY, which is what both backends observe), but the
+    /// `let` site read the bare `v[i]` RHS as a caller-retains ALIAS and armed
+    /// no handle free — so the whole cloned control block leaked. The clone is
+    /// elided for a read-only binding, which is why `cur.len()` and an unused
+    /// `cur` were clean and only a key-taking probe (`get` / `contains_key` /
+    /// `Set.contains`) reached the leak.
+    #[test]
+    fn asan_nested_map_bound_out_of_vec_then_probed_is_freed() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let k = env.args().len() as i64;
+    let mut vms: Vec[Map[String, i64]] = Vec.new();
+    let mut inner: Map[String, i64] = Map.new();
+    let _ = inner.insert("n", k);
+    vms.push(inner);
+    let cur = vms[0];
+    let mut tot = 0i64;
+    match cur.get("n") { Some(x) => { tot = tot + x; }, None => {} }
+    if cur.contains_key("n") { tot = tot + 10; }
+    println(tot);
+}
+"#,
+            // `k` is a stable 1 (the binary runs with no args); it exists to
+            // keep the map value out of reach of constant folding.
+            &["11"],
+            "nested_map_bound_out_of_vec_then_probed_is_freed",
+        );
+    }
+
+    /// B-2026-08-14-15 leg B — an `Option[Vec[<aggregate>]]` bound to a `let`
+    /// and then matched.
+    ///
+    /// The binding keeps the payload on its own tag-guarded overlay free,
+    /// which released the element ARRAY and nothing else: each element's own
+    /// heap (the `String` inside `P`) was stranded. The inline `match mk()`
+    /// form binds `v` as an owned `Vec[P]` and drains per element, so the two
+    /// spellings of the same program disagreed.
+    #[test]
+    fn asan_bound_option_vec_of_aggregates_drains_elements() {
+        assert_clean_asan_run(
+            r#"
+struct P { tag: String }
+fn mk(k: i64) -> Option[Vec[P]] {
+    let mut c: Vec[P] = Vec.new();
+    let mut s = String.new(); s.push_str("alpha"); s.push_str(k.to_string());
+    c.push(P { tag: s });
+    Some(c)
+}
+fn main() {
+    let k = env.args().len() as i64;
+    let held = mk(k);
+    match held { Some(v) => println(v[0].tag.len()), None => println(0) }
+}
+"#,
+            // "alpha1" — `k` is a stable 1, appended so the payload string is
+            // heap-allocated rather than a static literal.
+            &["6"],
+            "bound_option_vec_of_aggregates_drains_elements",
+        );
+    }
 }

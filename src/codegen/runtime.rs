@@ -5577,6 +5577,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(payload_elem_ty) = self.option_inline_payload_elem(option_te) else {
             return;
         };
+        let payload_elem_agg_drop = self.option_payload_vec_elem_agg_drop(option_te);
         let Some(layout) = self.enum_layouts.get("Option") else {
             return;
         };
@@ -5603,9 +5604,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 option_ty,
                 some_tag,
                 payload_elem_ty: Some(payload_elem_ty),
+                payload_elem_agg_drop,
             });
         }
         self.inline_option_payload_vars.insert(var_name.to_string());
+    }
+
+    /// B-2026-08-14-15 leg B — the per-element aggregate drop fn for an
+    /// `Option[Vec[<aggregate>]]` payload, or `None` for every other payload
+    /// shape (including `Option[Vec[String]]`, whose element is itself a
+    /// `{ptr,len,cap}` the overlay's own recursion already frees).
+    ///
+    /// This is the exact fn a DIRECT `Vec[P]` binding drains with
+    /// (`track_vec_of_aggs_var` ← `vec_elem_agg_drop_for_type_expr`). The two
+    /// paths disagreed only in reach: `match mk() { Some(v) => … }` binds `v`
+    /// as an owned `Vec[P]` and got the drain, while `let held = mk(); match
+    /// held { … }` left the payload on `held`'s overlay free, which drops the
+    /// outer buffer and nothing else — one leaked `String` per element.
+    pub(super) fn option_payload_vec_elem_agg_drop(
+        &mut self,
+        option_te: &TypeExpr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let payload_te = Self::option_payload_te(option_te)?;
+        let elem_te = crate::codegen::helpers::vec_inner_type_expr(&payload_te)?;
+        self.vec_elem_agg_drop_for_type_expr(&elem_te)
     }
 
     /// Register a scope-exit drop of an `Option[P]` binding whose `Some`
@@ -5750,6 +5772,7 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return false;
         };
+        let payload_elem_agg_drop = self.option_payload_vec_elem_agg_drop(&te);
         let slot = self.create_entry_alloca(cur_fn, "__owned_opt_tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
@@ -5758,6 +5781,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 option_ty,
                 some_tag,
                 payload_elem_ty: Some(payload_elem_ty),
+                payload_elem_agg_drop,
             });
             return true;
         }
@@ -6199,11 +6223,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `FreeVecBuffer`. `label` disambiguates the emitted block names so a
     /// two-variant Result emits distinct `respl.ok.*` / `respl.err.*` blocks.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_free_inline_payload_overlay(
         &self,
         enum_slot: PointerValue<'ctx>,
         enum_ty: StructType<'ctx>,
         payload_elem_ty: Option<BasicTypeEnum<'ctx>>,
+        // B-2026-08-14-15 leg B — per-element drop fn for a `Vec[<aggregate>]`
+        // payload, emitted as a drain loop over the payload's live elements
+        // before the outer buffer is released. `None` for every other shape,
+        // which keeps the existing single-level `{ptr,len,cap}` recursion below
+        // as the only element handling — the two are disjoint by construction
+        // (`vec_elem_agg_drop_for_type_expr` returns `None` for a String / Vec
+        // element, whose buffer that recursion already frees).
+        payload_elem_agg_drop: Option<FunctionValue<'ctx>>,
         fn_val: FunctionValue<'ctx>,
         vec_ty: StructType<'ctx>,
         ptr_ty: inkwell::types::PointerType<'ctx>,
@@ -6245,6 +6278,66 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(ptr_ty, data_ptr_ptr, &format!("{label}.data"))
             .unwrap()
             .into_pointer_value();
+        // B-2026-08-14-15 leg B — per-element aggregate drain for a
+        // `Vec[<struct/enum/tuple owning heap>]` payload, run BEFORE the outer
+        // buffer is released (the drop fn reads through each element). This is
+        // the same loop `FreeVecOfAggs` emits for a direct `Vec[P]` binding;
+        // without it a bound `Option[Vec[P]]` freed the element array and
+        // stranded every element's own heap.
+        if let (Some(agg_drop), Some(et)) = (payload_elem_agg_drop, payload_elem_ty) {
+            let len_ptr = self
+                .builder
+                .build_struct_gep(vec_ty, payload_base, 1, &format!("{label}.adrop.len.ptr"))
+                .unwrap();
+            let len = self
+                .builder
+                .build_load(i64_t, len_ptr, &format!("{label}.adrop.len"))
+                .unwrap()
+                .into_int_value();
+            let counter =
+                self.create_entry_alloca(fn_val, &format!("{label}.adrop.i"), i64_t.into());
+            self.builder.build_store(counter, zero).unwrap();
+            let cond_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("{label}.adrop.cond"));
+            let body_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("{label}.adrop.body"));
+            let after_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("{label}.adrop.after"));
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+            self.builder.position_at_end(cond_bb);
+            let cur = self
+                .builder
+                .build_load(i64_t, counter, &format!("{label}.adrop.cur"))
+                .unwrap()
+                .into_int_value();
+            let lt = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, cur, len, &format!("{label}.adrop.lt"))
+                .unwrap();
+            self.builder
+                .build_conditional_branch(lt, body_bb, after_bb)
+                .unwrap();
+            self.builder.position_at_end(body_bb);
+            let elem = unsafe {
+                self.builder
+                    .build_gep(et, data, &[cur], &format!("{label}.adrop.elem"))
+                    .unwrap()
+            };
+            self.builder
+                .build_call(agg_drop, &[elem.into()], "")
+                .unwrap();
+            let one = i64_t.const_int(1, false);
+            let next = self
+                .builder
+                .build_int_add(cur, one, &format!("{label}.adrop.next"))
+                .unwrap();
+            self.builder.build_store(counter, next).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+            self.builder.position_at_end(after_bb);
+        }
         // One-level recursive inner free for a Vec-struct payload element
         // (`Vec[String]` / `Vec[Vec[_]]`): each live element owns its own
         // data buffer. Same shape as `FreeVecBuffer`'s inner loop; `i8`
@@ -8885,6 +8978,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 option_ty,
                 some_tag,
                 payload_elem_ty,
+                payload_elem_agg_drop,
             } => {
                 // Tag-guard: only the `Some` discriminant carries a payload.
                 let tag_ptr = self
@@ -8915,6 +9009,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     *option_slot,
                     *option_ty,
                     *payload_elem_ty,
+                    *payload_elem_agg_drop,
                     fn_val,
                     vec_ty,
                     ptr_ty,
@@ -8990,6 +9085,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             *result_slot,
                             *result_ty,
                             *ok_payload_elem_ty,
+                            None,
                             fn_val,
                             vec_ty,
                             ptr_ty,
@@ -9022,6 +9118,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             *result_slot,
                             *result_ty,
                             *err_payload_elem_ty,
+                            None,
                             fn_val,
                             vec_ty,
                             ptr_ty,
@@ -9779,6 +9876,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         box_ptr,
                         *box_enum_ty,
                         Some(*elem_ty),
+                        None,
                         fn_val,
                         vec_ty,
                         ptr_ty,

@@ -33052,3 +33052,36 @@ fn unsigned_to_string_matches_fstring_interpolation() {
         "9223372036854775808\n9223372036854775808\n18446744073709551615\n-1\n"
     );
 }
+
+/// B-2026-08-14-15 — the interpreter oracle for the two nested-container
+/// binding leaks fixed in codegen (`tests/codegen.rs::
+/// test_e2e_bound_nested_container_reads`). The values were never in doubt on
+/// this backend; what makes it an oracle is that codegen must match it for
+/// BOTH spellings — the `let` binding and the inline read.
+#[test]
+fn test_bound_nested_container_reads() {
+    assert_eq!(
+        run("struct P { tag: String }\n\
+             fn mk(k: i64) -> Option[Vec[P]] {\n\
+                 let mut c: Vec[P] = Vec.new();\n\
+                 c.push(P { tag: f\"alpha{k}\" });\n\
+                 Some(c)\n\
+             }\n\
+             fn main() {\n\
+                 let k = 1;\n\
+                 let mut vms: Vec[Map[String, i64]] = Vec.new();\n\
+                 let mut inner: Map[String, i64] = Map.new();\n\
+                 let _ = inner.insert(\"n\", k);\n\
+                 vms.push(inner);\n\
+                 let cur = vms[0];\n\
+                 match cur.get(\"n\") { Some(x) => println(x), None => println(-1) }\n\
+                 println(cur.contains_key(\"n\"));\n\
+                 println(cur.len());\n\
+                 match vms[0].get(\"n\") { Some(x) => println(x), None => println(-1) }\n\
+                 let held = mk(k);\n\
+                 match held { Some(v) => println(v[0].tag), None => println(\"none\") }\n\
+                 match mk(k) { Some(v) => println(v[0].tag), None => println(\"none\") }\n\
+             }\n"),
+        "1\ntrue\n1\n1\nalpha1\nalpha1\n"
+    );
+}

@@ -1179,6 +1179,17 @@ pub(crate) enum CleanupAction<'ctx> {
         /// `{ptr,len,cap}`: `i8` for `String`, `llvm(U)` for `Vec[U]`
         /// (a Vec-struct element type triggers the recursive inner free).
         payload_elem_ty: Option<BasicTypeEnum<'ctx>>,
+        /// B-2026-08-14-15 leg B — per-element aggregate drop fn for a
+        /// `Vec[<aggregate>]` payload (`Option[Vec[P]]`, `P` a struct/enum/
+        /// tuple owning heap). The `payload_elem_ty` recursion above reaches
+        /// only elements that are THEMSELVES `{ptr,len,cap}` (`Vec[String]` /
+        /// `Vec[Vec[_]]`), so an aggregate element's own heap — the `String`
+        /// inside `struct P { tag: String }` — was stranded: the overlay freed
+        /// the outer buffer and nothing drained the elements. This is the same
+        /// `vec_elem_agg_drop_for_type_expr` fn the DIRECT `Vec[P]` binding
+        /// uses (`track_vec_of_aggs_var`), so a bound Option payload now drains
+        /// exactly like the inline `match mk()` temp already did.
+        payload_elem_agg_drop: Option<inkwell::values::FunctionValue<'ctx>>,
     },
     /// `Result[T, E]` sibling of `FreeInlineOptionPayload`. Same erased-
     /// layout problem (one `{tag, w0, w1, w2}` shape across instantiations),

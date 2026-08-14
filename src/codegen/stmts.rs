@@ -7071,6 +7071,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             )
                     ) || (matches!(&value.kind, ExprKind::Call { .. })
                         && !self.is_borrow_returning_call_expr(value));
+                    // B-2026-08-14-15 leg A — an index-read RHS (`let cur =
+                    // vms[0]` over `Vec[Map[..]]`) is a caller-retains alias
+                    // ONLY while the element clone above is elided. When the
+                    // clone actually fired, `cur` holds a fresh handle to a
+                    // freshly-allocated control block that nothing else frees:
+                    // the container's per-element drop frees the ORIGINAL, so
+                    // the clone leaked in full (602 bytes for a one-entry
+                    // `Map[String, i64]`). The clone's own emission is the
+                    // signal — see `vec_index_cloned_sites`.
+                    let fresh_handle = fresh_handle
+                        || (matches!(&value.kind, ExprKind::Index { .. })
+                            && self
+                                .vec_index_cloned_sites
+                                .contains(&crate::resolver::SpanKey::from_span(&value.span)));
                     if fresh_handle
                         && (self.map_key_types.contains_key(var_name.as_str())
                             || self.set_elem_types.contains_key(var_name.as_str()))

@@ -2432,6 +2432,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(clone_fn, &[src.into(), slot.into()], "")
             .unwrap();
+        // B-2026-08-14-15 leg B — an aggregate-element `Vec[P]` payload needs
+        // its per-element drain too; the clone above duplicated each element's
+        // own heap, so the overlay's outer-buffer free alone strands it.
+        let payload_elem_agg_drop = self.option_payload_vec_elem_agg_drop(&field_te);
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(
                 crate::codegen::state::CleanupAction::FreeInlineOptionPayload {
@@ -2439,6 +2443,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     option_ty,
                     some_tag,
                     payload_elem_ty: Some(payload_elem_ty),
+                    payload_elem_agg_drop,
                 },
             );
         }
@@ -2588,6 +2593,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(clone_fn, &[src.into(), slot.into()], "")
             .unwrap();
+        // B-2026-08-14-15 leg B — an aggregate-element `Vec[P]` payload needs
+        // its per-element drain too; the clone above duplicated each element's
+        // own heap, so the overlay's outer-buffer free alone strands it.
+        let payload_elem_agg_drop = self.option_payload_vec_elem_agg_drop(&opt_te);
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(
                 crate::codegen::state::CleanupAction::FreeInlineOptionPayload {
@@ -2595,6 +2604,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     option_ty,
                     some_tag,
                     payload_elem_ty: Some(payload_elem_ty),
+                    payload_elem_agg_drop,
                 },
             );
         }

@@ -3658,6 +3658,17 @@ pub(super) struct Codegen<'ctx> {
     /// (FreeVecBuffer + recursive element drop) is suppressed, since the
     /// container stays the unique owner. Recomputed (overwritten) per fn.
     pub(crate) vec_index_borrow_spans: HashSet<SpanKey>,
+    /// B-2026-08-14-15 leg A — the RHS `SpanKey` of every index-read that
+    /// `clone_owned_vec_index_element` actually deep-cloned. The clone makes the
+    /// destination the owner of a FRESH value, but the `let` site's Map/Set
+    /// cleanup arm keys on the RHS *shape* (`Call` / `.clone()` / …) and reads a
+    /// bare `v[i]` as a caller-retains ALIAS — correct when the clone is elided,
+    /// a leak of the whole cloned Map control block when it is not. Recording the
+    /// emission (rather than re-deriving it from `!borrow_elided`) keeps the two
+    /// sides exact: the clone self-gates on element copyability and on the read
+    /// value's LLVM type, so "not borrow-elided" is strictly wider than "cloned".
+    /// Accumulates across the module; `SpanKey`s are source-unique.
+    pub(crate) vec_index_cloned_sites: HashSet<SpanKey>,
     /// RC elision phase A (`src/ownership/elision.rs`; design record in
     /// phase-7-codegen.md): per-function sets of shared bindings whose
     /// refcount provably never exceeds 1. The let-site queues a
@@ -8370,6 +8381,7 @@ impl<'ctx> Codegen<'ctx> {
             current_variant_payload_bindings: HashSet::new(),
             deque_head_slots: HashMap::new(),
             vec_index_borrow_spans: HashSet::new(),
+            vec_index_cloned_sites: HashSet::new(),
             elided_bindings: HashMap::new(),
             elided_cluster_roots: HashMap::new(),
             elided_b2_bindings: HashMap::new(),

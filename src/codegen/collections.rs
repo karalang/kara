@@ -3085,6 +3085,12 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(clone_fn, &[src.into(), dst.into()], "")
             .unwrap();
+        // B-2026-08-14-15 leg A — the destination now owns a FRESH value, not an
+        // alias of the container's element. Record it so the `let` site's
+        // Map/Set cleanup arm (which otherwise reads a bare `v[i]` RHS as
+        // caller-retains) arms the scope-exit handle free.
+        self.vec_index_cloned_sites
+            .insert(crate::resolver::SpanKey::from_span(&value.span));
         Ok(self
             .builder
             .build_load(elem_ll, dst, "vidx.elem.cloned")
