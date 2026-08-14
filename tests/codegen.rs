@@ -61623,26 +61623,24 @@ fn main() {
         // Regression: `compile_method_call` used to silently return
         // const-0 for any method it didn't know how to dispatch (the
         // 2026-05-04 `Slice.len()` wrong-answer bug came from this).
-        // Both fall-through sites now return a typed `Err`. This test
-        // asserts the inner slice-method fall-through fires for a
-        // typechecker-accepted-but-not-codegened slice method.
+        // Both fall-through sites now return a typed `Err`.
         //
-        // If a future arm adds `windows()` codegen support, swap this to
-        // any other typechecker-accepted method without a codegen arm.
-        //
-        // Was `first()` until B-2026-08-14-8 gave the four read accessors
-        // (`contains`/`first`/`last`/`get`) codegen by routing them through
-        // `compile_vec_method` over a borrowed `{ptr,len,cap:0}` view. `windows`
-        // is one of eight still deferred (the mutators and the view-producers,
-        // filed as their own row) and cannot take that route — a `cap == 0`
-        // header is a lie to anything that reallocates, and a view-producer has
-        // no Vec analogue to borrow. It is the probe now for exactly the reason
-        // the comment above anticipated.
+        // THE PROBE IS NO LONGER A REAL METHOD, because there is no longer a
+        // real one to use. This test cycled through `first()` (until
+        // B-2026-08-14-8 routed the read accessors) and then `windows()` (until
+        // B-2026-08-14-9 implemented the mutators and view-producers), each
+        // time on the comment's own instruction to "swap this to any other
+        // typechecker-accepted method without a codegen arm". Every name in
+        // `SLICE_BUILTIN_METHODS` now has one, so the probe is a name the
+        // TYPECHECKER rejects instead — which still reaches the dispatcher,
+        // because this harness drives codegen past typecheck errors, and still
+        // pins the only thing the test was ever about: the fall-through must
+        // return an `Err` that names the method, never a silent zero.
         let src = r#"
 fn main() {
     let xs: Array[i64, 3] = [1, 2, 3];
     let s: Slice[i64] = xs.as_slice();
-    let _ = s.windows(2i64);
+    let _ = s.no_such_slice_method(2i64);
 }
 "#;
         let mut parsed = karac::parse(src);
@@ -61660,9 +61658,171 @@ fn main() {
              the dispatcher silent-zero must not be re-introduced",
         );
         assert!(
-            err.contains("no handler for slice method 'windows'"),
+            err.contains("no_such_slice_method"),
             "expected diagnostic to name the missing slice method; got: {}",
             err
+        );
+    }
+
+    /// B-2026-08-14-9 — the eight `Slice[T]` methods that typechecked and (some
+    /// of them) interpreted but had no codegen at all: the mutators
+    /// `fill`/`reverse`/`sort`/`sort_by_key`/`swap` and the view-producers
+    /// `chunks`/`windows`/`split_at`. Every line here was
+    /// `codegen: no handler for slice method '<m>'` before.
+    ///
+    /// FOUR of them are routed rather than reimplemented, extending
+    /// B-2026-08-14-8's borrowed `{ptr, len, cap: 0}` Vec view. That row held
+    /// the mutators back because `cap == 0` is a lie to anything that could
+    /// grow — true of `push`, and the reason it must never come this way, but
+    /// `reverse` / `sort` / `sort_by` / `sort_by_key` are permutations of
+    /// `[0, len)` that never touch field 2. The write lands in the caller's
+    /// buffer because the view aliases it.
+    ///
+    /// `swap` and `fill` have no Vec arm to route to and are implemented over
+    /// the 2-field header. `chunks` / `windows` build a `Vec` of slice headers
+    /// borrowing the receiver, and `split_at` shares the existing
+    /// `split_at_mut` arm — its halves may alias, which is what the
+    /// interpreter has always done and what makes an immutable view free.
+    ///
+    /// Line 06 is the one that would catch a header-offset mistake: the
+    /// receiver is the SECOND half of a `split_at_mut`, so its `ptr` is not the
+    /// collection's base and a fix that sorted from index 0 would corrupt the
+    /// untouched first half. Lines 07-08 pin the narrow-element stride, 11 and
+    /// 14 the degenerate counts (`n` larger than the slice, an empty
+    /// receiver), 13 a zero-length half.
+    #[test]
+    fn test_e2e_slice_mutators_and_view_producers() {
+        let src = r#"
+fn msort(xs: mut Slice[i64]) { xs.sort(); }
+fn mrev(xs: mut Slice[i64]) { xs.reverse(); }
+fn mfill(xs: mut Slice[i64]) { xs.fill(9i64); }
+fn mswap(xs: mut Slice[i64]) { xs.swap(0i64, 1i64); }
+fn mkey(xs: mut Slice[i64]) { xs.sort_by_key(|x| 0i64 - x); }
+fn mby(xs: mut Slice[i64]) { xs.sort_by(|a, b| b.cmp(a)); }
+fn sfill(xs: mut Slice[u8]) { xs.fill(200u8); }
+fn ssort(xs: mut Slice[u8]) { xs.sort(); }
+
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(3i64); a.push(1i64); a.push(2i64); a.push(5i64);
+    msort(a.as_slice_mut());
+    println(f"01 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+    mrev(a.as_slice_mut());
+    println(f"02 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+    mkey(a.as_slice_mut());
+    println(f"03 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+    mswap(a.as_slice_mut());
+    println(f"04 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+    mby(a.as_slice_mut());
+    println(f"05 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+
+    let mut b: Vec[i64] = Vec.new();
+    b.push(9i64); b.push(8i64); b.push(3i64); b.push(1i64); b.push(2i64);
+    let mut bs = b.as_slice_mut();
+    let h = bs.split_at_mut(2i64);
+    msort(h.1);
+    println(f"06 {b[0i64]} {b[1i64]} {b[2i64]} {b[3i64]} {b[4i64]}");
+
+    let mut u: Vec[u8] = Vec.new();
+    u.push(3u8); u.push(1u8); u.push(2u8);
+    ssort(u.as_slice_mut());
+    println(f"07 {u[0i64]} {u[1i64]} {u[2i64]}");
+    sfill(u.as_slice_mut());
+    println(f"08 {u[0i64]} {u[1i64]} {u[2i64]}");
+
+    let mut v: Vec[i64] = Vec.new();
+    v.push(3i64); v.push(1i64); v.push(2i64); v.push(5i64); v.push(4i64);
+    let s = v.as_slice();
+    let cs = s.chunks(2i64);
+    let c0 = cs[0i64];
+    let c2 = cs[2i64];
+    println(f"09 {cs.len()} {c0.len()} {c0[0i64]} {c0[1i64]} {c2.len()} {c2[0i64]}");
+    let ws = s.windows(3i64);
+    let w1 = ws[1i64];
+    println(f"10 {ws.len()} {w1.len()} {w1[0i64]} {w1[1i64]} {w1[2i64]}");
+    println(f"11 {s.chunks(1i64).len()} {s.chunks(9i64).len()} {s.windows(5i64).len()} {s.windows(9i64).len()}");
+    let p = s.split_at(2i64);
+    println(f"12 {p.0.len()} {p.1.len()} {p.0[0i64]} {p.1[0i64]}");
+    let q = s.split_at(0i64);
+    println(f"13 {q.0.len()} {q.1.len()}");
+
+    let e: Vec[i64] = Vec.new();
+    let es = e.as_slice();
+    println(f"14 {es.chunks(2i64).len()} {es.windows(2i64).len()} {es.split_at(0i64).0.len()}");
+
+    let mut m: Vec[i64] = Vec.new();
+    m.push(1i64); m.push(2i64); m.push(3i64);
+    mswap(m.as_slice_mut());
+    println(f"15 {m[0i64]} {m[1i64]} {m[2i64]}");
+    mfill(m.as_slice_mut());
+    println(f"16 {m[0i64]} {m[1i64]} {m[2i64]}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 1 2 3 5\n\
+                 02 5 3 2 1\n\
+                 03 5 3 2 1\n\
+                 04 3 5 2 1\n\
+                 05 5 3 2 1\n\
+                 06 9 8 1 2 3\n\
+                 07 1 2 3\n\
+                 08 200 200 200\n\
+                 09 3 2 3 1 1 4\n\
+                 10 3 3 1 2 5\n\
+                 11 5 1 1 0\n\
+                 12 2 3 3 2\n\
+                 13 0 5\n\
+                 14 0 0 0\n\
+                 15 2 1 3\n\
+                 16 9 9 9\n"
+            ),
+        );
+    }
+
+    /// B-2026-08-14-9, heap-element half. `String` elements exercise what
+    /// scalars cannot: `fill` has to drop what each slot already owns and give
+    /// it a distinct buffer, `sort` moves multi-word values, and a `chunks`
+    /// header must borrow rather than copy. Output parity is only half the
+    /// evidence here — `asan_slice_mutators_and_views_on_heap_elements` is the
+    /// other half, and the leak-shaped failures show up only there.
+    #[test]
+    fn test_e2e_slice_methods_on_string_elements() {
+        let src = r#"
+fn ssort(xs: mut Slice[String]) { xs.sort(); }
+fn srev(xs: mut Slice[String]) { xs.reverse(); }
+fn sswap(xs: mut Slice[String]) { xs.swap(0i64, 2i64); }
+fn sfill(xs: mut Slice[String]) { xs.fill("zz"); }
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("pear"); v.push("apple"); v.push("fig");
+    ssort(v.as_slice_mut());
+    println(f"01 {v[0i64]} {v[1i64]} {v[2i64]}");
+    srev(v.as_slice_mut());
+    println(f"02 {v[0i64]} {v[1i64]} {v[2i64]}");
+    sswap(v.as_slice_mut());
+    println(f"03 {v[0i64]} {v[1i64]} {v[2i64]}");
+    {
+        let sv = v.as_slice();
+        let cs = sv.chunks(2i64);
+        let c0 = cs[0i64];
+        println(f"04 {cs.len()} {c0.len()} {c0[0i64]}");
+    }
+    sfill(v.as_slice_mut());
+    println(f"05 {v[0i64]} {v[1i64]} {v[2i64]}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 apple fig pear\n\
+                 02 pear fig apple\n\
+                 03 apple fig pear\n\
+                 04 2 2 apple\n\
+                 05 zz zz zz\n"
+            ),
         );
     }
 

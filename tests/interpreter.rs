@@ -25992,6 +25992,70 @@ fn main() {
     );
 }
 
+/// B-2026-08-14-9, interpreter half — a `mut Slice[T]` mutator must write
+/// through to the collection it borrows.
+///
+/// `swap` was the ONLY method behind the mut-Slice fence in `method_call.rs`;
+/// `fill`, `reverse`, `sort`, `sort_by` and `sort_by_key` fell through to the
+/// Slice→Array normalization, ran against that fresh snapshot, and had their
+/// results discarded. The row that filed this called all eight
+/// "interp-correct" — for these five that was not true, and the failure was
+/// strictly worse than the codegen gap it was filed for: a build error is
+/// loud, `xs.sort()` doing nothing is not.
+///
+/// The PARTIAL-WINDOW line is the one that pins the fix rather than just the
+/// symptom. Writing back a whole snapshot over `storage[0..len]` would look
+/// right for a slice of the entire collection and silently corrupt one that
+/// starts at an offset; here the receiver is the second half of a
+/// `split_at_mut`, so the first half must come back untouched.
+#[test]
+fn mut_slice_mutators_write_through_to_the_collection() {
+    let out = run_no_errors(
+        r#"
+fn msort(xs: mut Slice[i64]) { xs.sort(); }
+fn mrev(xs: mut Slice[i64]) { xs.reverse(); }
+fn mfill(xs: mut Slice[i64]) { xs.fill(9i64); }
+fn mkey(xs: mut Slice[i64]) { xs.sort_by_key(|x| 0i64 - x); }
+fn mby(xs: mut Slice[i64]) { xs.sort_by(|a, b| b.cmp(a)); }
+fn mswap(xs: mut Slice[i64]) { xs.swap(0i64, 3i64); }
+
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(3i64); a.push(1i64); a.push(2i64); a.push(5i64);
+    msort(a.as_slice_mut());
+    println(f"01 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+    mrev(a.as_slice_mut());
+    println(f"02 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+    mkey(a.as_slice_mut());
+    println(f"03 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+    mby(a.as_slice_mut());
+    println(f"04 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+    mswap(a.as_slice_mut());
+    println(f"05 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+    mfill(a.as_slice_mut());
+    println(f"06 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
+
+    let mut b: Vec[i64] = Vec.new();
+    b.push(9i64); b.push(8i64); b.push(3i64); b.push(1i64); b.push(2i64);
+    let mut bs = b.as_slice_mut();
+    let h = bs.split_at_mut(2i64);
+    msort(h.1);
+    println(f"07 {b[0i64]} {b[1i64]} {b[2i64]} {b[3i64]} {b[4i64]}");
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "01 1 2 3 5\n\
+         02 5 3 2 1\n\
+         03 5 3 2 1\n\
+         04 5 3 2 1\n\
+         05 1 3 2 5\n\
+         06 9 9 9 9\n\
+         07 9 8 1 2 3\n"
+    );
+}
+
 // ── critical_section (interrupt-mask RAII guard) ────────────────
 
 #[test]

@@ -941,10 +941,21 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::Index { object, index } => {
                 if matches!(&index.kind, ExprKind::Range { .. }) {
-                    self.infer_elem_from_source(object)
-                } else {
-                    None
+                    return self.infer_elem_from_source(object);
                 }
+                // B-2026-08-14-9 — a scalar index into a `Vec[Slice[T]]` binds
+                // a SLICE, so `let c = chunks[0]` has to register `c` as one or
+                // its `.len()` finds no dispatcher. The container's element
+                // `TypeExpr` is the only thing that says so: the LLVM element
+                // type is the slice header struct, which is indistinguishable
+                // from any other two-field aggregate. Reached by `chunks` /
+                // `windows`, whose whole result is a Vec of views.
+                let ExprKind::Identifier(base) = &object.kind else {
+                    return None;
+                };
+                let elem_te = self.var_elem_type_exprs.get(base.as_str())?;
+                let inner = slice_inner_type_expr(elem_te)?;
+                Some(self.llvm_type_for_type_expr(&inner))
             }
             _ => None,
         }

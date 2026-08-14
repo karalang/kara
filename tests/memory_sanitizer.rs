@@ -47935,4 +47935,56 @@ fn main() {
             "let_bound_result_map_field",
         );
     }
+
+    /// B-2026-08-14-9 — the heap-element half of the new `Slice` mutators.
+    ///
+    /// `fill` is the only one of the eight that changes what a slot OWNS, and
+    /// it has three ways to go wrong that no output comparison can see: leaking
+    /// every value it overwrites, aliasing one buffer into every slot so scope
+    /// exit double-frees, and leaking the ARGUMENT when there is no slot to
+    /// move it into. All three are exercised here — a non-empty fill over
+    /// already-owned strings, and a fill over an EMPTY slice whose argument
+    /// nothing consumes.
+    ///
+    /// `sort` / `reverse` / `swap` are ownership-neutral (they permute values
+    /// that stay in the same buffer) and `chunks` / `windows` / `split_at`
+    /// produce borrowed headers that own nothing, so this fixture runs them
+    /// alongside to pin that they add no allocation of their own.
+    #[test]
+    fn asan_slice_mutators_and_views_on_heap_elements() {
+        assert_clean_asan_run(
+            r#"
+fn ssort(xs: mut Slice[String]) { xs.sort(); }
+fn srev(xs: mut Slice[String]) { xs.reverse(); }
+fn sswap(xs: mut Slice[String]) { xs.swap(0i64, 2i64); }
+fn sfill(xs: mut Slice[String]) { xs.fill("zz"); }
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("pear"); v.push("apple"); v.push("fig");
+    ssort(v.as_slice_mut());
+    srev(v.as_slice_mut());
+    sswap(v.as_slice_mut());
+    {
+        let sv = v.as_slice();
+        let cs = sv.chunks(2i64);
+        let c0 = cs[0i64];
+        println(f"{cs.len()} {c0.len()} {c0[0i64]}");
+        let ws = sv.windows(2i64);
+        println(f"{ws.len()}");
+        let p = sv.split_at(1i64);
+        println(f"{p.0.len()} {p.1.len()}");
+    }
+    sfill(v.as_slice_mut());
+    println(f"{v[0i64]} {v[1i64]} {v[2i64]}");
+    let mut e: Vec[String] = Vec.new();
+    sfill(e.as_slice_mut());
+    println(f"{e.len()}");
+    println("end");
+}
+"#,
+            &["2 2 apple", "2", "1 2", "zz zz zz", "0", "end"],
+            "slice_mutators_heap_elements",
+        );
+    }
 }

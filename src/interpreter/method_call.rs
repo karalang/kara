@@ -1514,6 +1514,63 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return Value::Unit;
             }
+            // B-2026-08-14-9 — the rest of the in-place mutators. `swap` above
+            // was the only one behind this fence, so `fill` / `reverse` /
+            // `sort` / `sort_by` / `sort_by_key` fell through to the snapshot
+            // below, ran against the COPY, and were discarded: a `mut Slice`
+            // receiver silently did nothing where the identical `Vec` receiver
+            // mutated. That is the exact failure mode the `split_at_mut`
+            // exemption note calls invisible, and these four were living it.
+            //
+            // SNAPSHOT-RUN-WRITE-BACK rather than four hand-written loops.
+            // Every one of these is an in-place permutation or overwrite that
+            // cannot change the LENGTH, so running the existing sequence
+            // implementation over a detached copy and copying the result back
+            // into the window is equivalent — and it inherits the comparator
+            // machinery `sort` / `sort_by` / `sort_by_key` need (unsigned
+            // ordering, key closures, user `Ord`) instead of reimplementing it
+            // against a `Value` window.
+            //
+            // The copy also keeps the closure safe: a `sort_by_key` body that
+            // reads the same collection runs while no lock on `storage` is
+            // held, where a loop mutating under a write guard would deadlock
+            // against its own receiver.
+            if matches!(
+                method,
+                "fill" | "reverse" | "sort" | "sort_by" | "sort_by_key"
+            ) {
+                let (storage, start, len) = (storage.clone(), *start, *len);
+                let label = match &object.kind {
+                    ExprKind::Identifier(n) => n.clone(),
+                    _ => "<value>".to_string(),
+                };
+                let window = { storage.read().unwrap()[start..start + len].to_vec() };
+                let scratch = Value::array_of(window);
+                let Value::Array(ref scratch_rc) = scratch else {
+                    unreachable!("array_of returns Value::Array")
+                };
+                let scratch_rc = scratch_rc.clone();
+                let out = self.try_eval_seq_method(
+                    method,
+                    object,
+                    scratch.clone(),
+                    args,
+                    span,
+                    args_close_span,
+                );
+                if self.pending_cf.is_some() {
+                    return Value::Unit;
+                }
+                let result = { scratch_rc.read().unwrap().clone() };
+                // Length is an invariant of all five; a mismatch would mean the
+                // sequence arm did something other than permute in place, and
+                // writing it back would corrupt the window's neighbours.
+                if result.len() == len {
+                    let mut guard = try_write_or_panic(&storage, &label);
+                    guard[start..start + len].clone_from_slice(&result);
+                }
+                return out.unwrap_or(Value::Unit);
+            }
         }
 
         // Slice 3 — methods on `Slice[T]` / `mut Slice[T]` dispatch via

@@ -4602,19 +4602,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // pass-through `Slice`, heap `Vec`) and then does one more step: split
         // the resulting `{ptr, len}` at `mid`.
         //
-        // NOTE the read-only `split_at` has no codegen arm at all and still
-        // errors with "not yet supported in codegen" — it is interpreter-only.
-        // That is deliberately left alone here: the two differ in the aliasing
-        // contract they hand back, and giving `split_at` a codegen arm means
-        // deciding whether its halves may alias the source, which is that
-        // method's question, not this row's.
+        // B-2026-08-14-9 answers the question the note here left open, and
+        // `split_at` now shares this arm. The two DO differ in the aliasing
+        // contract, and the answer is that the read-only one may alias freely:
+        // its halves are immutable views, so nothing can observe the sharing,
+        // and it is what the interpreter has always done (both halves are
+        // `Value::Slice` windows over the receiver's own storage). Copying
+        // instead would be a silent semantic change — a `Slice[String]` half
+        // would have to deep-clone or alias-without-owning — as well as slower.
+        // The mut form's disjointness argument is unaffected: it rests on
+        // `[0, mid)` and `[mid, len)` not overlapping, which is a property of
+        // the split, not of who else holds a view.
         //
         // Both halves are `mut Slice[T]` views over the receiver's own buffer
         // — no copy — which is the whole point: a write through either half
         // must land in the caller's collection. Disjointness is structural
         // (`[0, mid)` and `[mid, len)`), which is the spec's argument for why
         // both may be simultaneously live with no annotation.
-        if method == "split_at_mut" && args.len() == 1 {
+        if matches!(method, "split_at_mut" | "split_at") && args.len() == 1 {
             if let ExprKind::Identifier(name) = &object.kind {
                 if let Some(slot) = self.variables.get(name.as_str()).copied() {
                     let i64_t = self.context.i64_type();
@@ -5117,6 +5122,398 @@ impl<'ctx> super::Codegen<'ctx> {
                             return self
                                 .compile_binary_search(data, len, elem_ty, &elem_name, &args[0]);
                         }
+                        // B-2026-08-14-9 — `chunks(n)` / `windows(n)`, the
+                        // view-producers. Both return `Vec[Slice[T]]`, so the
+                        // result is a Vec whose ELEMENT is a 2-field slice
+                        // header: allocate `count` headers, fill each with an
+                        // `{ptr, len}` view into the receiver's own buffer, and
+                        // hand back the `{data, len, cap}` aggregate.
+                        //
+                        // Nothing is copied and nothing is owned. Every header
+                        // borrows the receiver, which is what makes the result
+                        // cheap and also why the outer Vec needs no element
+                        // drop — a slice header owns no allocation. The
+                        // existing `chunks`/`windows` codegen is unrelated: it
+                        // fuses `named_vec.iter().chunks(n)` into a collect
+                        // pipeline that materializes real sub-Vecs, and is
+                        // gated to a literal `n` over a named Vec.
+                        //
+                        // The two differ only in the count and the stride:
+                        // chunks tile (`ceil(len / n)` of them, the last one
+                        // short), windows overlap (`len - n + 1` of them, all
+                        // exactly `n`). A non-positive `n` or a window wider
+                        // than the slice yields an empty Vec, matching the
+                        // interpreter rather than trapping.
+                        "chunks" | "windows" => {
+                            if args.len() != 1 {
+                                return Err(format!("Slice.{method} requires 1 argument"));
+                            }
+                            let overlapping = method == "windows";
+                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let (data, len) = self.slice_data_and_len(slice_ty, slice_ptr, "cw");
+                            let n = self.compile_expr(&args[0].value)?;
+                            let n = self.coerce_to_i64(n)?;
+                            let fn_val = self.current_fn.unwrap();
+                            let zero = i64_t.const_zero();
+                            let one = i64_t.const_int(1, false);
+                            // `n <= 0` would divide by zero (chunks) or produce
+                            // a nonsense count (windows); clamp the count to 0
+                            // and let the empty-Vec path below handle it.
+                            let n_ok = self
+                                .builder
+                                .build_int_compare(inkwell::IntPredicate::SGT, n, zero, "cw.n.ok")
+                                .unwrap();
+                            let n_safe = self
+                                .builder
+                                .build_select(n_ok, n, one, "cw.n.safe")
+                                .unwrap()
+                                .into_int_value();
+                            let raw_count = if overlapping {
+                                // len - n + 1
+                                let d = self.builder.build_int_sub(len, n_safe, "cw.w.d").unwrap();
+                                self.builder.build_int_add(d, one, "cw.w.c").unwrap()
+                            } else {
+                                // (len + n - 1) / n
+                                let a = self.builder.build_int_add(len, n_safe, "cw.c.a").unwrap();
+                                let b = self.builder.build_int_sub(a, one, "cw.c.b").unwrap();
+                                self.builder
+                                    .build_int_signed_div(b, n_safe, "cw.c.c")
+                                    .unwrap()
+                            };
+                            let pos = self
+                                .builder
+                                .build_int_compare(
+                                    inkwell::IntPredicate::SGT,
+                                    raw_count,
+                                    zero,
+                                    "cw.cnt.pos",
+                                )
+                                .unwrap();
+                            let keep = self.builder.build_and(pos, n_ok, "cw.cnt.keep").unwrap();
+                            let count = self
+                                .builder
+                                .build_select(keep, raw_count, zero, "cw.cnt")
+                                .unwrap()
+                                .into_int_value();
+                            // One allocation of `count` slice headers. `count`
+                            // can be 0; the allocator returns a non-null
+                            // zero-size block, which the empty Vec then owns
+                            // and frees like any other.
+                            let hdr_size = slice_ty.size_of().unwrap();
+                            let alloc_bytes = self.checked_alloc_bytes(count, hdr_size, "cw")?;
+                            let buf = self
+                                .builder
+                                .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "cw.buf")
+                                .unwrap()
+                                .try_as_basic_value()
+                                .unwrap_basic()
+                                .into_pointer_value();
+                            let idx = self.create_entry_alloca(fn_val, "cw.i", i64_t.into());
+                            let _ = self.builder.build_store(idx, zero);
+                            let head = self.context.append_basic_block(fn_val, "cw.head");
+                            let body = self.context.append_basic_block(fn_val, "cw.body");
+                            let done = self.context.append_basic_block(fn_val, "cw.done");
+                            self.builder.build_unconditional_branch(head).unwrap();
+                            self.builder.position_at_end(head);
+                            let i = self
+                                .builder
+                                .build_load(i64_t, idx, "cw.cur")
+                                .unwrap()
+                                .into_int_value();
+                            let go = self
+                                .builder
+                                .build_int_compare(inkwell::IntPredicate::SLT, i, count, "cw.go")
+                                .unwrap();
+                            self.builder
+                                .build_conditional_branch(go, body, done)
+                                .unwrap();
+                            self.builder.position_at_end(body);
+                            let (off, sub_len) = if overlapping {
+                                (i, n_safe)
+                            } else {
+                                let off = self.builder.build_int_mul(i, n_safe, "cw.off").unwrap();
+                                // The final chunk is short: min(n, len - off).
+                                let rest = self.builder.build_int_sub(len, off, "cw.rest").unwrap();
+                                let short = self
+                                    .builder
+                                    .build_int_compare(
+                                        inkwell::IntPredicate::SLT,
+                                        rest,
+                                        n_safe,
+                                        "cw.short",
+                                    )
+                                    .unwrap();
+                                let l = self
+                                    .builder
+                                    .build_select(short, rest, n_safe, "cw.sublen")
+                                    .unwrap()
+                                    .into_int_value();
+                                (off, l)
+                            };
+                            let sub_ptr = unsafe {
+                                self.builder
+                                    .build_gep(elem_ty, data, &[off], "cw.sub.p")
+                                    .unwrap()
+                            };
+                            let mut hdr = slice_ty.get_undef();
+                            hdr = self
+                                .builder
+                                .build_insert_value(hdr, sub_ptr, 0, "cw.hdr.d")
+                                .unwrap()
+                                .into_struct_value();
+                            hdr = self
+                                .builder
+                                .build_insert_value(hdr, sub_len, 1, "cw.hdr.l")
+                                .unwrap()
+                                .into_struct_value();
+                            let slot = unsafe {
+                                self.builder
+                                    .build_gep(slice_ty, buf, &[i], "cw.slot")
+                                    .unwrap()
+                            };
+                            let _ = self.builder.build_store(slot, hdr);
+                            let next = self.builder.build_int_add(i, one, "cw.next").unwrap();
+                            let _ = self.builder.build_store(idx, next);
+                            self.builder.build_unconditional_branch(head).unwrap();
+                            self.builder.position_at_end(done);
+                            let vec_ty = self.vec_struct_type();
+                            let mut agg = vec_ty.get_undef();
+                            agg = self
+                                .builder
+                                .build_insert_value(agg, buf, 0, "cw.v.d")
+                                .unwrap()
+                                .into_struct_value();
+                            agg = self
+                                .builder
+                                .build_insert_value(agg, count, 1, "cw.v.l")
+                                .unwrap()
+                                .into_struct_value();
+                            agg = self
+                                .builder
+                                .build_insert_value(agg, count, 2, "cw.v.c")
+                                .unwrap()
+                                .into_struct_value();
+                            return Ok(agg.into());
+                        }
+                        // B-2026-08-14-9 — `swap` and `fill`, implemented
+                        // directly because `Vec` has no arm for either, so
+                        // there is nothing to route to.
+                        //
+                        // `swap` is element-type agnostic: it exchanges two
+                        // whole values in place, so ownership never changes
+                        // hands and a plain load/load/store/store is correct
+                        // for a `String` or a struct element as much as for an
+                        // `i64`. An out-of-range index is a NO-OP rather than a
+                        // panic, matching the interpreter's `if i < len && j <
+                        // len` exactly; whether both surfaces should instead
+                        // trap is that method's question, not this row's.
+                        "swap" => {
+                            if args.len() != 2 {
+                                return Err("Slice.swap requires 2 arguments".to_string());
+                            }
+                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                            let (data, len) = self.slice_data_and_len(slice_ty, slice_ptr, "swp");
+                            let i = self.compile_expr(&args[0].value)?;
+                            let i = self.coerce_to_i64(i)?;
+                            let j = self.compile_expr(&args[1].value)?;
+                            let j = self.coerce_to_i64(j)?;
+                            let fn_val = self.current_fn.unwrap();
+                            let zero = i64_t.const_zero();
+                            let ok = {
+                                use inkwell::IntPredicate::{SGE, SLT};
+                                let a = self
+                                    .builder
+                                    .build_int_compare(SLT, i, len, "swp.i.lt")
+                                    .unwrap();
+                                let b = self
+                                    .builder
+                                    .build_int_compare(SLT, j, len, "swp.j.lt")
+                                    .unwrap();
+                                let c = self
+                                    .builder
+                                    .build_int_compare(SGE, i, zero, "swp.i.ge")
+                                    .unwrap();
+                                let d = self
+                                    .builder
+                                    .build_int_compare(SGE, j, zero, "swp.j.ge")
+                                    .unwrap();
+                                let ab = self.builder.build_and(a, b, "swp.ab").unwrap();
+                                let cd = self.builder.build_and(c, d, "swp.cd").unwrap();
+                                self.builder.build_and(ab, cd, "swp.ok").unwrap()
+                            };
+                            let do_bb = self.context.append_basic_block(fn_val, "swp.do");
+                            let end_bb = self.context.append_basic_block(fn_val, "swp.end");
+                            self.builder
+                                .build_conditional_branch(ok, do_bb, end_bb)
+                                .unwrap();
+                            self.builder.position_at_end(do_bb);
+                            let pi = unsafe {
+                                self.builder
+                                    .build_gep(elem_ty, data, &[i], "swp.pi")
+                                    .unwrap()
+                            };
+                            let pj = unsafe {
+                                self.builder
+                                    .build_gep(elem_ty, data, &[j], "swp.pj")
+                                    .unwrap()
+                            };
+                            let vi = self.builder.build_load(elem_ty, pi, "swp.vi").unwrap();
+                            let vj = self.builder.build_load(elem_ty, pj, "swp.vj").unwrap();
+                            let _ = self.builder.build_store(pi, vj);
+                            let _ = self.builder.build_store(pj, vi);
+                            self.builder.build_unconditional_branch(end_bb).unwrap();
+                            self.builder.position_at_end(end_bb);
+                            let _ = ptr_ty;
+                            return Ok(self.context.struct_type(&[], false).get_undef().into());
+                        }
+                        // `fill(v)` overwrites every slot in `[0, len)`.
+                        //
+                        // The element type decides how much work a slot is. A
+                        // trivially-copyable element is one store per slot. A
+                        // heap-backed one has to DROP what is already there and
+                        // put a distinct buffer in its place, or the fill either
+                        // leaks every overwritten value or aliases one buffer
+                        // into every slot and double-frees at scope end. The
+                        // per-type `clone` / `drop` helpers are memory-ABI
+                        // (`clone(src_ptr, dst_ptr)`, `drop(ptr)`), the same
+                        // pair the repeat-literal path uses.
+                        //
+                        // The ARGUMENT is consumed, exactly as `Vec.filled`
+                        // consumes its value: it is moved into slot 0 and
+                        // cloned into the rest, so nothing double-owns it. An
+                        // empty slice has no slot to move into, so the argument
+                        // is dropped there instead — otherwise `s.fill(x)` on
+                        // an empty slice would leak `x`.
+                        "fill" => {
+                            if args.len() != 1 {
+                                return Err("Slice.fill requires 1 argument".to_string());
+                            }
+                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let elem_te = self.var_elem_type_exprs.get(name.as_str()).cloned();
+                            let needs_clone = match elem_te.as_ref() {
+                                Some(te) => !super::vec_method::is_trivially_copyable_te(te),
+                                // No element `TypeExpr` means no way to know
+                                // whether a slot owns anything. Guessing "it
+                                // does not" would leak or double-free a heap
+                                // element silently, so fail loudly instead.
+                                None => {
+                                    return Err(
+                                        "Slice.fill: could not resolve the element type in \
+                                         codegen"
+                                            .to_string(),
+                                    )
+                                }
+                            };
+                            let (data, len) = self.slice_data_and_len(slice_ty, slice_ptr, "fil");
+                            let val = self.compile_expr(&args[0].value)?;
+                            let val =
+                                self.coerce_scalar_to_type_src(val, elem_ty, Some(&args[0].value));
+                            let fn_val = self.current_fn.unwrap();
+                            let zero = i64_t.const_zero();
+                            let one = i64_t.const_int(1, false);
+                            let fill_loop = |cg: &mut Self,
+                                             from: inkwell::values::IntValue<'ctx>,
+                                             tag: &str,
+                                             body_fn: &dyn Fn(
+                                &mut Self,
+                                inkwell::values::PointerValue<'ctx>,
+                            )| {
+                                let idx = cg.create_entry_alloca(
+                                    fn_val,
+                                    &format!("{tag}.i"),
+                                    i64_t.into(),
+                                );
+                                let _ = cg.builder.build_store(idx, from);
+                                let head = cg
+                                    .context
+                                    .append_basic_block(fn_val, &format!("{tag}.head"));
+                                let body = cg
+                                    .context
+                                    .append_basic_block(fn_val, &format!("{tag}.body"));
+                                let done = cg
+                                    .context
+                                    .append_basic_block(fn_val, &format!("{tag}.done"));
+                                cg.builder.build_unconditional_branch(head).unwrap();
+                                cg.builder.position_at_end(head);
+                                let cur = cg
+                                    .builder
+                                    .build_load(i64_t, idx, &format!("{tag}.cur"))
+                                    .unwrap()
+                                    .into_int_value();
+                                let go = cg
+                                    .builder
+                                    .build_int_compare(
+                                        inkwell::IntPredicate::SLT,
+                                        cur,
+                                        len,
+                                        &format!("{tag}.go"),
+                                    )
+                                    .unwrap();
+                                cg.builder.build_conditional_branch(go, body, done).unwrap();
+                                cg.builder.position_at_end(body);
+                                let slot = unsafe {
+                                    cg.builder
+                                        .build_gep(elem_ty, data, &[cur], &format!("{tag}.slot"))
+                                        .unwrap()
+                                };
+                                body_fn(cg, slot);
+                                let next = cg
+                                    .builder
+                                    .build_int_add(cur, one, &format!("{tag}.next"))
+                                    .unwrap();
+                                let _ = cg.builder.build_store(idx, next);
+                                cg.builder.build_unconditional_branch(head).unwrap();
+                                cg.builder.position_at_end(done);
+                            };
+                            if !needs_clone {
+                                fill_loop(self, zero, "fil", &|cg, slot| {
+                                    let _ = cg.builder.build_store(slot, val);
+                                });
+                                return Ok(self.context.struct_type(&[], false).get_undef().into());
+                            }
+                            let te = elem_te.unwrap();
+                            let drop_fn = self.emit_drop_fn_for_type_expr(&te);
+                            let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+                            // 1. drop every value the slice currently holds.
+                            fill_loop(self, zero, "fil.d", &|cg, slot| {
+                                let _ = cg.builder.build_call(drop_fn, &[slot.into()], "");
+                            });
+                            // 2. move the argument into slot 0 (when there is
+                            //    one) and deep-clone it into slots 1..len.
+                            let src = self.create_entry_alloca(fn_val, "fil.src", elem_ty);
+                            let _ = self.builder.build_store(src, val);
+                            let nonempty = self
+                                .builder
+                                .build_int_compare(
+                                    inkwell::IntPredicate::SGT,
+                                    len,
+                                    zero,
+                                    "fil.nonempty",
+                                )
+                                .unwrap();
+                            let move_bb = self.context.append_basic_block(fn_val, "fil.move");
+                            let empty_bb = self.context.append_basic_block(fn_val, "fil.empty");
+                            let join_bb = self.context.append_basic_block(fn_val, "fil.join");
+                            self.builder
+                                .build_conditional_branch(nonempty, move_bb, empty_bb)
+                                .unwrap();
+                            self.builder.position_at_end(move_bb);
+                            let _ = self.builder.build_store(data, val);
+                            self.builder.build_unconditional_branch(join_bb).unwrap();
+                            self.builder.position_at_end(empty_bb);
+                            // Nothing consumed the argument — free it here so
+                            // `empty.fill(x)` does not leak `x`.
+                            let _ = self.builder.build_call(drop_fn, &[src.into()], "");
+                            self.builder.build_unconditional_branch(join_bb).unwrap();
+                            self.builder.position_at_end(join_bb);
+                            fill_loop(self, one, "fil.c", &|cg, slot| {
+                                let _ =
+                                    cg.builder
+                                        .build_call(clone_fn, &[src.into(), slot.into()], "");
+                            });
+                            return Ok(self.context.struct_type(&[], false).get_undef().into());
+                        }
                         // B-2026-08-14-8 — READ-ONLY accessors shared with
                         // `Vec`, routed rather than reimplemented.
                         //
@@ -5132,16 +5529,35 @@ impl<'ctx> super::Codegen<'ctx> {
                         // element, which is why routing beats four hand-written
                         // arms that would each have to repeat it.
                         //
-                        // SCOPED TO READS ON PURPOSE. The mutators and
-                        // view-producers the typechecker also lists for `Slice`
-                        // (`fill`/`reverse`/`sort`/`sort_by_key`/`swap`,
-                        // `chunks`/`windows`/`split_at`) are NOT routed: a
-                        // `cap == 0` header is a lie to anything that would
-                        // grow or reallocate, and the sort family needs the
-                        // comparator machinery keyed off a real Vec binding.
-                        // They keep the loud error and are filed with the
-                        // survey that found them.
-                        "contains" | "first" | "last" | "get" => {
+                        // B-2026-08-14-9 extends the same route to the
+                        // IN-PLACE mutators. -8 held them back on the grounds
+                        // that `cap == 0` is a lie to anything that could grow
+                        // or reallocate — true, and the reason `push` / `insert`
+                        // / `extend` must never come this way. But `reverse`,
+                        // `sort`, `sort_by` and `sort_by_key` cannot change the
+                        // length: each is a permutation of `[0, len)` that reads
+                        // `ptr` and `len` and writes through `ptr`. Checked arm
+                        // by arm in `compile_vec_method` — none of the four
+                        // GEPs field 2 — so the borrowed view is as valid for
+                        // them as for the reads, and the write lands in the
+                        // caller's buffer because the view aliases it rather
+                        // than copying.
+                        //
+                        // The comparator concern was real but is answered by
+                        // the same publish-and-restore this arm already does
+                        // for the element type: `sort` picks unsigned ordering
+                        // via `vec_elem_type_name` and `sort_by_key` recovers
+                        // its key shape via `var_elem_type_exprs`, both keyed by
+                        // VARIABLE NAME, and a slice binding registers its
+                        // element `TypeExpr` under exactly that name already.
+                        //
+                        // `fill` and `swap` are NOT here because `Vec` has no
+                        // arm to route to; they are implemented directly over
+                        // the 2-field header below. `chunks` / `windows` /
+                        // `split_at` return views and have no Vec analogue at
+                        // all.
+                        "contains" | "first" | "last" | "get" | "reverse" | "sort" | "sort_by"
+                        | "sort_by_key" => {
                             let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
                             let ptr_ty = self.context.ptr_type(AddressSpace::default());
                             let data = {
@@ -7388,6 +7804,42 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Extract `(data, len)` (fields 0 and 1) of a `String` / `Vec`
     /// `{ptr, len, cap}` struct value — the subject / replacement arguments of
     /// the regex method arms (and the LazyExpr col/lit-str lowerings).
+    /// Load a slice header's `{ptr, len}` pair. Shared by the arms that
+    /// implement a `Slice` method directly rather than routing it to `Vec`
+    /// (B-2026-08-14-9) — each needs exactly these two loads and nothing else
+    /// from the header.
+    fn slice_data_and_len(
+        &mut self,
+        slice_ty: inkwell::types::StructType<'ctx>,
+        slice_ptr: inkwell::values::PointerValue<'ctx>,
+        tag: &str,
+    ) -> (
+        inkwell::values::PointerValue<'ctx>,
+        inkwell::values::IntValue<'ctx>,
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let dp = self
+            .builder
+            .build_struct_gep(slice_ty, slice_ptr, 0, &format!("{tag}.data.p"))
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, dp, &format!("{tag}.data"))
+            .unwrap()
+            .into_pointer_value();
+        let lp = self
+            .builder
+            .build_struct_gep(slice_ty, slice_ptr, 1, &format!("{tag}.len.p"))
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, lp, &format!("{tag}.len"))
+            .unwrap()
+            .into_int_value();
+        (data, len)
+    }
+
     pub(super) fn str_data_len(
         &self,
         sv: inkwell::values::StructValue<'ctx>,
