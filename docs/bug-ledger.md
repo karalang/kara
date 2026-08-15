@@ -8432,7 +8432,67 @@ rather than the clone. Against the stashed compiler the pin fails with 808 bytes
 in 11 allocations.
 
 GATES: full `--features llvm` suite green (13,738 passed / 0 failed), fmt and
-clippy `--all-targets` clean. |
+clippy `--all-targets` clean.
+
+--- FOLLOW-UP (038c2e7): TWO MORE SITES, and one correction to this note ---
+
+fd7254d fixed `materialize_owned_temp`. It is one of THREE registration sites
+that materialize such a temp, and the other two kept the identical shortcut, so
+the bug was still live on top of that fix. Measured on the fd7254d base:
+
+    agg(ns.clone())  where  agg(ns: ref Vec[Node])      64 B / 2 obj
+    ns.clone().len()  (no user fn at all)              242 KB / 6 obj
+                       (Node { data: Vec[i64] }, indirect half)
+
+  (b) `queue_ref_rvalue_arg_cleanup` — the `ref`-param sibling. The callee only
+      borrows, so the CALLER owns the temp and owes its elements a release. Now
+      runs fd7254d's exact three-way dispatch (map / agg / inline).
+
+  (c) `try_track_len_family_recv_temp` — and this one is a TYPECHECKER gap, not
+      a codegen one. The parser gives a MethodCall its receiver's span, so a
+      chain's scalar result span-clobbers the receiver's `Vec[T]` in
+      `expr_types` and NO hint reaches codegen; `temp_recv_len_elem_types`
+      exists precisely to carry the element type past that. But its recording
+      predicate tested `Type::Named` against the struct and enum tables, and a
+      `shared struct` resolves to `Type::Shared` — so the one element shape
+      whose per-element drop is an rc-dec was the one shape never recorded. The
+      code comment there already claimed shared elements ride this machinery.
+
+Each half was verified independently load-bearing by reverting it alone: without
+the typechecker predicate only the `.len()` shapes leak; without the
+call_dispatch change only the `ref`-param shape does.
+
+CORRECTION TO THE COUNTING ARGUMENT ABOVE. This note repeats the row's reasoning
+that the leak count identifies "the container rather than the call as the unit"
+because a 1-element Vec cloned three times leaks 1 box. That inference does not
+hold: the program allocates exactly ONE `Node`, so one box is the CEILING no
+matter how large the imbalance — a +1-per-call error and a +1-total error are
+indistinguishable in that fixture. The conclusion happens to be right (leaks
+scale with ELEMENTS, one box per element per temp, confirmed by sweeping element
+count 1/2/3/5/8), but the 1-element evidence never supported it.
+
+LSAN UNDERCOUNTS, which matters for anyone writing fixtures here. On a 3-element
+`Vec[Node]` with String fields, 3 boxes are stranded and LSan reports 2 — its
+conservative stack scan finds a stale pointer to the third and calls it
+reachable. The same program with a `Vec[i64]` field reports all 3. So a
+one-element fixture can report CLEAN while leaking, and the earlier "n-1" and
+"n" readings were scan noise, not two different behaviours. Every fixture added
+here is multi-element for that reason.
+
+TESTS (`tests/memory_sanitizer.rs`): one fixture per site, so a partial revert
+fails a specific test; plus a nested-heap element (the indirect half — a fix
+that rc-dec'd but never reached 0 would still strand it), a `shared enum`
+element (a name-keyed fix covering only structs would pass everything else), and
+an OVER-RELEASE guard that reads the original Vec after 20 temps have dropped.
+That last one is the load-bearing one: LSan cannot see a double-free, so without
+it every fixture here would also pass a fix that released too much. All six red
+at baseline. E2E + interpreter oracle twins pin run-vs-build parity.
+
+Gates: full `--features llvm` sweep of all 98 targets, 12535 tests, 0 failures;
+39-program reduction corpus clean under LSan at both `KARAC_AUTO_PAR` settings
+with run/build/auto-par output parity; clippy `--all --all-targets` and fmt
+clean.
+ |
 | B-2026-08-15-16 | codegen | high | A RANGE-SLICE BINDING crossing an AUTO-PAR JOIN returns the WRONG LENGTH, silently, in the DEFAULT build — `let s = nums[0..2]; return s.len()` yield… | FIXED by f0832187, in `infer_expr_llvm_type` (src/codegen/stmts.rs).
 
 THE CAUSE IS ONE MISSING DISTINCTION. That helper sizes an auto-par RETURN SLOT
