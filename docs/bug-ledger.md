@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 249 | 0 |
-| leak | 177 | 2 |
+| leak | 177 | 1 |
 | double-free | 129 | 0 |
 | run-vs-build | 121 | 1 |
 | codegen-gap | 109 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 872 | 6 |
+| codegen | 872 | 5 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 2 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1207 surfaced · 8 open · 1187 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1207 surfaced · 7 open · 1188 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
-| B-2026-08-14-36 | 2026-08-14 | codegen | medium | A `Map` or `Set` TEMPORARY that is printed and not bound leaks its whole handle — `println(f"{mk()}")` in a 40-print loop strands 21440 bytes over 120 allocations, with no other owner to free it. | `try_compile_map_or_set_display` renders without registering a `FreeMapHandle`. Extract the binding path's drop-shape derivation (`src/codegen/maps.rs`, near the `track_map_var_with_val_drop` call — six call sites derive it near-identically today) into a helper over the key/value `TypeExpr`s, then gate the call on `print_vec_operand_is_owned_temp`. |
 | B-2026-08-14-37 | 2026-08-14 | ownership | low | AN IMMUTABLE `Slice[T]` FORMAL REPORTS ITS OWNED `Vec[T]` ARGUMENT AS MOVED: `fn take(xs: Slice[u8])` called as `take(v)` warns `value 'v' moved here, used again here` on any later use of `v`, even though a read-only slice formal only borrows. | `param_modes_from_signature` (src/ownership.rs) maps `TypeKind::Ref -> Ref`, `MutRef` / `MutSlice -> MutRef`, and EVERYTHING ELSE to `Own` — so a bare `Slice[T]` (immutable) formal falls in the `_` arm and is classified owned. `mut Slice[T]` is correct (it has its own `TypeKind::MutSlice`); only the read-only spelling is wrong. |
 | B-2026-08-14-38 | 2026-08-14 | codegen | low | INDEXING THE RESULT OF A Vec-RETURNING METHOD CALL loud-bails `Index operator applied to non-array type` under `karac build` while `--interp` runs it: `v.clone()[1]`, `v[1..3].to_vec()[0]`, and any other `<method-chain>[i]` whose receiver is a fresh temporary. | `compile_index` (src/codegen/collections.rs) resolves its object through name-keyed registries (`vec_elem_types` / `slice_elem_types` / array slot types); a MethodCall object has no name, so it falls to the generic tail whose ArrayType / VectorType branches cannot match the `{ptr,len,cap}` struct and errors. |
 | B-2026-08-15-1 | 2026-08-15 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints raw bytes, and `m.len()` is a hard codegen error — while the same program with a type annotation, or with plain `Map`/`Set`, is correct on every surface. | The `let` path derives the collection side-tables (`map_key_type_exprs` / `var_elem_type_exprs` / `set_elem_type_exprs` / `sorted_collection_vars`) from the ANNOTATION; the callee's declared return type is never consulted for the `SortedMap` / `SortedSet` heads, so an unannotated call-result binding registers nothing. The plain `Map` / `Set` equivalent registers fine, so the head-gate is the gap, not the call-result shape. |
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1207 surfaced
 
 </details>
 
-### Fixed (1187)
+### Fixed (1188)
 
-<details><summary>1187 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1188 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7173,6 +7172,71 @@ fine, and the plain `Map`/`Set` equivalent is fine. That is a variable-
 registration gap, not a display one: fixing only its display half would put a
 correct render on a binding whose every method call still fails to compile.
 Measured before this change and unchanged by it.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean. |
+| B-2026-08-14-36 | codegen | medium | A `Map` or `Set` TEMPORARY that is printed and not bound leaks its whole handle — `println(f"{mk()}")` in a 40-print loop strands 21440 bytes over 12… | FIXED by 320a86b. A `Map` / `Set` temporary that is printed and never bound now
+frees its handle at scope exit instead of stranding it.
+
+MEASURED, both directions. The producer fixture leaked 94400 bytes over 500
+allocations against the pre-fix compiler and is clean after; the callee-shape
+fixture, 24340 bytes over 140. The loss scales with the collection's CONTENTS
+(control block + bucket storage + every stored key), not a fixed header, so a
+program printing freshly-built collections in a loop bled proportionally to its
+data.
+
+THE ROW'S STEP 1 WAS ALREADY DONE, in a place it did not look. It asked to
+extract the binding path's drop-shape derivation into a helper over the K/V
+`TypeExpr`s, noting six near-identical `track_map_var_with_val_drop` call sites.
+A `TypeExpr`-driven derivation already existed — `map_temp_cleanup_parts`, which
+the `Vec[Map]` element path and the `Option[Map]` inline payload both use — but
+keyed on the WHOLE `Map[K, V]` `TypeExpr`, which a display site does not have:
+`display_map_types` / `display_set_types` store the halves. So the work was a
+strict extraction of that function's body into `map_cleanup_parts_from_halves`,
+with the whole-`TypeExpr` version peeling the args and delegating. No second
+implementation of the classification exists, which was the row's actual concern.
+
+The six name-keyed call sites are UNCHANGED. They read per-binding registries
+that are the source of truth for a bound collection, and consolidating them is a
+refactor across six ownership-critical sites with no bearing on this leak — not
+something to carry in the same commit as a memory fix.
+
+THE GATE IS `print_vec_operand_is_owned_temp`, as the row specified — the same
+predicate B-2026-08-14-30 established. Two shapes it admits looked like they
+should have made this a DOUBLE FREE rather than a leak fix: a free function
+returning its by-value parameter's map field, and a `ref self` method returning
+`self.m`. Read as source, each hands back storage its container still owns.
+They are not aliases — Kāra's caller-retains convention deep-copies an owned
+argument at callee entry — and that is measured rather than argued: both LEAKED
+pre-fix and are clean after, which is only possible if the returned handle had
+no other owner. An alias would have surfaced as a double free in that same
+fixture.
+
+SCOPE OF THE CLASSIFICATION ACTUALLY EXERCISED HERE. Reachable through a display
+site: `String` keys (the key-side flag walk), a `#[derive(Display)]` struct key
+with a heap field (`key_drop_fn`, the per-key release the flag cannot express),
+and scalar / `Vec[String]` / `Set[String]` values. NOT reachable: `val_drop_fn`
+and `val_shared_heap_type` — the typechecker refuses `Display` for
+`Map[K, StructV]` and `Map[K, sharedV]`, so a value owning heap beyond the
+one-level overlay never reaches a print. Those arms stay covered by the binding
+path's fixtures, which is the payoff of sharing one derivation instead of
+writing a second.
+
+PINNED by three fixtures, two new and one widened. The producer fixture carries
+every printable collection shape — `Map`, `Set`, `SortedMap`, `SortedSet`, a
+`Vec`-valued map, a `Set`-valued map, and the struct key — looped 20 times. The
+callee fixture carries the two aliasing-looking shapes. The place fixture from
+B-2026-08-14-31 gains tuple-element and `Vec[Map]`-element spellings, because
+what keeps places safe is now a LIVE predicate rather than the absence of any
+tracking: if that predicate ever widens, those spellings become double frees,
+and this is where it shows.
+
+ONE TRAP RECORDED IN THE FIXTURE ITSELF: the straight-line version of the callee
+program — three prints, no loop — PASSED against the leaking compiler. Each
+print site gets its own entry alloca, so at exit every stranded handle was still
+reachable from the stack and LeakSanitizer reported nothing. The loop is what
+makes the loss visible, and the fixture says so, because unrolling it for
+"clarity" would silently gut the test.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
