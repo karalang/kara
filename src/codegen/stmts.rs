@@ -6945,7 +6945,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 // explicit-annotation / struct-literal / fresh-call
                 // paths in `bind_pattern` / `compile_struct_init`.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
-                    if let Some(struct_name) = self.var_type_names.get(var_name.as_str()).cloned() {
+                    // B-2026-08-15-15 — A SLICE BINDING OWNS NOTHING, so it
+                    // must never be registered for a value-type struct drop.
+                    //
+                    // `var_type_names` holds the ELEMENT's name for a slice
+                    // binding (`let s = es[0..2]` over `Vec[Entry]` records
+                    // `s -> "Entry"`), which is what the element-dispatch paths
+                    // want and what this gate misread as "s IS an Entry". It
+                    // then registered `__karac_drop_struct_Entry` against `s`'s
+                    // slot — a two-word `{ptr, len}` view — so the drop read the
+                    // slice's `ptr`/`len` as `Entry`'s `{String, i64}` and freed
+                    // the SOURCE VEC's element buffer. `es`'s own cleanup then
+                    // freed it again: `free(): double free detected in tcache 2`,
+                    // SIGSEGV at -O0.
+                    //
+                    // The element being a struct with a heap field is what makes
+                    // it visible rather than what makes it wrong — a
+                    // `Vec[i64]` slice registers no drop because `i64` is not in
+                    // `struct_types`, so the same misread produced no free.
+                    //
+                    // Guarding on `slice_elem_types` states the actual property:
+                    // membership there IS "this binding is a borrowed view". A
+                    // layout comparison (`slot.ty == struct_types[name]`) would
+                    // also catch this shape, but it rejects a legitimate generic
+                    // monomorph whose slot carries the concrete layout while the
+                    // registry holds the erased base (the B-2026-08-06-2 class),
+                    // so it would trade a double free for a leak.
+                    let binding_is_slice_view =
+                        self.slice_elem_types.contains_key(var_name.as_str());
+                    if let Some(struct_name) = self
+                        .var_type_names
+                        .get(var_name.as_str())
+                        .filter(|_| !binding_is_slice_view)
+                        .cloned()
+                    {
                         // Phase 7 user-`impl Drop` dispatch Prereq.3:
                         // when the struct's type has a validated user
                         // Drop impl, route cleanup through the

@@ -50114,4 +50114,68 @@ fn main() {
             "inline_container_temp_arg_releases_elements",
         );
     }
+
+    /// B-2026-08-15-15 — a SLICE BINDING must not be registered for a
+    /// value-type struct drop.
+    ///
+    /// `var_type_names` holds the ELEMENT's name for a slice binding
+    /// (`let s = es[0..2]` over `Vec[Entry]` records `s -> "Entry"`), which is
+    /// what element dispatch wants and what the let-site struct-drop gate
+    /// misread as "s IS an Entry". It registered
+    /// `__karac_drop_struct_Entry` against `s`'s slot — a two-word
+    /// `{ptr, len}` view — so the drop read the slice's `ptr`/`len` as
+    /// `Entry`'s `{String, i64}` and freed the SOURCE VEC's element buffer.
+    /// `es`'s own cleanup then freed it again.
+    ///
+    /// The heap field makes it VISIBLE, not wrong: a `Vec[i64]` slice registers
+    /// no drop at all because `i64` is not in `struct_types`, so the identical
+    /// misread produced no free. Both are here.
+    ///
+    /// The row reports the default build as clean and `KARAC_AUTO_PAR=0` as the
+    /// crashing configuration — an inversion that would send a bisector away
+    /// from the cause. That polarity is real but narrow: it holds only for the
+    /// one shape auto-par happened to split (a `Map` local plus a `Vec` param).
+    /// The plain spelling below double-frees in the DEFAULT build, which is why
+    /// this fixture is written without the scenery.
+    #[test]
+    fn asan_range_slice_binding_of_struct_vec_owns_nothing() {
+        assert_clean_asan_run(
+            r#"
+struct Entry { service: String, weight: i64 }
+
+fn main() {
+    let mut es: Vec[Entry] = Vec.new();
+    es.push(Entry { service: "alphabetical", weight: 3 });
+    es.push(Entry { service: "betamaximum", weight: 5 });
+
+    // The bug's own shape: a range slice of a struct Vec with a heap field.
+    let s = es[0..2];
+    println(f"{s.len()} {s[0].service} {s[1].service}");
+
+    // The whole-container spelling of the same view.
+    let a = es.as_slice();
+    println(f"{a.len()} {a[1].service}");
+
+    // The element kind whose misread was silent: no `struct_types` entry, so
+    // no drop was registered and nothing was freed twice.
+    let mut ns: Vec[i64] = Vec.new();
+    ns.push(3); ns.push(5);
+    let t = ns[0..2];
+    println(f"{t.len()}");
+
+    // The source must still own and free its own elements afterwards.
+    println(f"{es.len()} {es[0].service}");
+    println("end");
+}
+"#,
+            &[
+                "2 alphabetical betamaximum",
+                "2 betamaximum",
+                "2",
+                "2 alphabetical",
+                "end",
+            ],
+            "range_slice_binding_of_struct_vec_owns_nothing",
+        );
+    }
 }
