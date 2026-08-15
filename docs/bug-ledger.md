@@ -96,11 +96,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 122 | 0 |
-| codegen-gap | 111 | 1 |
+| codegen-gap | 112 | 2 |
 | missing-feature | 96 | 0 |
 | perf | 69 | 0 |
-| false-positive | 64 | 1 |
-| diagnostics | 59 | 1 |
+| false-positive | 65 | 1 |
+| diagnostics | 60 | 2 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
 | other | 31 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 887 | 1 |
-| typecheck | 173 | 1 |
+| codegen | 888 | 2 |
+| typecheck | 174 | 1 |
 | interp | 146 | 1 |
-| ownership | 50 | 0 |
+| ownership | 51 | 1 |
 | autopar | 46 | 0 |
 | other | 42 | 0 |
 | cli | 30 | 0 |
@@ -124,15 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1229 surfaced · 3 open · 1214 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1232 surfaced · 5 open · 1215 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-20 | 2026-08-15 | interp | low | THE INTERPRETER BLAMES AN INTEGER OVERFLOW ON A SUB-EXPRESSION THAT CANNOT OVERFLOW: in `let c = (a + b) * m` with `a + b == 3`, the trap is reported at the column of `a`, not of the multiply that actually trapped. The compiled backends point elsewhere on the same line, so `karac run` and `karac build` give two different locations for one fault. | The span attached to the overflow trap in the interpreter's binary-op evaluation. It appears to carry the LEFT OPERAND's span rather than the operation's — which is indistinguishable from correct whenever the left operand is itself the overflowing op, and wrong whenever it is not. |
-| B-2026-08-15-22 | 2026-08-15 | typecheck | medium | A function returning a REUSABLE closure over a heap value is rejected whenever the body passes that capture BY VALUE -- which every stdlib `contains` / `starts_with` / `ends_with` does. The closure analysis calls those calls CONSUMING; the sequential checker does not (the same call twice plus a later use of the needle is accepted). And the diagnostic's own prescribed remedy -- clone the captured value -- does NOT compile, under either reading. | the closure once-vs-repeatable classification's notion of a consuming use, vs the sequential move checker's; and the by-value `substr: String` parameter the typechecker gives `String.contains` (src/typechecker/stdlib_seq.rs:261, whose own comment says the arg shape is all it enforces). |
 | B-2026-08-15-24 | 2026-08-15 | codegen | low | A TUPLE-element field store through a `mut Slice[(A, B)]` parameter is not lowered — `fn bump(s: mut Slice[(i64, i64)]) { s[0].0 = 99; }` fails the build with `tuple-element assignment through this receiver shape is not yet lowered; bind the tuple to a local first`. LOUD, not silent — filed to record the shape, not as a wrong-answer risk. | the tuple-element assignment lowering's receiver-shape dispatch: an `Index`-rooted receiver whose container is a `Slice` reaches the not-yet-lowered arm. Compare the STRUCT-element sibling, which B-2026-08-15-21 (9b284cb) taught to resolve through `lower_indexed_elem_ptr_slice`. |
+| B-2026-08-15-25 | 2026-08-15 | codegen | medium | A CLOSURE WHOSE BODY IS A BOOL-RETURNING BUILTIN PREDICATE fails LLVM module verification — `|s| s.starts_with("ab")` emits the closure's return as `i64` against the predicate's `i1` ("Function return type does not match operand type of return inst"). Reachable with NO CAPTURE, so it is not a once-callability issue. `|s| s.contains(x)` and `|m| m.len() > n` both build and run, so it is neither "bool closures" nor "container receivers" — it is which method lowering supplies the closure body's tail value. | the closure function's return-type derivation from its body tail (src/codegen/closures.rs) vs. the `i1` produced by the starts_with / ends_with / map.contains / set.contains lowerings. |
+| B-2026-08-15-26 | 2026-08-15 | typecheck | low | THE `OnceFnIntoFnSlot` HELP TEXT PRESCRIBES A CLONE ROUTE THAT DOES NOT COMPILE — split out of B-2026-08-15-22 as its fix shape (3). Both readings of "clone the captured value" were tried and both stay rejected. Not simply deletable: with -22 fixed the reported shape no longer reaches this diagnostic, so which shapes still do — and whether the clone advice is right for THEM — is the open question. | the `OnceFnIntoFnSlot` help text (src/typechecker.rs, the once-callable-closure slot rejection) and the set of shapes that still reach it after B-2026-08-15-22. |
+| B-2026-08-15-27 | 2026-08-15 | ownership | low | CALLING AN `Fn(ref T)` CLOSURE TWICE WITH THE SAME ARGUMENT warns "value moved here, used again here" — the closure's parameter is a BORROW, so the call cannot move it, and the program compiles and runs correctly on every backend. A direct call to `fn f(s: ref String)` does not warn. | the ownership checker's treatment of a CLOSURE call's arguments: it appears to ignore the closure type's declared parameter mode and treat every argument as an owned pass. |
 
 ### Wontfix (2)
 
@@ -145,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1229 surfaced
 
 </details>
 
-### Fixed (1214)
+### Fixed (1215)
 
-<details><summary>1214 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1215 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8813,6 +8815,112 @@ string from the side that was always correct.
 
 Gates: full `--features llvm` sweep of all 98 targets, 12543 tests, 0 failures;
 clippy `--all --all-targets` and fmt clean. |
+| B-2026-08-15-22 | typecheck | medium | A function returning a REUSABLE closure over a heap value is rejected whenever the body passes that capture BY VALUE -- which every stdlib `contains`… | FIXED by 1f801ce8, in two places, matching the row's own fix shape (1): the closure
+once-callability walker (src/typechecker/closures.rs) and the `contains` probe's
+argument check (src/typechecker/stdlib_seq.rs).
+
+THE ROW'S DIAGNOSIS IS EXACTLY RIGHT and its tracker names both halves. The
+asymmetry is visible in one screen of code: the walker's `Call` arm decides an
+argument's mode FROM THE CALLEE'S SIGNATURE, while its `MethodCall` arm had no
+signature to consult and called every non-`mut` argument Consuming. For a builtin
+read-only predicate that is simply false, and false in the one place a user cannot
+route around it — `String.contains` is not a signature anyone can re-declare. The
+row's own table already proved the rule was self-consistent (any by-value use
+demotes; a `ref`-taking user fn escapes); what it could not do is escape for the
+stdlib.
+
+HALF 1 — `builtin_read_only_arg_method`, gated on the RECEIVER'S TYPE. That gating
+is the whole safety argument, not caution: a user type may declare its own
+`contains` that stores what it is handed, and a name-only rule would have spoken
+for it. A fixture pins exactly that (`struct Bag` with a `contains` that pushes)
+as still-demoting, alongside `Vec.push` and an owned user-fn parameter. An unknown
+receiver type answers false, so anything unclassifiable keeps the old
+consume-everything behaviour.
+
+Every admitted method was MEASURED non-consuming before being added, the same way:
+called twice on one binding with a read of that binding afterwards, checked clean
+and run for the right answer. That is `contains` / `starts_with` / `ends_with` on
+`String` and on a `StringSlice` receiver, `contains` on `Vec` / `VecDeque` / `Set`
+/ `SortedSet`, and `contains_key` on `Map` / `SortedMap` — all eleven, not just the
+four the row named. The Map/Set siblings are the identical defect, so leaving them
+rejected would have meant filing a near-duplicate of the row I was closing.
+
+One honest note on reach: the `VecDeque` / `SortedSet` / `SortedMap` arms are
+measured correct but are not exercisable through the closure path today, because a
+returned closure capturing one of those is stopped earlier by the borrow-escape
+rule ("closure with `ref` capture of `d` escapes its scope by being returned") —
+which is a correct gate, not a defect. They are kept because they are true and
+because the predicate should not encode which OTHER gate happens to fire first.
+
+TYPING THE RECEIVER TOOK A SECOND ATTEMPT, and the reason is worth recording
+because it will bite the next person here. The obvious lookup —
+`expr_types[object.span]` — returns the WRONG ANSWER rather than nothing: the
+parser gives a postfix expression its receiver's span, so the key resolves to the
+METHOD CALL's own type. Instrumented, `s.contains(b)` reported its receiver as
+`Bool`. Names are the reliable key, so receivers resolve through the captures map,
+extended with the closure's own params. Extending that map is safe for the capture
+decision it also drives: `name_is_shadowed` is tested BEFORE `outer.get(name)` at
+the identifier leaf, and every param name is in the shadow stack, so a param can
+never reach that lookup.
+
+HALF 2 — `Vec.contains` REJECTED A BORROWED NEEDLE OUTRIGHT, which the row's table
+recorded as an `OnceFn` rejection but is really a second, independent error hiding
+behind the first: `v.contains(s)` for `s: ref String` failed with "expected
+'String', found 'ref String'" even OUTSIDE a closure. The String-receiver siblings
+already accepted it, because `is_str_like` peels `Ref`/`MutRef`. A probe scans for
+its needle and never keeps it, so the container arms now peel too — for the
+assignability comparison ONLY, leaving the three numeric-coercion checks on the raw
+type so a borrowed numeric needle behaves exactly as before and no coercion is ever
+recorded against a reference.
+
+FIX SHAPE (3) — THE HELP TEXT — IS NOT DONE, and saying so plainly is better than a
+half-measure. The row is right that the "clone the captured value" route does not
+work for this shape, and both readings were re-confirmed rejected. But with (1)
+fixed the shape no longer produces the diagnostic at all, so the remaining question
+is which OTHER shapes still reach that help text and whether the clone advice is
+wrong for them too. Rewriting the prose without knowing that would risk removing
+advice that is correct elsewhere. Filed as B-2026-08-15-26 with the evidence.
+
+FIX SHAPE (2) — whether a by-value ARGUMENT PASS should count as a consume at all
+when the callee does not retain it — is untouched, as the row itself scopes it
+("that is the general question and is larger"). What ships here is the specific
+answer for builtins, which is the half with no user-side workaround.
+
+TWO PRE-EXISTING DEFECTS FOUND WHILE VERIFYING, both reachable WITHOUT this fix and
+both filed rather than absorbed:
+
+  * B-2026-08-15-25 — a closure whose body is a bool-returning builtin predicate
+    (`starts_with` / `ends_with` / `Map.contains_key` / `Set.contains`) dies in
+    codegen: "Function return type does not match operand type of return inst",
+    the closure's return typed `i64` against the predicate's `i1`. Reachable with
+    NO CAPTURE (`|s| s.starts_with("ab")`), verified identical on the parent.
+    `contains` is unaffected, which is why the E2E fixture uses only that one.
+  * B-2026-08-15-27 — calling an `Fn(ref T)` closure twice with the same argument
+    warns "value moved here, used again here". Fires on a closure with no
+    `contains` anywhere, verified identical on the parent.
+
+Neither is caused by this change; this fix simply makes their neighbourhood
+reachable more often.
+
+MEASURED: the nine-shape accept/reject matrix before and after (six wrongly
+rejected → accepted, two genuine consumes still rejected, one borrow control
+unchanged), then the unblocked pattern run on `--interp`, JIT, `karac build` and
+`KARAC_OPT_LEVEL=0` for the shapes codegen supports, with every closure invoked
+repeatedly and the capture read afterwards. ASAN clean at both opt levels.
+
+TESTS. `test_builtin_read_only_predicate_does_not_demote_closure_to_oncefn`
+(tests/typechecker.rs) is the detector — verified FAILING on the parent — and
+covers all six admitted methods.
+`test_consuming_method_argument_still_demotes_closure_to_oncefn` is its
+counterweight: it PASSES on the parent, and must, because it pins the direction the
+fix could go wrong, including the user-declared `contains` that a name-only rule
+would have broken. `test_e2e_closure_factory_over_a_read_only_string_predicate`
+(tests/codegen.rs) proves the admitted pattern RUNS — a typecheck relaxation that
+let through a miscompiled program would be worse than the false positive it
+removed — and is verified failing on the parent too.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
+suite, and the asan -O0 leg. |
 | B-2026-08-15-23 | autopar+codegen | high | A `#[par_order_free]` COLLECT-TABULATE LOOP DISPATCHES FOUR WORKERS AND GIVES ALL THE WORK TO ONE: the order-free dynamic chunker sized chunks `.max(… | FIXED by c04bc65 — and the row's diagnosis needs correcting in a way that
 changes what the fix had to be.
 
