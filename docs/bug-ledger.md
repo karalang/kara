@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 96 | 0 |
 | perf | 68 | 0 |
 | false-positive | 63 | 0 |
-| diagnostics | 57 | 0 |
+| diagnostics | 58 | 1 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
 | other | 31 | 0 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 172 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
-| autopar | 44 | 0 |
+| autopar | 45 | 1 |
 | other | 42 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1223 surfaced · 3 open · 1208 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced · 4 open · 1208 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-14 | 2026-08-15 | codegen | medium | A `Vec[shared struct]` CLONED AND PASSED BY VALUE strands one 32-byte RC box — `agg_shared(ns.clone())` over `Vec[Node]` leaks ONE object regardless of call count, so the per-call clone/release pairing is balanced and the container's own scope exit is what fails to release its element references. | the scope-exit drop for a `Vec` whose element is a `shared struct` handle: the buffer is freed without releasing the per-element RC references. NOT B-2026-08-15-13's slot machinery — reproduces under `KARAC_AUTO_PAR=0`, where that code path never runs. |
 | B-2026-08-15-15 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING of a `Vec[Struct]` (`let s = entries[0..2]`) DOUBLE-FREES under `KARAC_AUTO_PAR=0` and SIGSEGVs at `-O0`, while the DEFAULT build is clean and prints the right answer — the inverted polarity means disabling auto-par to rule it out is what triggers the crash. | the range-index let path's element ownership for a struct element with a heap field: the slice and the source Vec both appear to own the element buffers. Auto-par splitting the function happens to mask it. |
 | B-2026-08-15-16 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING crossing an AUTO-PAR JOIN returns the WRONG LENGTH, silently, in the DEFAULT build — `let s = nums[0..2]; return s.len()` yields 1 instead of 2 under `karac build`, garbage under `-O0` and the JIT, and the correct 2 under `--interp` and `KARAC_AUTO_PAR=0`. | the `ReturnSlot` round-trip for a range-slice binding (`collect_return_slots` / `emit_par_run`, src/codegen/stmts.rs + par_blocks.rs): the joined slot loses the VALUE, not just the type name B-2026-08-15-13 fixed for element reads. |
+| B-2026-08-15-19 | 2026-08-15 | autopar | medium | `#[par_order_free]` IS SILENTLY IGNORED when the analyzer does not classify the loop as a collect: no fan-out, no diagnostic, and `karac query concurrency` does not even list the loop among the DECLINED ones — it is absent from `loop_reductions` entirely. The user gets a sequential binary and no way to learn why an explicit opt-in did nothing. | The attribute is an explicit user opt-in — the ledger's own B-2026-07-29-30 renamed it precisely to make it "the caller's promise not to depend on order" — so a loop carrying it and not fanning out is a decision the compiler owes the user an explanation for. `disjoint_write_loops` already emits a `gate` and a `reason` per declined loop; a `#[par_order_free]` collect that fails classification emits nothing at all. |
 
 ### Wontfix (2)
 
