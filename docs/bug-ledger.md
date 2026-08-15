@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 250 | 0 |
-| leak | 181 | 1 |
+| leak | 181 | 0 |
 | double-free | 129 | 0 |
 | run-vs-build | 122 | 1 |
 | codegen-gap | 110 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 880 | 3 |
+| codegen | 880 | 2 |
 | typecheck | 172 | 1 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1218 surfaced · 4 open · 1202 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1218 surfaced · 3 open · 1203 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-15-9 | 2026-08-15 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED TO A BARE-`T` GENERIC PARAM THAT THE CALLEE RETURNS is never dropped -- `pick(x.clone(), y.clone())` on `fn pick[T](a: T, b: T) -> T { id(a) }` strands one buffer per call, while the same forwarding tail in CONTAINER spelling (`a: Vec[T]`) is clean as of B-2026-08-15-7. | `generic_param_is_bare_type_param` (src/codegen/mono.rs) rejects a bare-`T` param whose type param appears in the declared return type, so `compile_generic_call` queues no caller-side materialization for it. Deliberate: B-2026-08-11-3 measured the unguarded version as a real double free on this exact shape and chose the leak as the conservative direction. |
 | B-2026-08-15-11 | 2026-08-15 | typecheck | high | EXHAUSTIVENESS IS NOT CHECKED when the `match` scrutinee is a `ref` PARAMETER -- `fn f(m: ref M) -> i64 { match m { A => 1 } }` over a three-variant enum passes `karac check`, and hitting the missing arm SEGFAULTS under AOT, INFINITE-LOOPS under the JIT, and raises an `internal error ... (the typechecker should have rejected this)` under the interpreter. Every other scrutinee form -- owned param, local binding, `Option`, `Result` -- is correctly rejected. | the exhaustiveness pass's scrutinee-type resolution: it recognizes an owned/local enum and misses `ref <Enum>` parameters. `match m { }` -- ZERO arms over a populated enum -- also passes, so the gate is not firing at all rather than mis-counting arms. |
 | B-2026-08-15-12 | 2026-08-15 | codegen | medium | `codegen failed: Undefined variable 'm'` on a program `karac check` accepts and the interpreter runs correctly: an enum-variant pattern binds a `shared enum` payload and passes it to a `ref`-taking helper. NOT reduced below 32 lines -- every attempt to shrink it further made the failure disappear, and the shapes that look responsible in isolation all build. | codegen's variable-scope map for a payload bound by an enum-variant pattern -- `Undefined variable 'm'` is emitted for the binding in `Simple(m, _path) => Outcome.Ok(method_name(m))`. |
 | B-2026-08-15-13 | 2026-08-15 | codegen | medium | A `Map`/`Set` LOCAL IN A FUNCTION WITH A `Vec[Struct]` PARAM makes `let e = entries[0]; e.field` FAIL TO BUILD — `codegen: cannot resolve field '...' on this receiver (its type was not recorded for codegen)`. No move, no reuse, no loop, and the Map is never used. Drop the Map local, or swap it for a Vec local, or make the Vec a LOCAL instead of a param, and the same program builds. `karac check` is clean and the interpreter runs it, so this is a run-vs-build divergence that only the compiled backends see. | the let-binding type record for a Vec-element struct (`var_type_names`), and whatever a `Map`/`Set` local changes about the path that writes it. The receiver reaches `compile_field_access` with no entry and takes the loud B-2026-07-20-9 arm, which is behaving correctly — the missing record is upstream of it. |
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1218 surfaced
 
 </details>
 
-### Fixed (1202)
+### Fixed (1203)
 
-<details><summary>1202 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1203 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7912,6 +7911,82 @@ to the phase-6-runtime query-surface block, whose JSON sample predates the field
 Gates: `cargo test --test cli` 546 pass, `concurrency` 147, `concurrency_report`
 4, `effectchecker` 420; `cargo clippy --all --all-targets --features llvm
 -D warnings` exit 0; fmt clean. |
+| B-2026-08-15-9 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED TO A BARE-`T` GENERIC PARAM THAT THE CALLEE RETURNS is never dropped -- `pick(x.clone(), y.clone())` on `fn pick… | FIXED by 57282b03, in `compile_generic_call` (src/codegen/mono.rs), with a new strict
+predicate in src/result_escape.rs.
+
+THE ROW'S TITLE IS WRONG AND THAT IS THE FINDING. It says the leak is a bare-`T`
+param THAT THE CALLEE RETURNS. The returned param is fine, and always was:
+`echo[T](x: T) -> T { x }` and the forwarding `nest[T](x: T) -> T { id(id(x)) }`
+are both single-free before the fix, because the buffer moves out of the callee
+and the caller's RESULT binding frees it exactly once. The row inherited that
+framing from B-2026-08-11-3's return-type exclusion and never tested the two
+params separately.
+
+WHAT ACTUALLY LEAKS IS THE SIBLING. In `pick[T](a: T, b: T) -> T { id(a) }` the
+leak is `b` — the param the callee never returns and, in the reproducer, never
+mentions at all. ASYMMETRIC ARGUMENT SIZES ARE WHAT SHOWED IT, and the original
+probe could not have: with both arguments 8 elements the leak is 64 B/call and
+either param is a candidate. Passing a 16-element `b` against an 8-element `a`
+moves the leak to 128 B/call, naming `b` unambiguously. Everything else in the
+row's repro — the `id` forwarding, the return type — is scenery.
+
+WHY IT LEAKED. `generic_param_is_bare_type_param` rejects a param whose type
+param appears in the declared return type. That name is SHARED by every param
+written with it, so `pick`'s `b` is rejected for `a`'s reason: exactly one of
+them can be the returned value, the syntactic test cannot say which, and it
+declines both. The precision loss is per-param, not per-function, which is why
+the fix is a per-param question rather than a weakening of the exclusion.
+
+THE FIX asks whether THIS param can reach a return at all, and admits it when it
+provably cannot. `crate::result_escape::unused_param_names` is that question: a
+param the body never names cannot reach any position, returns included. The
+module was already the right home — it is an exhaustive per-`ExprKind` walk with
+no `_` wildcard, so a new AST node breaks its build instead of silently
+classifying a move-out as safe, and `rc_elide.rs` already reuses it for the same
+kind of question.
+
+WHY NOT THE `nonescaping_param_names` SITTING NEXT TO IT, which also admits a
+param used only as a direct `match` scrutinee — MEASURED, not reasoned. That
+relaxation is correct for the in-place RC release it was written for and wrong
+here, because a match arm can bind the scrutinee and hand it straight back out:
+
+    fn takeout[T](b: T) -> T { match b { v => { return v; } } }
+
+`b` counts as a scrutinee use and `v` is a different name, so the loose predicate
+calls `b` non-escaping — while the buffer the caller passed in is exactly what
+the caller then binds as the result. Swapping the loose predicate in at the call
+site turns that line into `AddressSanitizer: attempting double-free`; the strict
+one is clean. That ablation was run in both directions and is pinned by the unit
+test `match_scrutinee_param_is_nonescaping_but_not_unused`.
+
+THE COST OF THE STRICT RULE, stated plainly: a param that is USED but still
+cannot reach the return — `fn pickm[T](a: T, b: T) -> T { match b { _ => {} }
+return a; }` — is still declined and still leaks. That is the same conservative
+direction B-2026-08-11-3 chose, now applied one step more precisely rather than
+lifted. Closing this to a strictly-unused rule is a deliberate narrowing, not an
+oversight; widening it needs a sound "may reach a return" analysis (taint
+through `let`/assignment/forwarding calls, with closures conservative), and the
+double-free above is the shape any such analysis has to survive.
+
+MEASURED against the interpreter as oracle on all three backends at both
+optimization levels — thirteen shapes, zero divergences, LSan clean at both.
+Shapes: the sibling leak in two spellings (`pick` via a forwarding tail, `keep`
+via a bare return); the returned param alone (`echo`); the doubly-forwarded
+return (`nest`); the match-scrutinee return (`takeout`); a three-param callee
+returning the middle one; a bare-`T` param beside a concrete `i64`; a
+collection-literal argument; and `Vec[String]` throughout, where a leak strands
+every element as well as the buffer.
+
+TESTS. `asan_generic_unused_bare_type_param_temp_arg_no_leak`
+(tests/memory_sanitizer.rs) is the detector, verified FAILING on the parent at
+BOTH opt levels, and carries `takeout` permanently as the double-free tripwire
+for any future loosening. `test_e2e_generic_bare_type_param_temp_arg`
+(tests/codegen.rs) is a regression guard and PASSES on the parent — verified, not
+assumed. Two unit tests in src/result_escape.rs pin the pair of predicates
+against each other so neither drifts into the other.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features
+llvm` suite, and the asan -O0 leg. |
 | B-2026-08-15-10 | codegen | high | A `UseAfterMove` WHOSE MOVE IS A CALL ARGUMENT GETS NO DEFENSIVE COPY: `uam_defensive_copy` covers three POSITIONS (a `let` RHS and the two struct-li… | FIXED by 74e558f. The use-after-free is gone on both compiled backends
 at every optimization level, and the row's central claim needs one correction
 that changes where the bug actually was.
