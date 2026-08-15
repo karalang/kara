@@ -281,20 +281,12 @@ pub(crate) fn loop_reductions_json(
             } else if r.seq {
                 ("sequential_tabulate", false, "n/a", "lowered inline, single-threaded")
             } else {
-                match func.and_then(|f| reduction_loop_verdict(f, program, r, decision_key)) {
-                    Some(v) => (
-                        "parallel_fanout",
-                        v.is_fanout(),
-                        v.tag(),
-                        v.reason(),
-                    ),
-                    None => (
-                        "parallel_fanout",
-                        false,
-                        "unknown",
-                        "loop shape not recoverable from the AST at this site",
-                    ),
-                }
+                let verdict = match func {
+                    Some(f) => reduction_loop_verdict(f, program, r, decision_key),
+                    None => LoopVerdict::FunctionUnavailable,
+                };
+                let (fanned_out, gate, reason) = verdict.render();
+                ("parallel_fanout", fanned_out, gate, reason)
             };
             format!(
                 "{{\"statement\":{},\"loop_line\":{},\"accumulator\":{},\"op\":{},\"lowering\":{},\"collect_tabulate\":{},\"fanned_out\":{},\"cost_gate\":{},\"reason\":{}}}",
@@ -390,10 +382,12 @@ pub(crate) fn disjoint_write_loops_json(
             } else if !d.proven() {
                 (false, "n/a")
             } else {
-                match func.and_then(|f| disjoint_loop_verdict(f, program, d, decision_key)) {
-                    Some(v) => (v.is_fanout(), v.tag()),
-                    None => (false, "unknown"),
-                }
+                let verdict = match func {
+                    Some(f) => disjoint_loop_verdict(f, program, d, decision_key),
+                    None => LoopVerdict::FunctionUnavailable,
+                };
+                let (fanned_out, gate, _) = verdict.render();
+                (fanned_out, gate)
             };
             format!(
                 "{{\"statement\":{},\"loop_line\":{},\"loop_var\":{},\"disjoint_writes\":{},\"gate\":{},\"fanned_out\":{},\"cost_gate\":{},\"targets\":[{}],\"reason\":{}}}",
@@ -426,16 +420,21 @@ fn disjoint_loop_verdict(
     program: Option<&Program>,
     d: &crate::concurrency::DisjointWriteLoop,
     decision_key: &str,
-) -> Option<crate::par_cost::FanoutVerdict> {
-    let (parent, idx, loop_expr) = find_loop_by_span(&func.body, &d.loop_span)?;
-    let shape = crate::par_cost::extract_loop_shape(parent, idx, loop_expr)?;
+) -> LoopVerdict {
+    let Some((parent, idx, loop_expr)) = find_loop_by_span(&func.body, &d.loop_span) else {
+        return LoopVerdict::LoopNotFound;
+    };
+    let shape = match crate::par_cost::extract_loop_shape_explained(parent, idx, loop_expr) {
+        Ok(s) => s,
+        Err(decline) => return LoopVerdict::Unshapeable(decline),
+    };
     let params: Vec<&str> = func.params.iter().filter_map(|p| p.name()).collect();
     let refs_param = expr_mentions_any_name(&shape.end_expr, &params)
         || shape
             .lo_expr
             .as_ref()
             .is_some_and(|e| expr_mentions_any_name(e, &params));
-    Some(crate::par_cost::fanout_verdict(
+    LoopVerdict::Verdict(crate::par_cost::fanout_verdict(
         &shape.body,
         &shape.end_expr,
         shape.lo_expr.as_ref(),
@@ -447,6 +446,66 @@ fn disjoint_loop_verdict(
         Some(&shape.loop_var),
         Some(decision_key),
     ))
+}
+
+/// The outcome of asking a report entry's loop for its fan-out verdict.
+///
+/// B-2026-08-15-4: this used to be an `Option<FanoutVerdict>`, and `None`
+/// covered THREE different facts that the report then rendered with one
+/// opaque string, `cost_gate: "unknown"`:
+///
+/// 1. the enclosing function's AST could not be found for the decision key,
+/// 2. the loop could not be found inside that AST, and
+/// 3. the loop was found, but the cost model has no shape for it.
+///
+/// The first two are COMPILER BUGS — the report entry exists, so the analyzer
+/// saw the loop, and a lookup that cannot then find it means the two keying
+/// conventions have drifted (B-2026-08-14-33 was exactly this, and its harm
+/// was that `unknown` sent people to restructure code that had in fact fanned
+/// out). The third is a DOCUMENTED v1 LIMITATION with nothing to report and
+/// nothing to fix. Collapsing them left that trap half-open: a reader could
+/// not tell "file a bug" from "expected, ignore".
+///
+/// So `unknown` now means a compiler bug, every time it appears, and the
+/// limitation gets its own tag and a reason that names the shape it wanted.
+enum LoopVerdict {
+    /// The gates ran; this is their answer.
+    Verdict(crate::par_cost::FanoutVerdict),
+    /// (1) The function's AST was unavailable — decision-key drift.
+    FunctionUnavailable,
+    /// (2) The loop was not found in the function's AST — lookup drift.
+    LoopNotFound,
+    /// (3) The loop was found; the cost model declined its shape.
+    Unshapeable(crate::par_cost::ShapeDecline),
+}
+
+impl LoopVerdict {
+    /// `(fanned_out, cost_gate, reason)` as the report renders them.
+    ///
+    /// Both compiler-bug arms keep `cost_gate: "unknown"` — a consumer
+    /// alerting on "the compiler lost track of a loop" matches that one string
+    /// — but their prose says WHICH lookup failed, because that is the first
+    /// thing a bug report needs.
+    fn render(&self) -> (bool, &'static str, &'static str) {
+        match self {
+            LoopVerdict::Verdict(v) => (v.is_fanout(), v.tag(), v.reason()),
+            LoopVerdict::FunctionUnavailable => (
+                false,
+                "unknown",
+                "internal: the enclosing function's AST was not found for this \
+                 decision key (compiler bug — the report entry exists, so the \
+                 analyzer saw this loop)",
+            ),
+            LoopVerdict::LoopNotFound => (
+                false,
+                "unknown",
+                "internal: the loop was not found in the enclosing function's \
+                 AST (compiler bug — the report entry exists, so the analyzer \
+                 saw this loop)",
+            ),
+            LoopVerdict::Unshapeable(d) => (false, "declined_unshapeable_loop", d.reason()),
+        }
+    }
 }
 
 /// How a report entry names the loop it wants back out of the AST.
@@ -620,9 +679,14 @@ fn reduction_loop_verdict(
     program: Option<&Program>,
     r: &crate::concurrency::LoopReduction,
     decision_key: &str,
-) -> Option<crate::par_cost::FanoutVerdict> {
-    let (parent, idx, loop_expr) = find_loop_by_line(&func.body, r.loop_line)?;
-    let shape = crate::par_cost::extract_loop_shape(parent, idx, loop_expr)?;
+) -> LoopVerdict {
+    let Some((parent, idx, loop_expr)) = find_loop_by_line(&func.body, r.loop_line) else {
+        return LoopVerdict::LoopNotFound;
+    };
+    let shape = match crate::par_cost::extract_loop_shape_explained(parent, idx, loop_expr) {
+        Ok(s) => s,
+        Err(decline) => return LoopVerdict::Unshapeable(decline),
+    };
     // The variable-K floor only fires when the trip-count bound references a
     // parameter of the ENCLOSING function — the reusable-helper shape.
     let params: Vec<&str> = func.params.iter().filter_map(|p| p.name()).collect();
@@ -631,7 +695,7 @@ fn reduction_loop_verdict(
             .lo_expr
             .as_ref()
             .is_some_and(|e| expr_mentions_any_name(e, &params));
-    Some(crate::par_cost::fanout_verdict(
+    LoopVerdict::Verdict(crate::par_cost::fanout_verdict(
         &shape.body,
         &shape.end_expr,
         shape.lo_expr.as_ref(),

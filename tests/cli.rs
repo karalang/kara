@@ -1921,6 +1921,140 @@ fn test_query_concurrency_reduction_verdict_is_independent_of_loop_nesting() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// B-2026-08-15-4 — a loop the cost model cannot SHAPE must not report the
+/// same `cost_gate` as a loop the compiler could not FIND.
+///
+/// Those are opposite facts. A shape decline is a documented v1 limitation
+/// (auto-par shapes `for k in lo..hi`, so `for ch in s.chars()` is expected to
+/// stay sequential); a lookup failure means the analyzer and the query have
+/// drifted apart, which is a compiler bug — B-2026-08-14-33 was one, and its
+/// harm was that `"unknown"` sent people to restructure code that had in fact
+/// fanned out. Reporting both as `"unknown"` left that trap half-open: the
+/// reader could not tell "file a bug" from "expected, ignore".
+///
+/// So this pins two things. `"unknown"` must not appear for any of these
+/// shapes — it is now reserved for the compiler-bug case — and the reasons
+/// must be DISTINCT, since one opaque string for five different causes is the
+/// defect itself, not merely an unhelpful message.
+///
+/// Only the five shapes below reach a decline through this surface. The other
+/// three arms of `ShapeDecline` are defensive: the analyzer emits no report
+/// entry at all for `loop { }` or for a `while` whose condition is not `k <
+/// end`, and `for k in lo..` (no upper bound) does not parse. They are
+/// deliberately not asserted here rather than pinned with a test that would
+/// prove nothing.
+#[test]
+fn test_query_concurrency_shape_decline_is_distinct_from_lookup_failure() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-decline-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // A body heavy enough to clear the cost gates, so `counted` is a real
+    // `fanout`. Without a fanning baseline this test could pass with auto-par
+    // wholly broken — every entry would decline, "distinctly" and uselessly.
+    let src = "fn iter_form(raw: String) -> i64 { \
+                 let mut t = 0i64; for ch in raw.chars() { t = t + (ch as i64); } return t; }\n\
+               fn inclusive(n: i64) -> i64 { \
+                 let mut t = 0i64; for k in 0i64..=n { t = t + k; } return t; }\n\
+               fn tuple_pat(ps: Vec[(i64, i64)]) -> i64 { \
+                 let mut t = 0i64; for (a, b) in ps { t = t + a + b; } return t; }\n\
+               fn while_no_init(n: i64) -> i64 { \
+                 let mut t = 0i64; let mut i = 0i64; t = t + 1i64; \
+                 while i < n { t = t + i; i = i + 1i64; } return t; }\n\
+               fn while_no_incr(n: i64) -> i64 { \
+                 let mut i = 0i64; let mut t = 0i64; \
+                 while i < n { i = i + 2i64; t = t + i; } return t; }\n\
+               fn counted(n: i64) -> i64 { let mut t = 0i64; \
+                 for k in 0i64..n { t = t + k * k * k + (k / 3i64) * (k % 7i64); } return t; }\n\
+               fn main() { println(1); }\n";
+
+    let path = tmp.join("decline.kara");
+    std::fs::write(&path, src).unwrap();
+    let out = karac_bin()
+        .args(["query", "concurrency", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query failed: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let doc: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("query concurrency emitted invalid JSON");
+
+    // (function, cost_gate, reason) over both loop-bearing report arrays.
+    let mut seen: Vec<(String, String, String)> = Vec::new();
+    for f in doc["functions"].as_array().expect("functions array") {
+        let name = f["function"].as_str().unwrap_or("?").to_string();
+        for key in ["loop_reductions", "disjoint_write_loops"] {
+            for l in f[key].as_array().into_iter().flatten() {
+                seen.push((
+                    name.clone(),
+                    l["cost_gate"].as_str().unwrap_or("?").to_string(),
+                    l["reason"].as_str().unwrap_or("?").to_string(),
+                ));
+            }
+        }
+    }
+
+    let get = |n: &str| -> (String, String) {
+        seen.iter()
+            .find(|(f, _, _)| f == n)
+            .map(|(_, g, r)| (g.clone(), r.clone()))
+            .unwrap_or_else(|| panic!("no report entry for {n}; got {seen:?}"))
+    };
+
+    let baseline = get("counted");
+    assert_eq!(
+        baseline.0, "fanout",
+        "the counted loop must itself fan out, or a test that only checks \
+         declines proves nothing; got {baseline:?}",
+    );
+
+    let declining = [
+        "iter_form",
+        "inclusive",
+        "tuple_pat",
+        "while_no_init",
+        "while_no_incr",
+    ];
+    let mut reasons: Vec<String> = Vec::new();
+    for shape in declining {
+        let (gate, reason) = get(shape);
+        assert_eq!(
+            gate, "declined_unshapeable_loop",
+            "{shape}: a shape the cost model declined must say so; \"unknown\" is \
+             reserved for the compiler having lost the loop",
+        );
+        reasons.push(reason);
+    }
+
+    let mut distinct = reasons.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        declining.len(),
+        "every declining shape must explain ITSELF — one string shared across \
+         causes is the defect this pins; got {reasons:?}",
+    );
+
+    // `unknown` now means a compiler bug, so it must not appear at all here.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("\"cost_gate\":\"unknown\""),
+        "no shape here is a lookup failure, so \"unknown\" must not appear; got: {stdout}",
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// The nested-loop carve-out on the memory-bound gate, query side
 /// (B-2026-07-31-10). Same source as `par_codegen`'s
 /// `test_ir_memory_bound_gate_nested_loop_body_fans_out`, which pins that

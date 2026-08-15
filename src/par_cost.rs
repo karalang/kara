@@ -1223,11 +1223,107 @@ pub(crate) fn is_lowered_primitive_op_call(callee: &Expr) -> bool {
 /// future shapes (non-zero `lo`, larger step constants, while_let,
 /// loop with break, etc.) extend by adding match arms here without
 /// changing the lowering body.
+/// Every remaining caller is in `src/codegen/`, which is
+/// `#[cfg(feature = "llvm")]` — the query side moved to
+/// [`extract_loop_shape_explained`] (B-2026-08-15-4), because it has to
+/// EXPLAIN a decline rather than just react to one. So without that feature
+/// this wrapper is genuinely dead, exactly like `LoopShape::loop_var` below;
+/// hence the same narrow cfg'd allow rather than a blanket one.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
 pub(crate) fn extract_loop_shape(
     parent_body: &Block,
     stmt_index: usize,
     expr: &Expr,
 ) -> Option<LoopShape> {
+    extract_loop_shape_explained(parent_body, stmt_index, expr).ok()
+}
+
+/// Why [`extract_loop_shape_explained`] could not recover a counted shape.
+///
+/// Every variant is one `return Err` site in that function, and that is the
+/// point: the reasons live with the rules that produce them rather than in a
+/// parallel classifier that re-reads the AST and drifts. `extract_loop_shape`
+/// discards them (`.ok()`), so the four codegen callers are unaffected — only
+/// the concurrency query, which has to EXPLAIN a decline, asks for them.
+///
+/// B-2026-08-15-4: before this split the query reported every decline as
+/// `cost_gate: "unknown"`, the same string it reports when the loop cannot be
+/// found in the AST at all. Those are opposite facts — a shape decline is a
+/// documented v1 limitation, a lookup failure is a compiler bug — and one
+/// string for both left the trap B-2026-08-14-33 opened half-shut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShapeDecline {
+    /// `for (a, b) in ..` / any destructuring pattern: not a loop counter.
+    PatternNotCounter,
+    /// `for ch in s.chars()` — the iterable is not a range at all. The common
+    /// case, and the one the row was filed on.
+    IterableNotRange,
+    /// `for k in 0..=n` — inclusive ranges have no arm.
+    RangeInclusive,
+    /// `for k in 0..` — no upper bound, so no trip count.
+    RangeUnbounded,
+    /// A `while` whose condition is not `k < end`.
+    WhileConditionNotLessThan,
+    /// A `while` whose body does not end in `k = k + 1` / `k += 1`.
+    WhileBodyNoTerminalIncrement,
+    /// A `while` with no preceding statement to carry the counter init.
+    WhileCounterInitNotFound,
+    /// `loop { }` and every other expression form: no counted shape exists.
+    NotACountedLoop,
+}
+
+impl ShapeDecline {
+    /// Prose for the query's `reason` field. Each names the shape that WAS
+    /// written and what auto-par needs instead, because the reader's next
+    /// question is always "so what do I write?".
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            ShapeDecline::PatternNotCounter => {
+                "loop pattern is a destructuring pattern, not a counter binding; \
+                 auto-par shapes `for k in lo..hi` only"
+            }
+            ShapeDecline::IterableNotRange => {
+                "loop iterable is not a counted range; auto-par shapes \
+                 `for k in lo..hi` only, so iterator forms (`.chars()`, \
+                 `.iter()`, ...) are left sequential"
+            }
+            ShapeDecline::RangeInclusive => {
+                "loop iterable is an inclusive range (`lo..=hi`); auto-par \
+                 shapes exclusive ranges (`lo..hi`) only"
+            }
+            ShapeDecline::RangeUnbounded => {
+                "loop range has no upper bound, so the trip count is unknown \
+                 at compile time"
+            }
+            ShapeDecline::WhileConditionNotLessThan => {
+                "while-loop condition is not `k < end`, so no trip count can \
+                 be recovered"
+            }
+            ShapeDecline::WhileBodyNoTerminalIncrement => {
+                "while-loop body does not end in `k = k + 1`, so the induction \
+                 step is not the canonical one"
+            }
+            ShapeDecline::WhileCounterInitNotFound => {
+                "while-loop is not immediately preceded by its counter's \
+                 `let mut k = lo;` init"
+            }
+            ShapeDecline::NotACountedLoop => {
+                "not a counted loop form (`loop { }` has no trip count)"
+            }
+        }
+    }
+}
+
+/// [`extract_loop_shape`] with the decline reason kept instead of discarded.
+///
+/// This is the real body; the `Option`-returning original is a `.ok()` wrapper
+/// over it. Split that way round on purpose — one set of rules, so a future
+/// shape added here cannot silently keep an explanation that no longer matches.
+pub(crate) fn extract_loop_shape_explained(
+    parent_body: &Block,
+    stmt_index: usize,
+    expr: &Expr,
+) -> Result<LoopShape, ShapeDecline> {
     match &expr.kind {
         ExprKind::For {
             pattern,
@@ -1247,17 +1343,23 @@ pub(crate) fn extract_loop_shape(
             let loop_var = match &pattern.kind {
                 PatternKind::Binding(name) => name.clone(),
                 PatternKind::Wildcard => "<reduce-wildcard-idx>".to_string(),
-                _ => return None,
+                _ => return Err(ShapeDecline::PatternNotCounter),
             };
+            // Split into two arms rather than one `inclusive: false` pattern:
+            // `0..=n` and `s.chars()` decline for different reasons and the
+            // query says which.
             let ExprKind::Range {
                 start,
                 end,
-                inclusive: false,
+                inclusive,
             } = &iterable.kind
             else {
-                return None;
+                return Err(ShapeDecline::IterableNotRange);
             };
-            let end_expr = end.as_ref()?;
+            if *inclusive {
+                return Err(ShapeDecline::RangeInclusive);
+            }
+            let end_expr = end.as_ref().ok_or(ShapeDecline::RangeUnbounded)?;
             // Slice 3b.3: any `lo` expression of the accumulator
             // type is supported by adding it to the worker's chunk-
             // local index. `None` / `Integer(0)` normalize to
@@ -1268,7 +1370,7 @@ pub(crate) fn extract_loop_shape(
                 Some(s) if matches!(s.kind, ExprKind::Integer(0, _)) => None,
                 Some(s) => Some(s.clone()),
             };
-            Some(LoopShape {
+            Ok(LoopShape {
                 loop_var,
                 end_expr: (**end_expr).clone(),
                 body: body.clone(),
@@ -1286,14 +1388,16 @@ pub(crate) fn extract_loop_shape(
             // recognizer (slice 1) already accepted the loop as an
             // induction-step + reduction pair, so we can be opinionated
             // about the shape here.
-            let (loop_var, end_expr) = parse_lt_condition(condition)?;
+            let (loop_var, end_expr) =
+                parse_lt_condition(condition).ok_or(ShapeDecline::WhileConditionNotLessThan)?;
 
             // The body's last stmt must be `loop_var = loop_var + 1`
             // (or `loop_var += 1`, either pre- or post-lowered). Strip
             // it so the worker's loop scaffolding handles the
             // increment via the back-edge — same shape as the for-loop
             // path, no need to re-think the worker fn synth.
-            let stripped_body = strip_terminal_step_one_increment(body, &loop_var)?;
+            let stripped_body = strip_terminal_step_one_increment(body, &loop_var)
+                .ok_or(ShapeDecline::WhileBodyNoTerminalIncrement)?;
 
             // The immediately preceding stmt must be `let mut k: T =
             // <anything>;`. Slices 3b.9 + 3b.10 normalize the init:
@@ -1310,9 +1414,10 @@ pub(crate) fn extract_loop_shape(
             // Adjacent let + while (no intervening stmts) means
             // nothing modifies k between the init and the dispatch.
             if stmt_index == 0 {
-                return None;
+                return Err(ShapeDecline::WhileCounterInitNotFound);
             }
-            let init_expr = preceding_stmt_init(parent_body, stmt_index, &loop_var)?;
+            let init_expr = preceding_stmt_init(parent_body, stmt_index, &loop_var)
+                .ok_or(ShapeDecline::WhileCounterInitNotFound)?;
             let lo_expr = match &init_expr.kind {
                 ExprKind::Integer(0, _) => None,
                 ExprKind::Integer(_, _) => Some(init_expr),
@@ -1322,14 +1427,14 @@ pub(crate) fn extract_loop_shape(
                 }),
             };
 
-            Some(LoopShape {
+            Ok(LoopShape {
                 loop_var,
                 end_expr,
                 body: stripped_body,
                 lo_expr,
             })
         }
-        _ => None,
+        _ => Err(ShapeDecline::NotACountedLoop),
     }
 }
 
