@@ -1334,6 +1334,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// identifier path's behaviour and the safe direction: a missed drop is a
     /// leak the LSan corpus catches, an extra one is a double free in a user's
     /// program.
+    ///
+    /// B-2026-08-15-6 (Vec-element half) adds the one INDEX shape that produces
+    /// rather than reads. The list above rules out `v[i]` as a place expression,
+    /// and for a bound `v` that is exactly right — but an index into an inline
+    /// `Vec` TEMPORARY (`mkrows()[1]`) is lowered by
+    /// `compile_inline_temp_vec_index_ex`, which deep-clones the element (it
+    /// drains the temp buffer straight after the read, so a borrowed element
+    /// would dangle) and de-registers the synth local. The clone that reaches
+    /// this consumer therefore has no container behind it and no cleanup of its
+    /// own — the same producer the argument gate has admitted since
+    /// B-2026-06-14-32. `expr_is_inline_temp_vec_heap_index` resolves through
+    /// `inline_index_recv_vec_te`, which is the dispatch the index lowering
+    /// itself uses, so this cannot fire on a shape lowered as a place read.
     pub(super) fn print_vec_operand_is_owned_temp(&self, expr: &Expr) -> bool {
         matches!(
             &expr.kind,
@@ -1341,6 +1354,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | ExprKind::PrefixCollectionLiteral { .. }
                 | ExprKind::RepeatLiteral { .. }
         ) || self.expr_yields_fresh_owned_temp(expr)
+            || self.expr_is_inline_temp_vec_heap_index(expr)
     }
 
     pub(super) fn compile_print(

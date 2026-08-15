@@ -49505,4 +49505,79 @@ fn main() {
             "asan_weak_targeted_shared_struct_string_field_reassign_releases_its_buffer",
         );
     }
+
+    /// B-2026-08-15-6 — the deep-cloned heap element of an inline-temp-`Vec`
+    /// index leaks when the index is an f-string INTERPOLATION operand, while
+    /// the identical expression as a direct `println` argument is clean.
+    ///
+    /// `compile_inline_temp_vec_index_ex` must deep-clone a non-Copy element (it
+    /// drains the temp buffer right after the read, so a borrowed element would
+    /// dangle) and then de-registers the synth local, so the clone arrives at its
+    /// consumer with no binding and no cleanup of its own. Every consuming
+    /// position therefore has to name it; the argument gate had since
+    /// B-2026-06-14-32, the f-string part renderer had not.
+    ///
+    /// Both element kinds are pinned because they leak through DIFFERENT arms of
+    /// `fstr_render_part` and needed separate fixes. A `String` element reaches
+    /// the fresh-owned-temp arm; a `Vec` element is intercepted earlier by
+    /// `try_compile_vec_display`, whose own producer list
+    /// (`print_vec_operand_is_owned_temp`) ruled out every `Index` as a place
+    /// read. That second half is also the row's one correction: for a `Vec`
+    /// element the DIRECT print argument leaks too, so it is not an f-string bug
+    /// there — hence the direct spellings below, which would have gone on passing
+    /// had only the f-string been fixed.
+    ///
+    /// The last four lines are the double-free direction, and they are the reason
+    /// the producer list is a list rather than "not an identifier": `b.xs`,
+    /// `grid[1]` and `names[1]` hand back a container's own `{ptr,len,cap}`, and
+    /// tracking one of those was exactly B-2026-08-14-30's hard double free.
+    #[test]
+    fn asan_fstring_inline_temp_vec_index_element_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct B { xs: Vec[i64] }
+fn names() -> Vec[String] {
+    let v: Vec[String] = ["alphaalphaalphaalpha", "betabetabetabetabeta"];
+    return v;
+}
+fn mkrows() -> Vec[Vec[i64]] {
+    let v: Vec[Vec[i64]] = [[1, 2, 3, 4], [5, 6, 7, 8]];
+    return v;
+}
+fn main() {
+    let b = B { xs: [7, 8, 9] };
+    let grid: Vec[Vec[i64]] = [[1, 2], [3, 4]];
+    let held: Vec[String] = ["gammagammagamma", "deltadeltadelta"];
+    let mut k = 0;
+    while k < 20 {
+        println(f"{names()[1]}");
+        println(names()[1]);
+        println(f"{mkrows()[1]}");
+        println(mkrows()[1]);
+        println(f"{b.xs}");
+        println(f"{grid[1]}");
+        println(f"{held[1]}");
+        println(held[1]);
+        k = k + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "betabetabetabetabeta",
+                "betabetabetabetabeta",
+                "[5, 6, 7, 8]",
+                "[5, 6, 7, 8]",
+                "[7, 8, 9]",
+                "[3, 4]",
+                "deltadeltadelta",
+                "deltadeltadelta",
+            ]
+            .repeat(20)
+            .into_iter()
+            .chain(std::iter::once("done"))
+            .collect::<Vec<_>>(),
+            "asan_fstring_inline_temp_vec_index_element_no_leak",
+        );
+    }
 }

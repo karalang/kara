@@ -96047,6 +96047,54 @@ fn main() {
             Some("litabc\nlitabcT\nlitabcT T\nlitabcT Tv3\nlitabcT Tv3P\nabab\naba\nXP\nrR\n0\n".to_string())
         );
     }
+
+    /// B-2026-08-15-6 — every consumer of an inline-temp-`Vec` index reads the
+    /// same element, whichever spelling it is written in.
+    ///
+    /// The bug was a leak, so this is a regression guard rather than the
+    /// detector (it passes on the parent; `asan_fstring_inline_temp_vec_index_-
+    /// element_no_leak` is what fails there). What it pins is the direction the
+    /// fix could go wrong: both halves now hand a clone to a scope-exit cleanup,
+    /// and freeing a buffer the reader still needs — or one a CONTAINER owns —
+    /// shows up here as a wrong element rather than as a leak. The `b.xs` /
+    /// `grid[1]` / `held[1]` lines are place reads that must keep printing their
+    /// container's live contents after the same container has been read through
+    /// a temporary.
+    #[test]
+    fn test_e2e_inline_temp_vec_index_spellings_agree() {
+        assert_eq!(
+            run_program(
+                "struct B { xs: Vec[i64] }\n\
+                 fn names() -> Vec[String] { let v: Vec[String] = [\"alpha\", \"beta\", \"gamma\"]; return v; }\n\
+                 fn mkrows() -> Vec[Vec[i64]] { let v: Vec[Vec[i64]] = [[1, 2, 3], [4, 5, 6]]; return v; }\n\
+                 fn main() {\n\
+                     let b = B { xs: [7, 8, 9] };\n\
+                     let grid: Vec[Vec[i64]] = [[1, 2], [3, 4]];\n\
+                     let held: Vec[String] = [\"one\", \"two\"];\n\
+                     println(f\"{names()[1]}\");\n\
+                     println(names()[1]);\n\
+                     println(f\"{names()[0]}-{names()[2]}\");\n\
+                     println(f\"{mkrows()[1]}\");\n\
+                     println(mkrows()[1]);\n\
+                     println(f\"{b.xs}\");\n\
+                     println(b.xs);\n\
+                     println(f\"{grid[1]}\");\n\
+                     println(grid[1]);\n\
+                     println(f\"{held[1]}\");\n\
+                     println(held[1]);\n\
+                     let r = names();\n\
+                     println(f\"{r[2]}\");\n\
+                     println(f\"{b.xs}\");\n\
+                     println(f\"{held[0]}\");\n\
+                 }\n"
+            ),
+            Some(
+                "beta\nbeta\nalpha-gamma\n[4, 5, 6]\n[4, 5, 6]\n[7, 8, 9]\n[7, 8, 9]\n\
+                 [3, 4]\n[3, 4]\ntwo\ntwo\ngamma\n[7, 8, 9]\none\n"
+                    .to_string()
+            )
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

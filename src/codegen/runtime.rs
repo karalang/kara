@@ -10909,19 +10909,34 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.emit_codepoint_to_utf8(val.into_int_value()));
         }
         // A String-typed part that is a FRESH owned heap temp — a fn/method
-        // call returning `String` (`f"{obj.describe()}"`) or a `String[a..b]`
-        // slice — owns its buffer, which the f-string append COPIES into the
-        // accumulator, leaving the temp's buffer unreferenced. Without
-        // scope-tracking it leaks once per interpolation and scales with the
-        // count (`f"{a()} {b()}"` leaks twice) — B-2026-07-15-12. Store it in a
-        // tracked alloca (exactly like the user-Display / enum / collection
+        // call returning `String` (`f"{obj.describe()}"`), a `String[a..b]`
+        // slice, or the deep-cloned heap element of an inline-temp-Vec index
+        // (`f"{names()[1]}"`) — owns its buffer, which the f-string append
+        // COPIES into the accumulator, leaving the temp's buffer unreferenced.
+        // Without scope-tracking it leaks once per interpolation and scales with
+        // the count (`f"{a()} {b()}"` leaks twice) — B-2026-07-15-12. Store it in
+        // a tracked alloca (exactly like the user-Display / enum / collection
         // arms above) so the buffer is freed once at scope exit. A PLACE-expr
         // String (identifier / field) is owned elsewhere and must NOT be
         // tracked here — its owner frees it, and a second free double-frees —
         // so this gates strictly on the fresh-owned-temp predicates.
+        //
+        // B-2026-08-15-6: the index shape is the same fresh-owned temp the
+        // ARGUMENT gate (`free_fresh_owned_str_arg`) has admitted since
+        // B-2026-06-14-32, which is why `println(names()[1])` was always clean
+        // while the f-string spelling of the identical expression leaked one
+        // `karac_string_clone` per evaluation. `compile_inline_temp_vec_index_ex`
+        // must deep-clone (it drains the temp buffer right after the read, so a
+        // borrowed element would dangle) and de-registers the synth local, so the
+        // clone reaches a consumer with no binding and no cleanup of its own —
+        // every consuming position has to name it. Binding the receiver first
+        // (`let r = names(); f"{r[1]}"`) mints no clone at all and was clean
+        // before and after.
         if val.is_struct_value()
             && self.llvm_ty_is_vec_struct(val.into_struct_value().get_type().into())
-            && (self.expr_yields_fresh_owned_temp(e) || self.expr_is_fresh_owned_string_slice(e))
+            && (self.expr_yields_fresh_owned_temp(e)
+                || self.expr_is_fresh_owned_string_slice(e)
+                || self.expr_is_inline_temp_vec_heap_index(e))
         {
             let sv = val.into_struct_value();
             let acc = self.create_entry_alloca(
