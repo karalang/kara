@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 112 | 0 |
 | missing-feature | 96 | 0 |
 | perf | 69 | 0 |
-| false-positive | 65 | 1 |
+| false-positive | 66 | 1 |
 | diagnostics | 60 | 0 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 890 | 0 |
 | typecheck | 174 | 0 |
 | interp | 145 | 0 |
-| ownership | 51 | 1 |
+| ownership | 52 | 1 |
 | autopar | 46 | 0 |
 | other | 42 | 0 |
 | cli | 30 | 0 |
@@ -124,13 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1233 surfaced · 1 open · 1220 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1234 surfaced · 1 open · 1221 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-15-27 | 2026-08-15 | ownership | low | CALLING AN `Fn(ref T)` CLOSURE TWICE WITH THE SAME ARGUMENT warns "value moved here, used again here" — the closure's parameter is a BORROW, so the call cannot move it, and the program compiles and runs correctly on every backend. A direct call to `fn f(s: ref String)` does not warn. | the ownership checker's treatment of a CLOSURE call's arguments: it appears to ignore the closure type's declared parameter mode and treat every argument as an owned pass. |
+| B-2026-08-15-29 | 2026-08-15 | ownership | low | The B-2026-08-15-27 false positive SURVIVES when the closure arrives as a PARAMETER rather than a local — `fn run(f: Fn(ref String) -> bool)` calling `f(q)` twice still warns 'value q moved here, used again here'. 8242fae fixed the local and returned-closure forms; a function-typed PARAMETER has no entry in `param_types`, so its declared modes reach neither name-keyed table. | `param_types_for_function` (src/use_classifier.rs) records a param only when `tc.expr_types` has an entry at the param's span; a function-typed param appears to have none, so `fn_typed_callee_modes` finds nothing and the `Call` arm's consume default stands. |
 
 ### Wontfix (2)
 
@@ -143,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1233 surfaced
 
 </details>
 
-### Fixed (1220)
+### Fixed (1221)
 
-<details><summary>1220 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1221 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9265,6 +9265,69 @@ fires and prints the offending text.
 
 Gates: full `--features llvm` sweep of all 98 targets, 12550 tests, 0 failures;
 clippy `--all --all-targets` and fmt clean. |
+| B-2026-08-15-27 | ownership | low | CALLING AN `Fn(ref T)` CLOSURE TWICE WITH THE SAME ARGUMENT warns "value moved here, used again here" — the closure's parameter is a BORROW, so the c… | FIXED in 8242fae. The `Call` arm of `use_classifier.rs` looks parameter modes up
+in `callee_param_modes`, a table keyed by declared-function NAME. A closure
+binding is a value, never has an entry, and every argument therefore fell to the
+consume default. The comment there justifies that default on the grounds that a
+function-typed callee's modes are "unknowable in principle" — true of what a
+closure BODY would infer, false of what its TYPE declares. `Fn(ref String) ->
+bool` promises the parameter is a borrow. Read the modes off the type when the
+name-keyed table misses; a real entry still wins, so no declared function's modes
+change.
+
+CONFIRMED THE ROW'S DIAGNOSIS EXACTLY — "it appears to treat a CLOSURE call's
+argument as an owned pass regardless of the closure type's declared parameter
+mode" is what the code does, and the fallback comment says so in as many words.
+
+PER POSITION, NOT PER CALLEE. The sharpest control is one closure typed
+`Fn(ref String, String)`: reusing the borrowed argument is accepted, reusing the
+owned one is still reported. A fix keyed off "the callee is a closure" rather
+than off the parameter position gets one of those wrong whichever way it decides,
+and the accept tests alone would not catch it.
+
+THE HELP TEXT WAS WRONG TOO, which the row did not record: the warning advised
+"declare the callee parameter `ref` if it only reads" on a callee whose parameter
+was ALREADY `ref`. That is the B-2026-08-11-8 shape a second time (a printed
+remedy that cannot be applied), and it resolves with the false positive rather
+than needing its own change — the diagnostic no longer fires here at all.
+
+NAME-KEYED LOOKUP ONLY, deliberately, and this is the part worth carrying
+forward. `classify_identifier`'s chain ends in a span-keyed `expr_types` lookup;
+the mode lookup must NOT. The parser gives a postfix expression its receiver's
+span, so `expr_types[callee.span]` for the callee of `p(q)` is the CALL's type,
+not `p`'s — measured, it answers `Bool` for `p: Fn(ref String) -> bool`. Reading
+modes from another expression's signature errs in the direction that SUPPRESSES a
+real move warning, which is silent. It is inert today (the one shape that reaches
+it answers a non-function type, so the helper declines either way), so this is
+prevention rather than a bug fixed; a control test pins the outer move of
+`Fn(String) -> Fn(ref String) -> bool`, the shape where the wrong answer would be
+function-typed.
+
+SCOPE MEASURED. Warned before, clean after: a returned `Fn(ref String)`, an
+annotated local `Fn(ref String)`, `Fn(ref Vec[i64])`, and the borrowed position
+of `Fn(ref String, String)`. Still warns, correctly: `Fn(String)` (returned or
+annotated), the owned position of the mixed closure, a direct `fn f(s: String)`,
+and the outer call of a closure-returning-closure. Unchanged: `Fn(mut ref T)`,
+which was already accepted — the call-site `mut` marker is read ahead of any mode
+lookup — and a direct `fn f(s: ref String)`, which was never affected. Scalars
+were always clean (Copy).
+
+REMAINDER, filed as its own row rather than left in this one: the same false
+positive through a closure-typed PARAMETER (`fn run(f: Fn(ref String) -> bool)`)
+rather than a local still warns. Its type reaches neither name-keyed table —
+`param_types` has no entry for a function-typed parameter — and populating that
+table changes what `classify_identifier` answers for closure-typed identifiers
+generally, which is a wider and riskier change than this row.
+
+TESTS (`tests/ownership.rs`): four accept cases and three controls. The controls
+are the load-bearing half — every accept test would also pass against a checker
+that had stopped classifying closure arguments entirely. Verified: the four
+accept tests are RED at baseline and the three controls GREEN at both, so nothing
+was pinned that the fix did not change and nothing changed that should not have.
+
+Gates: full `--features llvm` sweep of all 98 targets, 12558 tests, 0 failures;
+clippy `--all --all-targets` and fmt clean; the row's repro byte-identical under
+`run --interp`, `build`, and default auto-par `build`. |
 | B-2026-08-15-28 | codegen | high | A `ref`-DECLARED CLOSURE PARAM OF A HANDLE-BACKED BUILTIN IS DOUBLE-DEREFERENCED — `\|m\| m.len()` over a two-entry `Map` printed 529 under `karac buil… | FIXED by f1474ffe, in the closure param registration (src/codegen/closures.rs),
 alongside B-2026-08-15-25 — not as a convenience, but because -25 could not be
 shipped without it. Correcting -25's return type turned the `Map`/`Set` predicate
