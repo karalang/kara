@@ -38215,3 +38215,131 @@ fn method_suggestion_tie_is_deterministic_across_runs() {
         errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
     );
 }
+
+// B-2026-08-15-11 — EXHAUSTIVENESS ON A BORROWED SCRUTINEE.
+//
+// `check_exhaustiveness` used to be handed the raw `scrut_ty` while every arm
+// above it was checked against `dispatch_ty`, the same type with one layer of
+// `ref` / `mut ref` peeled off. Since `is_handled_scrutinee` denylists
+// `Type::Ref` / `Type::MutRef`, that one-word difference turned the gate OFF
+// for every match on a borrowed scrutinee: `check_match_exhaustive` returned
+// `Skipped` and a missing arm was not a compile error at all.
+//
+// That is the shape of essentially every matcher helper — `fn describe(e: ref
+// Error)`, `fn name(m: ref Method)` — so the hole sat under the most idiomatic
+// way to write one, and the three backends disagreed about what a missing arm
+// does: segfault under AOT, infinite loop under the JIT, and the interpreter's
+// own `internal error … (the typechecker should have rejected this)`.
+//
+// The table below is the scope, and the five ACCEPTING rows matter as much as
+// the rejecting ones: the fix peels the scrutinee rather than widening the
+// denylist, so the risk it carries is over-rejection, not under-rejection.
+
+/// The bug itself, and its `mut ref` twin — which was equally dark, since the
+/// denylist named both.
+#[test]
+fn ref_param_scrutinee_is_checked_for_exhaustiveness() {
+    for decl in ["ref M", "mut ref M"] {
+        let errors = typecheck_errors(&format!(
+            "enum M {{ A, B, C }}\n\
+             fn f(m: {decl}) -> i64 {{\n\
+                 match m {{\n\
+                     A => 1,\n\
+                 }}\n\
+             }}"
+        ));
+        let err = errors
+            .iter()
+            .find(|e| e.kind == TypeErrorKind::NonExhaustiveMatch)
+            .unwrap_or_else(|| {
+                panic!("`{decl}` scrutinee must be checked for exhaustiveness, got: {errors:?}")
+            });
+        assert!(
+            err.message.contains('B') || err.message.contains('C'),
+            "the witness must name an uncovered variant, got: {}",
+            err.message
+        );
+    }
+}
+
+/// A ZERO-ARM match over a populated enum. Kept separate because it exercises
+/// a different branch of the same gate — an empty match cannot be an
+/// arm-counting error, so its acceptance was the evidence that the gate was
+/// not running at all rather than miscomputing coverage.
+#[test]
+fn zero_arm_match_on_ref_param_is_rejected() {
+    let errors = typecheck_errors(
+        "enum M { A, B, C }\n\
+         fn f(m: ref M) -> i64 {\n\
+             match m {\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+        "an empty match over a three-variant enum must be rejected, got: {errors:?}"
+    );
+}
+
+/// The accepting half of the table. Peeling means a borrowed scrutinee is now
+/// held to exactly the standard its owned twin already was — no stricter. Each
+/// of these is total, and each reaches the gate through a different arm of it:
+/// full variant coverage, a wildcard, payload constructors, the slice
+/// length-coverage special case, and an open-domain scrutinee with a wildcard.
+#[test]
+fn total_matches_on_ref_scrutinees_stay_accepted() {
+    for (label, src) in [
+        (
+            "every variant covered",
+            "enum M { A, B, C }\n\
+             fn f(m: ref M) -> i64 { match m { A => 1, B => 2, C => 3 } }",
+        ),
+        (
+            "wildcard arm",
+            "enum M { A, B, C }\n\
+             fn f(m: ref M) -> i64 { match m { A => 1, _ => 0 } }",
+        ),
+        (
+            "payload variants, all covered",
+            "enum E { Good(i64), Bad(String) }\n\
+             fn f(e: ref E) -> i64 { match e { Good(n) => n, Bad(s) => s.len() } }",
+        ),
+        (
+            "slice patterns tiling every length",
+            "fn f(v: ref Vec[i64]) -> i64 { match v { [] => 0, [x, ..] => x } }",
+        ),
+        (
+            "open-domain scrutinee with a wildcard",
+            "fn f(s: ref String) -> i64 { match s { \"a\" => 1, _ => 0 } }",
+        ),
+    ] {
+        // `typecheck_ok`, not `typecheck_errors` — the latter asserts errors
+        // EXIST, which is the opposite of what this half of the table says.
+        let result = typecheck_ok(src);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+            "{label}: a total match on a `ref` scrutinee must stay accepted, got: {:?}",
+            result.errors
+        );
+    }
+}
+
+/// The other direction on an open-domain borrowed scrutinee: dropping the
+/// wildcard must now be an error, exactly as it already was for an owned
+/// `String`. This is the row most likely to reject code that used to compile,
+/// so it is pinned deliberately rather than discovered later.
+#[test]
+fn ref_string_scrutinee_without_a_wildcard_is_rejected() {
+    let errors = typecheck_errors("fn f(s: ref String) -> i64 { match s { \"a\" => 1 } }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+        "an open-domain `ref` scrutinee still needs a wildcard, got: {errors:?}"
+    );
+}

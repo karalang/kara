@@ -235,8 +235,11 @@ impl<'a> super::TypeChecker<'a> {
         // scrutinee isn't the enum the arms destructure, so a follow-on
         // "non-exhaustive match" would be redundant and misleading
         // (B-2026-07-17-6).
+        //
+        // `dispatch_ty`, NOT `scrut_ty` — the same peeled type the arms above
+        // were checked against (B-2026-08-15-11). See `infer_match`'s twin.
         if !scrutinee_mismatch {
-            self.check_exhaustiveness(&scrut_ty, arms, span.clone());
+            self.check_exhaustiveness(&dispatch_ty, arms, span.clone());
         }
         let result_ty = arm_types
             .iter()
@@ -283,8 +286,31 @@ impl<'a> super::TypeChecker<'a> {
         // pattern already mismatched the scrutinee type, which poisons the
         // match and would make a "non-exhaustive" tail redundant
         // (B-2026-07-17-6).
+        //
+        // `dispatch_ty`, NOT `scrut_ty` (B-2026-08-15-11). The two differ by
+        // exactly one layer of `ref` / `mut ref`, and handing the UNPEELED type
+        // to the gate turned exhaustiveness OFF for every `match` on a borrowed
+        // scrutinee: `is_handled_scrutinee` denylists `Type::Ref` / `MutRef`,
+        // so `check_match_exhaustive` returned `Skipped` and a missing arm was
+        // not a compile error. `fn f(m: ref M) -> i64 { match m { A => 1 } }`
+        // over a three-variant enum passed `karac check` and then SEGFAULTED
+        // under AOT, spun forever under the JIT, and tripped the interpreter's
+        // own "the typechecker should have rejected this" assert — three
+        // different wrong answers to a question the typechecker owns. An EMPTY
+        // `match m { }` passed too, which is what showed the gate was not
+        // running at all rather than miscounting arms.
+        //
+        // Peeling is not a relaxation of the check, it is the whole check:
+        // borrowing a value does not change which variants it can hold, and
+        // every arm above was already checked against `dispatch_ty`. Passing
+        // the same type here is what makes the two halves agree. Everything
+        // downstream of the gate — the unreachable-arm lint, the
+        // `#[non_exhaustive]` cross-package wildcard rule, the witness wording
+        // and its machine-applicable fix-it — keys on the scrutinee type too,
+        // so all of them were equally dark on a borrowed scrutinee and all of
+        // them come back with this.
         if !scrutinee_mismatch {
-            self.check_exhaustiveness(&scrut_ty, arms, span.clone());
+            self.check_exhaustiveness(&dispatch_ty, arms, span.clone());
         }
 
         // Fold the (non-Never, non-Error) arm types into their least-upper-
