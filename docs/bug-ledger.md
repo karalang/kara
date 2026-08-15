@@ -98,8 +98,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 122 | 0 |
 | codegen-gap | 112 | 0 |
 | missing-feature | 96 | 0 |
-| perf | 69 | 0 |
-| false-positive | 66 | 1 |
+| perf | 71 | 2 |
+| false-positive | 67 | 1 |
 | diagnostics | 60 | 0 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 890 | 0 |
+| codegen | 892 | 2 |
 | typecheck | 174 | 0 |
 | interp | 145 | 0 |
-| ownership | 52 | 1 |
+| ownership | 53 | 1 |
 | autopar | 46 | 0 |
 | other | 42 | 0 |
 | cli | 30 | 0 |
@@ -124,13 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1234 surfaced · 1 open · 1221 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1237 surfaced · 3 open · 1222 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-15-29 | 2026-08-15 | ownership | low | The B-2026-08-15-27 false positive SURVIVES when the closure arrives as a PARAMETER rather than a local — `fn run(f: Fn(ref String) -> bool)` calling `f(q)` twice still warns 'value q moved here, used again here'. 8242fae fixed the local and returned-closure forms; a function-typed PARAMETER has no entry in `param_types`, so its declared modes reach neither name-keyed table. | `param_types_for_function` (src/use_classifier.rs) records a param only when `tc.expr_types` has an entry at the param's span; a function-typed param appears to have none, so `fn_typed_callee_modes` finds nothing and the `Call` arm's consume default stands. |
+| B-2026-08-15-30 | 2026-08-15 | codegen | medium | The shuffled-uniform `sort_by` residual closed as `wontfix` in B-2026-08-11-28 at ~1.6x Rust is MATERIALLY LARGER on the canonical Apple-silicon host: 3.70x on kata #252 and 2.04x on kata #253, measured on M5 Pro with 50a50e8 IN the compiler. The disposition was reached entirely on a shared x86 cloud container, and `wontfix` was argued from a residual roughly half this size. Not a regression of 50a50e8 -- that fix is present and the ordered-input win it bought is not in question -- but the remaining gap is bigger than the number the wontfix was decided against, so the disposition deserves re-deciding on this host rather than inheriting. | mono sort_by lowering (natural-run merge sort, 50a50e8) -- shuffled-uniform residual, on arm64 |
+| B-2026-08-15-31 | 2026-08-15 | codegen | medium | The C PARITY that B-2026-08-05-21 bought on kata #246 is an x86-64 result and does NOT hold on arm64: on the M5 kara is 1.57x behind `clang -O3` (kara min ~14.2 ms vs C ~9.0 ms, stable across three independent 60-run rebuilds). The B-2026-08-05-21 fix IS firing here -- the punch loop carries ZERO overflow traps (`b.vs`/`b.vc` absent from main) and effectively no bounds checks (one `b.hs`, one `b.hi`) -- so this is a DIFFERENT mechanism from the x86 one that row closed, not a regression of it. Mechanism not pinned. | arm64 byte-scan punch loop -- kata #246 flat-corpus two-pointer |
+| B-2026-08-15-32 | 2026-08-15 | ownership | low | An `OnceFn()` PARAMETER called twice is NOT reported — `fn run(g: OnceFn()) { g(); g(); }` passes clean, while the identical local (`let g = || apply(cfg); g(); g();`) correctly reports a use-after-move. A once-callable closure invoked twice is exactly what `OnceFn` exists to forbid, so this is a missing report rather than a spurious one — the mirror image of the -27/-29 family. | `once_callable_closures` (src/use_classifier.rs / OwnershipChecker) is populated from `let` bindings whose initializer is a closure whose body consumes a capture; a PARAMETER declared `OnceFn(...)` never enters it, and nothing else consults the declared once-ness at a call site. |
 
 ### Wontfix (2)
 
@@ -143,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1234 surfaced
 
 </details>
 
-### Fixed (1221)
+### Fixed (1222)
 
-<details><summary>1221 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1222 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9367,6 +9369,78 @@ and the one spelling that compiled returned a plausible integer nobody checked.
 
 GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
 suite (14868 passed, 0 failed), and the asan -O0 leg (1108/0). |
+| B-2026-08-15-29 | ownership | low | The B-2026-08-15-27 false positive SURVIVES when the closure arrives as a PARAMETER rather than a local — `fn run(f: Fn(ref String) -> bool)` calling… | FIXED in 55ae608. `param_types_for_function` now recovers a FUNCTION-TYPED
+param's declared modes from its ANNOTATION when the span lookup answers nothing.
+
+THE ROW'S DIAGNOSIS WAS RIGHT BUT UNDERSTATED THE SCOPE. It says "a
+function-typed param appears to have none [no `expr_types` entry]". Measured: NO
+param of ANY type has one. Instrumented `param_types_for_function` on
+`fn run(f: Fn(ref String) -> bool, tag: String, n: i64)` and every one of the
+three answered `None`, at both the param span and the pattern span. So that map
+arrives holding only `self`, for every function in the program. Harmless for an
+ordinary param — `classify_identifier` falls through to a span-keyed lookup and a
+plain identifier use has its own span, so the answer is right — which is why this
+has never been visible before something needed the map for modes rather than for
+Copy-ness.
+
+WRONG CALL SITE FIRST, worth recording so the next person skips it. The obvious
+patch is at `ownership.rs`'s `classify_function_body_with` call, where a RELIABLE
+`param_types` (built from `lower_type_for_ownership(&param.ty)`) is already in
+scope and goes only to the legacy state machine. Seeding the classifier map there
+changed nothing: the UAM warning is emitted from `populate_predicate_outputs` →
+`run_predicate_for_function_with`, which runs EARLIER (ownership.rs:2107 vs 2153)
+and builds its own map via the same shared helper. Debug output made it obvious —
+two `None` lookups from the predicate path, then one `Some` from the patched
+path, with the warning already emitted. Fixing the shared builder covers all
+three callers (`ownership.rs` and two in `rc_predicate.rs`).
+
+A SECOND DEAD END, also recorded: `lower_type_for_ownership` has no `FnType` arm
+either, so a `Fn(...)` param lowers to `Named { name: "unknown" }` there. Adding
+one makes the legacy state machine treat function-typed params as Copy rather
+than non-Copy — a real behaviour change that this bug does not need, so it was
+reverted rather than shipped. Anyone touching that lowering should know the arm
+is missing and why it was left alone.
+
+FUNCTION TYPES ONLY, which is what makes the change safe. The row's own concern —
+"populating that table changes what `classify_identifier` answers for
+closure-typed identifiers generally" — resolves cleanly: `is_copy_type` already
+answers TRUE for `Type::Function` (a capture-free code pointer, B-2026-07-02-24),
+which is the same Read the span fallback produces today, so no identifier's
+classification moves. Filling in EVERY param would not be safe: it would flip
+`mut ref` params from Read to Consume, since `MutRef` is deliberately non-Copy.
+Only the modes are recovered — each parameter lowers to a bare `Ref` / `MutRef` /
+`Error` marker, the same mode-only idiom the function already uses for `ref self`
+— because that is all the mode lookup reads and inventing pointees would suggest
+a fidelity the value does not have.
+
+A CLAIM I WROTE AND THEN RETRACTED, since the ledger should carry the correction
+rather than the first draft. The first version of this change asserted in a code
+comment that mapping `is_once` faithfully "keeps `f(); f();` on a once-callable
+closure reported as a reuse". Measured, that is false as stated: the report comes
+from `once_callable_closures`, populated at `let` bindings, and is identical
+before and after (1 warning both ways — now pinned by a control test). The
+`is_once` mapping matters only in that it keeps the two types from being
+conflated. The comment was corrected before commit.
+
+SCOPE MEASURED. Warned before, clean after: `fn run(f: Fn(ref String) -> bool)`
+and the borrowed position of a `Fn(ref String, String)` parameter. Still warns,
+correctly: `Fn(String)` as a parameter, the owned position of the mixed
+parameter, and every local form B-2026-08-15-27 already covered. Run/build/auto-par
+output identical on the fixed shapes.
+
+REMAINDER, filed as its own row: an `OnceFn()` PARAMETER called twice
+(`fn run(g: OnceFn()) { g(); g(); }`) is reported by NEITHER mechanism, before
+this change or after. The local twin IS reported. Deliberately not asserted in
+either direction by the control test here, since it is neither this fix's doing
+nor its business.
+
+TESTS (`tests/ownership.rs`): two accept cases and two controls, the controls
+again load-bearing — both accept tests would pass against a checker that had
+stopped classifying closure arguments entirely. Verified RED at baseline for the
+two accepts and GREEN at both for the two controls.
+
+Gates: full `--features llvm` sweep of all 98 targets, 12563 tests, 0 failures;
+clippy `--all --all-targets` and fmt clean. |
 
 </details>
 
