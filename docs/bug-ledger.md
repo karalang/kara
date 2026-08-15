@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 68 | 0 |
 | false-positive | 63 | 0 |
 | diagnostics | 57 | 0 |
-| soundness | 46 | 1 |
+| soundness | 46 | 0 |
 | crash | 46 | 0 |
 | other | 30 | 0 |
 | use-after-free | 20 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 880 | 2 |
-| typecheck | 172 | 1 |
+| typecheck | 172 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
 | autopar | 44 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1218 surfaced · 3 open · 1203 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1218 surfaced · 2 open · 1204 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-15-11 | 2026-08-15 | typecheck | high | EXHAUSTIVENESS IS NOT CHECKED when the `match` scrutinee is a `ref` PARAMETER -- `fn f(m: ref M) -> i64 { match m { A => 1 } }` over a three-variant enum passes `karac check`, and hitting the missing arm SEGFAULTS under AOT, INFINITE-LOOPS under the JIT, and raises an `internal error ... (the typechecker should have rejected this)` under the interpreter. Every other scrutinee form -- owned param, local binding, `Option`, `Result` -- is correctly rejected. | the exhaustiveness pass's scrutinee-type resolution: it recognizes an owned/local enum and misses `ref <Enum>` parameters. `match m { }` -- ZERO arms over a populated enum -- also passes, so the gate is not firing at all rather than mis-counting arms. |
 | B-2026-08-15-12 | 2026-08-15 | codegen | medium | `codegen failed: Undefined variable 'm'` on a program `karac check` accepts and the interpreter runs correctly: an enum-variant pattern binds a `shared enum` payload and passes it to a `ref`-taking helper. NOT reduced below 32 lines -- every attempt to shrink it further made the failure disappear, and the shapes that look responsible in isolation all build. | codegen's variable-scope map for a payload bound by an enum-variant pattern -- `Undefined variable 'm'` is emitted for the binding in `Simple(m, _path) => Outcome.Ok(method_name(m))`. |
 | B-2026-08-15-13 | 2026-08-15 | codegen | medium | A `Map`/`Set` LOCAL IN A FUNCTION WITH A `Vec[Struct]` PARAM makes `let e = entries[0]; e.field` FAIL TO BUILD — `codegen: cannot resolve field '...' on this receiver (its type was not recorded for codegen)`. No move, no reuse, no loop, and the Map is never used. Drop the Map local, or swap it for a Vec local, or make the Vec a LOCAL instead of a param, and the same program builds. `karac check` is clean and the interpreter runs it, so this is a run-vs-build divergence that only the compiled backends see. | the let-binding type record for a Vec-element struct (`var_type_names`), and whatever a `Map`/`Set` local changes about the path that writes it. The receiver reaches `compile_field_access` with no entry and takes the loud B-2026-07-20-9 arm, which is behaving correctly — the missing record is upstream of it. |
 
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1218 surfaced
 
 </details>
 
-### Fixed (1203)
+### Fixed (1204)
 
-<details><summary>1203 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1204 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8090,6 +8089,85 @@ fixture reported green through the whole life of this bug. Both real pins live
 in a callee for the same reason. The ASAN fixture also carries a `Vec[String]`
 field moved into a `Set`, so a copy that duplicated only the outer buffer would
 surface as a double free of an element rather than as a pass. |
+| B-2026-08-15-11 | typecheck | high | EXHAUSTIVENESS IS NOT CHECKED when the `match` scrutinee is a `ref` PARAMETER -- `fn f(m: ref M) -> i64 { match m { A => 1 } }` over a three-variant… | FIXED by 526d672. One word: `check_exhaustiveness` was handed `scrut_ty`
+where every arm above it had been checked against `dispatch_ty`.
+
+THE TWO HALVES OF `match` CHECKING DISAGREED ABOUT THE SCRUTINEE TYPE. Both
+`infer_match` and `check_match_against` open with
+`ScrutineeMode::classify(&scrut_ty)`, which returns the mode plus a
+`dispatch_ty` with one layer of `ref` / `mut ref` peeled off, and both then check
+every arm pattern against that peeled type. Only the exhaustiveness call at the
+bottom kept passing the UNPEELED one. `is_handled_scrutinee` denylists
+`Type::Ref` and `Type::MutRef` — deliberately, per its own comment, "to preserve
+the pre-Maranget skip behaviour" — so `check_match_exhaustive` returned
+`Skipped` and the gate did not run at all. That is why an EMPTY `match m { }`
+over a three-variant enum passed too: there was nothing to miscount.
+
+PEELING IS NOT A RELAXATION OF THE CHECK, IT IS THE CHECK. Borrowing a value
+does not change which variants it can hold, and the arms had already been
+lowered against the peeled type — passing the same type to the gate is what
+makes the two halves agree rather than a new leniency. The alternative,
+widening the denylist, would have left `lower_pattern` classifying `A` against a
+`Ref(...)` scrutinee, where a bare unit-variant name reads as a fresh binding
+rather than a constructor.
+
+`mut ref` WAS EQUALLY DARK, which the row did not test — the denylist names both
+constructors, so `fn f(m: mut ref M) -> i64 { match m { A => 1 } }` passed
+`karac check` for the same reason. It is now rejected, and it is in the pin.
+
+EVERYTHING DOWNSTREAM OF THE GATE CAME BACK WITH IT, because all of it keys on
+the same scrutinee type: the unreachable-arm lint, the `#[non_exhaustive]`
+cross-package wildcard rule, the enum-specific witness wording, and the
+machine-applicable missing-arm fix-it. That last one is the Mend-loop half and
+is worth stating as a measurement rather than an inference — on the row's own
+repro, `karac check --output=json` now carries
+`{"offset": 59, "length": 0, "text": ", B => todo()"}`, and three `karac fix`
+passes drive the file to
+
+    fn f(m: ref M) -> i64 { match m { A => 1, B => todo(), C => todo() } }
+
+and a clean `All checks passed.` Before the fix there was no diagnostic, so
+there was nothing for `fix` to apply.
+
+THE RISK THIS CARRIES IS OVER-REJECTION, NOT UNDER-REJECTION, so that is what I
+measured. Every `.kara` file in the repository — 231 of them, examples, katas,
+self-hosting units and test fixtures — checked before and after: ZERO newly
+report a non-exhaustive match. Nothing in the corpus was relying on the hole.
+The five accepting rows of the scrutinee table are pinned for the same reason,
+and they are deliberately tests that pass on BOTH sides of the fix: full variant
+coverage, a wildcard arm, payload constructors, slice patterns tiling every
+length, and an open-domain `ref String` with a wildcard. The one row most likely
+to reject previously-compiling code — an open-domain `ref` scrutinee WITHOUT a
+wildcard — is pinned as a rejection on purpose rather than left to be discovered
+later, since it is now an error exactly as its owned twin already was.
+
+TWO THINGS CHECKED AND DELIBERATELY NOT CHANGED:
+
+  * The zero-arm match's witness renders as `missing variants: _`, which names
+    no real variant. That wording is identical for the OWNED zero-arm case
+    (`fn f(m: M) -> i64 { match m { } }`), i.e. it is pre-existing and
+    consistent rather than something peeling introduced. The bar for this row
+    is that a borrowed scrutinee is held to exactly the standard its owned twin
+    is, and it now is.
+  * `Type::Weak` and `Type::Pointer` are on the same denylist, but a `weak`
+    scrutinee is not reachable: a `weak T` read UPGRADES to `Option[shared T]`
+    before the match sees it, so `match h.w { Some(n) => n.v }` already reported
+    `missing variants: None` and always did. Measured, not assumed — there is no
+    neighbouring hole one door over.
+  * `ScrutineeMode::classify` peels exactly ONE layer by design (`ref ref T`
+    arises only from generic instantiation). A doubly-borrowed scrutinee
+    therefore still skips — but so does its arm checking, so the two halves
+    still agree, which is the invariant this fix is about.
+
+PINS. `ref_param_scrutinee_is_checked_for_exhaustiveness` (both `ref` and
+`mut ref`), `zero_arm_match_on_ref_param_is_rejected` and
+`ref_string_scrutinee_without_a_wildcard_is_rejected` all FAIL against the
+stashed compiler; `total_matches_on_ref_scrutinees_stay_accepted` passes on both
+sides, which is its job — it is the over-rejection guard, not a bug pin.
+
+GATES: full `--features llvm` suite green (13,730 passed / 0 failed, up from
+13,722 — the four new pins, two of which run a two-row loop), fmt and clippy
+`--all-targets` clean, plus the 231-file `.kara` corpus sweep above. |
 
 </details>
 
