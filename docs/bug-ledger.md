@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 122 | 0 |
-| codegen-gap | 112 | 2 |
+| codegen-gap | 112 | 1 |
 | missing-feature | 96 | 0 |
 | perf | 69 | 0 |
 | false-positive | 65 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 888 | 2 |
+| codegen | 888 | 1 |
 | typecheck | 174 | 1 |
 | interp | 146 | 1 |
 | ownership | 51 | 1 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1232 surfaced · 5 open · 1215 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1232 surfaced · 4 open · 1216 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-20 | 2026-08-15 | interp | low | THE INTERPRETER BLAMES AN INTEGER OVERFLOW ON A SUB-EXPRESSION THAT CANNOT OVERFLOW: in `let c = (a + b) * m` with `a + b == 3`, the trap is reported at the column of `a`, not of the multiply that actually trapped. The compiled backends point elsewhere on the same line, so `karac run` and `karac build` give two different locations for one fault. | The span attached to the overflow trap in the interpreter's binary-op evaluation. It appears to carry the LEFT OPERAND's span rather than the operation's — which is indistinguishable from correct whenever the left operand is itself the overflowing op, and wrong whenever it is not. |
-| B-2026-08-15-24 | 2026-08-15 | codegen | low | A TUPLE-element field store through a `mut Slice[(A, B)]` parameter is not lowered — `fn bump(s: mut Slice[(i64, i64)]) { s[0].0 = 99; }` fails the build with `tuple-element assignment through this receiver shape is not yet lowered; bind the tuple to a local first`. LOUD, not silent — filed to record the shape, not as a wrong-answer risk. | the tuple-element assignment lowering's receiver-shape dispatch: an `Index`-rooted receiver whose container is a `Slice` reaches the not-yet-lowered arm. Compare the STRUCT-element sibling, which B-2026-08-15-21 (9b284cb) taught to resolve through `lower_indexed_elem_ptr_slice`. |
 | B-2026-08-15-25 | 2026-08-15 | codegen | medium | A CLOSURE WHOSE BODY IS A BOOL-RETURNING BUILTIN PREDICATE fails LLVM module verification — `|s| s.starts_with("ab")` emits the closure's return as `i64` against the predicate's `i1` ("Function return type does not match operand type of return inst"). Reachable with NO CAPTURE, so it is not a once-callability issue. `|s| s.contains(x)` and `|m| m.len() > n` both build and run, so it is neither "bool closures" nor "container receivers" — it is which method lowering supplies the closure body's tail value. | the closure function's return-type derivation from its body tail (src/codegen/closures.rs) vs. the `i1` produced by the starts_with / ends_with / map.contains / set.contains lowerings. |
 | B-2026-08-15-26 | 2026-08-15 | typecheck | low | THE `OnceFnIntoFnSlot` HELP TEXT PRESCRIBES A CLONE ROUTE THAT DOES NOT COMPILE — split out of B-2026-08-15-22 as its fix shape (3). Both readings of "clone the captured value" were tried and both stay rejected. Not simply deletable: with -22 fixed the reported shape no longer reaches this diagnostic, so which shapes still do — and whether the clone advice is right for THEM — is the open question. | the `OnceFnIntoFnSlot` help text (src/typechecker.rs, the once-callable-closure slot rejection) and the set of shapes that still reach it after B-2026-08-15-22. |
 | B-2026-08-15-27 | 2026-08-15 | ownership | low | CALLING AN `Fn(ref T)` CLOSURE TWICE WITH THE SAME ARGUMENT warns "value moved here, used again here" — the closure's parameter is a BORROW, so the call cannot move it, and the program compiles and runs correctly on every backend. A direct call to `fn f(s: ref String)` does not warn. | the ownership checker's treatment of a CLOSURE call's arguments: it appears to ignore the closure type's declared parameter mode and treat every argument as an owned pass. |
@@ -147,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1232 surfaced
 
 </details>
 
-### Fixed (1215)
+### Fixed (1216)
 
-<details><summary>1215 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1216 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9022,6 +9021,67 @@ native clippy `--all-targets` clean, and BOTH wasm-cfg clippy targets clean
 touches the runtime, and it earned its keep: the first draft of the extraction
 inserted the new fn between `#[cfg(...)]` and `karac_par_reduce_pooled`,
 un-gating the pooled path on sequential wasm. Native clippy is blind to that. |
+| B-2026-08-15-24 | codegen | low | A TUPLE-element field store through a `mut Slice[(A, B)]` parameter is not lowered — `fn bump(s: mut Slice[(i64, i64)]) { s[0].0 = 99; }` fails the b… | FIXED in 3e6face. `place_chain_aggregate_llvm_type`'s `Index` arm consulted
+`vec_elem_types` alone; a `Slice[T]` param registers `slice_elem_types` and
+returns before that insert, so the lookup answered `None` for every slice and
+`compile_tuple_index_store` took its loud-bail arm.
+
+TWO RESOLVERS, ONE SHAPE — the part worth carrying forward. A tuple-element
+store needs the element POINTER (`field_chain_place_ptr`) and the element TYPE
+(`place_chain_aggregate_llvm_type`), and they are separate functions with
+separate table lookups. B-2026-08-15-21's fix (9b284cb) taught the pointer half
+about slices. That was necessary and not sufficient: measured after it,
+`base_ptr=true tuple_ty=false`, so the store bailed at the SECOND lookup rather
+than the first. Anyone teaching a third receiver shape to this path should
+expect to touch both, and check for others — the same `vec_elem_types`-only
+gate is the recurring pattern across all three of these rows.
+
+The `Index` arm was added by B-2026-08-02-8 for the Vec case, and its comment
+says it exists precisely so the tuple-element store does not loud-bail at the
+aggregate lookup. It just never covered the Slice container.
+
+WIDER THAN THE ROW'S REPRO. The row shows `.0` of a `(i64, i64)` at index 0.
+Measured, each verified fixed against the interpreter at BOTH KARAC_AUTO_PAR
+settings:
+
+    s[0].0 = 99            first element (the row's)
+    s[0].1 = 99            second element
+    s[0].2 = 99            three-element tuple
+    s[i].0 = 99            variable index
+    s[0].0 = s[0].0 + 1    read-modify-write
+    while i < s.len() { s[i].0 = i * 10; i = i + 1; }    whole loop
+    s[0].0 = "replaced"    on Slice[(String, i64)] — heap element
+
+MEMORY: NEW GROUND, NOT A RESTORED PATH. Because the store never lowered, no
+binary ever existed in which the displaced value's fate could be observed — the
+overwrite that frees the old buffer is created by this fix. So the ASAN fixture
+is not a regression guard for a previously-working path; it is the first check
+of that path ever. `asan_tuple_elem_store_through_mut_slice_frees_displaced`
+covers three angles: repeated overwrites in a loop (5 rounds over 2 elements) so
+a per-store imbalance ACCUMULATES rather than hiding in a single displacement; a
+displaced `Vec[String]` element, which strands more than one buffer if the old
+value is dropped shallowly or not at all; and the IDENTICAL workload through
+`mut ref Vec[(String, i64)]`, the arm that has worked since B-2026-08-02-8, so a
+divergence between the two halves is a slice-specific defect rather than a
+property of tuple-element stores. Measured clean under LSan at both auto-par
+settings, matching the Vec control exactly.
+
+SEVERITY UNCHANGED at low, and the filing rationale held up: this failed the
+BUILD with a message naming the limitation and the workaround, so unlike
+B-2026-08-15-21 (silent wrong answer, high) nobody could ship a wrong number.
+The fix is worth having because the struct-element and tuple-element forms of
+`s[<i>].<member> = v` read as the same operation and only one of them worked.
+
+TESTS. E2E (`test_e2e_tuple_elem_store_through_mut_slice_param_reaches_caller`)
+puts every shape above plus the `mut ref Vec` control in one program;
+interpreter oracle twin pins the same expected string from the side that was
+always correct; ASAN fixture as described. E2E and ASAN both RED at baseline —
+and specifically red with "CODEGEN FAILED … not yet lowered", i.e. the harness's
+hard-failure arm rather than a vacuous skip. The interpreter twin is green at
+baseline by construction, which is the point of an oracle.
+
+Gates: full `--features llvm` sweep of all 98 targets, 12547 tests, 0 failures;
+clippy `--all --all-targets` and fmt clean. |
 
 </details>
 
