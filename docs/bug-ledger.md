@@ -95,27 +95,27 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 251 | 1 |
 | leak | 182 | 1 |
 | double-free | 130 | 1 |
-| run-vs-build | 122 | 1 |
+| run-vs-build | 122 | 0 |
 | codegen-gap | 110 | 0 |
 | missing-feature | 96 | 0 |
 | perf | 68 | 0 |
 | false-positive | 63 | 0 |
 | diagnostics | 57 | 0 |
+| crash | 47 | 0 |
 | soundness | 46 | 0 |
-| crash | 46 | 0 |
-| other | 30 | 0 |
+| other | 31 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 883 | 4 |
+| codegen | 884 | 3 |
 | typecheck | 172 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
 | autopar | 44 | 0 |
-| other | 41 | 0 |
+| other | 42 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
 | resolver | 19 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1221 surfaced · 4 open · 1205 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1223 surfaced · 3 open · 1208 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-15-12 | 2026-08-15 | codegen | medium | `codegen failed: Undefined variable 'm'` on a program `karac check` accepts and the interpreter runs correctly: an enum-variant pattern binds a `shared enum` payload and passes it to a `ref`-taking helper. NOT reduced below 32 lines -- every attempt to shrink it further made the failure disappear, and the shapes that look responsible in isolation all build. | codegen's variable-scope map for a payload bound by an enum-variant pattern -- `Undefined variable 'm'` is emitted for the binding in `Simple(m, _path) => Outcome.Ok(method_name(m))`. |
 | B-2026-08-15-14 | 2026-08-15 | codegen | medium | A `Vec[shared struct]` CLONED AND PASSED BY VALUE strands one 32-byte RC box — `agg_shared(ns.clone())` over `Vec[Node]` leaks ONE object regardless of call count, so the per-call clone/release pairing is balanced and the container's own scope exit is what fails to release its element references. | the scope-exit drop for a `Vec` whose element is a `shared struct` handle: the buffer is freed without releasing the per-element RC references. NOT B-2026-08-15-13's slot machinery — reproduces under `KARAC_AUTO_PAR=0`, where that code path never runs. |
 | B-2026-08-15-15 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING of a `Vec[Struct]` (`let s = entries[0..2]`) DOUBLE-FREES under `KARAC_AUTO_PAR=0` and SIGSEGVs at `-O0`, while the DEFAULT build is clean and prints the right answer — the inverted polarity means disabling auto-par to rule it out is what triggers the crash. | the range-index let path's element ownership for a struct element with a heap field: the slice and the source Vec both appear to own the element buffers. Auto-par splitting the function happens to mask it. |
 | B-2026-08-15-16 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING crossing an AUTO-PAR JOIN returns the WRONG LENGTH, silently, in the DEFAULT build — `let s = nums[0..2]; return s.len()` yields 1 instead of 2 under `karac build`, garbage under `-O0` and the JIT, and the correct 2 under `--interp` and `KARAC_AUTO_PAR=0`. | the `ReturnSlot` round-trip for a range-slice binding (`collect_return_slots` / `emit_par_run`, src/codegen/stmts.rs + par_blocks.rs): the joined slot loses the VALUE, not just the type name B-2026-08-15-13 fixed for element reads. |
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1221 surfaced
 
 </details>
 
-### Fixed (1205)
+### Fixed (1208)
 
-<details><summary>1205 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1208 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8170,6 +8169,80 @@ sides, which is its job — it is the over-rejection guard, not a bug pin.
 GATES: full `--features llvm` suite green (13,730 passed / 0 failed, up from
 13,722 — the four new pins, two of which run a two-row loop), fmt and clippy
 `--all-targets` clean, plus the 231-file `.kara` corpus sweep above. |
+| B-2026-08-15-12 | codegen | medium | `codegen failed: Undefined variable 'm'` on a program `karac check` accepts and the interpreter runs correctly: an enum-variant pattern binds a `shar… | FIXED in 454af75. `user_shadowed_prelude_types` -- the B-2026-08-08-10 guard
+that stops built-in machinery describing a user value -- was populated ONLY by
+the struct declaration pass (`build_struct_types`). A user ENUM of a prelude
+name never entered it, so `builtin_opaque_ptr_handle` won on the `TypeExpr`
+lowering path and a `ref Request` param lowered to an opaque `ptr` instead of
+the tagged union; the match's payload binding was then never registered, and
+the failure surfaced hundreds of lines downstream as `Undefined variable 'm'`.
+
+THREE NAME-KEYED LISTS, THREE FIXES, ONE CAUSE:
+  1. `declare_enums` (src/codegen/declarations.rs) records the shadow, same
+     `stdlib_origin` gate the struct site uses.
+  2. The `TypeExpr` guard (src/codegen/types_lowering.rs) resolves through
+     `enum_layouts`, which its sibling NAME path already consulted ahead of
+     `builtin_opaque_ptr_handle`. The two entry points disagreeing about one
+     name is exactly the divergence that function's doc comment warns about.
+  3. `owned_ptr_param_is_noalias_safe` (src/codegen/functions.rs) consults the
+     registry. See the separate row filed for that one -- it was reachable on
+     its own, before any enum shadow existed.
+
+NOT ONE NAME. All FOURTEEN of `builtin_opaque_ptr_handle`'s names failed
+identically as a user enum -- Map, Set, SortedMap, SortedSet, Tensor, Column,
+DataFrame, Interner, Arena, Request, File, Sender, Receiver, Channel. `Request`
+is simply what the router dogfood happened to use.
+
+THE `shared enum` WAS A RED HERRING, and so was the payload type. A `shared` /
+`par` enum is caught by the `shared_types` / `shared_type_names` test that runs
+AHEAD of the builtin arms and answers `ptr` -- which is what a reference-
+semantic type wants anyway -- so only the PLAIN enum was ever exposed. Measured:
+`shared enum Request`, `struct Request` and `shared struct Request` all built
+before the fix.
+
+REDUCED TO THREE LINES, from the 32 the row recorded as irreducible:
+
+    enum Request { Simple(i64) }
+    fn handle(r: ref Request) -> i64 { match r { Simple(m) => m + 1 } }
+    fn main() { println(handle(Request.Simple(4))); }
+
+The row's ~20 failed reduction attempts were bisecting the wrong axis. They
+varied payload type, variant count, call shape and return type -- but several
+also RENAMED the enum, and a rename is precisely what makes the failure vanish,
+so those read as "this ingredient is necessary" when they were removing the
+actual trigger. The `ref` on the outer param is not required either (an owned
+`Request` param fails the same way); what is required is that the scrutinee not
+be a plain named local, since a `let`-bound local resolves through a different
+path.
+
+The row's HYPOTHESIS that this shares a cause with B-2026-08-15-11 is REFUTED,
+and worth recording since it was reasonable. That row was a typechecker gate
+handed an unpeeled `ref` type; this is a codegen registry that never saw enums.
+Independent: 11's fix (526d672, a sibling session) does not build this program,
+and this fix does not affect exhaustiveness.
+
+TESTS. Three in `tests/codegen.rs`: an IR pin sweeping all fourteen names (the
+right shape, because the failure was a COMPILE ERROR -- a successful
+`compile_to_ir` IS the assertion, and it holds without the runtime archives an
+E2E soft-skips without); an E2E sweep asserting the payload READS correctly
+(`4\n5\n0\n`), since a fix that registered the shadow but resolved the wrong
+layout would satisfy the IR pin and silently read the wrong offset; and the
+row's own router repro whole, for the parts the reduction drops -- nested enum
+payload, `shared` inner enum, binding forwarded to another function. One oracle
+twin in `tests/interpreter.rs` asserting the same values on the side that always
+worked, so the run-vs-build parity is pinned from both ends. All four fail at
+baseline with the fix stashed.
+
+ALSO IN THIS COMMIT: restores the `#[cfg(feature = "llvm")]` gate on
+`tests/codegen.rs`'s `presize_reservation` module, dropped when it landed
+(e8d1093). Without it, plain `cargo test` -- the documented command, which
+CLAUDE.md says skips codegen.rs -- fails to COMPILE, so the whole non-llvm suite
+was unrunnable on main. Verified pre-existing at c361689 before fixing.
+
+Gates: full `--features llvm` sweep of all 98 test targets, 12520 tests, 0
+failures (run in four batches; the container's disk allowance cannot hold every
+target's artifacts at once). Plain `cargo test` restored: 8903 passed, 0 failed.
+clippy `--all --all-targets --features llvm -D warnings` exit 0; fmt clean. |
 | B-2026-08-15-13 | codegen | medium | A `Map`/`Set` LOCAL IN A FUNCTION WITH A `Vec[Struct]` PARAM makes `let e = entries[0]; e.field` FAIL TO BUILD — `codegen: cannot resolve field '...'… | FIXED by 3c6ac77c, in `collect_return_slots` (src/codegen/stmts.rs) by adding the third RHS
 shape that names a struct.
 
@@ -8253,6 +8326,26 @@ quarantine another row's defect inside this one's fixture.
 
 GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
 suite, and the asan -O0 leg. |
+| B-2026-08-15-17 | codegen | medium | `karac build` PANICS -- `alias attribute 'noalias' emitted on a non-pointer param lowering` -- for a user STRUCT shadowing an owned-ptr handle name p… | FIXED in 454af75, alongside the row that exposed it. `owned_ptr_param_is_noalias_safe`
+now returns false for any name in `user_shadowed_prelude_types` -- a user type of
+that name is not the built-in and does not lower to a `ptr`.
+
+FILED SEPARATELY rather than folded into B-2026-08-15-12's close because it is a
+DIFFERENT DEFECT that happens to share a cause: it is reachable with no enum
+anywhere, it predates that row, and its symptom is a PANIC rather than a
+diagnostic. Someone grepping for "karac build panics" should find this, not a
+row about enum payload bindings.
+
+TEST: `test_e2e_user_struct_shadowing_an_owned_ptr_handle_takes_no_alias_attr`
+in tests/codegen.rs sweeps the seven `OWNED_VALUE_PTR_TYPES` names as user
+structs with an owned param -- the only shape that reaches this arm, since
+`ref`/`mut ref` are excluded by shape before the name check. Fails at baseline. |
+| B-2026-08-15-18 | other | medium | PLAIN `cargo test` FAILED TO COMPILE on main: `tests/codegen.rs`'s `presize_reservation` module lost its `#[cfg(feature = "llvm")]` gate, so the whol… | FIXED in 454af75 -- one line, the missing `#[cfg(feature = "llvm")]` above
+`mod presize_reservation`. Every sibling module in the file already carries it.
+
+No test pins this. A test that guards the gate would itself live in the file
+being gated; the real guard is CI running plain `cargo test`, which would have
+caught it at the commit that introduced it. |
 
 </details>
 
