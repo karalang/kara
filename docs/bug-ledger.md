@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 252 | 1 |
+| miscompile | 252 | 0 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 122 | 0 |
-| codegen-gap | 110 | 0 |
+| codegen-gap | 111 | 1 |
 | missing-feature | 96 | 0 |
 | perf | 69 | 1 |
 | false-positive | 64 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 886 | 2 |
+| codegen | 887 | 2 |
 | typecheck | 173 | 1 |
 | interp | 146 | 1 |
 | ownership | 50 | 0 |
@@ -124,16 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1228 surfaced · 4 open · 1212 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1229 surfaced · 4 open · 1213 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-20 | 2026-08-15 | interp | low | THE INTERPRETER BLAMES AN INTEGER OVERFLOW ON A SUB-EXPRESSION THAT CANNOT OVERFLOW: in `let c = (a + b) * m` with `a + b == 3`, the trap is reported at the column of `a`, not of the multiply that actually trapped. The compiled backends point elsewhere on the same line, so `karac run` and `karac build` give two different locations for one fault. | The span attached to the overflow trap in the interpreter's binary-op evaluation. It appears to carry the LEFT OPERAND's span rather than the operation's — which is indistinguishable from correct whenever the left operand is itself the overflowing op, and wrong whenever it is not. |
-| B-2026-08-15-21 | 2026-08-15 | codegen | high | A FIELD ASSIGNMENT THROUGH A `mut Slice[Struct]` PARAMETER IS SILENTLY DROPPED under codegen — `fn bump(s: mut Slice[P]) { s[0].x = s[0].x + 1; }` leaves the caller's element unchanged where the interpreter increments it. `karac check` is clean, both compiled backends print the stale value, and no heap is involved (`P { x: i64, y: i64 }`). A WHOLE-element assignment through the same parameter works, `mut ref Vec[P]` works, and `mut Slice[i64]` works — so it is the field store through the Slice ABI specifically. | the element-field store path for a `mut Slice[T]` parameter: a whole-element store reaches the caller's buffer and a field store does not. Compare against the `mut ref Vec[T]` path, which is correct for both, and against the whole-element `Slice` store, which is the closest working sibling. |
 | B-2026-08-15-22 | 2026-08-15 | typecheck | medium | A function returning a REUSABLE closure over a heap value is rejected whenever the body passes that capture BY VALUE -- which every stdlib `contains` / `starts_with` / `ends_with` does. The closure analysis calls those calls CONSUMING; the sequential checker does not (the same call twice plus a later use of the needle is accepted). And the diagnostic's own prescribed remedy -- clone the captured value -- does NOT compile, under either reading. | the closure once-vs-repeatable classification's notion of a consuming use, vs the sequential move checker's; and the by-value `substr: String` parameter the typechecker gives `String.contains` (src/typechecker/stdlib_seq.rs:261, whose own comment says the arg shape is all it enforces). |
 | B-2026-08-15-23 | 2026-08-15 | autopar+codegen | high | THE COLLECT-TABULATE LOWERING REPORTS `fanned_out: true, "dispatched across the worker pool"` AND RUNS ENTIRELY ON ONE THREAD. Every `#[par_order_free]` loop whose body pushes UNCONDITIONALLY — the natural parallel-map idiom — is sequential; wrapping the identical push in a tautological `if` restores a 4x speedup. The query claims fan-out for both. | `collect_tabulate` (concurrency.rs:2953, `collect_is_tabulate_shape`) selects an in-place-store lowering for the exactly-one-unconditional-push shape. That lowering does not dispatch. `effect_graph.rs`'s `fanned_out` / `cost_gate` / `reason` are computed from the reduction being CLASSIFIED, not from the lowering actually chosen, so they report fan-out unconditionally. |
+| B-2026-08-15-24 | 2026-08-15 | codegen | low | A TUPLE-element field store through a `mut Slice[(A, B)]` parameter is not lowered — `fn bump(s: mut Slice[(i64, i64)]) { s[0].0 = 99; }` fails the build with `tuple-element assignment through this receiver shape is not yet lowered; bind the tuple to a local first`. LOUD, not silent — filed to record the shape, not as a wrong-answer risk. | the tuple-element assignment lowering's receiver-shape dispatch: an `Index`-rooted receiver whose container is a `Slice` reaches the not-yet-lowered arm. Compare the STRUCT-element sibling, which B-2026-08-15-21 (9b284cb) taught to resolve through `lower_indexed_elem_ptr_slice`. |
 
 ### Wontfix (2)
 
@@ -146,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1228 surfaced
 
 </details>
 
-### Fixed (1212)
+### Fixed (1213)
 
-<details><summary>1212 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1213 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8745,6 +8745,75 @@ open — an analyzer may decline what it cannot prove — and the kata's README 
 carries an explanation instead of a shrug. Widening the collect recognizer to
 admit per-iteration outer-name writes is a separate question with its own
 soundness obligations. |
+| B-2026-08-15-21 | codegen | high | A FIELD ASSIGNMENT THROUGH A `mut Slice[Struct]` PARAMETER IS SILENTLY DROPPED under codegen — `fn bump(s: mut Slice[P]) { s[0].x = s[0].x + 1; }` le… | FIXED in 9b284cb. `field_chain_place_ptr`'s Index arm gated on
+`vec_elem_types`; the registrar for a `Slice[T]` param
+(`register_var_collection_metadata`, src/codegen/types_lowering.rs) writes
+`slice_elem_types` and RETURNS before the `vec_elem_types` insert, so that arm
+answered "not an indexable place" for every slice. `nested_store_place_ptr`'s
+two fallbacks then declined as well — `field_rooted_index_place_ptr` wants a
+field-rooted container, `impure_index_store_place_ptr` wants a non-pure
+subscript — and `compile_field_store` exited through its no-op tail.
+
+THE SAME NO-OP TAIL, A THIRD TIME. B-2026-08-01-35 (field-rooted container) and
+B-2026-08-02-15 (impure index) are the same defect at the same exit, and the
+comments on both branches already name it. The tail returns `Ok(())` for any
+receiver shape no resolver recognizes, so an unhandled shape is a SILENT
+DROPPED WRITE rather than a compile error. Worth noting for whoever adds the
+fourth shape: the cheap structural improvement is to make that tail loud (a
+codegen error naming the receiver), since every occurrence so far has been
+found by a user hitting a wrong answer, not by the compiler.
+
+NOT A WRITE-BACK PROBLEM, which the row's framing leaves open ("the store is
+simply not reaching the caller's buffer" is consistent with writing to a copy).
+It is not writing anywhere. Two measurements:
+
+  1. An immediate read-back INSIDE the callee sees the stale value:
+     `fn bump(s: mut Slice[P]) { s[0].x = 99; println(f"inside={s[0].x}"); }`
+     prints `inside=3` under build, `inside=99` under interp.
+  2. The emitted `@bump` computes the RHS in full — bounds check, overflow
+     check, `add` — and then `ret void`. There is no `store` in the function.
+
+WIDER THAN THE ROW'S REPRO. The row shows one read-modify-write on `x` of a
+two-i64 struct at index 0. EVERY field write through a `mut Slice[struct]` was
+dropped — measured, each verified fixed, against the interpreter, at both
+KARAC_AUTO_PAR settings:
+
+    s[0].x = 99             constant RHS, no read
+    s[0].x = s[0].x + 1     read-modify-write (the row's)
+    s[0].x += 1             compound assign
+    s[1].x = 99             non-zero literal index
+    s[i].x = 99             variable index
+    s[0].y = 99             second field
+    s[0].i.v = 99           nested struct field (chains through the same arm)
+    while i < s.len() { s[i].x = 99; i = i + 1; }    whole loop
+    field types i64 / f64 / String-bearing struct: all dropped, all fixed
+
+READS WERE ALWAYS FINE (`fn peek(s: Slice[P]) -> i64 { return s[0].x; }`), which
+is part of why this was invisible: only the store path lacked the resolver.
+
+WHY IT SURVIVED — the two neighbours the row lists as controls are also the
+reason nobody hit it earlier. A WHOLE-element store (`s[0] = P { .. }`) never
+reaches `compile_field_store` at all, and a `shared` element is caught by the
+indexed-shared branch UPSTREAM of the failing one, which has consulted
+`slice_elem_types` since it was written. Plain-struct elements were the only
+combination that fell through.
+
+BOUNDS CHECKING PRESERVED. The fix routes through `lower_indexed_elem_ptr_slice`,
+which emits its own `UGE`-against-len check and panic block, so an out-of-range
+field store still traps (verified: `s[5].x = 99` on a 1-element slice exits 1 on
+both backends, with the build side reporting "slice index out of bounds").
+
+TESTS. `test_e2e_field_store_through_mut_slice_param_reaches_caller`
+(tests/codegen.rs) exercises the failing shape plus all three of the row's
+working neighbours IN ONE PROGRAM, so the controls are asserted rather than
+described — at baseline it fails with `inside=3\n3\n11\n103\n...` against
+`inside=4\n4\n99\n104\n...`, i.e. exactly the three dropped field stores, with
+the whole-element and scalar values already matching. An interpreter oracle twin
+(`test_field_store_through_mut_slice_param_oracle`) pins the same expected
+string from the side that was always correct.
+
+Gates: full `--features llvm` sweep of all 98 targets, 12543 tests, 0 failures;
+clippy `--all --all-targets` and fmt clean. |
 
 </details>
 
