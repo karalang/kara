@@ -2341,6 +2341,35 @@ pub unsafe extern "C" fn karac_par_reduce(
     }
 }
 
+/// Chunk size for the order-free dynamic pull loop.
+///
+/// Split out of `karac_par_reduce_pooled` so the arithmetic can be pinned
+/// directly (B-2026-08-15-23): the defect it carries was a chunk COUNT
+/// collapse, and neither of the dispatch-level tests could see it — they
+/// assert that every index is covered exactly once, which one worker doing
+/// all the work satisfies perfectly.
+///
+/// Two competing pulls, and the bug was letting the second win outright:
+///   * over-decompose into `n_workers * factor` chunks so fast cores can
+///     absorb surplus from slow ones (the reason this path exists);
+///   * keep chunks big enough that the atomic pull-loop stays invisible.
+///
+/// The floor is a floor on chunk SIZE, so it must never push the chunk COUNT
+/// below the number of workers waiting to pull one — capping it at the static
+/// split is what enforces that. Above `MIN_DYNAMIC_CHUNK * n_workers` the cap
+/// is inactive and this is byte-identical to the pre-fix formula.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+fn order_free_chunk(iter_total: u64, n_workers: u64, factor: u64) -> u64 {
+    const MIN_DYNAMIC_CHUNK: u64 = 1024;
+    let n_workers = n_workers.max(1);
+    let target_chunks = n_workers.saturating_mul(factor.max(1));
+    let static_chunk = iter_total.div_ceil(n_workers);
+    iter_total
+        .div_ceil(target_chunks)
+        .max(MIN_DYNAMIC_CHUNK.min(static_chunk))
+        .max(1)
+}
+
 /// Native `karac_par_reduce` body — worker fan-out across the pool plus
 /// the serial combine. Split out of the extern shell so the wasm
 /// sequential arm above can swap in.
@@ -2476,11 +2505,10 @@ unsafe fn karac_par_reduce_pooled(
                 .and_then(|s| s.parse::<u64>().ok())
                 .filter(|&f| f >= 1)
                 .unwrap_or(8);
-            const MIN_DYNAMIC_CHUNK: u64 = 1024;
-            let target_chunks = (n_workers as u64).saturating_mul(factor);
-            let chunk = iter_total
-                .div_ceil(target_chunks)
-                .max(MIN_DYNAMIC_CHUNK.min(iter_total));
+            // B-2026-08-15-23 — the chunk-size floor may not starve workers;
+            // see `order_free_chunk`, where the arithmetic and its rationale
+            // live so they can be pinned without a timing-dependent test.
+            let chunk = order_free_chunk(iter_total, n_workers as u64, factor);
             let n_chunks = iter_total.div_ceil(chunk);
             let next_chunk = Arc::new(std::sync::atomic::AtomicU64::new(0));
             (0..n_workers)
@@ -10521,8 +10549,14 @@ mod tests {
     /// workers never publish to slots; the combine chain folds
     /// identities). The range is large enough to exceed the
     /// MIN_DYNAMIC_CHUNK floor × workers so multiple chunks per worker
-    /// actually occur; the second case pins the tiny-range degenerate
-    /// (floor collapses it to one chunk).
+    /// actually occur; the second case is a range far below the floor.
+    ///
+    /// That second case used to be described here as "the tiny-range
+    /// degenerate (floor collapses it to one chunk)" — i.e. the collapse
+    /// B-2026-08-15-23 turned out to be was written down as expected
+    /// behaviour, which is part of why it survived. Coverage-exactly-once
+    /// holds either way, so this test never could have caught it; the chunk
+    /// COUNT is pinned in `test_order_free_chunk_never_starves_workers`.
     #[test]
     fn test_par_reduce_order_free_covers_range_exactly_once() {
         for n in [200_000usize, 10usize] {
@@ -10564,6 +10598,79 @@ mod tests {
     /// flag is absent: a plain 0-cost dispatch must take the static
     /// split (observable only via coverage, asserted above, so here we
     /// simply pin identical results between flagged and unflagged runs).
+    /// B-2026-08-15-23 — the order-free chunker must never hand every
+    /// iteration to one worker.
+    ///
+    /// `chunk` was floored at `MIN_DYNAMIC_CHUNK.min(iter_total)`, which for
+    /// any range below 1024 is just `iter_total`: one chunk. All `n_workers`
+    /// tasks spawned, one pulled it and ran the whole loop, the rest exited
+    /// immediately — a correct fan-out that executes at 100% CPU. Measured on
+    /// a 4-core box: a 64-iteration `#[par_order_free]` collect ran 0.165s at
+    /// 100% CPU, against 0.045s at 371% for the same work in a shape that
+    /// took the static split. Between 1024 and `1024 * n_workers` it was
+    /// lopsided rather than serial (2048 iterations -> 2 chunks -> 196%).
+    ///
+    /// This pins the COUNT, which is what regressed and what neither
+    /// dispatch-level test can see: both assert every index is covered
+    /// exactly once, and one worker doing everything satisfies that.
+    #[test]
+    fn test_order_free_chunk_never_starves_workers() {
+        for &workers in &[1u64, 2, 4, 8, 64] {
+            for &n in &[
+                1u64, 2, 7, 63, 64, 100, 1023, 1024, 2048, 8191, 50_000, 1_000_000,
+            ] {
+                let chunk = order_free_chunk(n, workers, 8);
+                assert!(chunk >= 1, "chunk must be positive (n={n} w={workers})");
+                let n_chunks = n.div_ceil(chunk);
+                // The bar is the EQUAL STATIC SPLIT, not `n_workers` chunks:
+                // `ceil(n / ceil(n/w))` is itself below `w` whenever `n` is
+                // not a multiple of `w` (n=100 over 64 workers is 50 chunks of
+                // 2, and no split of 100 does better). "Never worse than the
+                // split this path replaced" is the guarantee actually
+                // available, and it is the one the bug violated — it produced
+                // ONE chunk where the static split gives `w`.
+                let static_chunks = n.div_ceil(n.div_ceil(workers));
+                assert!(
+                    n_chunks >= static_chunks,
+                    "n={n} workers={workers}: {n_chunks} chunks is worse than the static split's {static_chunks}"
+                );
+                // The floor still does its job: no chunk smaller than the
+                // static split unless over-decomposition asked for it.
+                assert!(
+                    chunk >= n.div_ceil(workers.saturating_mul(8)).max(1),
+                    "n={n} workers={workers}: chunk {chunk} is below the                      over-decomposition target"
+                );
+            }
+        }
+    }
+
+    /// The companion guarantee: above `MIN_DYNAMIC_CHUNK * n_workers` the
+    /// starvation cap is inactive, so the over-decomposition this path exists
+    /// for is untouched. Pinned as an exact equality against the pre-fix
+    /// formula, because "I did not change the hot case" is the claim that
+    /// carries the risk here.
+    #[test]
+    fn test_order_free_chunk_matches_prior_formula_above_the_floor() {
+        let prior = |iter_total: u64, n_workers: u64, factor: u64| -> u64 {
+            iter_total
+                .div_ceil(n_workers.saturating_mul(factor))
+                .max(1024u64.min(iter_total))
+        };
+        for &workers in &[1u64, 2, 4, 8, 64] {
+            for &factor in &[1u64, 8] {
+                // At or above 1024 * workers the two must agree exactly.
+                for mult in 1..=4u64 {
+                    let n = 1024 * workers * mult;
+                    assert_eq!(
+                        order_free_chunk(n, workers, factor),
+                        prior(n, workers, factor),
+                        "n={n} workers={workers} factor={factor}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_par_reduce_order_free_matches_static_result() {
         let n = 50_000usize;
