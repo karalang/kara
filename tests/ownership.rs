@@ -12057,3 +12057,163 @@ fn test_rc_fallback_notes_are_emitted_in_source_order() {
         notes.iter().map(|n| n.message.clone()).collect::<Vec<_>>()
     );
 }
+
+// ── B-2026-08-15-27: a closure call honours its TYPE's parameter modes ──
+//
+// Calling an `Fn(ref T)` binding twice on one argument reported a
+// use-after-move. The closure's parameter is a borrow, so the call cannot move
+// the argument, and the program compiles and runs correctly on every backend —
+// the warning was the checker's alone.
+//
+// The classifier's `Call` arm falls back to consuming every argument when the
+// callee has no `callee_param_modes` entry, which a function-typed VALUE never
+// has. The stated reason was that such a callee's modes are "unknowable in
+// principle". True of what a closure BODY would infer; false of what its TYPE
+// declares. `Fn(ref String) -> bool` promises the parameter is a borrow.
+//
+// The accept tests below would pass just as well against a checker that had
+// stopped classifying closure arguments at all, so the `Fn(T)` controls after
+// them are the load-bearing half.
+
+#[test]
+fn ref_typed_closure_call_does_not_move_its_argument() {
+    // The row's repro, unchanged.
+    ownership_ok(
+        "fn longer(n: i64) -> Fn(ref String) -> bool { |s| s.len() > n }\n\
+         fn main() {\n\
+             let p = longer(2);\n\
+             let q = \"alpha\";\n\
+             println(f\"{p(q)} {p(q)}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn ref_typed_closure_from_annotated_local_does_not_move() {
+    // The annotation, rather than a returned closure, supplies the type.
+    ownership_ok(
+        "fn main() {\n\
+             let p: Fn(ref String) -> bool = |s| s.len() > 2;\n\
+             let q = \"alpha\";\n\
+             println(f\"{p(q)} {p(q)}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn ref_typed_closure_call_does_not_move_a_vec_argument() {
+    // Not String-specific — any non-Copy argument behind a `ref` parameter.
+    ownership_ok(
+        "fn big(n: i64) -> Fn(ref Vec[i64]) -> bool { |v| v.len() > n }\n\
+         fn main() {\n\
+             let p = big(1);\n\
+             let q: Vec[i64] = [1i64, 2i64, 3i64];\n\
+             println(f\"{p(q)} {p(q)}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn mut_ref_typed_closure_call_does_not_move_its_argument() {
+    // Green BEFORE the fix as well as after: a `mut ref` argument carries the
+    // call-site `mut` marker, and the `Call` arm reads that marker directly
+    // ahead of any mode lookup. Kept because the fix now ALSO answers this
+    // position from the type, and the two answers must agree — a `MutRef`
+    // mapped to `Own` by mistake would be invisible without it.
+    ownership_ok(
+        "fn main() {\n\
+             let p: Fn(mut ref Vec[i64]) = |v| v.push(1i64);\n\
+             let mut q: Vec[i64] = [0i64];\n\
+             p(mut q);\n\
+             p(mut q);\n\
+             println(q.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn owned_typed_closure_call_still_moves_its_argument() {
+    // CONTROL. `Fn(String)` takes ownership, so the second call IS a
+    // use-after-move and must still be reported. Without this the fix could
+    // have been "stop consuming closure arguments" and every accept test above
+    // would still pass.
+    let errors = ownership_errors(
+        "fn eat(s: String) { }\n\
+         fn main() {\n\
+             let p: Fn(String) = |s| eat(s);\n\
+             let q = \"alpha\";\n\
+             p(q);\n\
+             println(q);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "an owned-parameter closure must still move its argument; got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn closure_param_modes_are_read_per_position() {
+    // CONTROL, and the sharpest one: ONE closure whose type is
+    // `Fn(ref String, String)`. Reusing the borrowed argument is fine;
+    // reusing the owned one is a move. A fix that keyed off "the callee is a
+    // closure" rather than off the parameter POSITION gets one of these wrong
+    // whichever way it decides.
+    ownership_ok(
+        "fn eat(s: String) { }\n\
+         fn main() {\n\
+             let p: Fn(ref String, String) = |a, b| eat(b);\n\
+             let x = \"alpha\";\n\
+             let y = \"beta\";\n\
+             p(x, y);\n\
+             println(x);\n\
+         }",
+    );
+    let errors = ownership_errors(
+        "fn eat(s: String) { }\n\
+         fn main() {\n\
+             let p: Fn(ref String, String) = |a, b| eat(b);\n\
+             let x = \"alpha\";\n\
+             let y = \"beta\";\n\
+             p(x, y);\n\
+             println(y);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "the OWNED position of the same closure must still move; got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn a_closure_returning_a_ref_taking_closure_still_moves_at_the_outer_call() {
+    // CONTROL for the lookup itself. `p: Fn(String) -> Fn(ref String) -> bool`
+    // consumes its argument, but the span-keyed type at `p`'s own span is the
+    // CALL's type — `Fn(ref String) -> bool` — because the parser gives a
+    // postfix expression its receiver's span. Reading modes from there would
+    // say "borrow" and silently drop a real move, which is why the mode lookup
+    // is name-keyed only. Pins that the outer move is still reported.
+    let errors = ownership_errors(
+        "fn mk() -> Fn(String) -> Fn(ref String) -> bool { |t| |s| s.len() > t.len() }\n\
+         fn main() {\n\
+             let p = mk();\n\
+             let q = \"alpha\";\n\
+             let a = p(q);\n\
+             let b = p(q);\n\
+             println(f\"{a(q)} {b(q)}\");\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "the outer owned-parameter call must still move; got: {:?}",
+        errors
+    );
+}

@@ -546,7 +546,16 @@ impl<'a> UseClassifier<'a> {
                 } else {
                     self.walk_expr(callee, Mode::Reading);
                 }
-                let modes = self.callee_modes_for_call(callee).cloned();
+                // B-2026-08-15-27 — a function-TYPED callee (a closure binding,
+                // a `Fn(...)`-typed param) has no `callee_param_modes` entry,
+                // but its type still declares each parameter's mode. Fall back
+                // to reading them off the type so a `Fn(ref T)` call borrows
+                // rather than consuming. Strictly a fallback: a real entry
+                // always wins, so no declared function's modes change.
+                let modes = self
+                    .callee_modes_for_call(callee)
+                    .cloned()
+                    .or_else(|| self.fn_typed_callee_modes(callee));
                 // B-2026-07-02-23: a comparison operator (`==` `!=` `<` `<=`
                 // `>` `>=`) lowers to `Call(Path([Type, "eq"/…]), [lhs, rhs])`
                 // — a free-call to an *instance* trait method, so it never
@@ -1143,6 +1152,57 @@ impl<'a> UseClassifier<'a> {
         // (B-2026-07-02-26) via `callee_param_modes_key`.
         let key = callee_param_modes_key(callee)?;
         self.callee_param_modes.get(&key)
+    }
+
+    /// B-2026-08-15-27 — parameter modes read off a FUNCTION-TYPED callee's own
+    /// type, for a callee that has no `callee_param_modes` entry because it is
+    /// a value rather than a declared function.
+    ///
+    /// The `Call` arm's fallback treats every argument to such a callee as an
+    /// owned pass, on the stated grounds that a function-typed value's modes
+    /// are "unknowable in principle". That is true of the modes a closure
+    /// BODY would infer, but not of the ones its TYPE declares: a binding of
+    /// type `Fn(ref String) -> bool` promises its parameter is a borrow, and
+    /// calling it therefore cannot move the argument. Consuming anyway made
+    /// `p(q)` twice on one `q` report a use-after-move on a program that
+    /// compiles and runs correctly on every backend — and the diagnostic's own
+    /// help then advised declaring the parameter `ref`, which it already was.
+    ///
+    /// Only ever turns a Consume into a Read, and only where the type says
+    /// `ref` / `mut ref` in that position. A `Fn(String)` slot keeps the
+    /// consume default, because there the call really does take ownership.
+    fn fn_typed_callee_modes(&self, callee: &Expr) -> Option<Vec<OwnershipMode>> {
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return None;
+        };
+        // NAME-KEYED TABLES ONLY — deliberately no `expr_types` span fallback,
+        // unlike `classify_identifier`'s chain. The parser gives a postfix
+        // expression its receiver's span, so `expr_types[callee.span]` for the
+        // callee of `p(q)` is the CALL's type, not `p`'s. Reading modes off
+        // that would be reading another expression's signature; when it
+        // happens to be function-typed the modes would be wrong in the
+        // direction that SUPPRESSES a real move warning. Measured inert today
+        // (the closure-param case it would reach answers `Bool`, which is not
+        // a function type, so the helper declines either way), but it buys
+        // nothing and the failure mode is silent, so it stays out.
+        let ty = self
+            .param_types
+            .get(name.as_str())
+            .or_else(|| self.local_types.get(name.as_str()))?;
+        let params = match ty {
+            Type::Function { params, .. } | Type::OnceFunction { params, .. } => params,
+            _ => return None,
+        };
+        Some(
+            params
+                .iter()
+                .map(|p| match p {
+                    Type::Ref(_) => OwnershipMode::Ref,
+                    Type::MutRef(_) => OwnershipMode::MutRef,
+                    _ => OwnershipMode::Own,
+                })
+                .collect(),
+        )
     }
 
     /// The resolved `"Type.method"` / `"Trait.method"` mode key for a method
