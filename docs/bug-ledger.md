@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 109 | 1 |
 | missing-feature | 96 | 0 |
 | perf | 68 | 1 |
-| false-positive | 63 | 1 |
+| false-positive | 63 | 0 |
 | diagnostics | 56 | 1 |
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 873 | 5 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
-| ownership | 50 | 2 |
+| ownership | 50 | 1 |
 | autopar | 43 | 1 |
 | other | 41 | 0 |
 | cli | 30 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1209 surfaced · 7 open · 1190 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1209 surfaced · 6 open · 1191 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
-| B-2026-08-14-37 | 2026-08-14 | ownership | low | AN IMMUTABLE `Slice[T]` FORMAL REPORTS ITS OWNED `Vec[T]` ARGUMENT AS MOVED: `fn take(xs: Slice[u8])` called as `take(v)` warns `value 'v' moved here, used again here` on any later use of `v`, even though a read-only slice formal only borrows. | `param_modes_from_signature` (src/ownership.rs) maps `TypeKind::Ref -> Ref`, `MutRef` / `MutSlice -> MutRef`, and EVERYTHING ELSE to `Own` — so a bare `Slice[T]` (immutable) formal falls in the `_` arm and is classified owned. `mut Slice[T]` is correct (it has its own `TypeKind::MutSlice`); only the read-only spelling is wrong. |
 | B-2026-08-14-38 | 2026-08-14 | codegen | low | INDEXING THE RESULT OF A Vec-RETURNING METHOD CALL loud-bails `Index operator applied to non-array type` under `karac build` while `--interp` runs it: `v.clone()[1]`, `v[1..3].to_vec()[0]`, and any other `<method-chain>[i]` whose receiver is a fresh temporary. | `compile_index` (src/codegen/collections.rs) resolves its object through name-keyed registries (`vec_elem_types` / `slice_elem_types` / array slot types); a MethodCall object has no name, so it falls to the generic tail whose ArrayType / VectorType branches cannot match the `{ptr,len,cap}` struct and errors. |
 | B-2026-08-15-1 | 2026-08-15 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints raw bytes, and `m.len()` is a hard codegen error — while the same program with a type annotation, or with plain `Map`/`Set`, is correct on every surface. | The `let` path derives the collection side-tables (`map_key_type_exprs` / `var_elem_type_exprs` / `set_elem_type_exprs` / `sorted_collection_vars`) from the ANNOTATION; the callee's declared return type is never consulted for the `SortedMap` / `SortedSet` heads, so an unannotated call-result binding registers nothing. The plain `Map` / `Set` equivalent registers fine, so the head-gate is the gap, not the call-result shape. |
 | B-2026-08-15-2 | 2026-08-15 | codegen+ownership | high | `s.push_str(s)` ON A HEAP STRING THAT MUST GROW IS A USE-AFTER-FREE: the grow reallocs the destination and the copy then reads through the now-stale SOURCE pointer — 5,000 invalid reads under valgrind on one call. It produces the RIGHT ANSWER anyway, so nothing surfaces. The two SLICE spellings of the same aliasing (`s.push_str(s[a..b])`, and via a `let`) are correctly rejected by the ownership checker; only the whole-value self-append reaches codegen. | Two candidate layers, and the fix should probably be both. CODEGEN: `push_str`'s alias guard in `src/codegen/vec_method.rs` is emitted only under `src_borrowed` — an owned source is assumed not to alias, which is true of a fresh temp but false of the destination itself. The grow path calls `emit_string_buffer_grow` (realloc, may move) and then copies from `src_ptr`, captured before the grow. OWNERSHIP: the checker already rejects `s` borrowed as `Slice[T]` while borrowed as `mut ref T`; the whole-value read of `s` as a `push_str` argument is the same conflict and is not flagged. |
@@ -149,9 +148,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1209 surfaced
 
 </details>
 
-### Fixed (1190)
+### Fixed (1191)
 
-<details><summary>1190 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1191 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7357,6 +7356,31 @@ makes the loss visible, and the fixture says so, because unrolling it for
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-14-37 | ownership | medium | AN IMMUTABLE `Slice[T]` FORMAL REPORTS ITS OWNED `Vec[T]` ARGUMENT AS MOVED: `fn take(xs: Slice[u8])` called as `take(v)` warns `value 'v' moved here… | FIXED by 60c94174. Three sites, one omission, and the row's own severity call was too low.
+
+THE ROW SAID LOW BECAUSE IT IS A WARNING. That is true of the shape it reproduced and false of the shape next to it. `is_borrow_param_type` — the once-callability walker's borrow-position test in `typechecker/items.rs` — listed `Type::Slice { mutable: true }` only, so a closure that forwards a captured container to a READ-ONLY slice formal was judged to CONSUME the capture and became `OnceFn`. Routed into an `Fn(...)` slot that is a hard `E_ONCE_FN_INTO_FN_SLOT` ERROR, and both remedies it offers are wrong for a callee that only reads: cloning the container is an O(n) deep copy, and widening the slot to `OnceFn` gives up repeatable invocation the program is entitled to.
+
+    fn total(xs: Slice[i64]) -> i64 { xs.len() }
+    fn twice(f: Fn() -> i64) -> i64 { f() + f() }
+    fn main() { let v: Vec[i64] = [1i64]; println(twice(|| total(v))); }
+    // error[typecheck]: cannot pass once-callable closure where 'Fn() -> i64'
+    //   is expected ... (because it consumes captured binding 'v')
+
+So it is not "a wrong suggestion on a program that still builds" — it is a legal program that cannot be built. Severity raised to medium.
+
+THE THIRD SITE IS THE ORACLE, and it is the one that would have quietly enforced the bug. `ownership_oracle.rs`'s `param_mode` had the identical omission, and because "Slice" is also in `is_heap_builtin` the model scheduled a scope-exit DROP for a parameter that owns no allocation at all — a `{ptr, len}` view has no `cap` and cannot free anything. The oracle is the reference implementation the drop-fuzzer differentials against (`drop_fuzz --oracle`), so this was a standing model-vs-codegen disagreement in the artifact whose whole job is to be the one place the rules live. Had only the compiler learned the rule, the oracle's own tests would have started asserting the old wrong answer against a now-correct pass. Measured, not assumed: on the parent the oracle reports `drops: ["xs"]` for `fn total(xs: Slice[i64])`.
+
+WHY IT SURVIVED THIS LONG — the stdlib insulated it. `runtime/stdlib/stats.kara` spells its params `xs: ref Slice[f64]`, and the OUTER `ref` alone makes them borrows, so B-2026-07-01-10's `stats_calls_borrow_not_consume` passes with or without this fix. The bare read-only spelling had zero coverage: `tests/ownership.rs` mentions `Slice[` twelve times and every one is `mut Slice[T]` or `ref Slice[T]`; `src/ownership_oracle/tests.rs` mentions it zero times. That is why the entire `--features llvm` suite stayed green through a change to parameter-mode classification — the behaviour was untested, not correct.
+
+THE FIX IS ONE ARM PER SITE, and the ownership one routes through `slice_kind_from_type` rather than re-spelling the match: that helper is already the shared answer to "is this formal a slice" for `arg_formal_slice_kind`, so the borrow-classification and the slice-view-attribution cannot drift apart. It covers the free-function AND method paths together — `MethodCall` args read `method_param_modes` via `method_arg_is_borrow_position`, a different table, but `param_modes_from_signature` fills both, and inherent impls, trait impls and trait declarations are three separate collector walks that all call it. `use_classifier` shares the same tables, so its predicate pipeline moves in step (which it must — `arg_is_borrow_position`'s comments record that the two diverging is how closure classification gets mis-driven).
+
+THE MUTABLE SPELLING MUST NOT MOVE, and is pinned in all three suites. `mut Slice[T]` stays `MutRef`, not silently widened to `Ref`, or the call-site `mut` marker rule and the exclusive-borrow-arg rule lose their subject.
+
+THIS IS NOT DIAGNOSTICS-ONLY, which is the part worth measuring rather than reasoning about. `UseAfterMove` is deliberately NON-FATAL: codegen reads `use_after_move_consume_sites` and at every flagged reuse does two things — deep-copy the value being moved, and skip the source's cleanup disarm (a copy alone leaks the source; a disarm-skip alone turns the use-after-free into a double free). Every `count(words)` reuse used to be such a site. Reclassifying the argument as a borrow REMOVES those sites, so the container is now passed and freed exactly once by its own scope-exit drop, and the two ways to get that wrong are a leak and a double free. `asan_read_only_slice_param_borrows_its_argument` covers it over `String` elements, including a fresh-owned temporary argument, a closure invoked twice through an `Fn` slot, an `as_slice()` view and a range window. The printed values are identical in all three worlds, so the leak gate is the only thing that separates them.
+
+MEASURED against the interpreter as oracle on all four surfaces at both optimization levels: the reuse shapes, three calls in one expression, the method and trait-method paths, heap elements, a fresh temporary, and the `Fn`-slot shape that previously would not build at all. Zero divergences, ASAN + LeakSanitizer clean. Every new test was checked against the parent source rather than assumed non-vacuous: the three ownership tests fail there with the exact move diagnostic, the closures test fails with the once-into-`Fn` error, the oracle test fails with the phantom drop, and both `mut Slice[T]` controls pass on both sides.
+
+GATES: fmt / clippy / the full `--features llvm` suite clean. The asan `-O0` leg flags one fixture, `asan_shared_struct_string_field_reassign_no_leak` (B-2026-08-14-25) — its source contains no slice of any kind, so this change cannot reach it. |
 
 </details>
 
