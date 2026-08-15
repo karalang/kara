@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 96 | 0 |
 | perf | 68 | 1 |
 | false-positive | 63 | 0 |
-| diagnostics | 56 | 1 |
+| diagnostics | 57 | 1 |
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
 | other | 30 | 0 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
-| autopar | 43 | 1 |
+| autopar | 44 | 1 |
 | other | 41 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
@@ -124,16 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1212 surfaced · 4 open · 1196 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1213 surfaced · 4 open · 1197 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-3 | 2026-08-15 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capacity 0 and re-grows 8 -> 16 -> ... on every round. Both spellings now compile to the same in-place append as `push_str` (B-2026-08-14-23), so the two are equivalent code and the heuristic disagrees with itself: measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends, entirely from the missing reservation. | `src/presize.rs`. `is_push_to` matches only `ExprKind::MethodCall` with `push`/`push_str`/`push_back`, and `top_level_push_count` counts only `StmtKind::Expr` statements, so `StmtKind::Assign { target: V, value: V + x }` and `StmtKind::CompoundAssign { Add, target: V, .. }` are invisible. `find_fill_bound` additionally BAILS on any non-`Expr` statement between the Let and the loop that mentions `V`, which would reject a prelude `s = s + "seed"` the way it currently folds in a prelude `s.push_str("seed")`. |
-| B-2026-08-15-4 | 2026-08-15 | autopar | low | `cost_gate: "unknown"` conflates "the loop lookup failed" (a compiler bug) with "found it, but the iterable is not a shapeable range" (a legitimate limitation) -- the same opaque string for both | disjoint_loop_verdict / reduction_loop_verdict (src/effect_graph.rs) chain two `?`s -- find_loop_in_block then par_cost::extract_loop_shape -- and both collapse to None, which effect_graph.rs reports as (false, "unknown"). |
 | B-2026-08-15-6 | 2026-08-15 | codegen | medium | THE DEEP-CLONED HEAP ELEMENT OF AN INLINE-TEMP-VEC INDEX LEAKS WHEN THE INDEX IS AN F-STRING INTERPOLATION OPERAND but not when it is a direct print argument: `println(f"{names()[1]}")` strands one String per evaluation while `println(names()[1])` is clean. | `compile_inline_temp_vec_index_ex` (src/codegen/collections.rs) deep-clones a non-Copy element before draining the temp buffer — it has to, or the returned value dangles — and the clone's owner is the CONSUMER, via `free_fresh_owned_str_arg` gated on `expr_is_inline_temp_vec_heap_index`. The direct print-argument site calls that; the f-string interpolation lowering does not. |
 | B-2026-08-15-7 | 2026-08-15 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED BY VALUE TO A GENERIC FN'S OWNED PARAM IS NEVER DROPPED — `take(nums.clone())` strands one buffer per call when `take` is `take[T](v: Vec[T])`, while the identical call into a non-generic `take_i(v: Vec[i64])` is clean. | The monomorph call path (`compile_generic_call` / `compile_mono_function`, src/codegen.rs) does not run the caller-side owned-temp argument cleanup the ordinary call path does — the arg value is stored into the inlined body's param slot and no cleanup is queued for it on the caller's frame. |
+| B-2026-08-15-8 | 2026-08-15 | autopar | low | A DISJOINT-WRITE ENTRY HAS NOWHERE TO PUT ITS COST-DECLINE PROSE: its `reason` field is the disjointness proof's, so `cost_gate` names the declining gate while nothing says why -- the reduction path carries both. | loop_disjoint_writes_json (src/effect_graph.rs) emits `reason` from `DisjointWriteLoop::reason` (the PROOF's prose). The reduction twin emits the cost verdict's prose there instead, so `LoopVerdict::render`'s third element is used on one path and discarded on the other. |
 
 ### Wontfix (2)
 
@@ -146,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1212 surfaced
 
 </details>
 
-### Fixed (1196)
+### Fixed (1197)
 
-<details><summary>1196 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1197 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7541,6 +7541,76 @@ THE TWO TESTS DIVIDE EXACTLY AS THE BUG DOES, verified against the parent both w
 MEASURED against the interpreter as oracle on all three backends at both optimization levels, nine shapes: the `cap == 0` receiver that must NOT be rebased; a heap self-append small enough to print in full; three chained self-appends, each reallocating again; the 40 KB shape with both ends and the seam; a distinct source; a borrowed slice of a DIFFERENT string (the hot path the deleted guard used to sit on); and the empty-source and empty-receiver degenerates. Zero divergences, ASAN clean at both levels.
 
 GATES: fmt / clippy / the full `--features llvm` suite clean, and the asan `-O0` leg is now FULLY green — 1092 passed, 0 failed, matching the quarantine list exactly. The `asan_shared_struct_string_field_reassign_no_leak` fixture that had been the leg's one standing failure was fixed by B-2026-08-15-5 (04e550b0) in a sibling session. |
+| B-2026-08-15-4 | autopar | low | `cost_gate: "unknown"` conflates "the loop lookup failed" (a compiler bug) with "found it, but the iterable is not a shapeable range" (a legitimate l… | FIXED by 3893197. `cost_gate: "unknown"` now means A COMPILER BUG, every
+time it appears, and a shape the cost model declined says so in its own tag with
+prose that names the shape it wanted instead.
+
+THREE FACTS SHARED ONE STRING, not the two the row filed. The tracker named the
+chained `?`s in `disjoint_loop_verdict` / `reduction_loop_verdict` — the lookup
+and the shape extraction — but the emission site added a third: the helpers were
+reached through `func.and_then(...)`, so a `func` of `None` (the enclosing
+function's AST not found for the decision key) produced the same `None`, and the
+same `"unknown"`, as both of the others. That one is decision-key drift between
+`ConcurrencyChecker::collect_functions`' keying convention and
+`function_by_decision_key` — the failure mode `function_by_decision_key`'s own
+doc comment already warned "silently degrades the query to `unknown` rather than
+failing loudly". It is now its own arm.
+
+WHAT EACH RENDERS NOW. The two lookup failures keep `"unknown"`, because a
+consumer alerting on "the compiler lost track of a loop" wants ONE string to
+match, but their prose says WHICH lookup failed, since that is the first thing a
+bug report needs. The shape decline gets `declined_unshapeable_loop` and prose
+naming the shape that was written and the `for k in lo..hi` auto-par wanted.
+
+THE RULES AND THEIR EXPLANATIONS ARE THE SAME CODE, which is the part that has to
+survive future edits. Rather than add a classifier next to `extract_loop_shape`
+that re-reads the AST and infers why it declined — two copies of one rule set,
+drifting the moment a shape is added — the body BECAME
+`extract_loop_shape_explained`, returning `Result<LoopShape, ShapeDecline>` with
+one variant per `return Err` site, and `extract_loop_shape` is now a `.ok()`
+wrapper over it. A new shape therefore cannot keep a stale explanation: the
+explanation is the `Err` it returns.
+
+That split also kept the change off `src/codegen/`. All four remaining
+`extract_loop_shape` callers are in `codegen/reduce.rs` and
+`codegen/disjoint_par.rs` and are untouched — worth doing deliberately, since
+three other sessions were editing that directory at the time. The wrapper is
+consequently dead without `--features llvm` (the query side no longer calls it),
+so it carries the same narrow `cfg_attr(not(feature = "llvm"), allow(dead_code))`
+that `LoopShape::loop_var` already carries, rather than a blanket allow. CI's
+clippy leg runs without `--tests`, so an unqualified warning there would have
+broken it.
+
+MEASURED on the row's own repro and four more shapes. `for ch in raw.chars()`
+(the row's), `for k in 0..=n`, `for (a, b) in ps`, a `while` with no adjacent
+counter init, and a `while` whose body does not end in the induction step — five
+distinct reasons, none of them `"unknown"` — against a counted loop in the same
+program that still reports `fanout`, which is what keeps the test from passing
+vacuously with auto-par wholly broken. The pin asserts the reasons are DISTINCT,
+not merely present: one string shared across causes is the defect itself.
+Verified discriminating by stashing the fix — it fails on the parent at the first
+shape.
+
+THREE OF THE EIGHT `ShapeDecline` ARMS ARE DEFENSIVE and are deliberately not
+pinned, rather than pinned by a test that would prove nothing: the analyzer emits
+no report entry at all for `loop { }` or for a `while` whose condition is not
+`k < end`, and `for k in lo..` (no upper bound) does not parse — checked, not
+assumed.
+
+ONE ASYMMETRY REMAINS AND IS FILED SEPARATELY. On the DISJOINT-WRITE path the new
+tag discriminates correctly — a proven-disjoint `for i in 0..=n` reports
+`declined_unshapeable_loop` where the exclusive-range twin reports `fanout` — but
+that entry's `reason` field carries the DISJOINTNESS PROOF's prose, so the shape
+explanation has nowhere to go. That is pre-existing and not specific to this row:
+no cost decline has ever had prose on that path, `declined_memory_bound` included.
+Left alone here because giving it one means adding an output field, which is a
+wider change than this row, and split into its own row rather than buried in this
+one.
+
+GATES: `cargo fmt --all -- --check` clean, `cargo clippy --all --all-targets`
+clean both with and without `--features llvm`, and the full `--features llvm`
+suite green — 5668 tests across 28 binaries, zero failures, and zero archive-skip
+notices, so the E2E legs really ran rather than passing vacuously. |
 | B-2026-08-15-5 | codegen | medium | shared-struct String field reassignment never frees the displaced buffer (hidden at default opt by LICM; -O0 leg caught it) | String joins the container family in release_old_shared_container_field (src/codegen/expr_ops.rs): the displaced buffer gets the same in-place cap-guarded drop through the field GEP before the new value is stored. Fixture comment rewritten to retire the false 'already released' premise; new aliasing fixture asan_shared_struct_string_field_reassign_aliasing pins self-assign, cross-alias, and compound-append shapes. Fixed in 04e550b0. |
 
 </details>
