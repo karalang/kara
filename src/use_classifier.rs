@@ -1436,10 +1436,89 @@ pub fn param_types_for_function(
         if let PatternKind::Binding(name) = &p.pattern.kind {
             if let Some(ty) = tc.expr_types.get(&SpanKey::from_span(&p.span)) {
                 map.insert(name.clone(), ty.clone());
+            } else if let Some(ty) = fn_type_from_annotation(&p.ty) {
+                // B-2026-08-15-29 — a FUNCTION-TYPED param, recovered from its
+                // ANNOTATION because the span lookup above answers nothing.
+                //
+                // Measured: `tc.expr_types` has no entry at a param's span for
+                // ANY param, of any type, so the loop above contributes
+                // nothing and this map arrives holding only `self`. Harmless
+                // for an ordinary param — `classify_identifier` falls through
+                // to a span-keyed lookup and a plain identifier use has its
+                // own span, so the answer is right — but it left
+                // B-2026-08-15-27's `fn_typed_callee_modes` with nowhere to
+                // read a closure PARAMETER's declared modes. `fn run(f: Fn(ref
+                // String))` calling `f(q)` twice kept reporting a
+                // use-after-move on `q` while the local form was fixed.
+                //
+                // DELIBERATELY FUNCTION TYPES ONLY. Filling in every param
+                // from its annotation would change what `classify_identifier`
+                // answers for every parameter identifier in the program — a
+                // far wider change than this needs, and one that would flip
+                // `mut ref` params from Read to Consume. A function type is
+                // safe on that axis because `is_copy_type` already answers
+                // TRUE for `Type::Function` (a capture-free code pointer,
+                // B-2026-07-02-24), which is the same Read the span fallback
+                // produces today, so no identifier's classification moves.
+                // Verified: the local once-callable reuse report is identical
+                // before and after.
+                map.insert(name.clone(), ty);
             }
         }
     }
     map
+}
+
+/// `Type::Function` / `Type::OnceFunction` for a `Fn(...)` / `OnceFn(...)`
+/// annotation; `None` for anything else.
+///
+/// Only the PARAMETER MODES are meaningful in the result — each parameter
+/// lowers to a bare `Ref` / `MutRef` / `Error` marker rather than its real
+/// pointee, the same mode-only idiom `param_types_for_function` already uses
+/// for a `ref self` receiver. That is all `fn_typed_callee_modes` reads, and
+/// `is_copy_type` does not inspect a function type's parameters at all. Do not
+/// reach into these for a pointee.
+///
+/// `is_once` picks the target, and the two differ where it matters:
+/// `Type::Function` is Copy, `Type::OnceFunction` is not. Mapping it faithfully
+/// keeps them from being conflated here.
+///
+/// It is NOT what reports a once-callable reuse, and this was measured rather
+/// than assumed: the `let g = || …; g(); g();` report comes from
+/// `once_callable_closures`, which is populated at `let` bindings, and it is
+/// unchanged by this (1 warning before, 1 after). An `OnceFn()` PARAMETER
+/// called twice is reported by neither mechanism, before this change or after
+/// — a separate gap, filed rather than fixed here.
+fn fn_type_from_annotation(te: &crate::ast::TypeExpr) -> Option<Type> {
+    let crate::ast::TypeKind::FnType {
+        params, is_once, ..
+    } = &te.kind
+    else {
+        return None;
+    };
+    fn mode_marker(te: &crate::ast::TypeExpr) -> Type {
+        match &te.kind {
+            crate::ast::TypeKind::Ref(_) => Type::Ref(Box::new(Type::Error)),
+            crate::ast::TypeKind::MutRef(_) => Type::MutRef(Box::new(Type::Error)),
+            _ => Type::Error,
+        }
+    }
+    let params = params.iter().map(mode_marker).collect();
+    // The return type is not read by any consumer of this map, so it is left
+    // as `Unit` rather than lowered — inventing a pointee would suggest a
+    // fidelity this value does not have.
+    let return_type = Box::new(Type::Unit);
+    Some(if *is_once {
+        Type::OnceFunction {
+            params,
+            return_type,
+        }
+    } else {
+        Type::Function {
+            params,
+            return_type,
+        }
+    })
 }
 
 /// Convenience wrapper: locate `fn <name>` at the program top level and

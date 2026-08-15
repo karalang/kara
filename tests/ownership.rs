@@ -12217,3 +12217,116 @@ fn a_closure_returning_a_ref_taking_closure_still_moves_at_the_outer_call() {
         errors
     );
 }
+
+// ── B-2026-08-15-29: the parameter half of B-2026-08-15-27 ──
+//
+// 8242fae taught the classifier to read a closure call's parameter modes off
+// the callee's type, which fixed the LOCAL and returned-closure forms. A
+// closure arriving as a PARAMETER kept warning, because the map it reads is
+// built from `tc.expr_types` at each param's span and the typechecker records
+// nothing there — measured, no param of any type gets an entry that way, so
+// the map arrived holding only `self`. Recovered from the annotation instead.
+//
+// The controls below are again the load-bearing half: every accept test here
+// would also pass against a checker that had stopped classifying closure
+// arguments entirely.
+
+#[test]
+fn ref_typed_closure_parameter_call_does_not_move_its_argument() {
+    // The row's repro.
+    ownership_ok(
+        "fn run(f: Fn(ref String) -> bool) -> bool {\n\
+             let q = \"alpha\";\n\
+             let a = f(q);\n\
+             let b = f(q);\n\
+             return a;\n\
+         }\n\
+         fn main() { println(run(|s| s.len() > 2)); }",
+    );
+}
+
+#[test]
+fn owned_typed_closure_parameter_call_still_moves_its_argument() {
+    // CONTROL. `Fn(String)` as a parameter still takes ownership.
+    let errors = ownership_errors(
+        "fn run(f: Fn(String) -> bool) -> bool {\n\
+             let q = \"alpha\";\n\
+             let a = f(q);\n\
+             let b = f(q);\n\
+             return a;\n\
+         }\n\
+         fn main() { println(run(|s| s.len() > 2)); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "an owned-parameter closure parameter must still move; got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn closure_parameter_modes_are_read_per_position() {
+    // CONTROL, the sharpest: one closure PARAMETER typed
+    // `Fn(ref String, String)`. Borrowed position reusable, owned position not.
+    ownership_ok(
+        "fn eat(s: String) { }\n\
+         fn run(p: Fn(ref String, String)) {\n\
+             let x = \"alpha\";\n\
+             let y = \"beta\";\n\
+             p(x, y);\n\
+             println(x);\n\
+         }\n\
+         fn main() { run(|a, b| eat(b)); }",
+    );
+    let errors = ownership_errors(
+        "fn eat(s: String) { }\n\
+         fn run(p: Fn(ref String, String)) {\n\
+             let x = \"alpha\";\n\
+             let y = \"beta\";\n\
+             p(x, y);\n\
+             println(y);\n\
+         }\n\
+         fn main() { run(|a, b| eat(b)); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "the OWNED position of the same closure parameter must still move; got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn local_once_callable_closure_reuse_is_still_reported() {
+    // CONTROL for the `is_once` mapping. Seeding function-typed params also
+    // seeds `OnceFn(...)` ones, and `Type::OnceFunction` is non-Copy where
+    // `Type::Function` is Copy — so this pins that the local once-callable
+    // reuse report survives, which is the behaviour a careless mapping of
+    // `is_once` would erase.
+    //
+    // Note what this does NOT claim: the report comes from
+    // `once_callable_closures`, populated at `let` bindings, not from the
+    // Copy-ness of the type. An `OnceFn()` PARAMETER called twice is reported
+    // by neither mechanism, before this change or after — filed separately,
+    // not fixed here, and deliberately not asserted in either direction.
+    let errors = ownership_errors(
+        "struct Cfg { name: i64 }\n\
+         fn apply(c: Cfg) { }\n\
+         fn main() {\n\
+             let cfg = Cfg { name: 7 };\n\
+             let g = || apply(cfg);\n\
+             g();\n\
+             g();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "reusing a once-callable closure must still be reported; got: {:?}",
+        errors
+    );
+}
