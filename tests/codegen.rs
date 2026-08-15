@@ -96516,3 +96516,108 @@ mod string_append_in_place {
         );
     }
 }
+
+/// B-2026-08-15-3 — loop-bound pre-sizing recognizes the two ASSIGNMENT
+/// spellings of an append, not just the `push`/`push_str` method call.
+///
+/// The three spellings compile to the same in-place append (B-2026-08-14-23),
+/// so recognizing only the method call left `src/presize.rs` disagreeing with
+/// itself: an accumulator filled by `s = s + x` or `s += x` started at capacity
+/// 0 and re-grew 8 -> 16 -> ... on every round. Measured 5.8 ms vs 2.7 ms on
+/// 2,000 rounds of 400 appends, entirely from the missing reservation.
+///
+/// THESE RUN THE REAL PIPELINE ON PURPOSE. `presize.rs`'s own unit tests call
+/// `presize_block` on a freshly parsed body, which is pre-lowering by
+/// construction — so they cannot see the trap B-2026-08-14-23 documented, where
+/// a recognizer that matches only `Binary` is silently dead because lowering
+/// has already rewritten `s + x` into a `String.add` call. `karac::lower` is
+/// what orders `presize_block` before the operator rewrite; these assert
+/// through it, so a reordering fails here rather than quietly costing 2x.
+mod presize_reservation {
+    /// THE PARSE AND TYPECHECK ASSERTIONS ARE WHAT KEEP THE DECLINE TEST
+    /// HONEST. Its four probes assert that `str_with_cap.buf` is ABSENT — which
+    /// a source that never compiled would satisfy just as well, so a typo'd
+    /// probe would read as a deliberate decline forever. Nothing here needs to
+    /// survive a broken probe, so refusing one costs nothing.
+    fn module_ir(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "probe does not parse: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "probe does not typecheck: {:?}",
+            typed.errors
+        );
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        karac::codegen::compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen")
+    }
+
+    /// `str_with_cap.buf` is the name `String.with_capacity` gives its
+    /// allocation, so it is present exactly when the accumulator was reserved
+    /// up front rather than grown from zero.
+    fn reserves(body: &str) -> bool {
+        module_ir(&format!(
+            "fn f(n: i64) {{ {body} }}\nfn main() {{ f(4i64); }}\n"
+        ))
+        .contains("str_with_cap.buf")
+    }
+
+    #[test]
+    fn assign_append_spellings_reserve_up_front() {
+        // The baseline the two spellings have to reach: the method call has
+        // always been pre-sized.
+        assert!(
+            reserves("let mut s = \"\"; let mut i = 0i64; while i < n { s.push_str(\"x\"); i = i + 1i64; } println(s);"),
+            "`s.push_str(x)` must reserve (the pre-existing behavior)"
+        );
+        assert!(
+            reserves("let mut s = \"\"; let mut i = 0i64; while i < n { s = s + \"x\"; i = i + 1i64; } println(s);"),
+            "`s = s + x` must reserve — it is the same append"
+        );
+        assert!(
+            reserves("let mut s = \"\"; let mut i = 0i64; while i < n { s += \"x\"; i = i + 1i64; } println(s);"),
+            "`s += x` must reserve — it is the same append"
+        );
+        assert!(
+            reserves("let mut s = \"\"; for i in 0i64..n { s += \"x\"; } println(s);"),
+            "a `for`-range fill in the operator spelling must reserve too"
+        );
+        // The seed prelude in its assignment spelling: `find_fill_bound` used to
+        // bail on it (a non-`Expr` statement mentioning `s`) while folding in
+        // the identical `s.push_str("seed")`.
+        assert!(
+            reserves("let mut s = \"\"; s = s + \"seed\"; let mut i = 0i64; while i < n { s += \"x\"; i = i + 1i64; } println(s);"),
+            "an assignment-spelled seed append must be folded in, not bailed on"
+        );
+    }
+
+    /// The declines. Pre-sizing is only a capacity hint, so none of these could
+    /// change an answer — but a heuristic that fires on shapes it cannot
+    /// account for stops meaning anything, and these are the shapes whose final
+    /// length is NOT the trip count.
+    #[test]
+    fn non_append_assignment_shapes_still_decline() {
+        assert!(
+            !reserves("let mut s = \"\"; let mut i = 0i64; while i < n { s = \"x\" + s; i = i + 1i64; } println(s);"),
+            "a prepend is not the append this reserves for"
+        );
+        assert!(
+            !reserves("let mut s = \"\"; let t = \"q\"; let mut i = 0i64; while i < n { s = t + \"z\"; i = i + 1i64; } println(s);"),
+            "an assignment not rooted at the target REPLACES it — nothing accumulates"
+        );
+        assert!(
+            !reserves("let mut s = \"\"; let mut i = 0i64; while i < n { if i > 0i64 { s += \"x\"; } i = i + 1i64; } println(s);"),
+            "a conditional append is <= the trip count, not equal to it"
+        );
+        assert!(
+            !reserves("let mut s = \"\"; let mut i = 0i64; while i < n { s += \"x\"; s = s + \"y\"; i = i + 1i64; } println(s);"),
+            "two appends per iteration is not one per iteration"
+        );
+    }
+}

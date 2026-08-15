@@ -15,24 +15,29 @@
 //! `lowering` **before** operator lowering, so loop conditions / increments are
 //! still raw `Binary` nodes — see [`crate::lowering::Lowerer::lower_block`].
 //!
+//! **What counts as the fill.** Three spellings, all of them appends and all
+//! treated alike (see [`stmt_appends_to`]): `V.push(x)` / `V.push_str(x)` /
+//! `V.push_back(x)`, `V = V + x`, and `V += x`.
+//!
 //! **Effect/ownership safety.** The rewrite only fires when the loop body
-//! contains a `push`/`push_str` to the binding — which already allocates — so
-//! swapping `new()` (no alloc) for `with_capacity` (allocates) introduces no
-//! effect category the enclosing function did not already carry. Ownership is
-//! unchanged: both yield a fresh owned collection.
+//! appends to the binding — which already allocates — so swapping `new()` (no
+//! alloc) for `with_capacity` (allocates) introduces no effect category the
+//! enclosing function did not already carry. Ownership is unchanged: both yield
+//! a fresh owned collection.
 //!
 //! Firing pattern (ALL must hold):
 //!   1. `let mut V = Vec.new()` / `String.new()` / `""` — fresh mutable binding.
 //!   2. A following `while IV < BOUND` / `while IV <= BOUND` / `for I in LO..BOUND`
-//!      loop whose body pushes to `V` exactly once, unconditionally, with no
-//!      break/continue/return (so push-count == trip-count). The `<=` form runs
+//!      loop whose body appends to `V` exactly once, unconditionally, with no
+//!      break/continue/return (so append-count == trip-count). The `<=` form runs
 //!      one extra iteration, so it reserves `BOUND + 1`.
-//!   3. Between the Let and the loop, `V` may only be *seed-pushed* (e.g.
-//!      `fact.push(1)` / DP base cases); each such push adds 1 to the
-//!      reservation. Any other mention there (move, reassign, index-write)
-//!      bails. Inside the loop body `V` may be *read* (e.g. `V[i - 1]` /
-//!      `V.len()` in a cumulative fill) but is pushed to exactly once — reads
-//!      don't change the length, so the trip-count reservation stays exact.
+//!   3. Between the Let and the loop, `V` may only be *seed-appended* (e.g.
+//!      `fact.push(1)` / `s = s + "seed"` / DP base cases); each such append adds
+//!      1 to the reservation. Any other mention there (move, reassign,
+//!      index-write) bails. Inside the loop body `V` may be *read* (e.g.
+//!      `V[i - 1]` / `V.len()` in a cumulative fill) but is appended to exactly
+//!      once — reads don't change the length, so the trip-count reservation
+//!      stays exact.
 //!   4. `BOUND` is fully analyzable, loop-invariant (none of its identifiers is
 //!      assigned or method-called in the body), does not reference `IV` or `V`,
 //!      and every identifier it names is in scope at the Let (i.e. not bound by
@@ -128,10 +133,11 @@ enum LoopVerdict {
 /// unhandled use of `v` aborts.
 fn find_fill_bound(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Expr> {
     let mut bound_between: Vec<String> = Vec::new();
-    // Pre-loop seed pushes to `v` (e.g. `fact.push(1)` before the counted fill,
-    // or base cases seeding a DP table). Each adds one element on top of the
-    // loop's trip count, so they're folded into the reservation below.
-    let mut prelude_pushes: i64 = 0;
+    // Pre-loop seed appends to `v` (e.g. `fact.push(1)` / `s = s + "seed"`
+    // before the counted fill, or base cases seeding a DP table). Each adds one
+    // element on top of the loop's trip count, so they're folded into the
+    // reservation below.
+    let mut prelude_appends: i64 = 0;
     for stmt in &stmts[let_idx + 1..] {
         let verdict = match &stmt.kind {
             StmtKind::Expr(e) => match &e.kind {
@@ -147,7 +153,7 @@ fn find_fill_bound(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Expr> {
                 // A pre-loop seed push to `v` — count it rather than bail; the
                 // reservation is the loop trip count plus these seeds.
                 _ if is_push_to(e, v) => {
-                    prelude_pushes += 1;
+                    prelude_appends += 1;
                     LoopVerdict::Skip
                 }
                 // Any OTHER non-loop statement that touches `v` (a move into a
@@ -156,6 +162,15 @@ fn find_fill_bound(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Expr> {
                 _ if mentions_ident(e, v) => LoopVerdict::Bail,
                 _ => LoopVerdict::Skip,
             },
+            // A pre-loop seed append written as an ASSIGNMENT — `s = s + "seed"`
+            // / `s += "seed"`. Same statement as the `is_push_to` seed above,
+            // spelled with an operator, so it counts rather than bails
+            // (B-2026-08-15-3). Only reachable for non-`Expr` statements: the
+            // arm above matches every `StmtKind::Expr` first.
+            _ if stmt_appends_to(stmt, v) => {
+                prelude_appends += 1;
+                LoopVerdict::Skip
+            }
             // A non-expr statement between the Let and the loop. If it touches
             // `v`, bail (v may be moved/reassigned). Otherwise record the names
             // it binds — the bound must not reference any (not in scope at Let).
@@ -169,8 +184,8 @@ fn find_fill_bound(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Expr> {
         };
         match verdict {
             LoopVerdict::Presize(bound) => {
-                return Some(if prelude_pushes > 0 {
-                    add_const(&bound, prelude_pushes)
+                return Some(if prelude_appends > 0 {
+                    add_const(&bound, prelude_appends)
                 } else {
                     *bound
                 });
@@ -213,7 +228,7 @@ fn analyze_while(condition: &Expr, body: &Block, v: &str, bound_between: &[Strin
 
 /// Build the expression `<e> + k` (`k >= 1`) — a larger reservation than the
 /// raw bound. An inclusive `<=` loop adds one iteration; each pre-loop seed
-/// push adds one element. Spans are inherited from `e` — synthesized nodes
+/// append adds one element. Spans are inherited from `e` — synthesized nodes
 /// never surface in diagnostics, they only feed the `with_capacity` argument.
 fn add_const(e: &Expr, k: i64) -> Expr {
     let span = e.span.clone();
@@ -311,16 +326,17 @@ fn fill_loop_ok(
     true
 }
 
-/// The body pushes to `v` exactly once, unconditionally, with no
+/// The body appends to `v` exactly once — in any of the three spellings
+/// [`stmt_appends_to`] recognizes — unconditionally, with no
 /// break/continue/return. Read-only mentions of `v` elsewhere in the body — e.g.
 /// `v.len()` or `v[i - 1]` in a cumulative fill `v.push(v[i - 1] + x)` — are
-/// allowed: a read never changes the length, so push-count still equals
+/// allowed: a read never changes the length, so append-count still equals
 /// trip-count.
 ///
 /// Correctness rests on the complete-or-bail ident analysis: `count_ident_in_
 /// block` returns `None` on any node it can't fully enumerate (nested `if`/loop
 /// bodies, or `v` moved into an un-walked position), so a body that survives it
-/// is straight-line — which makes the single top-level push the *only* push
+/// is straight-line — which makes the single top-level append the *only* append
 /// (i.e. unconditional). And pre-sizing is a pure capacity hint, so even an
 /// imperfect estimate from an allowed read can never change program output.
 fn body_fills_once(body: &Block, v: &str) -> bool {
@@ -329,7 +345,7 @@ fn body_fills_once(body: &Block, v: &str) -> bool {
     }
     // Straight-line case: every mention of `v` is in an analyzable (top-level)
     // position — `count_ident_in_block` returns `None` on nested control flow —
-    // so the single top-level push is the *only* push (unconditional).
+    // so the single top-level append is the *only* append (unconditional).
     if count_ident_in_block(body, v).is_some() {
         return top_level_push_count(body, v) == 1;
     }
@@ -344,14 +360,15 @@ fn body_fills_once(body: &Block, v: &str) -> bool {
     balanced_if_fills_once(body, v)
 }
 
-/// Count the top-level (unconditional) pushes to `v` in `body` — statements and
-/// the final expression. Callers gate on `count_ident_in_block(..).is_some()`
-/// first, so any push nested in control flow has already forced a bail.
+/// Count the top-level (unconditional) appends to `v` in `body` — statements
+/// and the final expression, in all three spellings (see [`stmt_appends_to`]).
+/// Callers gate on `count_ident_in_block(..).is_some()` first, so any append
+/// nested in control flow has already forced a bail.
+///
+/// The final expression only needs the method-call spelling: an assignment is a
+/// statement in this AST, never a block's trailing expression.
 fn top_level_push_count(body: &Block, v: &str) -> usize {
-    body.stmts
-        .iter()
-        .filter(|s| matches!(&s.kind, StmtKind::Expr(e) if is_push_to(e, v)))
-        .count()
+    body.stmts.iter().filter(|s| stmt_appends_to(s, v)).count()
         + body
             .final_expr
             .as_ref()
@@ -360,6 +377,8 @@ fn top_level_push_count(body: &Block, v: &str) -> usize {
 
 /// `v` is mentioned in exactly one top-level statement/final, and that mention
 /// is a balanced `if { v.push(_) } else { v.push(_) }` (see `body_fills_once`).
+/// The arms may use any append spelling — they are counted by
+/// [`top_level_push_count`], same as a straight-line body.
 fn balanced_if_fills_once(body: &Block, v: &str) -> bool {
     let mut found = false;
     let mut mentions = 0usize;
@@ -413,8 +432,8 @@ fn is_balanced_if_push(e: &Expr, v: &str) -> bool {
 }
 
 /// One arm of a balanced-if: no early exit, `v` only in analyzable positions,
-/// and exactly one push to `v` (reads of `v` — `v[j - 1]` in a cumulative fill —
-/// are fine; a read never changes the length).
+/// and exactly one append to `v` (reads of `v` — `v[j - 1]` in a cumulative
+/// fill — are fine; a read never changes the length).
 fn arm_pushes_v_once(block: &Block, v: &str) -> bool {
     if block_has_early_exit(block) {
         return false;
@@ -429,6 +448,72 @@ fn is_push_to(e: &Expr, v: &str) -> bool {
     matches!(&e.kind, ExprKind::MethodCall { object, method, .. }
         if matches!(&object.kind, ExprKind::Identifier(n) if n == v)
             && matches!(method.as_str(), "push" | "push_str" | "push_back"))
+}
+
+/// One statement that appends to `v`. Three spellings of the same operation:
+/// the `push`/`push_str`/`push_back` method call, `v = v + x`, and `v += x`
+/// (B-2026-08-15-3).
+///
+/// THE THREE ARE THE SAME CODE, which is why they get the same reservation.
+/// B-2026-08-14-23 made both assignment spellings extend the left buffer in
+/// place — they lower to `push_str`'s grow-and-copy — so recognizing only the
+/// method call left the heuristic disagreeing with itself: it pre-sized one
+/// spelling of an operation and not another spelling that compiles to the same
+/// instructions. Measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends,
+/// entirely from the missing reservation.
+///
+/// The effect/ownership argument in the module header carries over unchanged.
+/// It rests on the fill ALREADY ALLOCATING, so swapping `new()` for
+/// `with_capacity` introduces no new effect — and an append allocates on either
+/// path, whether it reaches the in-place grow or falls back to the
+/// allocate-and-copy concatenation (which codegen still does for an aliasing
+/// operand such as `s = s + s`). So this does not depend on the in-place
+/// lowering having fired, only on the append being an append.
+fn stmt_appends_to(stmt: &Stmt, v: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::Expr(e) => is_push_to(e, v),
+        StmtKind::Assign { target, value } => is_ident(target, v) && add_chain_root_is(value, v),
+        StmtKind::CompoundAssign {
+            target,
+            op,
+            value: _,
+        } => *op == CompoundOp::Add && is_ident(target, v),
+        _ => false,
+    }
+}
+
+fn is_ident(e: &Expr, v: &str) -> bool {
+    matches!(&e.kind, ExprKind::Identifier(n) if n == v)
+}
+
+/// The leftmost leaf of a left-associated `+` chain is `v` — i.e. `v = v + x`
+/// is an append rather than a prepend (`v = x + v`) or an unrelated sum
+/// (`v = a + b`). Mirrors codegen's `flatten_string_add_spine`, so the shapes
+/// pre-sized here are exactly the shapes that append in place.
+///
+/// MATCHES `Binary` ONLY, and that is a property of WHERE THIS RUNS rather than
+/// an omission: `lower_block` calls `presize_block` before lowering any of the
+/// block's statements, so operators are still raw `Binary` nodes here.
+/// Post-lowering the same expression is a `Call` to `String.add` — the shape
+/// codegen has to match, and the shape that made a `Binary`-only recognizer
+/// silently dead there (see B-2026-08-14-23's postmortem). Adding that spelling
+/// here would be unreachable code, so the ordering is pinned by a test through
+/// the real pipeline instead (`presize_reservation::assign_append_spellings_
+/// reserve_up_front` in `tests/codegen.rs`), which is the thing that would
+/// actually catch a reordering.
+fn add_chain_root_is(e: &Expr, v: &str) -> bool {
+    let mut cur = e;
+    let mut saw_add = false;
+    while let ExprKind::Binary {
+        op: BinOp::Add,
+        left,
+        ..
+    } = &cur.kind
+    {
+        saw_add = true;
+        cur = left;
+    }
+    saw_add && is_ident(cur, v)
 }
 
 /// Rewrite `let mut V = new()/""` to `let mut V = <Coll>.with_capacity(bound)`.
@@ -756,8 +841,19 @@ mod tests {
 
     /// Parse `src`, run pre-sizing on the first function's body, and report
     /// whether the binding `name` ended up as a `*.with_capacity(...)` init.
+    ///
+    /// THE PARSE ASSERTION IS WHAT KEEPS THE NEGATIVE TESTS HONEST. Every
+    /// `assert!(!fires_for(..))` below would also pass on a source that failed
+    /// to parse at all — the recovered AST simply wouldn't contain the shape,
+    /// and a typo'd probe would read as a deliberate decline forever. Nothing
+    /// here needs to survive a parse error, so refusing one costs nothing.
     fn fires_for(src: &str, name: &str) -> bool {
         let parsed = crate::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "probe source does not parse: {:?}",
+            parsed.errors
+        );
         let mut body = parsed
             .program
             .items
@@ -903,6 +999,133 @@ mod tests {
         // (the `<=`) + 1 (the seed).
         let src = "fn f(n: i64) {\n  let mut fact: Vec[i64] = Vec.new();\n  fact.push(1i64);\n  let mut i = 1i64;\n  while i <= n {\n    fact.push(fact[i - 1i64] * i);\n    i = i + 1i64;\n  }\n}\n";
         assert!(fires_for(src, "fact"));
+    }
+
+    // ── B-2026-08-15-3: the assignment spellings of an append ──────────
+    //
+    // `s = s + x` and `s += x` compile to the same in-place append as
+    // `s.push_str(x)` (B-2026-08-14-23), so the heuristic has to recognize all
+    // three or it disagrees with itself.
+
+    #[test]
+    fn fires_on_plain_assign_append() {
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < n {\n    s = s + \"x\";\n    i = i + 1i64;\n  }\n}\n";
+        assert!(fires_for(src, "s"));
+    }
+
+    #[test]
+    fn fires_on_compound_assign_append() {
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < n {\n    s += \"x\";\n    i = i + 1i64;\n  }\n}\n";
+        assert!(fires_for(src, "s"));
+    }
+
+    #[test]
+    fn fires_on_assign_append_chain_rooted_at_target() {
+        // `s = s + a + b` is still one append statement per iteration; codegen
+        // appends each operand in turn onto the same buffer.
+        let src = "fn f(n: i64, t: String) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < n {\n    s = s + \" \" + t;\n    i = i + 1i64;\n  }\n}\n";
+        assert!(fires_for(src, "s"));
+    }
+
+    #[test]
+    fn fires_on_assign_append_in_for_range() {
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  for i in 0i64..n {\n    s += \"x\";\n  }\n}\n";
+        assert!(fires_for(src, "s"));
+    }
+
+    #[test]
+    fn fires_on_assign_seed_then_assign_fill() {
+        // The seed-append prelude in its assignment spelling — `find_fill_bound`
+        // used to bail here (a non-`Expr` statement mentioning `s`) while
+        // folding in the identical `s.push_str("seed")`.
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  s = s + \"seed\";\n  let mut i = 0i64;\n  while i < n {\n    s += \"x\";\n    i = i + 1i64;\n  }\n}\n";
+        assert!(fires_for(src, "s"));
+    }
+
+    #[test]
+    fn fires_on_balanced_if_assign_append() {
+        // Both arms append once, so the net count is still the trip count —
+        // the B-2026-07-16-17 shape written with the operator.
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < n {\n    if i == 0i64 { s = s + \"a\"; } else { s = s + \"b\"; }\n    i = i + 1i64;\n  }\n}\n";
+        assert!(fires_for(src, "s"));
+    }
+
+    #[test]
+    fn no_fire_on_prepend_assign() {
+        // `s = "x" + s` is a PREPEND: nothing can reuse the left buffer, so it
+        // is not the operation this reserves for. Declining keeps the pass
+        // honest about which shapes it claims to speed up.
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < n {\n    s = \"x\" + s;\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "s"));
+    }
+
+    #[test]
+    fn no_fire_on_assign_not_rooted_at_target() {
+        // `s = a + b` REPLACES `s` rather than extending it, so the length
+        // after N iterations is not N — pre-sizing would be a hint about a
+        // quantity that never accumulates.
+        let src = "fn f(n: i64, a: String, b: String) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < n {\n    s = a + b;\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "s"));
+    }
+
+    #[test]
+    fn no_fire_on_plain_reassign() {
+        // A bare `s = t` is the reassign the prelude guard has always bailed
+        // on; the seed-append relaxation must not swallow it.
+        let src = "fn f(n: i64, t: String) {\n  let mut s: String = \"\";\n  s = t;\n  let mut i = 0i64;\n  while i < n {\n    s += \"x\";\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "s"));
+    }
+
+    #[test]
+    fn no_fire_on_non_add_compound_assign() {
+        // `s -= x` is not an append. Only `+=` extends.
+        //
+        // No REAL program can reach this arm — `-=` on a String does not
+        // typecheck, and every other pre-sizable initializer is a collection
+        // too — so this probes the recognizer rather than a shape a user could
+        // write. It is worth having anyway: `stmt_appends_to` reads the
+        // `CompoundOp`, and dropping that check is a one-character edit that
+        // nothing else in the suite would notice.
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < n {\n    s -= \"x\";\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "s"));
+    }
+
+    #[test]
+    fn no_fire_on_two_assign_appends() {
+        // Two appends per iteration means append-count != trip-count, the same
+        // rule the method-call spelling has always enforced.
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < n {\n    s += \"x\";\n    s = s + \"y\";\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "s"));
+    }
+
+    #[test]
+    fn no_fire_on_mixed_spelling_double_append() {
+        // The mixed spelling of the same over-count: one method call and one
+        // operator. Counting only one of the two forms would have called this
+        // a single append.
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < n {\n    s.push_str(\"x\");\n    s += \"y\";\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "s"));
+    }
+
+    #[test]
+    fn no_fire_on_conditional_assign_append() {
+        // An `if` with no `else`: append-count <= trip-count, not exact.
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < n {\n    if i > 0i64 { s += \"x\"; }\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "s"));
+    }
+
+    #[test]
+    fn no_fire_when_assign_append_bound_declared_after_let() {
+        // The scope guard is spelling-independent: `hi` is bound between the
+        // Let and the loop, so it is not in scope at the rewrite site.
+        let src = "fn f(n: i64) {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  let hi = n + 1i64;\n  while i < hi {\n    s += \"x\";\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "s"));
+    }
+
+    #[test]
+    fn no_fire_on_giant_literal_bound_with_assign_append() {
+        let src = "fn f() {\n  let mut s: String = \"\";\n  let mut i = 0i64;\n  while i < 2000000000i64 {\n    s += \"x\";\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "s"));
     }
 
     #[test]
