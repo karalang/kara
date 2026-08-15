@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 249 | 1 |
+| miscompile | 249 | 0 |
 | leak | 177 | 3 |
 | double-free | 129 | 1 |
 | run-vs-build | 120 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 869 | 7 |
+| codegen | 869 | 6 |
 | typecheck | 171 | 1 |
 | interp | 145 | 0 |
 | ownership | 48 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced · 10 open · 1181 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced · 9 open · 1182 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced
 | B-2026-08-14-22 | 2026-08-14 | codegen | high | `s += x` ON A LOCAL `String` LEAKS THE ENTIRE PREVIOUS BUFFER ON EVERY APPEND: building a 160 KB string with 20,000 appends peaks at 1.5 GB of RSS — the exact sum of every intermediate — where `push_str` and `s = s + x` both peak at 2.5 MB. | The `+=` compound-assignment lowering for `String`. It evidently allocates a fresh concatenation and stores it over the binding without releasing the buffer the binding held. `s = s + x`, which produces the same value through an explicit assignment, DOES release — so the drop of the overwritten value exists and the `+=` path does not reach it. |
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
-| B-2026-08-14-26 | 2026-08-14 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--interp` applies it — for a scalar field as well as a container, so this is not a heap-ownership gap but a lost write. `karac check` passes and nothing reports an error; the program simply keeps the old value. | The FieldAccess-rooted branch of `compile_field_store`: with a SHARED chain root, `nested_store_place_ptr` or `place_chain_type_name` declines and the branch exits through the no-op tail. Two prior fixes in that same branch (B-2026-07-28-6, B-2026-08-01-35) were for this same tail — instrument which resolution returns None before changing anything. |
 | B-2026-08-14-32 | 2026-08-14 | codegen | high | an index read into a heap-owning Vec, used as the value of an `if`/`match` ARM, is freed by both the binding and the container -- `let w = if c { v[i] } else { .. }` aborts with a double free while `let w = v[i]` is correct | src/codegen/stmts.rs:4074 and let_binding_is_borrow_elided (stmts.rs:1581) test only the TOP-LEVEL RHS kind for ExprKind::Index; an index read reached through an If/Match arm is invisible to them, so the binding registers an owned cleanup over a pointer the container still owns. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
 | B-2026-08-14-34 | 2026-08-14 | resolver+ownership | medium | DIAGNOSTIC OUTPUT IS NONDETERMINISTIC RUN-TO-RUN on the same binary and the same input, in two independent places: a resolver "did you mean" suggestion picks a different candidate among equal-distance ties (7/7/6 three-way split over 20 runs), and two `perf[rc-fallback]` diagnostics are emitted in a different ORDER (10/10 over 20 runs). Both reach the `--output=json` surface the Mend loop consumes. | HashMap iteration order leaking into user-visible output, the same mechanism as B-2026-08-14-10 but on the diagnostics side rather than the typechecking side. LEG A: the resolver's suggestion search evidently walks a hash-ordered name table and keeps the first best candidate, so an edit-distance TIE resolves by hash. LEG B: the RC-fallback diagnostics are collected from a hash-ordered map and emitted in iteration order rather than sorted by span. |
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced
 
 </details>
 
-### Fixed (1181)
+### Fixed (1182)
 
-<details><summary>1181 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1182 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6592,6 +6591,21 @@ NOTE ON THE SOURCE CASE, unchanged: the Cumulus loop this came from is still
 declined once visible, for the sound reason the row records (`the body reads a
 collection it also writes`). The gain there is observability, which is what the
 row asked for. |
+| B-2026-08-14-26 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--i… | FIXED by 38e15acd. The row asks for the branch to be instrumented before anything is changed, because its two prior fixes were mis-diagnosed. Done, and the answer is unambiguous: `place_chain_type_name` resolves correctly (`Some("Inner")`); `nested_store_place_ptr` returns `None`.
+
+ONE LOOKUP, AND IT IS THE SAME ONE B-2026-07-28-6 ALREADY FIXED ONE LAYER UP. `nested_store_place_ptr`'s FieldAccess arm opens with `self.struct_types.get(obj_ty)?`. A `shared struct` is registered ONLY in `shared_types`, so that `?` answers "not a struct" for every shared parent and the walk returns `None` — after which `compile_field_store`'s guard, which needs BOTH the pointer and the type name, exits through the no-op tail. `compile_field_store` itself learned the `shared_types`-first order in B-2026-07-28-6, and this arm already carries THAT SAME ROW's fix for the shared FIELD three lines below (the extra load, because a shared field holds a handle). The parent's layout was the half nobody went back for.
+
+A SECOND DEREF WAS NEEDED, and it is the reason the first attempt built and then exited 48. `get_data_ptr` returns the ALLOCA for an owned binding, and a shared binding's alloca holds an RC handle — so the place a shared ROOT denotes is the node, one load in, exactly as for a shared field. The walk had no reason to know that before: it never got past the root, because the layout lookup declined first. Fixed at the two root arms (`Identifier` / `SelfValue`) rather than at the call site, so depth-3 chains get it for free — `x.b.c.n = 42` recurses through the same arms.
+
+The shared arm routes the layout through `shared_gep_layout` for the header shift: a headed node carries a leading refcount word (two when the type is weak-targeted), so the field index has to be biased or the GEP lands on the header.
+
+MAKING THE STORE LAND EXPOSED A LEAK THAT COULD NOT HAVE EXISTED BEFORE, and it is worth naming because it is invisible to every output comparison. With the write dropped, nothing was ever displaced. With the write landing, the old container is — and the nested branch skips its old-value drop for a shared parent on the reasoning that "its fields ride the RC node teardown". True of the field's FINAL occupant, and silent about one an assignment displaced: LeakSanitizer reported 96 bytes for a two-element `Vec[String]`, once per assignment. B-2026-08-14-18 had already written the exact helper for this at DEPTH 1 (`release_old_shared_container_field`, deliberately narrow — `Vec`/`Map`/`Set` only, because `String` is already released on this path and a bare `shared T` field needs a release rather than a free). The nested branch now calls it too. Every surface prints the same number with or without that call, so the leak test is the only thing that separates the two.
+
+THE ROW'S "THIRD BEHAVIOUR" IS NOT A BUG. It records `plain Outer -> shared Inner` as BUILD FAIL and asks for it to be resolved in the same pass. It fails with an ownership diagnostic — "cannot assign through `o` — `o` is declared without `mut`" — which is correct: assigning through a PLAIN struct mutates the local, so it needs `let mut o`. Spelled that way it builds and prints 9 on both surfaces. The row's `--interp` column for that shape came from `karac run --interp`, which executes despite check errors, so the two columns were not measuring the same program.
+
+MEASURED against the interpreter as oracle on all four surfaces and both optimization levels, nine shapes in one program: the scalar and container repros; a depth-3 shared chain; the store through a `ref self` method and through a `ref` parameter; the depth-1 shared control (B-2026-08-14-18's) and the plain-to-plain nested control, both of which must not move; a plain outer holding a shared inner; and the sibling field on the shared outer, to show the write lands where it is aimed and nowhere else. Zero divergences, and the whole fixture is ASAN + LeakSanitizer clean.
+
+GATES: fmt / clippy / the full `--features llvm` suite (103 targets) clean, and this row's own leak test passes at `-O0` as well. The asan `-O0` leg flags one fixture, `asan_shared_struct_string_field_reassign_no_leak`. That is B-2026-08-14-25's and it fails identically on the parent source — re-verified here rather than carried over from an earlier round, because unlike the previous two fixes this change lands squarely in shared-struct field assignment and could plausibly have moved it. |
 | B-2026-08-14-27 | codegen | high | BINDING AN INNER `Vec` ELEMENT OF A `ref Vec[Vec[i64]]` TO A LOCAL DOUBLE-FREES ITS BUFFER: `let first = m[0i64];` copies the row header without a re… | FIXED by 0dc28cf4. THE ROW'S ABLATION HAS ONE WRONG LINE AND IT IS THE LOAD-BEARING ONE. "KARAC_AUTO_PAR=0 — same" is not what happens: this is an AUTO-PARALLELISATION bug, and a build with auto-par off is clean. The measurement went wrong at the stage, not the observation — auto-par is a COMPILE-time decision, so `KARAC_AUTO_PAR=0 ./binary` sets it after the parallelism is already in the object. Building the same kata as `KARAC_AUTO_PAR=0 karac build …` produces the correct twelve lines and the correct `sums:` fold. That is why the row's other ablations behaved so strangely: removing the reverse passes kept the crash, replacing the binding with a direct read killed it, and dropping the push loop killed it — all of them are edits to the DEPENDENCE GRAPH the parallelizer reads, not to ownership.
 
 THE BINDING IS INNOCENT ON ITS OWN, which the row half-saw when it recorded "the binding is necessary and not sufficient". The sequential path gets `let first = m[0]` exactly right: `borrow_elided` is computed from `vec_index_borrow_spans`, and the `track_vec_*` registration is guarded on `!borrow_elided` under a comment that states the reason in full — "this binding aliases the container element and does NOT own a buffer — registering a `track_vec_*` cleanup would double-free". The emitted IR bears that out: no cleanup for `first` at all.
