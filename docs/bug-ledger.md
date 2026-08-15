@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 249 | 0 |
 | leak | 177 | 1 |
 | double-free | 129 | 0 |
-| run-vs-build | 121 | 1 |
+| run-vs-build | 121 | 0 |
 | codegen-gap | 109 | 1 |
 | missing-feature | 96 | 0 |
 | perf | 68 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 873 | 5 |
+| codegen | 873 | 4 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 1 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1209 surfaced · 6 open · 1191 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1209 surfaced · 5 open · 1192 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-38 | 2026-08-14 | codegen | low | INDEXING THE RESULT OF A Vec-RETURNING METHOD CALL loud-bails `Index operator applied to non-array type` under `karac build` while `--interp` runs it: `v.clone()[1]`, `v[1..3].to_vec()[0]`, and any other `<method-chain>[i]` whose receiver is a fresh temporary. | `compile_index` (src/codegen/collections.rs) resolves its object through name-keyed registries (`vec_elem_types` / `slice_elem_types` / array slot types); a MethodCall object has no name, so it falls to the generic tail whose ArrayType / VectorType branches cannot match the `{ptr,len,cap}` struct and errors. |
-| B-2026-08-15-1 | 2026-08-15 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints raw bytes, and `m.len()` is a hard codegen error — while the same program with a type annotation, or with plain `Map`/`Set`, is correct on every surface. | The `let` path derives the collection side-tables (`map_key_type_exprs` / `var_elem_type_exprs` / `set_elem_type_exprs` / `sorted_collection_vars`) from the ANNOTATION; the callee's declared return type is never consulted for the `SortedMap` / `SortedSet` heads, so an unannotated call-result binding registers nothing. The plain `Map` / `Set` equivalent registers fine, so the head-gate is the gap, not the call-result shape. |
 | B-2026-08-15-2 | 2026-08-15 | codegen+ownership | high | `s.push_str(s)` ON A HEAP STRING THAT MUST GROW IS A USE-AFTER-FREE: the grow reallocs the destination and the copy then reads through the now-stale SOURCE pointer — 5,000 invalid reads under valgrind on one call. It produces the RIGHT ANSWER anyway, so nothing surfaces. The two SLICE spellings of the same aliasing (`s.push_str(s[a..b])`, and via a `let`) are correctly rejected by the ownership checker; only the whole-value self-append reaches codegen. | Two candidate layers, and the fix should probably be both. CODEGEN: `push_str`'s alias guard in `src/codegen/vec_method.rs` is emitted only under `src_borrowed` — an owned source is assumed not to alias, which is true of a fresh temp but false of the destination itself. The grow path calls `emit_string_buffer_grow` (realloc, may move) and then copies from `src_ptr`, captured before the grow. OWNERSHIP: the checker already rejects `s` borrowed as `Slice[T]` while borrowed as `mut ref T`; the whole-value read of `s` as a `push_str` argument is the same conflict and is not flagged. |
 | B-2026-08-15-3 | 2026-08-15 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capacity 0 and re-grows 8 -> 16 -> ... on every round. Both spellings now compile to the same in-place append as `push_str` (B-2026-08-14-23), so the two are equivalent code and the heuristic disagrees with itself: measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends, entirely from the missing reservation. | `src/presize.rs`. `is_push_to` matches only `ExprKind::MethodCall` with `push`/`push_str`/`push_back`, and `top_level_push_count` counts only `StmtKind::Expr` statements, so `StmtKind::Assign { target: V, value: V + x }` and `StmtKind::CompoundAssign { Add, target: V, .. }` are invisible. `find_fill_bound` additionally BAILS on any non-`Expr` statement between the Let and the loop that mentions `V`, which would reject a prelude `s = s + "seed"` the way it currently folds in a prelude `s.push_str("seed")`. |
 | B-2026-08-15-4 | 2026-08-15 | autopar | low | `cost_gate: "unknown"` conflates "the loop lookup failed" (a compiler bug) with "found it, but the iterable is not a shapeable range" (a legitimate limitation) -- the same opaque string for both | disjoint_loop_verdict / reduction_loop_verdict (src/effect_graph.rs) chain two `?`s -- find_loop_in_block then par_cost::extract_loop_shape -- and both collapse to None, which effect_graph.rs reports as (false, "unknown"). |
@@ -148,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1209 surfaced
 
 </details>
 
-### Fixed (1191)
+### Fixed (1192)
 
-<details><summary>1191 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1192 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7381,6 +7380,21 @@ THIS IS NOT DIAGNOSTICS-ONLY, which is the part worth measuring rather than reas
 MEASURED against the interpreter as oracle on all four surfaces at both optimization levels: the reuse shapes, three calls in one expression, the method and trait-method paths, heap elements, a fresh temporary, and the `Fn`-slot shape that previously would not build at all. Zero divergences, ASAN + LeakSanitizer clean. Every new test was checked against the parent source rather than assumed non-vacuous: the three ownership tests fail there with the exact move diagnostic, the closures test fails with the once-into-`Fn` error, the oracle test fails with the phantom drop, and both `mut Slice[T]` controls pass on both sides.
 
 GATES: fmt / clippy / the full `--features llvm` suite clean. The asan `-O0` leg flags one fixture, `asan_shared_struct_string_field_reassign_no_leak` (B-2026-08-14-25) — its source contains no slice of any kind, so this change cannot reach it. |
+| B-2026-08-15-1 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints… | FIXED by 8668bbf2. Two gaps, not one, and the first alone produces a WORSE program than the bug — which is the reason to record the order they were found in.
+
+GAP 1 IS THE HEAD-GATE THE ROW NAMED. The `let` fallback that registers an unannotated binding from the typechecker's recorded surface (`pattern_binding_types` / `pattern_binding_inner_types`) dispatches on the head name, and its collection arm reads `surface == "Map" || surface == "Set"`. The sorted heads matched nothing, so the binding got a slot in `self.variables` and no side-table entry at all. Nothing about them is special here: `extract_map_kv_types` and `extract_set_elem_type` have admitted `SortedMap` / `SortedSet` since they existed, and `register_var_from_type_expr` fills the Map/Set tables from either head. The gate was simply never widened when the sorted variants shipped.
+
+GAP 2 IS WHY WIDENING IT IS NOT THE FIX. With only gap 1 closed, `m2.len()` works and the pointer-print stops — and the render becomes `{zz: 1, aa: 2}`: plain-`Map` prefix, INSERTION order. `sorted_collection_vars` is a SEPARATE table from the K/V ones, and `register_var_from_type_expr` never wrote it; the annotated `let` path sets it inline, three lines below its own `extract_map_kv_types` call, which is exactly why the annotated spelling was correct and nothing else was. So the registrar has been handing out unsorted sorted-collections to EVERY caller — a place source, a struct field, a synthetic index / tuple element, a closure param — and the row's repro is one visible instance of that, not the whole of it. Fixed at the registrar rather than at the call site, before the map/set arms because each returns early.
+
+Landing gap 1 without gap 2 would have traded a loud failure and an obviously-garbage number for a plausible-looking wrong answer, on a container whose entire purpose is the ordering.
+
+THE ROW IS WRONG ABOUT `karac run`. Its investigation note says "`karac run` (both `--interp` and JIT) is correct throughout"; the JIT is the same codegen, and it reproduces both symptoms exactly — the control pointer for `f"{m2}"`, the raw bytes for `println(m2)`, the hard dispatch error for `m2.len()`. Only `--interp` was ever right. The row's `run-vs-build` class is still the closest fit in the controlled vocabulary, but the divergence is interp-vs-codegen, not run-vs-build.
+
+THE UNMEASURED QUESTION IS ANSWERED: NO LEAK. The row closed with "Whether the handle is also leaked at scope exit was NOT measured", and the doubt was well-placed — the existing `Map`/`Set` arm documents itself as DISPATCH-ONLY, on the stated reasoning that `register_var_from_type_expr` queues no `FreeMapHandle` and a PLACE source is a caller-retains alias whose owner frees it. A CALL RESULT is not that: `mkm()` hands back a fresh handle with no other owner, so had the arm registered dispatch and nothing else, every such binding would leak its whole control block. It does not — the let path's ownership tracking is armed elsewhere and is head-agnostic, so it was already correct while the dispatch tables were not. Measured over both spellings and both containers with `String` keys (so a leaked handle drags its key storage with it), clean at both optimization levels, and pinned as `asan_unannotated_sorted_collection_binding_frees_its_handle`.
+
+MEASURED against the interpreter as oracle on all three backends at both optimization levels, nine shapes: the annotated control; the unannotated call result (the repro); ASCENDING iteration through `keys()` and `iter()` — the two lines a registered-but-unmarked binding still gets wrong, and the only ones that separate gap 2 from gap 1; the `contains_key` / `is_empty` / `contains` method surface; the SortedSet twin; a PLACE source (`let bm = h.sm`), which is the same head-gate reached the other way; and the plain `Map` control, which must not move. Zero divergences.
+
+GATES: fmt / clippy / the full `--features llvm` suite clean, and both new tests pass at `-O0`. The asan `-O0` leg flags one fixture, `asan_shared_struct_string_field_reassign_no_leak`, which is B-2026-08-14-25's and contains no map, set or sorted collection of any kind. |
 
 </details>
 
