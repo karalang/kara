@@ -535,6 +535,15 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             tensor_type_info_of(core).map(|ti| ((k.0, k.1), ti))
         })
         .collect();
+    // B-2026-08-14-38 — the Vec twin of the table above: the `Vec[T]` type of
+    // an `Index` receiver that is a method call, so codegen can materialize
+    // the nameless temporary and lower the index through its identifier-keyed
+    // Vec path. Same keying (receiver span), same collision-avoidance reason.
+    program.index_recv_vec_types = tc
+        .index_recv_vec_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Column[T] (phase-11 data-science stdlib, Arrow commitment Q5):
     // map every `Column[T]`-typed expression's span to its element
     // `TypeExpr`. `Column` is always 1-D with a runtime length, so there

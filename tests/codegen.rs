@@ -89197,6 +89197,68 @@ fn main() {
         );
     }
 
+    // ── Inline index of a METHOD-returned `Vec` (B-2026-08-14-38) ────
+    // The sibling of the block above, for the receiver shape it never
+    // covered: `inline_temp_vec_te` resolves a Vec temporary's element type
+    // from the CALLEE'S SIGNATURE, which exists for a free fn and for the one
+    // built-in `tensor.shape()` — and for nothing else. So every other
+    // Vec-returning method (`v.clone()`, `s.to_vec()`, a user accessor) fell
+    // to the generic tail and failed the build with "Index operator applied to
+    // non-array type" while `--interp` ran it. The typechecker now records the
+    // receiver's own `Vec[T]` under its span; the materialization is the same.
+
+    #[test]
+    fn test_e2e_inline_index_method_returned_vec() {
+        // Both spellings the bug reported, plus the two the fix has to get
+        // right for its own reasons: a USER method (nothing built-in resolves
+        // it) and a GENERIC body (the recorded element is the body's `T`, so
+        // the monomorph substitution has to run before it sizes the load —
+        // one instantiation per element type here proves it does).
+        let out = run_program(
+            "struct Bag { items: Vec[i64] }\n\
+             impl Bag {\n\
+                 pub fn copy_items(ref self) -> Vec[i64] { return self.items.clone(); }\n\
+             }\n\
+             fn pick[T](v: Vec[T], i: i64) -> T { return v.clone()[i]; }\n\
+             fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3];\n\
+                 println(f\"{v.clone()[1]}\");\n\
+                 let nums: Vec[i64] = [10, 20, 30, 40];\n\
+                 println(f\"{nums[1..3].to_vec()[0]}\");\n\
+                 let b = Bag { items: [7, 8] };\n\
+                 println(f\"{b.copy_items()[1]}\");\n\
+                 let names: Vec[String] = [\"ann\", \"bo\", \"cy\"];\n\
+                 println(names.clone()[2]);\n\
+                 println(f\"{pick(v, 0)}\");\n\
+                 println(pick(names, 1));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\n20\n8\ncy\n1\nbo\n",
+                "inline <method>()[i] must read the element (codegen == karac run)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_inline_index_method_returned_vec_takes_the_temp_path() {
+        // The E2E above soft-skips without the runtime archives, and the
+        // generic tail's failure is a compile ERROR — so pin structurally that
+        // the read goes through the materialize-a-synth-Vec path (its alloca
+        // is named `inline.vec.tmp`) rather than merely "compiles".
+        for src in [
+            "fn main() { let v: Vec[i64] = [1, 2, 3]; println(f\"{v.clone()[1]}\"); }\n",
+            "fn main() { let n: Vec[i64] = [10, 20, 30]; println(f\"{n[0..2].to_vec()[1]}\"); }\n",
+        ] {
+            let ir = ir_for(src);
+            assert!(
+                ir.contains("inline.vec.tmp"),
+                "the method-returned Vec must be materialized, not left to the generic tail: {src}"
+            );
+        }
+    }
+
     // ── Mono-body owned-local cleanup ────────────────────────────────
     // A monomorphized body that binds an owned local needing drop (a
     // `Tensor` / `Vec` / `String` local) now compiles: `compile_mono_function`

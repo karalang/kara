@@ -49318,4 +49318,54 @@ fn main() {
             "asan_printed_map_temporary_from_a_field_returning_callee_is_not_aliased",
         );
     }
+
+    /// B-2026-08-14-38 — indexing a Vec-returning METHOD call
+    /// (`v.clone()[1]`, `b.copy_items()[0]`, `nums[1..3].to_vec()[0]`) now
+    /// materializes the nameless temporary and reads through it. The read is
+    /// the easy half; the temporary's BUFFER is the half a wrong fix loses.
+    /// Each spelling here allocates a Vec nothing else owns, so a missing drop
+    /// is a per-iteration leak and a drop of a non-owned view would be a
+    /// double free — LSan sees both. The `Vec[String]` cases carry the second
+    /// obligation: the element read is deep-cloned before the temp's buffer is
+    /// drained, and that CLONE needs an owner too. The first cut of the fix
+    /// dropped the buffer correctly and leaked every clone, because the
+    /// consumer-side predicate that frees such an element
+    /// (`expr_is_inline_temp_vec_heap_index`) still listed only the two older
+    /// receiver shapes — which is why both halves resolve through one helper
+    /// now.
+    ///
+    /// Looped for the same reason as the map fixture above: at one print site
+    /// per shape every stranded buffer is still reachable from its entry
+    /// alloca at exit, and LSan reports nothing. Iterating overwrites the
+    /// slots. Do not unroll this fixture.
+    #[test]
+    fn asan_indexing_a_vec_returning_method_call_owns_its_temporary() {
+        assert_clean_asan_run(
+            r#"
+struct Bag { items: Vec[String] }
+impl Bag {
+    pub fn copy_items(ref self) -> Vec[String] { return self.items.clone(); }
+}
+fn main() {
+    let mut k = 0;
+    while k < 20 {
+        let names: Vec[String] = ["alphaalphaalphaalpha", "betabetabetabetabeta"];
+        println(names.clone()[1]);
+        let b = Bag { items: names.clone() };
+        println(b.copy_items()[0]);
+        let nums: Vec[i64] = [10, 20, 30, 40];
+        println(f"{nums[1..3].to_vec()[0]}");
+        k = k + 1;
+    }
+    println("done");
+}
+"#,
+            &["betabetabetabetabeta", "alphaalphaalphaalpha", "20"]
+                .repeat(20)
+                .into_iter()
+                .chain(std::iter::once("done"))
+                .collect::<Vec<_>>(),
+            "asan_indexing_a_vec_returning_method_call_owns_its_temporary",
+        );
+    }
 }

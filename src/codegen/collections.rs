@@ -2445,11 +2445,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Checked BEFORE `inline_temp_vec_te` because that helper's `Call`
         // arm never matches a `.unwrap()` method chain anyway; keeping it
         // first documents the borrow-vs-owned split at the dispatch site.
-        if let Some(vec_te) = self.map_get_unwrap_vec_value_te(object) {
-            return self.compile_inline_temp_vec_index_ex(object, index, &vec_te, false);
-        }
-        if let Some(vec_te) = self.inline_temp_vec_te(object) {
-            return self.compile_inline_temp_vec_index_ex(object, index, &vec_te, true);
+        if let Some((vec_te, owns_temp)) = self.inline_index_recv_vec_te(object) {
+            return self.compile_inline_temp_vec_index_ex(object, index, &vec_te, owns_temp);
         }
 
         let idx_raw = self.compile_expr(index)?;
@@ -2710,6 +2707,51 @@ impl<'ctx> super::Codegen<'ctx> {
         self.extract_vec_elem_type(&te).is_some().then_some(te)
     }
 
+    /// The `Vec[T]` / `VecDeque[T]` a NAMELESS index receiver produces, and
+    /// whether the temporary is owned *here* (`true` → this read frees it).
+    /// The single dispatch order for every nameless-Vec index, so the
+    /// element-clone consumers (`expr_is_inline_temp_vec_heap_index`) and the
+    /// index lowering itself can never disagree about which shapes are
+    /// serviceable — a disagreement leaks the deep-cloned element, which is
+    /// exactly what B-2026-08-14-38's first cut did.
+    ///
+    /// Three sources, in the order `compile_index` needs them:
+    ///
+    /// 1. `<map>.get(k).unwrap()[i]` — a `{ptr,len,cap=0}` BORROW of the map's
+    ///    bucket buffer (B-2026-07-15-27), so `owns == false`; dropping it
+    ///    would double-free against the map's per-entry drop. Checked first
+    ///    because it is the one shape whose ownership does not follow from the
+    ///    expression kind.
+    /// 2. A free-fn / closure call or `tensor.shape()`, resolved from the
+    ///    callee's declared return (`inline_temp_vec_te`) — always a fresh
+    ///    owned temp; a `ref`-returning callee is excluded there.
+    /// 3. B-2026-08-14-38 — a Vec-returning METHOD call (`v.clone()[1]`,
+    ///    `nums[1..3].to_vec()[0]`), whose `Vec[T]` no signature table holds
+    ///    and whose own span carries the index's ELEMENT type in `expr_types`
+    ///    (the parser stamps a postfix expr with its receiver's span). The
+    ///    typechecker records it in `index_recv_vec_types` instead. Ownership
+    ///    is the one fact this leg must decide for itself, since a method
+    ///    result can be a borrow: `expr_yields_fresh_owned_temp` — the
+    ///    predicate every other owned-temp site asks — separates them, and a
+    ///    `ref Vec` return never gets recorded in the first place. Inside a
+    ///    monomorph the recorded element is the generic body's `T`, so the
+    ///    active binding is substituted before it sizes the load.
+    pub(super) fn inline_index_recv_vec_te(&self, object: &Expr) -> Option<(TypeExpr, bool)> {
+        if let Some(te) = self.map_get_unwrap_vec_value_te(object) {
+            return Some((te, false));
+        }
+        if let Some(te) = self.inline_temp_vec_te(object) {
+            return Some((te, true));
+        }
+        let te = self
+            .index_recv_vec_types
+            .get(&(object.span.offset, object.span.length))?;
+        Some((
+            self.subst_monomorph_type_params(te),
+            self.expr_yields_fresh_owned_temp(object),
+        ))
+    }
+
     /// Index an inline `Vec` temporary (`a.shape()[k]`, `make_vec()[i]`,
     /// `m.get(k).unwrap()[i]`) — the value `object` evaluates to is a `Vec`
     /// `{ptr, len, cap}` struct, not a named binding the identifier-keyed
@@ -2914,10 +2956,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(&index.kind, ExprKind::Range { .. }) {
             return false;
         }
-        let Some(vec_te) = self
-            .inline_temp_vec_te(object)
-            .or_else(|| self.map_get_unwrap_vec_value_te(object))
-        else {
+        // Same dispatch the index lowering uses, so a shape it services always
+        // has its deep-cloned element freed here (B-2026-08-14-38: when this
+        // predicate still listed only two of the three sources, `v.clone()[i]`
+        // over a `Vec[String]` read correctly and dropped its temp buffer, and
+        // leaked the element clone once per evaluation).
+        let Some((vec_te, _owns)) = self.inline_index_recv_vec_te(object) else {
             return false;
         };
         match vec_inner_type_expr(&vec_te) {

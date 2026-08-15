@@ -289,6 +289,15 @@ pub type MethodUnwrapInnerTypesTable = std::collections::HashMap<(usize, usize),
 pub type TempRecvElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
 /// Side-table populated by the lowering pass from the typechecker's
+/// `index_recv_vec_types` map. Maps the span of an `Index` RECEIVER that is a
+/// `Vec`/`VecDeque`-returning `MethodCall` (`v.clone()[1]`,
+/// `nums[1..3].to_vec()[0]`) to the receiver's whole `Vec[T]` `TypeExpr`.
+/// Codegen consults it to materialize the nameless temporary into a synth Vec
+/// local and lower the index through the identifier-keyed path
+/// (B-2026-08-14-38).
+pub type IndexRecvVecTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
+/// Side-table populated by the lowering pass from the typechecker's
 /// `iter_terminal_elem_types` map. Maps each numeric `Iterator.sum()` /
 /// `Iterator.reduce(f)` terminal `MethodCall` span to the yielded element
 /// `TypeExpr`. Codegen seeds the fused loop's accumulator with a width-correct
@@ -720,6 +729,12 @@ pub struct Program {
     /// index's scalar RESULT, which is why the receiver's tensor type needed a
     /// table of its own (B-2026-08-14-17).
     pub tensor_index_recv_types: TensorTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.index_recv_vec_types`;
+    /// empty otherwise. The `Vec[T]` / `VecDeque[T]` `TypeExpr` of an `Index`
+    /// receiver that is a method call, keyed by the receiver's span — the Vec
+    /// twin of `tensor_index_recv_types`, kept out of `expr_types` for the
+    /// same span-collision reason (B-2026-08-14-38).
+    pub index_recv_vec_types: IndexRecvVecTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.temp_recv_mapset_types`;
     /// empty otherwise. Fresh-temp `Map`/`Set` receiver types for codegen's
     /// slice-3d read-method redispatch + handle drop-tracking.

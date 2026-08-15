@@ -33495,3 +33495,34 @@ fn test_string_append_spellings_agree() {
         "litabc\nlitabcT\nlitabcT T\nlitabcT Tv3\nlitabcT Tv3P\nabab\naba\nXP\nrR\n0\n"
     );
 }
+
+/// B-2026-08-14-38 oracle twin — `<method>()[i]` under the tree-walk backend.
+///
+/// This is the side that always worked: indexing a Vec-returning method call
+/// ran here while `karac build` rejected it outright ("Index operator applied
+/// to non-array type"), which is what made the bug a run-vs-build divergence
+/// rather than a wrong answer. These are the bytes codegen's new
+/// materialize-a-temp path has to reproduce.
+#[test]
+fn test_index_of_method_returned_vec() {
+    assert_eq!(
+        run("struct Bag { items: Vec[i64] }\n\
+             impl Bag {\n\
+                 pub fn copy_items(ref self) -> Vec[i64] { return self.items.clone(); }\n\
+             }\n\
+             fn pick[T](v: Vec[T], i: i64) -> T { return v.clone()[i]; }\n\
+             fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3];\n\
+                 println(f\"{v.clone()[1]}\");\n\
+                 let nums: Vec[i64] = [10, 20, 30, 40];\n\
+                 println(f\"{nums[1..3].to_vec()[0]}\");\n\
+                 let b = Bag { items: [7, 8] };\n\
+                 println(f\"{b.copy_items()[1]}\");\n\
+                 let names: Vec[String] = [\"ann\", \"bo\", \"cy\"];\n\
+                 println(names.clone()[2]);\n\
+                 println(f\"{pick(v, 0)}\");\n\
+                 println(pick(names, 1));\n\
+             }\n"),
+        "2\n20\n8\ncy\n1\nbo\n"
+    );
+}

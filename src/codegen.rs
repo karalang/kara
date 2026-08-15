@@ -3337,6 +3337,14 @@ pub(super) struct Codegen<'ctx> {
     /// (`(t * 2)[0]`) routes through the tensor lowering instead of being
     /// compiled as scalar arithmetic on two pointers.
     pub(crate) tensor_index_recv_types: HashMap<(usize, usize), crate::ast::TensorTypeInfo>,
+    /// B-2026-08-14-38 — the `Vec[T]` / `VecDeque[T]` `TypeExpr` of an `Index`
+    /// RECEIVER that is a method call (`Program.index_recv_vec_types`). The Vec
+    /// twin of `tensor_index_recv_types`: same key, same collision (the parser
+    /// stamps a postfix expression with its receiver's span, so `expr_types`
+    /// holds the index's ELEMENT type there). `compile_index` reads it to
+    /// materialize the nameless temporary into a synth Vec local and lower the
+    /// read through the identifier-keyed Vec path.
+    pub(crate) index_recv_vec_types: HashMap<(usize, usize), TypeExpr>,
     /// Per-binding Tensor registration: element LLVM type + static dims
     /// (`Some(n)` = concrete literal usable for stride folding /
     /// bounds-check elision; `None` = read the dim from the value's
@@ -8372,6 +8380,7 @@ impl<'ctx> Codegen<'ctx> {
             call_type_subs_mangle: HashMap::new(),
             tensor_typed_exprs: HashMap::new(),
             tensor_index_recv_types: HashMap::new(),
+            index_recv_vec_types: HashMap::new(),
             tensor_var_infos: HashMap::new(),
             pending_let_tensor_info: None,
             column_typed_exprs: HashMap::new(),
@@ -9711,6 +9720,7 @@ impl<'ctx> Codegen<'ctx> {
         // `src/codegen/tensor.rs`).
         self.tensor_typed_exprs = program.tensor_typed_exprs.clone();
         self.tensor_index_recv_types = program.tensor_index_recv_types.clone();
+        self.index_recv_vec_types = program.index_recv_vec_types.clone();
         // Sibling: per-span Column element-type info for construction /
         // let-registration / indexing dispatch (see `src/codegen/column.rs`).
         self.column_typed_exprs = program.column_typed_exprs.clone();
@@ -11059,6 +11069,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_method_unwrap_inner_types = tp.method_unwrap_inner_types.clone();
         let mut t_method_unwrap_err_types = tp.method_unwrap_err_types.clone();
         let mut t_temp_recv_elem_types = tp.temp_recv_elem_types.clone();
+        let mut t_index_recv_vec_types = tp.index_recv_vec_types.clone();
         let mut t_temp_recv_mapset_types = tp.temp_recv_mapset_types.clone();
         let mut t_temp_recv_len_elem_types = tp.temp_recv_len_elem_types.clone();
         let mut t_channel_elem_types = tp.channel_elem_types.clone();
@@ -11116,6 +11127,7 @@ impl<'ctx> Codegen<'ctx> {
                     &mut t_method_unwrap_err_types,
                 );
                 std::mem::swap(&mut self.temp_recv_elem_types, &mut t_temp_recv_elem_types);
+                std::mem::swap(&mut self.index_recv_vec_types, &mut t_index_recv_vec_types);
                 std::mem::swap(
                     &mut self.temp_recv_mapset_types,
                     &mut t_temp_recv_mapset_types,

@@ -3917,6 +3917,40 @@ impl<'a> super::TypeChecker<'a> {
                             .insert(SpanKey::from_span(&object.span), te);
                     }
                 }
+                // B-2026-08-14-38 — indexing the result of a Vec-RETURNING
+                // METHOD CALL (`v.clone()[1]`, `nums[1..3].to_vec()[0]`, any
+                // `<method-chain>[i]` whose receiver is a fresh temporary).
+                // Codegen's Vec index dispatch is keyed on a NAME, and a
+                // temporary has none; its fallback for a nameless Vec
+                // (`inline_temp_vec_te`) recovers the element type from a
+                // free function's declared return, which a method call has no
+                // entry for. Recording the receiver's own `Vec[T]` here gives
+                // that fallback the one fact it was missing — and it has to be
+                // its own table, not `expr_types`, because the parser stamps a
+                // postfix expression with its receiver's span: the `Index` and
+                // its object collide there and the index's ELEMENT type wins.
+                // Same collision and same remedy as `tensor_index_recv_types`
+                // just below, and as `temp_recv_elem_types` above.
+                //
+                // A `ref Vec` return is `Type::Ref` and never matches this
+                // gate, so a borrow can't reach the path that frees the
+                // temporary. An element still carrying an inference metavar
+                // declines too — codegen would size the load from it.
+                if matches!(&object.kind, ExprKind::MethodCall { .. }) {
+                    if let Type::Named { name, args } = &obj_ty {
+                        if (name == "Vec" || name == "VecDeque") && args.len() == 1 {
+                            let elem = resolve_type_var_top(&args[0], &self.env.substitutions);
+                            if !contains_type_var(&elem) {
+                                let te = Self::type_to_type_expr(&Type::Named {
+                                    name: name.clone(),
+                                    args: vec![elem],
+                                });
+                                self.index_recv_vec_types
+                                    .insert(SpanKey::from_span(&object.span), te);
+                            }
+                        }
+                    }
+                }
                 // Phase 11: Tensor multi-dim indexing — `t[i, j, k]`
                 // arrives as a tuple index (parser desugar per design.md
                 // § Numerical Types > Indexing). Arity must equal the

@@ -1283,6 +1283,23 @@ pub struct TypeCheckResult {
     /// `let r = t * 2; r[0]`, whose spans do not collide, compiled fine. Same
     /// shape and same reason as `temp_recv_elem_types` (B-2026-07-20-2).
     pub tensor_index_recv_types: HashMap<SpanKey, Type>,
+    /// B-2026-08-14-38 — the `Vec[T]` / `VecDeque[T]` type of an `Index`
+    /// receiver that is a METHOD CALL (`v.clone()[1]`,
+    /// `nums[1..3].to_vec()[0]`), keyed by the RECEIVER's span. The Vec twin
+    /// of `tensor_index_recv_types`, and needed for the same reason: the
+    /// parser stamps a postfix expression with its receiver's span, so the
+    /// `Index` and its object share one key in `expr_types` and the index's
+    /// ELEMENT type overwrites the object's `Vec` there. Codegen's
+    /// identifier-keyed Vec dispatch can't see a nameless temporary either,
+    /// so without this table `v.clone()[1]` fell to the generic tail and
+    /// failed the build with "Index operator applied to non-array type"
+    /// while `--interp` ran it — and `let c = v.clone(); c[1]`, whose spans
+    /// do not collide and whose receiver is named, compiled fine.
+    ///
+    /// Recorded only for a directly-`Vec`-typed method result: a `ref Vec`
+    /// return is `Type::Ref` and never matches, keeping borrows out of a
+    /// path that frees the temporary.
+    pub index_recv_vec_types: HashMap<SpanKey, TypeExpr>,
     /// Sibling of `temp_recv_elem_types` for `Map`/`Set` fresh-temp receivers
     /// (`make_map().get(k)`, `make_set().contains(x)`): span of the MethodCall →
     /// the receiver's whole `Map[K, V]` / `Set[T]` `TypeExpr` (codegen needs K+V
@@ -1812,6 +1829,8 @@ pub struct TypeChecker<'a> {
     pub(super) temp_recv_elem_types: HashMap<SpanKey, TypeExpr>,
     /// B-2026-08-14-17 — see `TypeCheckResult::tensor_index_recv_types`.
     pub(super) tensor_index_recv_types: HashMap<SpanKey, Type>,
+    /// B-2026-08-14-38 — see `TypeCheckResult::index_recv_vec_types`.
+    pub(super) index_recv_vec_types: HashMap<SpanKey, TypeExpr>,
     /// MethodCall span → `Map[K,V]` / `Set[T]` `TypeExpr` of a fresh-temp
     /// Map/Set receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_mapset_types: HashMap<SpanKey, TypeExpr>,
@@ -2096,6 +2115,7 @@ impl<'a> TypeChecker<'a> {
             pending_unwrap_receiver_expectation: None,
             temp_recv_elem_types: HashMap::new(),
             tensor_index_recv_types: HashMap::new(),
+            index_recv_vec_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
             temp_recv_len_elem_types: HashMap::new(),
             iter_terminal_elem_types: HashMap::new(),
@@ -2305,6 +2325,7 @@ impl<'a> TypeChecker<'a> {
             method_unwrap_err_types: self.method_unwrap_err_types,
             temp_recv_elem_types: self.temp_recv_elem_types,
             tensor_index_recv_types: self.tensor_index_recv_types,
+            index_recv_vec_types: self.index_recv_vec_types,
             temp_recv_mapset_types: self.temp_recv_mapset_types,
             temp_recv_len_elem_types: self.temp_recv_len_elem_types,
             iter_terminal_elem_types: self.iter_terminal_elem_types,
