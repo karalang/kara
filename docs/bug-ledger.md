@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 96 | 0 |
 | perf | 68 | 0 |
 | false-positive | 63 | 0 |
-| diagnostics | 58 | 1 |
+| diagnostics | 58 | 0 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
 | other | 31 | 0 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 172 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
-| autopar | 45 | 1 |
+| autopar | 45 | 0 |
 | other | 42 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced · 2 open · 1210 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced · 1 open · 1211 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-15 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING of a `Vec[Struct]` (`let s = entries[0..2]`) DOUBLE-FREES under `KARAC_AUTO_PAR=0` and SIGSEGVs at `-O0`, while the DEFAULT build is clean and prints the right answer — the inverted polarity means disabling auto-par to rule it out is what triggers the crash. | the range-index let path's element ownership for a struct element with a heap field: the slice and the source Vec both appear to own the element buffers. Auto-par splitting the function happens to mask it. |
-| B-2026-08-15-19 | 2026-08-15 | autopar | medium | `#[par_order_free]` IS SILENTLY IGNORED when the analyzer does not classify the loop as a collect: no fan-out, no diagnostic, and `karac query concurrency` does not even list the loop among the DECLINED ones — it is absent from `loop_reductions` entirely. The user gets a sequential binary and no way to learn why an explicit opt-in did nothing. | The attribute is an explicit user opt-in — the ledger's own B-2026-07-29-30 renamed it precisely to make it "the caller's promise not to depend on order" — so a loop carrying it and not fanning out is a decision the compiler owes the user an explanation for. `disjoint_write_loops` already emits a `gate` and a `reason` per declined loop; a `#[par_order_free]` collect that fails classification emits nothing at all. |
 
 ### Wontfix (2)
 
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced
 
 </details>
 
-### Fixed (1210)
+### Fixed (1211)
 
-<details><summary>1210 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1211 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8531,6 +8530,74 @@ structs with an owned param -- the only shape that reaches this arm, since
 No test pins this. A test that guards the gate would itself live in the file
 being gated; the real guard is CI running plain `cargo test`, which would have
 caught it at the commit that introduced it. |
+| B-2026-08-15-19 | autopar | medium | `#[par_order_free]` IS SILENTLY IGNORED when the analyzer does not classify the loop as a collect: no fan-out, no diagnostic, and `karac query concur… | FIXED by 8f71ec2. `classify_loop_body` returned a bare `Option`, so all seventeen
+of its decline sites collapsed to "no", and a loop carrying the attribute then
+fell out of `recognize_reductions_in_block`'s `else if !par_order_free` arm and
+was recorded NOWHERE — not in `loop_reductions` (it is not a reduction), not in
+`disjoint_write_loops` (not that shape), and with no diagnostic. It now returns
+`Result<_, &'static str>` carrying the obligation that failed.
+
+THE STRINGS ARE ATTACHED AT THE DECLINE SITE, which was the one design decision
+worth making carefully. The cheaper fix — re-walk the body after the fact and
+report the first obstruction a diagnoser recognizes — is free to disagree with
+the condition that actually stopped it, and a confidently wrong explanation is
+worse than silence. Static strings at the seventeen `return` points cannot drift.
+
+THREE PATHS COULD DECLINE AN ANNOTATED LOOP, and the row only knew about one.
+Besides the classifier there are two soundness gates that `continue` past a
+successfully-classified reduction: `loop_body_types_cross_task_safe` (a plain
+`shared` value, whose refcount header is non-atomic and would race) and
+`loop_body_shares_outer_mut_borrow`. Both were equally silent and both now
+record. Had the fix only covered the classifier, the same bug report would have
+been re-filed from a `shared`-typed body.
+
+A SEPARATE LIST, NOT A FLAG ON `LoopReduction`. Codegen consumes
+`loop_reductions` to choose a lowering; putting non-reductions in it and relying
+on every consumer to check a `declined` flag invites exactly the confusion this
+row was filed about. `DeclinedParLoop` is reporting-only.
+
+UNANNOTATED LOOPS ARE NEVER RECORDED. Every loop in every program that is not a
+reduction would qualify, which is noise rather than an explanation; the signal is
+that the AUTHOR asked. Pinned by its own test.
+
+BOTH SURFACES. `karac query concurrency` grows a `declined_par_loops` array —
+added to both JSON assembly sites, since the query has two (`cli.rs` for the
+single-file path, `effect_graph.rs` for the graph path) and fixing one would have
+left the other silent. `--concurrency-report` prints the reason INLINE rather
+than pointing at the query tool the way the disjoint-write summary does: the
+author wrote the attribute on that exact loop and is already reading the answer
+to "did it work", so a redirect to a second tool was most of the defect. And the
+report's early-return gate now counts declined annotated loops, or a function
+whose only interesting property is that the opt-in did nothing would still be
+skipped as sequential noise.
+
+MEASURED on the shape that prompted the row, kata 272's bench kernel:
+
+    `#[par_order_free]` loop at line 123 did NOT fan out — a statement writes a
+    name declared outside the loop and it is not a recognized reduction or `push`
+
+which is correct and actionable: the merge loop mutates `pt`/`st`, declared by
+the descent above it.
+
+THE ROW'S OWN BISECTION IS SUPERSEDED BY THE ANSWER, and worth correcting. It
+concluded "what the failing shape adds is a loop whose bound depends on state an
+earlier loop in the same body mutated" — true of the repro but not the rule. The
+actual obligation is simpler and broader: any write to an outer-scope name that
+is not a recognized reduction or `push`. The bound-dependence was incidental.
+
+FOUR TESTS, deliberately reaching three different decline sites (mixed
+accumulators, a non-associative `-=`, an outer non-reduction write) plus the
+negative case, so the reasons are demonstrably per-site rather than one string
+reused. Suite green: concurrency 2994, concurrency_report 152, codegen 4,
+par_codegen 589, memory_sanitizer 255, cli 1099, non-llvm all pass. fmt and
+clippy `--all --all-targets --features llvm` clean.
+
+NOT CLOSED BY THIS: kata 272's parallel lane still cannot be built, because the
+classifier still declines that shape. That was always the correct half to leave
+open — an analyzer may decline what it cannot prove — and the kata's README now
+carries an explanation instead of a shrug. Widening the collect recognizer to
+admit per-iteration outer-name writes is a separate question with its own
+soundness obligations. |
 
 </details>
 
