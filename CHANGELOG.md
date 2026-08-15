@@ -2,9 +2,52 @@
 
 All notable changes to the Kāra language and compiler will be documented in this file.
 
+> **Maintenance note (2026-08-15).** This file is a coarse milestone record, not
+> the project's living history. Day-to-day progress is tracked in
+> [`docs/roadmap.md`](docs/roadmap.md) (phase status),
+> [`docs/implementation_checklist/`](docs/implementation_checklist/) (per-phase
+> slice trackers), and [`docs/bug-ledger.md`](docs/bug-ledger.md) (every bug
+> found and fixed, 1,200+ rows) — those, plus `git log`, are authoritative. The
+> entry below summarizes the state as of 2026-08-15; the section after it is
+> the original 2026-06 entry, kept as the record of the design milestone.
+
 ---
 
-## [Unreleased]
+## [Unreleased] — state as of 2026-08-15
+
+The compiler is far past the parser milestone recorded below. Working today:
+
+- **Full pipeline:** lexer → parser → resolver → typechecker → effect checker →
+  ownership checker, with three execution backends — a tree-walk interpreter,
+  an LLVM 18 AOT backend (`karac build`), and an LLJIT engine (the `karac run`
+  default). `run` == `build` output parity is a tested invariant, as is a third
+  surface: the default build auto-parallelizes via effect analysis
+  (`KARAC_AUTO_PAR=0` opts out).
+- **Language:** effects (declared on public functions, inferred for private),
+  tiered ownership (owned → `ref` → RC, `shared struct`/`enum`, RC elision),
+  generics `[T]` with trait bounds, pattern matching with exhaustiveness,
+  layout blocks (SoA), contracts, refinement/distinct types.
+- **Targets:** native (macOS/Linux/Windows CI-tested), `wasm_wasi` (component
+  model emission) and `wasm_browser` including a threaded dual artifact, and
+  GPU compute — `#[gpu]` kernels compiled to WGSL and dispatched through wgpu
+  (`gpu.dispatch`), proven on Metal and Vulkan. The CUDA/NVPTX path is not
+  built.
+- **Runtime:** static-linked Rust runtime with a tokio-backed event loop
+  (TCP/TLS/HTTP/WebSocket), a native work-stealing scheduler, and opt-in
+  gpu/regex/arrow archive variants.
+- **AI-first tooling:** structured JSON diagnostics (`karac check
+  --output=json`), machine-applicable fixes (`karac fix`), and the Mend
+  authoring loop that dogfoods both.
+- **Self-hosting (in progress):** ~20k lines of Kāra in `selfhost/` (lexer,
+  parser, resolver, typechecker, codegen underway), differentially tested
+  against the Rust implementation as oracle in CI.
+- **Verification:** ~8,900 non-codegen tests, ~3,200 codegen E2E tests, and an
+  ASAN/LeakSanitizer fixture suite (~1,100 programs) run at two optimization
+  levels across a 26-job CI matrix (x86 + arm64, three OSes).
+
+---
+
+## 2026-06 — language redesign + parser milestone (historical)
 
 ### Language Design
 
