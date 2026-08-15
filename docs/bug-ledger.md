@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 250 | 0 |
-| leak | 181 | 0 |
-| double-free | 129 | 0 |
+| miscompile | 251 | 1 |
+| leak | 182 | 1 |
+| double-free | 130 | 1 |
 | run-vs-build | 122 | 1 |
-| codegen-gap | 110 | 1 |
+| codegen-gap | 110 | 0 |
 | missing-feature | 96 | 0 |
 | perf | 68 | 0 |
 | false-positive | 63 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 880 | 2 |
+| codegen | 883 | 4 |
 | typecheck | 172 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
@@ -124,14 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1218 surfaced · 2 open · 1204 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1221 surfaced · 4 open · 1205 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-12 | 2026-08-15 | codegen | medium | `codegen failed: Undefined variable 'm'` on a program `karac check` accepts and the interpreter runs correctly: an enum-variant pattern binds a `shared enum` payload and passes it to a `ref`-taking helper. NOT reduced below 32 lines -- every attempt to shrink it further made the failure disappear, and the shapes that look responsible in isolation all build. | codegen's variable-scope map for a payload bound by an enum-variant pattern -- `Undefined variable 'm'` is emitted for the binding in `Simple(m, _path) => Outcome.Ok(method_name(m))`. |
-| B-2026-08-15-13 | 2026-08-15 | codegen | medium | A `Map`/`Set` LOCAL IN A FUNCTION WITH A `Vec[Struct]` PARAM makes `let e = entries[0]; e.field` FAIL TO BUILD — `codegen: cannot resolve field '...' on this receiver (its type was not recorded for codegen)`. No move, no reuse, no loop, and the Map is never used. Drop the Map local, or swap it for a Vec local, or make the Vec a LOCAL instead of a param, and the same program builds. `karac check` is clean and the interpreter runs it, so this is a run-vs-build divergence that only the compiled backends see. | the let-binding type record for a Vec-element struct (`var_type_names`), and whatever a `Map`/`Set` local changes about the path that writes it. The receiver reaches `compile_field_access` with no entry and takes the loud B-2026-07-20-9 arm, which is behaving correctly — the missing record is upstream of it. |
+| B-2026-08-15-14 | 2026-08-15 | codegen | medium | A `Vec[shared struct]` CLONED AND PASSED BY VALUE strands one 32-byte RC box — `agg_shared(ns.clone())` over `Vec[Node]` leaks ONE object regardless of call count, so the per-call clone/release pairing is balanced and the container's own scope exit is what fails to release its element references. | the scope-exit drop for a `Vec` whose element is a `shared struct` handle: the buffer is freed without releasing the per-element RC references. NOT B-2026-08-15-13's slot machinery — reproduces under `KARAC_AUTO_PAR=0`, where that code path never runs. |
+| B-2026-08-15-15 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING of a `Vec[Struct]` (`let s = entries[0..2]`) DOUBLE-FREES under `KARAC_AUTO_PAR=0` and SIGSEGVs at `-O0`, while the DEFAULT build is clean and prints the right answer — the inverted polarity means disabling auto-par to rule it out is what triggers the crash. | the range-index let path's element ownership for a struct element with a heap field: the slice and the source Vec both appear to own the element buffers. Auto-par splitting the function happens to mask it. |
+| B-2026-08-15-16 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING crossing an AUTO-PAR JOIN returns the WRONG LENGTH, silently, in the DEFAULT build — `let s = nums[0..2]; return s.len()` yields 1 instead of 2 under `karac build`, garbage under `-O0` and the JIT, and the correct 2 under `--interp` and `KARAC_AUTO_PAR=0`. | the `ReturnSlot` round-trip for a range-slice binding (`collect_return_slots` / `emit_par_run`, src/codegen/stmts.rs + par_blocks.rs): the joined slot loses the VALUE, not just the type name B-2026-08-15-13 fixed for element reads. |
 
 ### Wontfix (2)
 
@@ -144,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1218 surfaced
 
 </details>
 
-### Fixed (1204)
+### Fixed (1205)
 
-<details><summary>1204 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1205 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8168,6 +8170,89 @@ sides, which is its job — it is the over-rejection guard, not a bug pin.
 GATES: full `--features llvm` suite green (13,730 passed / 0 failed, up from
 13,722 — the four new pins, two of which run a two-row loop), fmt and clippy
 `--all-targets` clean, plus the 231-file `.kara` corpus sweep above. |
+| B-2026-08-15-13 | codegen | medium | A `Map`/`Set` LOCAL IN A FUNCTION WITH A `Vec[Struct]` PARAM makes `let e = entries[0]; e.field` FAIL TO BUILD — `codegen: cannot resolve field '...'… | FIXED by 3c6ac77c, in `collect_return_slots` (src/codegen/stmts.rs) by adding the third RHS
+shape that names a struct.
+
+THE ROW'S TRIGGER IS A PROXY, AND NAMING THE REAL ONE IS THE FINDING. It is filed
+as "a `Map`/`Set` LOCAL in a function with a `Vec[Struct]` PARAM", with three
+one-line controls that build — drop the Map, swap it for a Vec local, or make the
+Vec a local instead of a param. All three are the same fact underneath:
+`KARAC_AUTO_PAR=0` compiles the failing program correctly and prints the right
+answer, and each control performs ZERO par splits. The `Map`/`Set` local is not an
+ingredient of the defect; it is what makes two statements look independent enough
+for AUTO-PAR to split the function, and the `Vec` being a param matters because a
+locally-built one carries a push chain that serializes the group. `Set` failing
+"exactly like Map" is the same story once more.
+
+So the defect is: a `let` binding that crosses an AUTO-PAR JOIN keeps no type when
+its RHS is an element read.
+
+MECHANISM, instrumented rather than inferred. `emit_par_branch_fn` compiles each
+branch as a separate function and `mem::take`s `var_type_names` around it — correct,
+since the branch has its own scope. Bindings that escape the group travel back
+through `ReturnSlot`s, and the parent re-registers each one from
+`slot.var_type_name`. That field was resolved from an explicit annotation, or from
+an unannotated `let x = f(..)` whose callee's declared return type names a user
+struct. An INDEX RHS had no arm, so `let e = entries[0]` joined with
+`var_type_name: None`, the parent recorded nothing, and `e.service` reached
+`compile_field_access` with an untypeable receiver — the loud B-2026-07-20-9 arm,
+doing its job on a receiver nobody had typed. The trace is unambiguous: `entries ->
+Vec`, SAVE, `index -> Map`, RESTORE, SAVE, `e -> Entry`, RESTORE, then the failure
+with `var_type_names` holding only `entries`.
+
+THE FIX resolves an element RHS through `vec_index_elem_type_expr` — the same
+resolver the SEQUENTIAL let path uses for this shape, so the two lanes agree by
+construction instead of by a second copy of the rule — and filters it through the
+same `struct_types || shared_types` test the call-return arm uses. A RANGE index is
+excluded: `v[a..b]` is a slice, not an element.
+
+THIS IS THE THIRD PATCH TO THE SAME FALLBACK and the pattern is worth naming. It
+was added for a struct-of-Vecs Call RHS, widened by B-2026-08-08-19 when it turned
+out to check `struct_types` but not `shared_types`, and is widened again here for
+an RHS shape it never considered. Each miss presents identically — a compile
+FAILURE on a program that builds with auto-par off — because the auto-par lane
+re-derives binding types from a small enumeration of RHS shapes instead of reading
+what the sequential lane already computed. The durable fix is for the join to reuse
+the sequential registration rather than re-enumerate; that is a larger change than
+this row, and it is why this note records the pattern rather than just the patch.
+
+MEASURED against the interpreter as oracle on FOUR configurations — `--interp`,
+JIT, `karac build`, `KARAC_OPT_LEVEL=0`, plus `KARAC_AUTO_PAR=0` as the fifth —
+across eight shapes: the headline field read; a method call on the element
+(`e.service.len()`); a `shared struct` element; a nested `Vec[Vec[Entry]]` read
+through two bindings; two element bindings in one group; and the two
+must-not-over-fire controls, a PRIMITIVE element and a scalar FIELD of an element,
+neither of which may be recorded as a struct. Zero divergences; ASAN clean at both
+optimization levels.
+
+THREE PRE-EXISTING DEFECTS FOUND WHILE VERIFYING, none of them caused by this fix,
+all filed rather than absorbed:
+
+  * B-2026-08-15-14 — a `Vec[shared struct]` cloned and passed by value strands one
+    RC box. Reproduces under `KARAC_AUTO_PAR=0`, where this fix's code path never
+    runs; only newly REACHABLE, since the program could not be compiled before.
+  * B-2026-08-15-15 — `let s = v[a..b]` over a `Vec[Struct]` double-frees under
+    `KARAC_AUTO_PAR=0` and at `-O0`, while the default build is clean.
+  * B-2026-08-15-16 — `let s = v[a..b]` over a `Vec[i64]` crossing an auto-par join
+    returns the WRONG length, silently, in the DEFAULT build.
+
+The last one is the reason the range shape is excluded here rather than merely
+untested: it is a silent miscompile in the same join machinery, and giving a range
+binding a type name would have papered over its symptom without fixing it.
+
+TESTS. `test_e2e_autopar_joined_vec_element_struct_binding` (tests/codegen.rs) is
+the DETECTOR — this row is a build failure, so the E2E test is what fails on the
+parent, where every program in it fails to compile. `asan_autopar_joined_vec_-
+element_struct_binding_no_double_free` (tests/memory_sanitizer.rs) covers the
+direction the fix could go wrong: the joined binding now carries a struct type
+name, and a `var_type_names` entry is what arms struct-shaped drops, so a parent
+lane dropping what the branch already owns would turn a program that merely failed
+to compile into a double free. Its `shared struct` arm was deliberately left out —
+that shape carries B-2026-08-15-14's unrelated leak, and pinning it here would
+quarantine another row's defect inside this one's fixture.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
+suite, and the asan -O0 leg. |
 
 </details>
 
