@@ -1402,7 +1402,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(var_name)
                     .copied()
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
-                let display_fn = self.emit_map_display_fn(&k_te, &v_te);
+                // B-2026-08-14-35 — `SortedMap` populates the same registries;
+                // route it to the ascending-order renderer, not `Map`'s.
+                let display_fn = if self.sorted_collection_vars.contains(var_name) {
+                    self.emit_sorted_map_display_fn(&k_te, &v_te)?
+                } else {
+                    self.emit_map_display_fn(&k_te, &v_te)
+                };
                 let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
                 self.emit_print_and_free_string(sval, nl);
                 return Ok(zero.into());
@@ -1415,7 +1421,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(var_name)
                     .copied()
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
-                let display_fn = self.emit_set_display_fn(&elem_te);
+                let display_fn = if self.sorted_collection_vars.contains(var_name) {
+                    self.emit_sorted_set_display_fn(&elem_te)?
+                } else {
+                    self.emit_set_display_fn(&elem_te)
+                };
                 let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
                 self.emit_print_and_free_string(sval, nl);
                 return Ok(zero.into());

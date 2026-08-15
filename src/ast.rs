@@ -786,6 +786,12 @@ pub struct Program {
     /// Element type of every `Set`/`SortedSet`-typed expression, keyed by span
     /// — the `Set` sibling of `display_map_types` (B-2026-08-14-31).
     pub display_set_types: DisplayVecTypesTable,
+    /// Spans from the two tables above whose type was the SORTED sibling
+    /// (`SortedMap` / `SortedSet`) rather than `Map` / `Set` (B-2026-08-14-35).
+    /// The type tables carry only the key/value/element types, so the surface
+    /// type name — the one thing that selects the sorted renderer and the
+    /// ascending walk — would otherwise be discarded at lowering.
+    pub display_sorted_collection_spans: std::collections::HashSet<(usize, usize)>,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: the inner
     /// `T` of every expression typed `Secret[T]` (`std.secret`), keyed by span.
     /// Lets codegen resolve a `Secret[T]` receiver's inner type at a

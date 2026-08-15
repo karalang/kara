@@ -48625,4 +48625,60 @@ fn main() {
             "chained_shared_field_assignment_displaced_container",
         );
     }
+
+    #[test]
+    fn asan_sorted_map_and_set_display_frees_its_key_buffer() {
+        // B-2026-08-14-35 — the sorted Display fns do not walk the runtime
+        // iterator the unsorted ones use. They materialize an ASCENDING KEY
+        // BUFFER with `karac_map_sorted_keys` (the same call `keys()` and
+        // `for (k, v) in m` make), walk it by index, and free it. That is a
+        // fresh malloc per render, on a path that runs once per `println`, so
+        // it has both failure modes the unsorted path does not:
+        //
+        //   - forget the trailing `free` and every print leaks a buffer;
+        //   - free the ELEMENTS as well as the buffer and a `String` key is
+        //     released while the map still owns it — the buffer holds aliasing
+        //     `{ptr, len, cap}` headers, not copies.
+        //
+        // String keys (heap halves, so a wrong drop is visible) rendered 20
+        // times from both the bound spelling and a struct field, plus the
+        // integer-key set for the scalar shape. LSan on the Linux CI leg is
+        // what makes the leak half of this assert; the ASAN redzones catch the
+        // double-free half on every host.
+        assert_clean_asan_run(
+            r#"
+struct H { m: SortedMap[String, i64], s: SortedSet[String] }
+fn main() {
+    let mut bm: SortedMap[String, i64] = SortedMap.new();
+    let _ = bm.insert("zebrazebrazebrazebra", 1);
+    let _ = bm.insert("applesapplesapples", 2);
+    let mut hm: SortedMap[String, i64] = SortedMap.new();
+    let _ = hm.insert("mangomangomangomango", 3);
+    let mut hs: SortedSet[String] = SortedSet.new();
+    hs.insert("elemelemelemelemelem");
+    let h = H { m: hm, s: hs };
+    let mut k = 0;
+    while k < 20 {
+        println(f"{bm}");
+        println(f"{h.m}");
+        println(h.s);
+        k = k + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "SortedMap{applesapplesapples: 2, zebrazebrazebrazebra: 1}",
+                "SortedMap{mangomangomangomango: 3}",
+                "SortedSet{elemelemelemelemelem}",
+            ]
+            .iter()
+            .cycle()
+            .take(60)
+            .copied()
+            .chain(std::iter::once("done"))
+            .collect::<Vec<_>>(),
+            "asan_sorted_map_and_set_display_frees_its_key_buffer",
+        );
+    }
 }

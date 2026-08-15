@@ -830,6 +830,229 @@ impl<'ctx> super::Codegen<'ctx> {
         self.disp_append_lit(acc, "}");
     }
 
+    /// Emit (or reuse) a Display function for `SortedMap[K, V]`
+    /// (B-2026-08-14-35). The sorted siblings share `Map`/`Set`'s `KaracMap`
+    /// storage, so before this existed they were pointed at the unsorted
+    /// renderers above — and inherited both of that renderer's assumptions:
+    /// the literal `{` / `Set{` prefix, and HASH-BUCKET iteration order. A
+    /// compiled `SortedMap{apple: 2, banana: 4, mango: 3, zebra: 1}` printed
+    /// `{zebra: 1, apple: 2, banana: 4, mango: 3}` — a different type name over
+    /// a different order, against an interpreter that got both right.
+    ///
+    /// Order comes from the same `emit_sorted_keys_buf` the `for` loop and
+    /// `keys()` already use, so the render cannot drift from iteration: walk
+    /// the sorted key buffer by index and look each value up with
+    /// `karac_map_get`. That is why this returns `Result` where the unsorted
+    /// entry points do not — `emit_sorted_key_cmp_fn` declines element types
+    /// codegen cannot order, and rendering those in bucket order under a
+    /// `SortedMap` label would be a worse bug than the one being fixed.
+    pub(super) fn emit_sorted_map_display_fn(
+        &mut self,
+        key_te: &TypeExpr,
+        val_te: &TypeExpr,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let key_name = Self::display_mangle_te(key_te);
+        let val_name = Self::display_mangle_te(val_te);
+        let type_name = format!("SortedMap_{key_name}_{val_name}");
+        self.emit_sorted_collection_display_fn(type_name, key_te, Some(val_te), "SortedMap{")
+    }
+
+    /// `SortedSet[T]`'s Display fn — the `Set` sibling of
+    /// `emit_sorted_map_display_fn`, minus the value lookup (a Set lowers to
+    /// `Map[T, ()]`, so the sorted key buffer IS the element sequence).
+    pub(super) fn emit_sorted_set_display_fn(
+        &mut self,
+        elem_te: &TypeExpr,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let type_name = format!("SortedSet_{elem_name}");
+        self.emit_sorted_collection_display_fn(type_name, elem_te, None, "SortedSet{")
+    }
+
+    /// Shared emitter behind the two entry points above: same prologue,
+    /// cache and calling convention as `emit_map_display_fn`, with the body
+    /// driven by the sorted key buffer instead of `karac_map_iter_*`.
+    /// `val_te` is `Some` for a map and `None` for a set.
+    fn emit_sorted_collection_display_fn(
+        &mut self,
+        type_name: String,
+        key_te: &TypeExpr,
+        val_te: Option<&TypeExpr>,
+        prefix: &str,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+            return Ok(f);
+        }
+        let fn_name = format!("karac_display_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.display_fn_cache.insert(type_name, f);
+            return Ok(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.display_fn_cache.insert(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let slot_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        let body = self
+            .emit_sorted_collection_display_body(display_fn, slot_ptr, acc, key_te, val_te, prefix);
+
+        // Restore the caller's position before propagating, so a declined
+        // element type leaves the builder where it was found.
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        body?;
+
+        Ok(display_fn)
+    }
+
+    /// Body of a `SortedMap` / `SortedSet` Display fn. Loads the handle,
+    /// appends `prefix`, materializes the ascending key buffer via
+    /// `emit_sorted_keys_buf`, walks it by index (appending `", "` before
+    /// every element but the first), and frees the buffer before appending
+    /// `"}"`. For a map each value is fetched with `karac_map_get` against the
+    /// same key pointer the render just used, mirroring `compile_for_map_var`'s
+    /// sorted arm exactly.
+    ///
+    /// The key pointer is passed straight to the element Display fn: the
+    /// buffer holds raw key bytes (for `String`, the `{ptr, len, cap}` header
+    /// aliasing the map's own data), which is the same shape the unsorted
+    /// path's `out_key` alloca holds. Nothing in the buffer is owned, so
+    /// freeing it after the walk drops no element.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_sorted_collection_display_body(
+        &mut self,
+        display_fn: FunctionValue<'ctx>,
+        slot_ptr: PointerValue<'ctx>,
+        acc: PointerValue<'ctx>,
+        key_te: &TypeExpr,
+        val_te: Option<&TypeExpr>,
+        prefix: &str,
+    ) -> Result<(), String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let key_ty = self.llvm_type_for_type_expr(key_te);
+
+        // Materialize the per-element Display fns first: the recursive emit
+        // repositions the builder (it restores, but the sorted-keys call below
+        // must land in THIS block, after the handle load).
+        let key_disp = self.emit_display_fn_for_type_expr(key_te);
+        let val_disp = val_te.map(|v| self.emit_display_fn_for_type_expr(v));
+        let out_val = val_te.map(|v| {
+            let val_ty = self.llvm_type_for_type_expr(v);
+            self.create_entry_alloca(display_fn, "smd.out_val", val_ty)
+        });
+
+        self.disp_append_lit(acc, prefix);
+
+        let handle = self
+            .builder
+            .build_load(ptr_ty, slot_ptr, "smd.handle")
+            .unwrap()
+            .into_pointer_value();
+
+        let (kbuf, len) = self.emit_sorted_keys_buf(handle, key_te)?;
+        let idx_slot = self.create_entry_alloca(display_fn, "smd.i", i64_t.into());
+        self.builder
+            .build_store(idx_slot, i64_t.const_zero())
+            .unwrap();
+
+        let cond_bb = self.context.append_basic_block(display_fn, "smd.cond");
+        let body_bb = self.context.append_basic_block(display_fn, "smd.body");
+        let sep_bb = self.context.append_basic_block(display_fn, "smd.sep");
+        let elem_bb = self.context.append_basic_block(display_fn, "smd.elem");
+        let exit_bb = self.context.append_basic_block(display_fn, "smd.exit");
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let i = self
+            .builder
+            .build_load(i64_t, idx_slot, "smd.i.v")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, len, "smd.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body_bb, exit_bb)
+            .unwrap();
+
+        // A scalar index makes the separator a plain `i != 0` test — no
+        // `is_first` alloca is needed (unlike the iterator-driven paths).
+        self.builder.position_at_end(body_bb);
+        let is_first = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                i,
+                i64_t.const_zero(),
+                "smd.first",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_first, elem_bb, sep_bb)
+            .unwrap();
+
+        self.builder.position_at_end(sep_bb);
+        self.disp_append_lit(acc, ", ");
+        self.builder.build_unconditional_branch(elem_bb).unwrap();
+
+        self.builder.position_at_end(elem_bb);
+        let kptr = unsafe {
+            self.builder
+                .build_gep(key_ty, kbuf, &[i], "smd.kptr")
+                .unwrap()
+        };
+        self.builder
+            .build_call(key_disp, &[kptr.into(), acc.into()], "smd.kd")
+            .unwrap();
+        if let (Some(vd), Some(ov)) = (val_disp, out_val) {
+            self.disp_append_lit(acc, ": ");
+            self.builder
+                .build_call(
+                    self.karac_map_get_fn,
+                    &[handle.into(), kptr.into(), ov.into()],
+                    "smd.get",
+                )
+                .unwrap();
+            self.builder
+                .build_call(vd, &[ov.into(), acc.into()], "smd.vd")
+                .unwrap();
+        }
+        let inc = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "smd.inc")
+            .unwrap();
+        self.builder.build_store(idx_slot, inc).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder
+            .build_call(self.free_fn, &[kbuf.into()], "")
+            .unwrap();
+        self.disp_append_lit(acc, "}");
+        self.builder.build_return(None).unwrap();
+        Ok(())
+    }
+
     /// Deeply mangled type name suitable for Display cache keys. Unlike
     /// `mangled_type_name` (which is shallow on `Path` types — used for
     /// hash/eq, where `Map[Vec[T], V]` is unreachable so deep mangling is
@@ -1043,6 +1266,49 @@ impl<'ctx> super::Codegen<'ctx> {
                         p.generic_args.as_ref().and_then(|a| a.first()).cloned()
                     {
                         return self.emit_set_display_fn(&elem_te);
+                    }
+                }
+                // B-2026-08-14-35 — the sorted siblings. Absent these arms a
+                // NESTED sorted collection (`Vec[SortedMap[K, V]]`, a struct
+                // field of that shape) fell all the way through to the by-name
+                // catch-all and panicked the compiler with
+                // `type_name 'SortedMap_String_i64' not yet supported`; the
+                // non-nested spellings reached the unsorted renderers instead
+                // and printed the wrong prefix in bucket order.
+                //
+                // This dispatcher is not `Result`-returning and is recursive
+                // through every element/field shape, so a declined comparator
+                // surfaces as a panic here — the same convention every other
+                // unsupported arm in this file already uses, and with a message
+                // that names the escape hatch instead of a mangled cache key.
+                // The DIRECT display entry points propagate the error cleanly
+                // instead, which is where any reachable case lands: the
+                // typechecker already restricts `SortedMap`/`SortedSet` keys to
+                // `Ord` types and further requires the key to be `Display` here,
+                // and every such type codegen's comparator supports.
+                if head == Some("SortedMap") {
+                    let args = p.generic_args.as_ref();
+                    let k_te = args.and_then(|a| a.first()).and_then(|a| match a {
+                        GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    });
+                    let v_te = args.and_then(|a| a.get(1)).and_then(|a| match a {
+                        GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    });
+                    if let (Some(k), Some(v)) = (k_te, v_te) {
+                        return self
+                            .emit_sorted_map_display_fn(&k, &v)
+                            .unwrap_or_else(|e| panic!("emit_display_fn_for_type_expr: {e}"));
+                    }
+                }
+                if head == Some("SortedSet") {
+                    if let Some(GenericArg::Type(elem_te)) =
+                        p.generic_args.as_ref().and_then(|a| a.first()).cloned()
+                    {
+                        return self
+                            .emit_sorted_set_display_fn(&elem_te)
+                            .unwrap_or_else(|e| panic!("emit_display_fn_for_type_expr: {e}"));
                     }
                 }
                 // User enum (possibly payload-bearing) — value-driven Display
@@ -2242,12 +2508,23 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             let k = self.map_key_type_exprs[&name].clone();
             let v = self.var_elem_type_exprs[&name].clone();
-            let disp = self.emit_map_display_fn(&k, &v);
+            // B-2026-08-14-35 — `SortedMap` shares `Map`'s registries and its
+            // storage, so without this test it rendered through the unsorted
+            // fn: `Map`'s prefix over `Map`'s bucket order.
+            let disp = if self.sorted_collection_vars.contains(&name) {
+                self.emit_sorted_map_display_fn(&k, &v)?
+            } else {
+                self.emit_map_display_fn(&k, &v)
+            };
             return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
         }
         if self.set_elem_type_exprs.contains_key(&name) {
             let elem_te = self.set_elem_type_exprs[&name].clone();
-            let disp = self.emit_set_display_fn(&elem_te);
+            let disp = if self.sorted_collection_vars.contains(&name) {
+                self.emit_sorted_set_display_fn(&elem_te)?
+            } else {
+                self.emit_set_display_fn(&elem_te)
+            };
             return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
         }
         // B-2026-07-08-9: Option[T] / Result[T, E] place-expr Display. The
@@ -2500,9 +2777,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.unwrap();
         let slot = self.create_entry_alloca(fn_val, "mapset.disp.tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
-        let disp = match (&map_kv, &set_elem) {
-            (Some((k, v)), _) => self.emit_map_display_fn(k, v),
-            (_, Some(el)) => self.emit_set_display_fn(el),
+        // B-2026-08-14-35 — `display_map_types` / `display_set_types` admit the
+        // sorted siblings (they share the control-block layout and the same
+        // fall-through) but keep only the type arguments; the surface name
+        // arrives separately, by span.
+        let sorted = self.display_sorted_collection_spans.contains(&key);
+        let disp = match (&map_kv, &set_elem, sorted) {
+            (Some((k, v)), _, true) => self.emit_sorted_map_display_fn(k, v)?,
+            (Some((k, v)), _, false) => self.emit_map_display_fn(k, v),
+            (_, Some(el), true) => self.emit_sorted_set_display_fn(el)?,
+            (_, Some(el), false) => self.emit_set_display_fn(el),
             _ => unreachable!("guarded above"),
         };
         Ok(Some(self.render_via_display_fn(disp, slot)))

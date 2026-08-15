@@ -33285,3 +33285,82 @@ fn test_compound_assign_through_mut_ref_param() {
         "Xabc\nXabc\nXabc\nXzzz\n6\n"
     );
 }
+
+/// B-2026-08-14-35 — the interpreter oracle for `SortedMap` / `SortedSet`
+/// rendering. This backend renders from the value's own type and was right on
+/// every line here already; what makes it the oracle is that codegen, which
+/// pointed the sorted types at `Map` / `Set`'s Display fns because they share
+/// the `KaracMap` storage, disagreed on ALL of them — wrong type name over
+/// hash-bucket order — with no diagnostic.
+///
+/// The program is byte-identical to `SORTED_DISPLAY_SRC` in `tests/codegen.rs`,
+/// whose twin asserts this exact output under `karac build`. Insertion order is
+/// deliberately not sorted order anywhere in it (zebra/apple/mango, 30/10/20),
+/// so a regression to bucket or insertion order fails rather than passing by
+/// luck.
+#[test]
+fn test_sorted_map_and_set_display_prefix_and_order() {
+    assert_eq!(
+        run(r#"
+struct Holder { m: SortedMap[String, i64], s: SortedSet[i64] }
+
+fn mkm() -> SortedMap[String, i64] {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    let _ = m.insert("zebra", 1);
+    let _ = m.insert("apple", 2);
+    let _ = m.insert("mango", 3);
+    return m;
+}
+
+fn mks() -> SortedSet[i64] {
+    let mut s: SortedSet[i64] = SortedSet.new();
+    s.insert(30);
+    s.insert(10);
+    s.insert(20);
+    return s;
+}
+
+fn main() {
+    let mut bm: SortedMap[String, i64] = SortedMap.new();
+    let _ = bm.insert("zebra", 1);
+    let _ = bm.insert("apple", 2);
+    let _ = bm.insert("mango", 3);
+    println(f"{bm}");
+    println(bm);
+    let mut bs: SortedSet[i64] = SortedSet.new();
+    bs.insert(30);
+    bs.insert(10);
+    bs.insert(20);
+    println(f"{bs}");
+    println(bs);
+    let h = Holder { m: mkm(), s: mks() };
+    println(f"{h.m}");
+    println(h.s);
+    println(f"{mkm()}");
+    println(f"{mks()}");
+    let vm: Vec[SortedMap[String, i64]] = [mkm()];
+    println(f"{vm}");
+    let vs: Vec[SortedSet[i64]] = [mks()];
+    println(f"{vs}");
+    let em: SortedMap[String, i64] = SortedMap.new();
+    println(f"{em}");
+    let es: SortedSet[i64] = SortedSet.new();
+    println(f"{es}");
+}
+"#),
+        "\
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedSet{10, 20, 30}
+SortedSet{10, 20, 30}
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedSet{10, 20, 30}
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedSet{10, 20, 30}
+[SortedMap{apple: 2, mango: 3, zebra: 1}]
+[SortedSet{10, 20, 30}]
+SortedMap{}
+SortedSet{}
+"
+    );
+}

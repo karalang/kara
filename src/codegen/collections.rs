@@ -761,7 +761,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 elem_name.as_str(),
                 "i8" | "i16" | "i32" | "i64" | "isize" | "char" | "bool"
             );
-        let is_string = elem_name == "String";
+        // `"str"` is the typechecker-internal spelling of `String`
+        // (`Type::Str` → `type_to_type_expr` → `path("str")`, the same aliasing
+        // `types_lowering.rs`'s `Some("String") | Some("str")` arms carry). It
+        // reaches here from B-2026-08-14-35's span-keyed display path, whose
+        // key `TypeExpr` is reconstructed from `expr_types` rather than read
+        // off a source annotation; without this the comparator declined a
+        // plain `SortedMap[String, i64]` printed through a struct field or a
+        // call result, turning a wrong-prefix render into a build failure.
+        let is_string = elem_name == "String" || elem_name == "str";
         if !is_int && !is_string {
             // B-2026-08-01-17 — a plain struct key sorts field-wise in
             // declaration order (derived `Ord` semantics), unlocking sorted

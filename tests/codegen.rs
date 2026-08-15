@@ -29778,6 +29778,107 @@ fn main() {
         }
     }
 
+    /// Fixture shared by the codegen test below and, verbatim, by
+    /// `sorted_map_and_set_display_prefix_and_order_interp` in
+    /// `tests/interpreter.rs` — the interpreter is the oracle for this row, so
+    /// the two must exercise the same program.
+    ///
+    /// Insertion order is deliberately NOT sorted order anywhere in it
+    /// (zebra/apple/mango, 30/10/20), so a regression to hash-bucket or
+    /// insertion order fails rather than passing by luck.
+    const SORTED_DISPLAY_SRC: &str = r#"
+struct Holder { m: SortedMap[String, i64], s: SortedSet[i64] }
+
+fn mkm() -> SortedMap[String, i64] {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    let _ = m.insert("zebra", 1);
+    let _ = m.insert("apple", 2);
+    let _ = m.insert("mango", 3);
+    return m;
+}
+
+fn mks() -> SortedSet[i64] {
+    let mut s: SortedSet[i64] = SortedSet.new();
+    s.insert(30);
+    s.insert(10);
+    s.insert(20);
+    return s;
+}
+
+fn main() {
+    let mut bm: SortedMap[String, i64] = SortedMap.new();
+    let _ = bm.insert("zebra", 1);
+    let _ = bm.insert("apple", 2);
+    let _ = bm.insert("mango", 3);
+    println(f"{bm}");
+    println(bm);
+    let mut bs: SortedSet[i64] = SortedSet.new();
+    bs.insert(30);
+    bs.insert(10);
+    bs.insert(20);
+    println(f"{bs}");
+    println(bs);
+    let h = Holder { m: mkm(), s: mks() };
+    println(f"{h.m}");
+    println(h.s);
+    println(f"{mkm()}");
+    println(f"{mks()}");
+    let vm: Vec[SortedMap[String, i64]] = [mkm()];
+    println(f"{vm}");
+    let vs: Vec[SortedSet[i64]] = [mks()];
+    println(f"{vs}");
+    let em: SortedMap[String, i64] = SortedMap.new();
+    println(f"{em}");
+    let es: SortedSet[i64] = SortedSet.new();
+    println(f"{es}");
+}
+"#;
+
+    /// Expected render of [`SORTED_DISPLAY_SRC`] — the `karac run --interp`
+    /// oracle's byte-for-byte output.
+    const SORTED_DISPLAY_EXPECTED: &str = "\
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedSet{10, 20, 30}
+SortedSet{10, 20, 30}
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedSet{10, 20, 30}
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedSet{10, 20, 30}
+[SortedMap{apple: 2, mango: 3, zebra: 1}]
+[SortedSet{10, 20, 30}]
+SortedMap{}
+SortedSet{}
+";
+
+    #[test]
+    fn e2e_sorted_map_and_set_display_prefix_and_order_codegen() {
+        // B-2026-08-14-35 — `SortedMap` / `SortedSet` share `Map` / `Set`'s
+        // `KaracMap` storage, and before this they shared their DISPLAY FNS
+        // too. A compiled program therefore printed the wrong type name over
+        // the wrong order: `SortedMap{apple: 2, mango: 3, zebra: 1}` came out
+        // `{zebra: 1, apple: 2, mango: 3}` — hash-bucket sequence under a `Map`
+        // label — and `SortedSet{10, 20, 30}` announced itself as `Set{...}`.
+        // Every spelling was wrong, the bound local included, and the NESTED
+        // one (`Vec[SortedMap[K, V]]`) panicked the compiler outright with
+        // "type_name 'SortedMap_String_i64' not yet supported".
+        //
+        // ORDER is the load-bearing half. A prefix-only fix would have put a
+        // correct label on a bucket-order render — a worse bug than the one it
+        // closed. It now comes from the same `emit_sorted_keys_buf` that
+        // `keys()` and `for (k, v) in m` use, so the render cannot drift from
+        // iteration.
+        //
+        // The spellings below are the ones that reach different code paths:
+        // bound local (both `f"{}"` and bare `println`), struct field, call
+        // result, `Vec` element (the recursive dispatcher), and empty (the
+        // zero-length walk). Twin:
+        // `sorted_map_and_set_display_prefix_and_order_interp`.
+        if let Some(out) = run_program(SORTED_DISPLAY_SRC) {
+            assert_eq!(out, SORTED_DISPLAY_EXPECTED);
+        }
+    }
+
     #[test]
     fn e2e_sorted_map_ordered_methods_codegen() {
         // B-2026-07-18-1: the ordered-only `SortedMap` methods — `min`/`max`/

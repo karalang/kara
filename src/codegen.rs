@@ -3241,6 +3241,10 @@ pub(super) struct Codegen<'ctx> {
     /// render like a bound one instead of printing its control pointer.
     pub(crate) display_map_types: HashMap<(usize, usize), (TypeExpr, TypeExpr)>,
     pub(crate) display_set_types: HashMap<(usize, usize), TypeExpr>,
+    /// B-2026-08-14-35 — the subset of the two tables above whose surface type
+    /// was `SortedMap` / `SortedSet`. Selects the ascending-order renderer and
+    /// the `SortedMap{` / `SortedSet{` prefix.
+    pub(crate) display_sorted_collection_spans: std::collections::HashSet<(usize, usize)>,
     /// Bare names of USER-defined impl methods whose declared return type is
     /// a borrow (`-> ref T`). Gates the method-ref caller path (let-bind +
     /// direct-use rejection) so it fires ONLY for user accessors — builtin
@@ -8344,6 +8348,7 @@ impl<'ctx> Codegen<'ctx> {
             display_vec_types: HashMap::new(),
             display_map_types: HashMap::new(),
             display_set_types: HashMap::new(),
+            display_sorted_collection_spans: std::collections::HashSet::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             user_ref_method_inner: std::collections::HashMap::new(),
             heuristic_inline_hints: std::collections::HashMap::new(),
@@ -9763,6 +9768,7 @@ impl<'ctx> Codegen<'ctx> {
         self.display_vec_types = program.display_vec_types.clone();
         self.display_map_types = program.display_map_types.clone();
         self.display_set_types = program.display_set_types.clone();
+        self.display_sorted_collection_spans = program.display_sorted_collection_spans.clone();
         // Bare names of user impl methods that return a borrow — gates the
         // method-ref caller path away from builtin ref-returning methods.
         for item in &program.items {

@@ -321,6 +321,23 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // B-2026-08-14-35 — which of the two tables above are SORTED. Both
+    // `filter_map`s match the sorted sibling and then keep only the type
+    // arguments, so the surface name is dropped exactly where codegen needs it
+    // to pick the ascending-order renderer over the hash-bucket one.
+    program.display_sorted_collection_spans = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { name, args }
+                if (name == "SortedMap" && args.len() == 2)
+                    || (name == "SortedSet" && args.len() == 1) =>
+            {
+                Some((k.0, k.1))
+            }
+            _ => None,
+        })
+        .collect();
     // Inner `T` of every `Secret[T]`-typed expression, keyed by span. A
     // `.ct_eq(...)` call's result is a plain `bool`, so — unlike a borrow
     // accessor — it leaves no entry in `ref_return_inner_types` for codegen to
