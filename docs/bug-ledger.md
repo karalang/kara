@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 96 | 0 |
 | perf | 68 | 1 |
 | false-positive | 63 | 1 |
-| diagnostics | 55 | 1 |
+| diagnostics | 56 | 1 |
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
 | other | 30 | 0 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 2 |
-| autopar | 42 | 1 |
+| autopar | 43 | 1 |
 | other | 41 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
@@ -124,19 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1208 surfaced · 7 open · 1189 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1209 surfaced · 7 open · 1190 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
-| B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
 | B-2026-08-14-37 | 2026-08-14 | ownership | low | AN IMMUTABLE `Slice[T]` FORMAL REPORTS ITS OWNED `Vec[T]` ARGUMENT AS MOVED: `fn take(xs: Slice[u8])` called as `take(v)` warns `value 'v' moved here, used again here` on any later use of `v`, even though a read-only slice formal only borrows. | `param_modes_from_signature` (src/ownership.rs) maps `TypeKind::Ref -> Ref`, `MutRef` / `MutSlice -> MutRef`, and EVERYTHING ELSE to `Own` — so a bare `Slice[T]` (immutable) formal falls in the `_` arm and is classified owned. `mut Slice[T]` is correct (it has its own `TypeKind::MutSlice`); only the read-only spelling is wrong. |
 | B-2026-08-14-38 | 2026-08-14 | codegen | low | INDEXING THE RESULT OF A Vec-RETURNING METHOD CALL loud-bails `Index operator applied to non-array type` under `karac build` while `--interp` runs it: `v.clone()[1]`, `v[1..3].to_vec()[0]`, and any other `<method-chain>[i]` whose receiver is a fresh temporary. | `compile_index` (src/codegen/collections.rs) resolves its object through name-keyed registries (`vec_elem_types` / `slice_elem_types` / array slot types); a MethodCall object has no name, so it falls to the generic tail whose ArrayType / VectorType branches cannot match the `{ptr,len,cap}` struct and errors. |
 | B-2026-08-15-1 | 2026-08-15 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints raw bytes, and `m.len()` is a hard codegen error — while the same program with a type annotation, or with plain `Map`/`Set`, is correct on every surface. | The `let` path derives the collection side-tables (`map_key_type_exprs` / `var_elem_type_exprs` / `set_elem_type_exprs` / `sorted_collection_vars`) from the ANNOTATION; the callee's declared return type is never consulted for the `SortedMap` / `SortedSet` heads, so an unannotated call-result binding registers nothing. The plain `Map` / `Set` equivalent registers fine, so the head-gate is the gap, not the call-result shape. |
 | B-2026-08-15-2 | 2026-08-15 | codegen+ownership | high | `s.push_str(s)` ON A HEAP STRING THAT MUST GROW IS A USE-AFTER-FREE: the grow reallocs the destination and the copy then reads through the now-stale SOURCE pointer — 5,000 invalid reads under valgrind on one call. It produces the RIGHT ANSWER anyway, so nothing surfaces. The two SLICE spellings of the same aliasing (`s.push_str(s[a..b])`, and via a `let`) are correctly rejected by the ownership checker; only the whole-value self-append reaches codegen. | Two candidate layers, and the fix should probably be both. CODEGEN: `push_str`'s alias guard in `src/codegen/vec_method.rs` is emitted only under `src_borrowed` — an owned source is assumed not to alias, which is true of a fresh temp but false of the destination itself. The grow path calls `emit_string_buffer_grow` (realloc, may move) and then copies from `src_ptr`, captured before the grow. OWNERSHIP: the checker already rejects `s` borrowed as `Slice[T]` while borrowed as `mut ref T`; the whole-value read of `s` as a `push_str` argument is the same conflict and is not flagged. |
 | B-2026-08-15-3 | 2026-08-15 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capacity 0 and re-grows 8 -> 16 -> ... on every round. Both spellings now compile to the same in-place append as `push_str` (B-2026-08-14-23), so the two are equivalent code and the heuristic disagrees with itself: measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends, entirely from the missing reservation. | `src/presize.rs`. `is_push_to` matches only `ExprKind::MethodCall` with `push`/`push_str`/`push_back`, and `top_level_push_count` counts only `StmtKind::Expr` statements, so `StmtKind::Assign { target: V, value: V + x }` and `StmtKind::CompoundAssign { Add, target: V, .. }` are invisible. `find_fill_bound` additionally BAILS on any non-`Expr` statement between the Let and the loop that mentions `V`, which would reject a prelude `s = s + "seed"` the way it currently folds in a prelude `s.push_str("seed")`. |
+| B-2026-08-15-4 | 2026-08-15 | autopar | low | `cost_gate: "unknown"` conflates "the loop lookup failed" (a compiler bug) with "found it, but the iterable is not a shapeable range" (a legitimate limitation) -- the same opaque string for both | disjoint_loop_verdict / reduction_loop_verdict (src/effect_graph.rs) chain two `?`s -- find_loop_in_block then par_cost::extract_loop_shape -- and both collapse to None, which effect_graph.rs reports as (false, "unknown"). |
 
 ### Wontfix (2)
 
@@ -149,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1208 surfaced
 
 </details>
 
-### Fixed (1189)
+### Fixed (1190)
 
-<details><summary>1189 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1190 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7093,6 +7093,43 @@ Verified after rebasing onto 11 upstream commits (several codegen fixes):
 codegen 2972 passed, interpreter 1523 passed, memory_sanitizer 1085 passed, fmt
 and clippy clean. apps/cumulus -- the app that surfaced this -- builds and its
 streamed stack stays byte-identical to the resident one. |
+| B-2026-08-14-33 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the… | Both loop lookups behind the report -- find_loop_by_span (disjoint writes) and
+find_loop_by_line (reductions) -- were separate copies of one shallow walk over
+block.stmts that recursed into loop bodies alone. Replaced with a single
+traversal (src/effect_graph.rs, find_loop_in_block / find_loop_in_expr, keyed by
+a LoopKey::Span | LoopKey::Line enum) that descends if/if-let arms including
+else-if chains, match arms, nested/labeled/unsafe/comptime blocks, loop bodies,
+let initializers, and block tail expressions.
+
+The walk returns the INNERMOST enclosing block plus the loop's index in it,
+which extract_loop_shape's while-counter lookup depends on; a tail-position loop
+reports index stmts.len(), so preceding_stmt_init reads the last statement as
+its predecessor.
+
+VERIFIED AGAINST THE LOWERING rather than assumed: the nested and hoisted forms
+of the same heavy loop each emit exactly one karac_disjoint_worker_* symbol, so
+the fan-out fires identically and only the report disagreed. Post-fix the nested
+form reports fanout, matching.
+
+The REDUCTION half was broken identically and was NOT described in this row --
+found by fixing the shared walk and ablating. Pre-fix a reduction nested in an
+if/match reported cost_gate "unknown" while the unnested form reported "fanout".
+Both surfaces are now pinned.
+
+Tests (tests/cli.rs): test_query_concurrency_verdict_is_independent_of_loop_nesting
+(8 shapes: whole body, tail if, tail block, stmt-then-if, else arm, else-if arm,
+match arm, and a 3-level if>match>block nest) and
+..._reduction_verdict_is_independent_of_loop_nesting (5 shapes). Each shape is
+compared to the UNNESTED BASELINE rather than a hardcoded gate name, so a later
+retune of the cost model cannot silently void them; each also asserts the
+baseline itself fans out, so a test that degraded to comparing declines would
+fail loudly. Both fail without the fix (ablated).
+
+FOLLOW-UP FILED: B-2026-08-15-4 -- "unknown" still conflates two causes, and the
+walk-depth one was only half of it.
+
+apps/cumulus calibrate_rows' comment, which documented the stale report as
+current behaviour, is corrected in kara-katas. |
 | B-2026-08-14-34 | resolver+ownership | medium | DIAGNOSTIC OUTPUT IS NONDETERMINISTIC RUN-TO-RUN on the same binary and the same input, in two independent places: a resolver "did you mean" suggesti… | FIXED by a5cb578. Both legs reproduce exactly as filed and are deterministic
 after: 30/30 identical on each leg's repro, and a three-runs-per-file sweep of
 all 819 `.kara` files in the katas / examples / selfhost corpora reports ZERO
