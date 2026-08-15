@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 96 | 0 |
 | perf | 68 | 1 |
 | false-positive | 63 | 0 |
-| diagnostics | 57 | 1 |
+| diagnostics | 57 | 0 |
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
 | other | 30 | 0 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
-| autopar | 44 | 1 |
+| autopar | 44 | 0 |
 | other | 41 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1213 surfaced · 4 open · 1197 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1213 surfaced · 3 open · 1198 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-3 | 2026-08-15 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capacity 0 and re-grows 8 -> 16 -> ... on every round. Both spellings now compile to the same in-place append as `push_str` (B-2026-08-14-23), so the two are equivalent code and the heuristic disagrees with itself: measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends, entirely from the missing reservation. | `src/presize.rs`. `is_push_to` matches only `ExprKind::MethodCall` with `push`/`push_str`/`push_back`, and `top_level_push_count` counts only `StmtKind::Expr` statements, so `StmtKind::Assign { target: V, value: V + x }` and `StmtKind::CompoundAssign { Add, target: V, .. }` are invisible. `find_fill_bound` additionally BAILS on any non-`Expr` statement between the Let and the loop that mentions `V`, which would reject a prelude `s = s + "seed"` the way it currently folds in a prelude `s.push_str("seed")`. |
 | B-2026-08-15-6 | 2026-08-15 | codegen | medium | THE DEEP-CLONED HEAP ELEMENT OF AN INLINE-TEMP-VEC INDEX LEAKS WHEN THE INDEX IS AN F-STRING INTERPOLATION OPERAND but not when it is a direct print argument: `println(f"{names()[1]}")` strands one String per evaluation while `println(names()[1])` is clean. | `compile_inline_temp_vec_index_ex` (src/codegen/collections.rs) deep-clones a non-Copy element before draining the temp buffer — it has to, or the returned value dangles — and the clone's owner is the CONSUMER, via `free_fresh_owned_str_arg` gated on `expr_is_inline_temp_vec_heap_index`. The direct print-argument site calls that; the f-string interpolation lowering does not. |
 | B-2026-08-15-7 | 2026-08-15 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED BY VALUE TO A GENERIC FN'S OWNED PARAM IS NEVER DROPPED — `take(nums.clone())` strands one buffer per call when `take` is `take[T](v: Vec[T])`, while the identical call into a non-generic `take_i(v: Vec[i64])` is clean. | The monomorph call path (`compile_generic_call` / `compile_mono_function`, src/codegen.rs) does not run the caller-side owned-temp argument cleanup the ordinary call path does — the arg value is stored into the inlined body's param slot and no cleanup is queued for it on the caller's frame. |
-| B-2026-08-15-8 | 2026-08-15 | autopar | low | A DISJOINT-WRITE ENTRY HAS NOWHERE TO PUT ITS COST-DECLINE PROSE: its `reason` field is the disjointness proof's, so `cost_gate` names the declining gate while nothing says why -- the reduction path carries both. | loop_disjoint_writes_json (src/effect_graph.rs) emits `reason` from `DisjointWriteLoop::reason` (the PROOF's prose). The reduction twin emits the cost verdict's prose there instead, so `LoopVerdict::render`'s third element is used on one path and discarded on the other. |
 
 ### Wontfix (2)
 
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1213 surfaced
 
 </details>
 
-### Fixed (1197)
+### Fixed (1198)
 
-<details><summary>1197 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1198 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7612,6 +7611,50 @@ clean both with and without `--features llvm`, and the full `--features llvm`
 suite green — 5668 tests across 28 binaries, zero failures, and zero archive-skip
 notices, so the E2E legs really ran rather than passing vacuously. |
 | B-2026-08-15-5 | codegen | medium | shared-struct String field reassignment never frees the displaced buffer (hidden at default opt by LICM; -O0 leg caught it) | String joins the container family in release_old_shared_container_field (src/codegen/expr_ops.rs): the displaced buffer gets the same in-place cap-guarded drop through the field GEP before the new value is stored. Fixture comment rewritten to retire the false 'already released' premise; new aliasing fixture asan_shared_struct_string_field_reassign_aliasing pins self-assign, cross-alias, and compound-append shapes. Fixed in 04e550b0. |
+| B-2026-08-15-8 | autopar | low | A DISJOINT-WRITE ENTRY HAS NOWHERE TO PUT ITS COST-DECLINE PROSE: its `reason` field is the disjointness proof's, so `cost_gate` names the declining… | FIXED in ac23f22. The disjoint-write entry gains a `cost_reason` field, fed by
+the third element of `LoopVerdict::render` that `disjoint_write_loops_json`
+already computed and threw away (`let (fanned_out, gate, _) = ...`). It is the
+counterpart to `cost_gate` exactly as `reason` is to `gate`.
+
+Implemented as the row's own fix sketch proposed — additive, so no existing
+consumer breaks — and it covers ALL FOUR decline tags plus `fanout` and the
+proof-declined path, not just the `declined_unshapeable_loop` tag that made the
+gap visible. A proof-declined entry now says the cost model never ran rather
+than leaving the reader to infer it from `cost_gate: "n/a"`.
+
+The ledger's own repro, after:
+
+    incl_disjoint  cost_gate=declined_unshapeable_loop
+      reason      : iteration `i` writes `out` only within [i * (1), (i + 1) * (1))
+      cost_reason : loop iterable is an inclusive range (`lo..=hi`); auto-par
+                    shapes exclusive ranges (`lo..hi`) only
+    ok_disjoint    cost_gate=fanout
+      reason      : iteration `i` writes `out` only within [i * (1), (i + 1) * (1))
+      cost_reason : dispatched across the worker pool
+
+The two `reason` strings still match, and that is deliberate: the proof DID
+succeed identically in both cases, and saying so is correct. Overloading
+`reason` with the cost verdict -- the alternative the row rejected -- would have
+destroyed the interval proof that is this array's reason for existing.
+
+TEST (`tests/cli.rs::test_query_concurrency_disjoint_write_cost_decline_carries_prose`)
+pins that rejection as its FIRST assertion: `incl_disjoint` and `ok_disjoint`
+must still render EQUAL `reason` strings. A future "fix" that writes the cost
+verdict over the proof then fails instead of passing -- a test that only checked
+"the strings differ now" would have rewarded it. It also asserts a fanning
+baseline (or a decline-only test proves nothing with auto-par wholly broken),
+distinct prose per distinct gate, and that all four decline tags are reachable
+in the source so none is left unpinned. Negative control run: the test fails at
+baseline with the fix stashed.
+
+Doc: the field contract in `disjoint_write_loops_json`'s rustdoc now states that
+`reason` is the proof's prose on every entry INCLUDING a cost-declined one, and
+`cost_reason`'s entry records why the two cannot be one field. Same note added
+to the phase-6-runtime query-surface block, whose JSON sample predates the field.
+
+Gates: `cargo test --test cli` 546 pass, `concurrency` 147, `concurrency_report`
+4, `effectchecker` 420; `cargo clippy --all --all-targets --features llvm
+-D warnings` exit 0; fmt clean. |
 
 </details>
 
