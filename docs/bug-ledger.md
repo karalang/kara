@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 249 | 0 |
-| leak | 180 | 2 |
+| leak | 181 | 1 |
 | double-free | 129 | 0 |
 | run-vs-build | 121 | 0 |
 | codegen-gap | 109 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 876 | 3 |
+| codegen | 877 | 2 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1213 surfaced · 3 open · 1198 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1214 surfaced · 2 open · 1200 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-3 | 2026-08-15 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capacity 0 and re-grows 8 -> 16 -> ... on every round. Both spellings now compile to the same in-place append as `push_str` (B-2026-08-14-23), so the two are equivalent code and the heuristic disagrees with itself: measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends, entirely from the missing reservation. | `src/presize.rs`. `is_push_to` matches only `ExprKind::MethodCall` with `push`/`push_str`/`push_back`, and `top_level_push_count` counts only `StmtKind::Expr` statements, so `StmtKind::Assign { target: V, value: V + x }` and `StmtKind::CompoundAssign { Add, target: V, .. }` are invisible. `find_fill_bound` additionally BAILS on any non-`Expr` statement between the Let and the loop that mentions `V`, which would reject a prelude `s = s + "seed"` the way it currently folds in a prelude `s.push_str("seed")`. |
-| B-2026-08-15-6 | 2026-08-15 | codegen | medium | THE DEEP-CLONED HEAP ELEMENT OF AN INLINE-TEMP-VEC INDEX LEAKS WHEN THE INDEX IS AN F-STRING INTERPOLATION OPERAND but not when it is a direct print argument: `println(f"{names()[1]}")` strands one String per evaluation while `println(names()[1])` is clean. | `compile_inline_temp_vec_index_ex` (src/codegen/collections.rs) deep-clones a non-Copy element before draining the temp buffer — it has to, or the returned value dangles — and the clone's owner is the CONSUMER, via `free_fresh_owned_str_arg` gated on `expr_is_inline_temp_vec_heap_index`. The direct print-argument site calls that; the f-string interpolation lowering does not. |
-| B-2026-08-15-7 | 2026-08-15 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED BY VALUE TO A GENERIC FN'S OWNED PARAM IS NEVER DROPPED — `take(nums.clone())` strands one buffer per call when `take` is `take[T](v: Vec[T])`, while the identical call into a non-generic `take_i(v: Vec[i64])` is clean. | The monomorph call path (`compile_generic_call` / `compile_mono_function`, src/codegen.rs) does not run the caller-side owned-temp argument cleanup the ordinary call path does — the arg value is stored into the inlined body's param slot and no cleanup is queued for it on the caller's frame. |
+| B-2026-08-15-9 | 2026-08-15 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED TO A BARE-`T` GENERIC PARAM THAT THE CALLEE RETURNS is never dropped -- `pick(x.clone(), y.clone())` on `fn pick[T](a: T, b: T) -> T { id(a) }` strands one buffer per call, while the same forwarding tail in CONTAINER spelling (`a: Vec[T]`) is clean as of B-2026-08-15-7. | `generic_param_is_bare_type_param` (src/codegen/mono.rs) rejects a bare-`T` param whose type param appears in the declared return type, so `compile_generic_call` queues no caller-side materialization for it. Deliberate: B-2026-08-11-3 measured the unguarded version as a real double free on this exact shape and chose the leak as the conservative direction. |
 
 ### Wontfix (2)
 
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1213 surfaced
 
 </details>
 
-### Fixed (1198)
+### Fixed (1200)
 
-<details><summary>1198 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1200 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7611,6 +7610,168 @@ clean both with and without `--features llvm`, and the full `--features llvm`
 suite green — 5668 tests across 28 binaries, zero failures, and zero archive-skip
 notices, so the E2E legs really ran rather than passing vacuously. |
 | B-2026-08-15-5 | codegen | medium | shared-struct String field reassignment never frees the displaced buffer (hidden at default opt by LICM; -O0 leg caught it) | String joins the container family in release_old_shared_container_field (src/codegen/expr_ops.rs): the displaced buffer gets the same in-place cap-guarded drop through the field GEP before the new value is stored. Fixture comment rewritten to retire the false 'already released' premise; new aliasing fixture asan_shared_struct_string_field_reassign_aliasing pins self-assign, cross-alias, and compound-append shapes. Fixed in 04e550b0. |
+| B-2026-08-15-6 | codegen | medium | THE DEEP-CLONED HEAP ELEMENT OF AN INLINE-TEMP-VEC INDEX LEAKS WHEN THE INDEX IS AN F-STRING INTERPOLATION OPERAND but not when it is a direct print… | FIXED by 3d190f71, in two places, because the row is two defects that share a root cause and
+only one of them is the f-string bug the title describes.
+
+ROOT CAUSE, common to both. `compile_inline_temp_vec_index_ex` MUST deep-clone a
+non-Copy element — it drains the temp buffer immediately after the read, so a
+borrowed element would dangle — and it then de-registers the synth Vec local. The
+clone therefore reaches its consumer with no binding behind it and no scope-exit
+cleanup of its own, so EVERY consuming position has to name it. The argument gate
+(`free_fresh_owned_str_arg`) has done since B-2026-06-14-32. Two other consumers
+had not.
+
+HALF 1 — THE STRING ELEMENT, which is the row exactly as written.
+`fstr_render_part` (src/codegen/runtime.rs) scope-tracks a String-typed part that
+is a fresh owned temp, gated on `expr_yields_fresh_owned_temp ||
+expr_is_fresh_owned_string_slice`. That is the argument gate's list minus its
+third predicate. Adding `expr_is_inline_temp_vec_heap_index` is the whole fix:
+`println(f"{names()[1]}")` now tracks the clone in the same entry alloca every
+sibling arm uses, and the buffer is freed once per evaluation.
+
+HALF 2 — THE VEC ELEMENT, where THE ROW'S CHARACTERIZATION IS WRONG AND THE
+CORRECTION IS THE USEFUL PART. The row says a `Vec` element "leaks the same way
+… so this is about the CONSUMER site, not the element type". Measured, it does
+not: for a `Vec` element BOTH spellings leak — `println(f"{mkrows()[1]}")` AND
+`println(mkrows()[1])`, 1280 B / 20 evaluations each, the direct one being the
+very spelling the row's own probe table certifies as clean. So the leaking-vs-
+clean pair that localizes the String half does not exist for the Vec half, and a
+fix that trusted the row's framing would have shipped the f-string arm, watched
+the four listed probes go green, and left the direct print leaking.
+
+The Vec element never reaches the arm fixed in half 1: `try_compile_vec_display`
+intercepts it earlier, in BOTH consumers (the print path and the f-string part
+renderer call the same helper). Its ownership decision runs through
+`print_vec_operand_is_owned_temp`, whose producer list — collection literal, or a
+call whose return is owned — rules out every `Index` as a place read. For a bound
+`v[i]` that is exactly right and is why B-2026-08-14-30 wrote it that way: `b.xs`,
+`grid[1]`, `t.0` hand back a container's own `{ptr,len,cap}`, and tracking one
+was a hard double free. An index into an inline TEMPORARY is the one index shape
+that produces rather than reads, so it belongs on the list; adding it fixes both
+spellings at once, which is why half 2 is one predicate and not two.
+
+WHY THE SAME PREDICATE IS SAFE IN BOTH PLACES. It resolves through
+`inline_index_recv_vec_te`, the same dispatch `compile_vec_index` itself uses to
+decide whether to take the clone-minting path, so it cannot answer true for a
+shape lowered as a place read — the two would have to disagree about which
+lowering ran. That is a stronger guarantee than a shape enumeration, and it is
+the reason B-2026-08-14-38 rewrote the predicate to consult that dispatch.
+
+DECLINE LEFT UNCHANGED, and it is pre-existing: `names()[1].len()` — a METHOD on
+an inline-temp index — is still the loud "indexed-receiver method requires the
+indexed container to be a named variable" build error, verified identical on the
+parent. B-2026-08-14-38's close note already records `rows.clone()[1].len()` as a
+deliberate decline of the same dispatcher; nothing here widens or narrows it.
+
+MEASURED on all three backends at both optimization levels, against the
+interpreter as oracle: both spellings of a String element and of a `Vec[i64]`
+element, a two-operand f-string (`f"{names()[0]}-{names()[2]}"`, which mints two
+clones in one interpolation), a nested `Vec[Vec[String]]` element, an
+accumulating `acc = acc + names()[i]` loop, and the three place-expression shapes
+that must NOT be dropped (`b.xs`, `grid[1]`, `held[1]`) read both before and
+after a temporary reads the same container. Zero divergences; LSan clean at both
+levels.
+
+TESTS. `asan_fstring_inline_temp_vec_index_element_no_leak`
+(tests/memory_sanitizer.rs) is the detector — verified FAILING on the parent at
+BOTH opt levels — and carries the direct-print lines that half 2 needs, which
+would have gone on passing had only the f-string been fixed. Its last four lines
+are the double-free direction: the place reads whose containers must still own
+their buffers. `test_e2e_inline_temp_vec_index_spellings_agree` (tests/codegen.rs)
+is a regression guard and PASSES on the parent — verified, not assumed — because
+every value was already correct; what it pins is that the new cleanups free
+nothing a later read still needs.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features
+llvm` suite, and the asan -O0 leg. |
+| B-2026-08-15-7 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED BY VALUE TO A GENERIC FN'S OWNED PARAM IS NEVER DROPPED — `take(nums.clone())` strands one buffer per call when… | FIXED by 2623cde0, in `compile_generic_call` (src/codegen/mono.rs) by extending the caller-side
+materialization to the param spelling it had been missing.
+
+THE ROW'S DIAGNOSIS IS RIGHT AND ITS TRACKER POINTS AT THE RIGHT LINE. The mono
+prologue enters EVERY bare non-borrow param that lands in `vec_elem_types` into
+`owned_vecstr_params` — how the param was SPELLED is not one of its inputs — so
+`v: Vec[T]` is caller-retains exactly as `v: T` is: the callee deep-copies at each
+retaining consume site and never frees the caller's buffer. The ordinary call path
+answers that by materializing every fresh heap `Vec` temp with no callee-shape test
+at all (`call_dispatch.rs`, the #20 arm). The monomorph path had only two narrow
+arms — `String`-typed temps (B-2026-07-14-12) and temps to a param written as a
+BARE type parameter (B-2026-08-11-3) — so `fn take[T](v: Vec[T])`, the ordinary way
+to write it, fell between them.
+
+WHY THE `Vec[T]` SPELLING WAS EXCLUDED, and why that reason no longer holds. The
+String arm's comment says a `Vec[T]` param temp "MOVES/aliases into the callee's
+sink … so materializing it would add a spurious second free." That was written
+BEFORE B-2026-07-11-35 converted owned Vec/String params to retaining-deep-copy;
+the prologue at `compile_mono_function` now registers the container spelling into
+`owned_vecstr_params` alongside the bare one, so both are caller-retains and the
+distinction the gate was drawing no longer corresponds to any difference in the
+callee's behaviour. The non-generic twins are the control and they are unambiguous:
+`fn passthru(v: Vec[i64]) -> Vec[i64] { return v; }` and a `mut ref` sink are BOTH
+single-free under LSan under the very same unconditional materialization.
+
+THE RETURN-TYPE EXCLUSION IS DELIBERATELY NOT INHERITED, AND THAT WAS MEASURED
+RATHER THAN ASSUMED — including one draft that got it wrong. The bare-`T` arm
+rejects a param whose type param appears in the return type, because a forwarding
+tail hands the caller's own buffer back out; B-2026-08-11-3 measured that as a real
+`free(): double free detected`. The container spelling cannot do that, because an
+owned `Vec` param is deep-copied at every retaining consume site INCLUDING the
+return — so `fn pick[T](a: Vec[T], b: Vec[T]) -> Vec[T] { return id(a); }`, the
+exact forwarding shape, is single-free with the materialization and was pinned as a
+test rather than reasoned about.
+
+THE DRAFT THAT GOT IT WRONG IS WORTH RECORDING, because the mistake is latent in
+the predicate's name. The first version defined the new gate as
+`!generic_param_is_bare_type_param`. But that predicate folds the return-type
+exclusion INTO the spelling test, so its negation reads "container spelling OR a
+bare type param that IS returned" — and it handed the new arm precisely the
+forwarding tail the exclusion exists to keep out, turning `fn pick[T](a: T, b: T)
+-> T { id(a) }` into an ASAN double-free abort. The fix splits
+`generic_param_is_bare_type_param_spelling` out as its own predicate and negates
+only that, leaving the bare-`T` arm byte-identical in behaviour. A predicate that
+answers two questions at once is safe to CALL and unsafe to NEGATE; the split is
+the durable half of this change.
+
+THE ROW'S ONE MEASUREMENT ERROR — and it is the kind that makes a permanent
+fixture vacuous. The row says "The body is irrelevant: `v.len()` leaks exactly as
+`return v[i]` does." At `-O0` that holds. At the DEFAULT opt level it does not: a
+callee that only asks for `len()` never reads the cloned bytes, LLVM deletes the
+allocation outright, and the probe reports CLEAN. That is why `q1` (the row's
+headline spelling, `Vec[i64]`, `v.len()`) measured clean on the parent at `-O2`
+and leaking at `-O0`. The permanent fixture therefore carries BOTH callees:
+`take` for the row's spelling, and `head[T](v: Vec[T]) -> T { return v[0]; }`,
+which reads the buffer and so cannot be optimized into a vacuous pass if the
+`-O0` leg is ever dropped.
+
+SHAPES THE ROW DID NOT TEST THAT LEAKED THE SAME WAY, all now clean: a call-result
+temp (`take(mk())`) and a collection literal (`take([7, 8, 9])`) — the row tested
+only `.clone()`; a `Vec[String]` element type, which strands the buffer AND every
+element (2340 B / 80 allocations over 20 calls); a fully CONCRETE param on a
+generic fn (`fn two[T](v: Vec[i64], t: T)`), which has no type param in it at all
+and leaked because the prologue's rule is about the param being owned, not about it
+being generic; a `mut ref` accumulator sink; and both passthrough shapes.
+
+REMAINDER, SPLIT INTO ITS OWN ROW rather than buried here: a fresh temp into a
+BARE-`T` param that IS returned still leaks (`fn pick[T](a: T, b: T) -> T {
+id(a) }`, 1280 B / 20 calls). Verified identical on the parent — this fix neither
+improves nor worsens it. It is the deliberate conservative direction of
+B-2026-08-11-3 ("an unrecognized return shape answers 'mentions it', so the
+conservative direction is a leak, never a double free"), documented in that row's
+prose but never tracked as open work.
+
+MEASURED against the interpreter as oracle on all three backends at both
+optimization levels — 16 shapes, zero divergences, LSan clean — with the
+non-generic twin of each shape as the control.
+
+TESTS. `asan_generic_owned_vec_param_temp_arg_no_leak` (tests/memory_sanitizer.rs)
+is the detector, verified FAILING on the parent at BOTH opt levels.
+`test_e2e_generic_owned_vec_param_temp_arg` (tests/codegen.rs) is a regression
+guard and PASSES on the parent — verified, not assumed — since the values were
+always right; it covers the double-free direction, where a collision between the
+new caller-side drop and the result consumer's would surface as a corrupted read,
+and it re-reads `nums` and `ns` after six clones to pin that the callee deep-copied.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
+suite, and the asan -O0 leg. |
 | B-2026-08-15-8 | autopar | low | A DISJOINT-WRITE ENTRY HAS NOWHERE TO PUT ITS COST-DECLINE PROSE: its `reason` field is the disjointness proof's, so `cost_gate` names the declining… | FIXED in ac23f22. The disjoint-write entry gains a `cost_reason` field, fed by
 the third element of `LoopVerdict::render` that `disjoint_write_loops_json`
 already computed and threw away (`let (fanned_out, gate, _) = ...`). It is the
