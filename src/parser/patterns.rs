@@ -61,6 +61,7 @@ impl super::Parser {
                 let name_span = self.span_from(&start);
                 if !self.eat(&Token::At) {
                     self.errors.push(ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: format!(
                             "'ref' in a pattern is only valid on an '@' binding \
                              ('ref {name} @ PATTERN'); binding modes otherwise \
@@ -314,6 +315,7 @@ impl super::Parser {
                             // Recovery: keep the first rest marker; later
                             // elements continue collecting into `suffix`.
                             self.errors.push(ParseError {
+                                kind: crate::parser::ParseErrorKind::Syntax,
                                 message:
                                     "slice pattern may have at most one `..` marker; remove the extras"
                                         .to_string(),
@@ -499,8 +501,7 @@ impl super::Parser {
                 }
             }
             _ => {
-                let msg = self.unexpected_ident_msg("pattern");
-                self.error(&msg);
+                self.error_unexpected_ident("pattern");
                 None
             }
         }
@@ -551,6 +552,7 @@ impl super::Parser {
             return Some(RangeBound::Literal(self.parse_literal_pattern()?));
         }
         self.errors.push(ParseError {
+            kind: crate::parser::ParseErrorKind::Syntax,
             message: "error[E_RANGE_PATTERN_BOUND_NOT_SIMPLE]: range pattern bound must be \
                       a literal or a path to a module-level const; arbitrary expressions are \
                       not accepted at pattern position"
@@ -586,6 +588,7 @@ impl super::Parser {
                 self.advance();
                 if has_rest {
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_REST_PATTERN_DUPLICATE]: \
                                   `..` rest-pattern appears more than once in \
                                   the same struct pattern — only one is permitted"
@@ -598,6 +601,7 @@ impl super::Parser {
                 // the `..` is not.
                 if self.eat(&Token::Comma) && !self.check(&Token::RightBrace) {
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_REST_PATTERN_NOT_LAST]: \
                                   `..` rest-pattern must appear last in the \
                                   struct pattern's field list — move it after \

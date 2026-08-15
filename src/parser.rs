@@ -20,10 +20,51 @@ mod types;
 
 // ── Parse Errors ─────────────────────────────────────────────────
 
+/// Machine-readable family of a parse diagnostic — the parse-phase twin of
+/// `resolver::ResolveErrorKind`. Until this existed every parse error reached
+/// the JSON surface as one undifferentiated `E0001`, which made parse the
+/// weakest diagnostic surface for machine consumers (`karac fix`, the Mend
+/// loop, IDEs): a reserved-keyword misuse and a stray token were the same
+/// code. One kind per FAMILY, not per message — the message carries the
+/// specifics; the kind is what a tool can dispatch on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParseErrorKind {
+    /// Uncategorized syntax error — the default every pre-existing
+    /// construction site lands on, and the same `E0001` those errors have
+    /// always carried. Classify sites OUT of this bucket over time; never
+    /// dispatch on it.
+    #[default]
+    Syntax,
+    /// The parser required a specific token / production and found another
+    /// (`expect`, and the identifier/expression/pattern-position fallbacks).
+    UnexpectedToken,
+    /// A reserved keyword used where an identifier is required
+    /// (the B-2026-07-08-13 family — `let mut group = …`).
+    ReservedKeyword,
+    /// Syntax recognized and deliberately frozen at v1 (reserved ABIs and
+    /// peers) — valid-looking code the language reserves rather than rejects
+    /// as nonsense; tools should surface these as "not yet", not "wrong".
+    ReservedSyntax,
+}
+
+impl ParseErrorKind {
+    /// Stable diagnostic code, `E00xx` (parse owns the block below the
+    /// resolver's `E01xx`). `Syntax` keeps the historical `E0001`.
+    pub fn code(self) -> &'static str {
+        match self {
+            ParseErrorKind::Syntax => "E0001",
+            ParseErrorKind::UnexpectedToken => "E0002",
+            ParseErrorKind::ReservedKeyword => "E0003",
+            ParseErrorKind::ReservedSyntax => "E0005",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParseError {
     pub message: String,
     pub span: Span,
+    pub kind: ParseErrorKind,
 }
 
 impl std::fmt::Display for ParseError {
@@ -658,11 +699,10 @@ impl Parser {
             self.advance();
             Some(())
         } else {
-            self.error(&format!(
-                "Expected {:?}, found {:?}",
-                expected,
-                self.peek_token()
-            ));
+            self.error_kind(
+                ParseErrorKind::UnexpectedToken,
+                &format!("Expected {:?}, found {:?}", expected, self.peek_token()),
+            );
             None
         }
     }
@@ -674,8 +714,7 @@ impl Parser {
                 Some(name)
             }
             _ => {
-                let msg = self.unexpected_ident_msg("identifier");
-                self.error(&msg);
+                self.error_unexpected_ident("identifier");
                 None
             }
         }
@@ -791,8 +830,15 @@ impl Parser {
     // ── Error Recovery ───────────────────────────────────────────
 
     fn error(&mut self, message: &str) {
+        self.error_kind(ParseErrorKind::Syntax, message);
+    }
+
+    /// [`error`] with an explicit machine-readable family. New diagnostics
+    /// should come through here; `error` is the legacy `Syntax` bucket.
+    fn error_kind(&mut self, kind: ParseErrorKind, message: &str) {
         let span = self.current_span();
         self.errors.push(ParseError {
+            kind,
             message: message.to_string(),
             span,
         });
@@ -806,6 +852,19 @@ impl Parser {
     /// and cannot be used as an identifier` rather than `Expected pattern, found
     /// Group` (B-2026-07-08-13). `expected` is the noun used in the non-keyword
     /// fallback ("identifier" / "pattern" / "expression").
+    /// Push the [`unexpected_ident_msg`] diagnostic with the matching kind:
+    /// `ReservedKeyword` when the offending token is a reserved keyword,
+    /// `UnexpectedToken` otherwise. Call this instead of pairing
+    /// `unexpected_ident_msg` with plain `error`, which loses the family.
+    fn error_unexpected_ident(&mut self, expected: &str) {
+        let kind = match self.peek_token().keyword_spelling() {
+            Some(_) => ParseErrorKind::ReservedKeyword,
+            None => ParseErrorKind::UnexpectedToken,
+        };
+        let msg = self.unexpected_ident_msg(expected);
+        self.error_kind(kind, &msg);
+    }
+
     fn unexpected_ident_msg(&self, expected: &str) -> String {
         let tok = self.peek_token();
         match tok.keyword_spelling() {
@@ -820,7 +879,13 @@ impl Parser {
     /// rather than the current token — for cases where the offending
     /// construct was already consumed (e.g. a bad `extern "ABI"` string).
     fn error_at(&mut self, message: &str, span: Span) {
+        self.error_at_kind(ParseErrorKind::Syntax, message, span);
+    }
+
+    /// [`error_at`] with an explicit machine-readable family.
+    fn error_at_kind(&mut self, kind: ParseErrorKind, message: &str, span: Span) {
         self.errors.push(ParseError {
+            kind,
             message: message.to_string(),
             span,
         });
@@ -836,7 +901,8 @@ impl Parser {
     /// embedded/hardware tracker and design.md § FFI.
     fn reserved_abi_diagnostic(&mut self, abi: &str, span: Span) -> bool {
         if RESERVED_FFI_ABIS.contains(&abi) {
-            self.error_at(
+            self.error_at_kind(
+                ParseErrorKind::ReservedSyntax,
                 &format!(
                     "the `\"{abi}\"` calling convention is reserved for a future release \
                      and cannot be used yet — at v1 an `extern` ABI may only be `\"C\"` or \
@@ -887,6 +953,7 @@ impl Parser {
             None => format!("rename it to {expected_desc}"),
         };
         self.errors.push(ParseError {
+            kind: ParseErrorKind::Syntax,
             message: format!(
                 "`{name}` is {actual_desc} but {context} names must be {expected_desc}; {advice}"
             ),

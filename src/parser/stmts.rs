@@ -353,6 +353,7 @@ impl super::Parser {
             }
         }
         self.errors.push(super::ParseError {
+            kind: crate::parser::ParseErrorKind::Syntax,
             message: "`test \"name\" { body }` declares a top-level test \
                       case and may not appear inside a function body. \
                       Move the case to module scope (any `_test.kara` \
@@ -570,6 +571,7 @@ impl super::Parser {
             self.advance();
             let Some(ty) = ty else {
                 self.errors.push(ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: "uninitialized `let` requires a type annotation; write `let x: T;` (or supply an initializer with `= ...`)"
                         .to_string(),
                     span: self.span_from(&start),
@@ -580,6 +582,7 @@ impl super::Parser {
                 PatternKind::Binding(name) => (name.clone(), pattern.span.clone()),
                 _ => {
                     self.errors.push(ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: "uninitialized `let` must bind a single name; destructuring patterns require an initializer"
                             .to_string(),
                         span: pattern.span.clone(),

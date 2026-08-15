@@ -3320,7 +3320,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             id: &format!("d{id_counter}"),
             severity: "error",
             phase: "parse",
-            code: "E0001",
+            code: err.kind.code(),
             category: "parse",
             message: &err.message,
             filename,

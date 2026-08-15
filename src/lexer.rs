@@ -8,6 +8,14 @@ use crate::token::{FloatSuffix, IntSuffix, Span, SpannedToken, Token};
 /// The Lexer holds state required to tokenize input source code.
 pub struct Lexer<'a> {
     source: &'a [u8],
+    /// The same source as the `&str` it arrived as. Text slices go through
+    /// `str::get` on this, which returns `None` instead of panicking when an
+    /// index is not a char boundary — the byte-scanning loops below keep
+    /// `start`/`current` on boundaries by construction (they only stop on
+    /// ASCII bytes, which cannot occur inside a multi-byte sequence), but that
+    /// invariant is one edit away from a compiler panic on user input, so the
+    /// slice path must not be able to abort.
+    source_str: &'a str,
     start: usize,
     current: usize,
     line: usize,
@@ -20,6 +28,7 @@ impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
         Lexer {
             source: source.as_bytes(),
+            source_str: source,
             start: 0,
             current: 0,
             line: 1,
@@ -138,9 +147,7 @@ impl<'a> Lexer<'a> {
                     while self.peek() != b'\n' && !self.is_at_end() {
                         self.advance();
                     }
-                    let text = std::str::from_utf8(&self.source[start..self.current])
-                        .unwrap()
-                        .to_string();
+                    let text = self.slice_text(start, self.current).to_string();
                     self.make_spanned(Token::DocComment(text))
                 } else if self.peek() == b'/' && self.peek_next() == b'!' {
                     // Module-level doc comment: //!
@@ -154,9 +161,7 @@ impl<'a> Lexer<'a> {
                     while self.peek() != b'\n' && !self.is_at_end() {
                         self.advance();
                     }
-                    let text = std::str::from_utf8(&self.source[start..self.current])
-                        .unwrap()
-                        .to_string();
+                    let text = self.slice_text(start, self.current).to_string();
                     self.make_spanned(Token::ModuleDocComment(text))
                 } else if self.match_char(b'=') {
                     self.make_spanned(Token::SlashEqual)
@@ -360,7 +365,7 @@ impl<'a> Lexer<'a> {
         if self.is_at_end() {
             return Err("Unterminated unicode escape".to_string());
         }
-        let hex_str = std::str::from_utf8(&self.source[hex_start..self.current]).unwrap();
+        let hex_str = self.slice_text(hex_start, self.current);
         self.advance(); // consume '}'
         match u32::from_str_radix(hex_str, 16) {
             Ok(code) => match char::from_u32(code) {
@@ -790,7 +795,8 @@ impl<'a> Lexer<'a> {
             *slot = b;
             self.advance();
         }
-        let hex = std::str::from_utf8(&digits).expect("ASCII hex digits");
+        let hex = std::str::from_utf8(&digits)
+            .map_err(|_| "\\xHH escape: hex digit parse failed".to_string())?;
         u8::from_str_radix(hex, 16).map_err(|_| "\\xHH escape: hex digit parse failed".to_string())
     }
 
@@ -1248,7 +1254,7 @@ impl<'a> Lexer<'a> {
         while is_alpha(self.peek()) || is_digit(self.peek()) {
             self.advance();
         }
-        let name = std::str::from_utf8(&self.source[name_start..self.current]).unwrap();
+        let name = self.slice_text(name_start, self.current);
         if matches!(
             name,
             "self"
@@ -1609,8 +1615,23 @@ impl<'a> Lexer<'a> {
         self.current >= self.source.len()
     }
 
+    /// Panic-free text slice of `source[start..end]`. The scanning loops keep
+    /// both offsets on UTF-8 boundaries (they stop only on ASCII bytes), so
+    /// the fallback is unreachable today — `debug_assert` catches a future
+    /// edit that breaks the invariant in tests, while release builds degrade
+    /// to an empty slice instead of aborting the compiler on user input.
+    fn slice_text(&self, start: usize, end: usize) -> &'a str {
+        match self.source_str.get(start..end) {
+            Some(s) => s,
+            None => {
+                debug_assert!(false, "lexer slice {start}..{end} splits a UTF-8 codepoint");
+                ""
+            }
+        }
+    }
+
     fn token_text(&self) -> &str {
-        std::str::from_utf8(&self.source[self.start..self.current]).unwrap()
+        self.slice_text(self.start, self.current)
     }
 
     fn make_spanned(&self, token: Token) -> SpannedToken {
@@ -1762,7 +1783,7 @@ pub fn suggest_value_name(name: &str) -> String {
         if c.is_uppercase() && prev_lower {
             result.push('_');
         }
-        result.push(c.to_lowercase().next().unwrap());
+        result.push(c.to_lowercase().next().unwrap_or(c));
         prev_lower = c.is_lowercase();
     }
     // Collapse sequences of underscores left by all-caps acronyms.

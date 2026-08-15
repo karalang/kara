@@ -1064,6 +1064,28 @@ fn test_json_clean_program() {
 }
 
 #[test]
+fn parse_error_kind_codes_reach_json() {
+    // The ParseErrorKind families must survive to the JSON surface as
+    // distinct codes — E0003 (reserved keyword as identifier) here; the
+    // E0002 leg is pinned by test_json_parse_error_snapshot below. Guards
+    // against a regression to the flat historical E0001.
+    let dir = std::env::temp_dir().join(format!("karac-parse-kind-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("kw.kara");
+    std::fs::write(&path, "fn main() {\n    let mut group = 1;\n}\n").unwrap();
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"code\":\"E0003\""),
+        "reserved-keyword parse error should carry E0003: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_json_parse_error_snapshot() {
     let out = karac_bin()
         .args(["check", "tests/snapshots/parse_error.kara", "--output=json"])
@@ -1076,7 +1098,11 @@ fn test_json_parse_error_snapshot() {
     assert!(json.contains("\"severity\":\"error\""));
     assert!(json.contains("\"primary\":true"));
     assert!(json.contains("\"phase\":\"parse\""));
-    assert!(json.contains("\"code\":\"E0001\""));
+    // E0002 = ParseErrorKind::UnexpectedToken. This fixture carried the flat
+    // E0001 until parse errors got a kind enum (every parse error was one
+    // undifferentiated code); `let x = ;` is an unexpected-token error, so it
+    // now reports the specific family.
+    assert!(json.contains("\"code\":\"E0002\""));
     assert!(json.contains("\"line\":2"));
     assert!(json.contains("\"column\":13"));
     assert!(json.contains("\"message\":"));

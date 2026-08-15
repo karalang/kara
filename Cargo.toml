@@ -167,6 +167,15 @@ name = "dump_ir"
 path = "examples/dump_ir.rs"
 required-features = ["llvm"]
 
+# Same gating, same reason: the ASAN build harness imports `karac::codegen`,
+# which only exists under `llvm`. Without this entry a plain `cargo test` /
+# `cargo clippy --all-targets` tries to compile it featureless and fails
+# (landed unregistered in 6d51e132; broke both no-feature gates).
+[[example]]
+name = "asan_build"
+path = "examples/asan_build.rs"
+required-features = ["llvm"]
+
 [dependencies]
 # LINKING PREFERENCE IS DELIBERATELY ABSENT from these dep lines
 # (release-pipeline step 2): llvm-sys permits exactly ONE of its four

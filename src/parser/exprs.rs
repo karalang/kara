@@ -1018,6 +1018,7 @@ impl super::Parser {
                         if let Some(name) = attr.codegen_hint_name() {
                             recover_closure = true;
                             self.errors.push(ParseError {
+                                kind: crate::parser::ParseErrorKind::Syntax,
                                 message: format!(
                                     "error[E_CODEGEN_HINT_ON_CLOSURE]: `#[{name}]` cannot \
                                      apply to a closure; codegen hints attach to named \
@@ -1033,6 +1034,7 @@ impl super::Parser {
                     if !attr.is_par_order_free() {
                         let name = attr.path.join("::");
                         self.errors.push(ParseError {
+                            kind: crate::parser::ParseErrorKind::Syntax,
                             message: format!(
                                 "attribute `#[{name}]` is not valid on a loop expression; \
                                  only `#[par_order_free]` is recognised here at Phase 1. \
@@ -1065,6 +1067,7 @@ impl super::Parser {
                     }
                     _ => {
                         self.errors.push(ParseError {
+                            kind: crate::parser::ParseErrorKind::Syntax,
                             message: "expected `while`, `for`, or `loop` after attribute \
                                       block; loop attributes do not apply to other \
                                       expression kinds at Phase 1. Labeled-loop targets \
@@ -1313,8 +1316,7 @@ impl super::Parser {
             Token::Identifier { .. } => self.parse_identifier_expr(),
 
             _ => {
-                let msg = self.unexpected_ident_msg("expression");
-                self.error(&msg);
+                self.error_unexpected_ident("expression");
                 None
             }
         }

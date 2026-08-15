@@ -34,6 +34,7 @@ impl super::Parser {
         if let (Some(_), Some(second)) = (target_attrs.next(), target_attrs.next()) {
             let span = second.span.clone();
             self.errors.push(super::ParseError {
+                kind: crate::parser::ParseErrorKind::Syntax,
                 message: "multiple `#[target(...)]` attributes on one item — merge the \
                           target names into a single attribute, e.g. \
                           `#[target(wasm_browser, wasm_wasi)]`"
@@ -290,6 +291,7 @@ impl super::Parser {
                     Some((target_name, negated)) => {
                         if !crate::target::V1_TARGETS.contains(&target_name.as_str()) {
                             self.errors.push(super::ParseError {
+                                kind: crate::parser::ParseErrorKind::Syntax,
                                 message: format!(
                                     "unknown target `{target_name}` in `#[target(...)]` — \
                                      the v1 target set is closed: {}",
@@ -306,6 +308,7 @@ impl super::Parser {
                     }
                     None => {
                         self.errors.push(super::ParseError {
+                            kind: crate::parser::ParseErrorKind::Syntax,
                             message: "invalid `#[target(...)]` argument — expected a bare \
                                       target name or `not(<target>)`; no general boolean \
                                       logic is supported (syntax.md § 8)"

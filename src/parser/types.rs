@@ -336,6 +336,7 @@ impl super::Parser {
                         }
                     };
                     self.errors.push(crate::parser::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: msg,
                         span: impl_kw_span.clone(),
                     });

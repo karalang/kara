@@ -591,6 +591,7 @@ impl super::Parser {
             present = true;
             if !attr.args.is_empty() || attr.string_value.is_some() {
                 self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: "error[E_TRACK_CALLER_ARGS_NOT_PERMITTED]: \
                               `#[track_caller]` takes no arguments — \
                               the attribute redirects the panic-site \
@@ -627,6 +628,7 @@ impl super::Parser {
             present = true;
             if !attr.args.is_empty() || attr.string_value.is_some() {
                 self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: "error[E_GPU_ARGS_NOT_PERMITTED]: \
                               `#[gpu]` takes no arguments — it is a bare \
                               constraint marker asserting the function uses \
@@ -675,6 +677,7 @@ impl super::Parser {
         let span = tf.span.clone();
         if crate::ast::target_feature_enables(attributes).is_empty() {
             self.errors.push(super::ParseError {
+                kind: crate::parser::ParseErrorKind::Syntax,
                 message: "error[E_TARGET_FEATURE_EMPTY]: `#[target_feature(...)]` needs at least \
                           one feature — e.g. `#[target_feature(enable = \"avx2\")]`"
                     .to_string(),
@@ -684,6 +687,7 @@ impl super::Parser {
         }
         if !is_unsafe {
             self.errors.push(super::ParseError {
+                kind: crate::parser::ParseErrorKind::Syntax,
                 message: "error[E_TARGET_FEATURE_REQUIRES_UNSAFE]: a `#[target_feature]` function \
                           widens its CPU-feature set above the baseline, so calling it on hardware \
                           without the feature is undefined — mark it `unsafe fn` (the caller \
@@ -711,6 +715,7 @@ impl super::Parser {
             .is_empty()
         {
             self.errors.push(super::ParseError {
+                kind: crate::parser::ParseErrorKind::Syntax,
                 message: "error[E_MULTIVERSION_EMPTY]: `#[multiversion(...)]` needs at least one \
                           feature variant — e.g. `#[multiversion(baseline, \"avx2\")]`"
                     .to_string(),
@@ -777,6 +782,7 @@ impl super::Parser {
                         // Two different inline-axis attributes — mutually
                         // exclusive. Anchor at the second; name both.
                         self.errors.push(super::ParseError {
+                            kind: crate::parser::ParseErrorKind::Syntax,
                             message: format!(
                                 "error[E_INLINE_HINT_CONFLICT]: {prev_disp} and {} are \
                                  mutually exclusive — keep only the inlining hint you mean",
@@ -792,6 +798,7 @@ impl super::Parser {
             } else if attr.is_bare("cold") {
                 if !attr.args.is_empty() || attr.string_value.is_some() {
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_MALFORMED_ATTRIBUTE_ARGS]: `#[cold]` accepts no \
                                   arguments — write it as a bare `#[cold]`"
                             .to_string(),
@@ -807,6 +814,7 @@ impl super::Parser {
         if is_cold {
             if let Some(span) = always_span {
                 self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: "error[E_COLD_INLINE_ALWAYS_CONFLICT]: `#[cold]` and \
                               `#[inline(always)]` express opposite intents — a cold function \
                               is rarely run, so force-inlining it everywhere contradicts the \
@@ -825,6 +833,7 @@ impl super::Parser {
     /// badly-shaped `#[inline(...)]` attribute.
     fn push_malformed_inline(&mut self, span: &Span) {
         self.errors.push(super::ParseError {
+            kind: crate::parser::ParseErrorKind::Syntax,
             message: "error[E_MALFORMED_ATTRIBUTE_ARGS]: `#[inline]` takes no arguments or a \
                       single `always` / `never` keyword — write `#[inline]`, \
                       `#[inline(always)]`, or `#[inline(never)]`"
@@ -864,6 +873,7 @@ impl super::Parser {
             }
             if attr.string_value.is_some() {
                 self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: "error[E_PROFILE_STRING_VALUE]: \
                               `#[profile = \"...\"]` is not a recognised shape; \
                               use `#[profile(NAME, ...)]` with bare profile names"
@@ -874,6 +884,7 @@ impl super::Parser {
             }
             if attr.args.is_empty() {
                 self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: "error[E_PROFILE_NO_PROFILES]: \
                               `#[profile]` requires at least one profile name — \
                               `#[profile(default)]`, `#[profile(embedded, kernel)]`, etc."
@@ -885,6 +896,7 @@ impl super::Parser {
             for arg in &attr.args {
                 if arg.name.is_some() {
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_PROFILE_NAMED_ARG]: \
                                   `#[profile(...)]` takes positional profile names only; \
                                   remove the `name:` / `name =` prefix"
@@ -920,6 +932,7 @@ impl super::Parser {
                     ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
                     ExprKind::StringLit(_) => {
                         self.errors.push(super::ParseError {
+                            kind: crate::parser::ParseErrorKind::Syntax,
                             message: "error[E_PROFILE_STRING_VALUE]: \
                                       `#[profile(...)]` takes bare profile names, not \
                                       string literals — write `#[profile(embedded)]` \
@@ -931,6 +944,7 @@ impl super::Parser {
                     }
                     _ => {
                         self.errors.push(super::ParseError {
+                            kind: crate::parser::ParseErrorKind::Syntax,
                             message: "error[E_PROFILE_NON_IDENT_ARG]: \
                                       `#[profile(...)]` takes bare profile-name identifiers; \
                                       this argument is not an identifier"
@@ -977,6 +991,7 @@ impl super::Parser {
             }
             if first.is_some() {
                 self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: "error[E_DEPRECATED_DUPLICATE]: \
                               multiple `#[deprecated]` attributes on the \
                               same item; keep one and remove the rest"
@@ -991,6 +1006,7 @@ impl super::Parser {
                     // Shouldn't happen — the attribute parser uses
                     // string_value XOR args, but pin the assumption.
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_DEPRECATED_DUPLICATE]: \
                                   `#[deprecated = \"...\"]` cannot also \
                                   carry parenthesised arguments"
@@ -1012,6 +1028,7 @@ impl super::Parser {
             for arg in &attr.args {
                 let Some(name) = &arg.name else {
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_DEPRECATED_POSITIONAL_ARG]: \
                                   `#[deprecated(...)]` requires named \
                                   arguments — use `since: \"...\"` and/or \
@@ -1027,6 +1044,7 @@ impl super::Parser {
                     "note" => &mut note,
                     other => {
                         self.errors.push(super::ParseError {
+                            kind: crate::parser::ParseErrorKind::Syntax,
                             message: format!(
                                 "error[E_DEPRECATED_UNKNOWN_FIELD]: \
                                  `#[deprecated]` does not accept field \
@@ -1040,6 +1058,7 @@ impl super::Parser {
                 };
                 let Some(value_expr) = &arg.value else {
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: format!(
                             "error[E_DEPRECATED_FIELD_NOT_STRING]: \
                              `#[deprecated]` field `{name}` requires a \
@@ -1051,6 +1070,7 @@ impl super::Parser {
                 };
                 let ExprKind::StringLit(s) = &value_expr.kind else {
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: format!(
                             "error[E_DEPRECATED_FIELD_NOT_STRING]: \
                              `#[deprecated]` field `{name}` requires a \
@@ -1092,6 +1112,7 @@ impl super::Parser {
             }
             if first.is_some() {
                 self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: "error[E_UNSTABLE_DUPLICATE]: \
                               multiple `#[unstable]` attributes on the \
                               same item; keep one and remove the rest"
@@ -1113,6 +1134,7 @@ impl super::Parser {
             for arg in &attr.args {
                 let Some(name) = &arg.name else {
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_UNSTABLE_POSITIONAL_ARG]: \
                                   `#[unstable(...)]` requires named \
                                   arguments — use `note: \"...\"`, or \
@@ -1273,6 +1295,7 @@ impl super::Parser {
             };
             if attr.string_value.is_some() {
                 self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: format!(
                         "error[E_LINT_LEVEL_NON_IDENT_ARG]: \
                          `#[{}]` does not accept a string value — \
@@ -1286,6 +1309,7 @@ impl super::Parser {
             }
             if attr.args.is_empty() {
                 self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: format!(
                         "error[E_LINT_LEVEL_NO_ARGS]: \
                          `#[{}]` requires at least one lint name — \
@@ -1317,6 +1341,7 @@ impl super::Parser {
                 };
                 let Some(name) = lint_name else {
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: format!(
                             "error[E_LINT_LEVEL_NON_IDENT_ARG]: \
                              `#[{}(...)]` accepts bare lint-name \
@@ -1330,6 +1355,7 @@ impl super::Parser {
                 };
                 if !seen.insert(name.clone()) {
                     self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: format!(
                             "error[E_DUPLICATE_LINT_LEVEL]: lint \
                              name `{}` appears more than once in \
@@ -1615,6 +1641,7 @@ impl super::Parser {
         };
         let type_text = render_type_for_diagnostic(&ty);
         self.errors.push(ParseError {
+            kind: crate::parser::ParseErrorKind::Syntax,
             message: format!(
                 "error[{code}]: {kind_label} parameters require a name; \
                  write `_: {type_text}` for an unused parameter, or \
@@ -1705,8 +1732,7 @@ impl super::Parser {
                 }
             }
             _ => {
-                let msg = self.unexpected_ident_msg("parameter pattern");
-                self.error(&msg);
+                self.error_unexpected_ident("parameter pattern");
                 None
             }
         }
@@ -2293,6 +2319,7 @@ impl super::Parser {
         let _ = self.eat(&Token::Semicolon);
         let span = self.span_from(&start);
         self.errors.push(ParseError {
+            kind: crate::parser::ParseErrorKind::Syntax,
             message: "`mod` declarations are not used in Kāra — module structure is derived from the directory tree. Each `.kara` file is its own module; put this file in the appropriate directory to define its module path. See `docs/design.md § Module System`."
                 .to_string(),
             span,

@@ -71,6 +71,7 @@ impl super::Parser {
                     )
                 };
                 self.errors.push(ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
                     message: format!("error[{code}]: {msg}"),
                     span: body_span,
                 });
@@ -198,6 +199,7 @@ impl super::Parser {
                     // user intent. Emit a focused diagnostic; the
                     // parsed item still attaches without the attrs.
                     self.errors.push(ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_ATTR_ON_ASSOC_TYPE_DECL]: \
                                   attributes are not supported on \
                                   associated-type declarations at v1; \
@@ -385,6 +387,7 @@ impl super::Parser {
             .collect::<Vec<_>>()
             .join(", ");
         self.errors.push(ParseError {
+            kind: crate::parser::ParseErrorKind::Syntax,
             message: format!(
                 "error[E_GAT_EFFECT_PARAM]: effect parameter `with {joined}` is not \
                  permitted on a generic associated type {role}; GATs are over types \
@@ -596,6 +599,7 @@ impl super::Parser {
                             .is_empty()
                         {
                             self.errors.push(super::ParseError {
+                                kind: crate::parser::ParseErrorKind::Syntax,
                                 message: "error[E_MULTIVERSION_ON_ASSOC]: `#[multiversion]` on an \
                                           impl item is supported only on a method with a `self` \
                                           receiver, not an associated function"
