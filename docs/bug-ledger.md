@@ -104,16 +104,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
 | other | 30 | 0 |
-| use-after-free | 20 | 1 |
+| use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 876 | 5 |
+| codegen | 876 | 4 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
-| ownership | 50 | 1 |
+| ownership | 50 | 0 |
 | autopar | 43 | 1 |
 | other | 41 | 0 |
 | cli | 30 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1212 surfaced · 6 open · 1194 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1212 surfaced · 5 open · 1195 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
-| B-2026-08-15-2 | 2026-08-15 | codegen+ownership | high | `s.push_str(s)` ON A HEAP STRING THAT MUST GROW IS A USE-AFTER-FREE: the grow reallocs the destination and the copy then reads through the now-stale SOURCE pointer — 5,000 invalid reads under valgrind on one call. It produces the RIGHT ANSWER anyway, so nothing surfaces. The two SLICE spellings of the same aliasing (`s.push_str(s[a..b])`, and via a `let`) are correctly rejected by the ownership checker; only the whole-value self-append reaches codegen. | Two candidate layers, and the fix should probably be both. CODEGEN: `push_str`'s alias guard in `src/codegen/vec_method.rs` is emitted only under `src_borrowed` — an owned source is assumed not to alias, which is true of a fresh temp but false of the destination itself. The grow path calls `emit_string_buffer_grow` (realloc, may move) and then copies from `src_ptr`, captured before the grow. OWNERSHIP: the checker already rejects `s` borrowed as `Slice[T]` while borrowed as `mut ref T`; the whole-value read of `s` as a `push_str` argument is the same conflict and is not flagged. |
 | B-2026-08-15-3 | 2026-08-15 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capacity 0 and re-grows 8 -> 16 -> ... on every round. Both spellings now compile to the same in-place append as `push_str` (B-2026-08-14-23), so the two are equivalent code and the heuristic disagrees with itself: measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends, entirely from the missing reservation. | `src/presize.rs`. `is_push_to` matches only `ExprKind::MethodCall` with `push`/`push_str`/`push_back`, and `top_level_push_count` counts only `StmtKind::Expr` statements, so `StmtKind::Assign { target: V, value: V + x }` and `StmtKind::CompoundAssign { Add, target: V, .. }` are invisible. `find_fill_bound` additionally BAILS on any non-`Expr` statement between the Let and the loop that mentions `V`, which would reject a prelude `s = s + "seed"` the way it currently folds in a prelude `s.push_str("seed")`. |
 | B-2026-08-15-4 | 2026-08-15 | autopar | low | `cost_gate: "unknown"` conflates "the loop lookup failed" (a compiler bug) with "found it, but the iterable is not a shapeable range" (a legitimate limitation) -- the same opaque string for both | disjoint_loop_verdict / reduction_loop_verdict (src/effect_graph.rs) chain two `?`s -- find_loop_in_block then par_cost::extract_loop_shape -- and both collapse to None, which effect_graph.rs reports as (false, "unknown"). |
 | B-2026-08-15-6 | 2026-08-15 | codegen | medium | THE DEEP-CLONED HEAP ELEMENT OF AN INLINE-TEMP-VEC INDEX LEAKS WHEN THE INDEX IS AN F-STRING INTERPOLATION OPERAND but not when it is a direct print argument: `println(f"{names()[1]}")` strands one String per evaluation while `println(names()[1])` is clean. | `compile_inline_temp_vec_index_ex` (src/codegen/collections.rs) deep-clones a non-Copy element before draining the temp buffer — it has to, or the returned value dangles — and the clone's owner is the CONSUMER, via `free_fresh_owned_str_arg` gated on `expr_is_inline_temp_vec_heap_index`. The direct print-argument site calls that; the f-string interpolation lowering does not. |
@@ -148,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1212 surfaced
 
 </details>
 
-### Fixed (1194)
+### Fixed (1195)
 
-<details><summary>1194 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1195 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7458,6 +7457,25 @@ THE UNMEASURED QUESTION IS ANSWERED: NO LEAK. The row closed with "Whether the h
 MEASURED against the interpreter as oracle on all three backends at both optimization levels, nine shapes: the annotated control; the unannotated call result (the repro); ASCENDING iteration through `keys()` and `iter()` — the two lines a registered-but-unmarked binding still gets wrong, and the only ones that separate gap 2 from gap 1; the `contains_key` / `is_empty` / `contains` method surface; the SortedSet twin; a PLACE source (`let bm = h.sm`), which is the same head-gate reached the other way; and the plain `Map` control, which must not move. Zero divergences.
 
 GATES: fmt / clippy / the full `--features llvm` suite clean, and both new tests pass at `-O0`. The asan `-O0` leg flags one fixture, `asan_shared_struct_string_field_reassign_no_leak`, which is B-2026-08-14-25's and contains no map, set or sorted collection of any kind. |
+| B-2026-08-15-2 | codegen+ownership | high | `s.push_str(s)` ON A HEAP STRING THAT MUST GROW IS A USE-AFTER-FREE: the grow reallocs the destination and the copy then reads through the now-stale… | FIXED by 074fa446, taking the row's option (b) — REBASE — and deliberately not (a).
+
+CONFIRMED HARDER THAN THE ROW MEASURED. The row reported valgrind "invalid reads"; under ASAN this is a hard `heap-use-after-free`, `READ of size 40000`, on the whole string, at both optimization levels. Same defect, unambiguous classification.
+
+THE FIX. The source lies inside `[data, data + cap)` and `emit_string_buffer_grow` preserves those bytes at the same offsets, so the offset is measured BEFORE the branch and the pointer rebuilt from the reloaded `cur_data` at the copy. No phi is needed, which is the neat part: `cur_data` comes from the slot, so on the no-grow edge it is unchanged and `cur_data + offset == data + offset == src_ptr` — the select is the identity there — and on the grow edge it names the same content at its new address. A plain `memcpy` stays valid because the two ranges cannot overlap: the source sits within `[0, len)` of the buffer and the destination starts AT `len`. A `cap == 0` receiver (static literal / empty) has an empty range, so `aliases` is false and the source — which that grow path's malloc-and-copy leaves untouched — is used as-is.
+
+WHY NOT (a), THE OWNERSHIP REJECTION. It is the cheaper fix and it is consistent with the two slice spellings, which the row is right to call out. But it turns a program that currently produces the right answer into an error, and — the deciding argument — it would permanently block the work the row itself identifies as blocked. B-2026-08-14-22 proposed lowering `s += x` onto `push_str`'s in-place path; under (a) `s += s` becomes a compile error, under (b) it becomes correct. The row's own note that (b) "would let the existing panic be deleted rather than extended" points the same way. The diagnostic asymmetry that remains — `s.push_str(s[0..16])` rejected, `s.push_str(s)` accepted — is defensible: the slice spellings create an explicit `Slice[T]` borrow overlapping a `mut ref` one, which is the general borrow rule, not a `push_str` rule.
+
+THE DELETED GUARD WAS ONLY HALF A GUARD, and naming why matters more than the deletion. It panicked ("source slice aliases destination buffer") when a borrowed source overlapped the destination — but was emitted `if src_borrowed` ONLY, on the stated reasoning that "an owned-temp source is a fresh copy that can't alias". True of a temporary, false of the destination VARIABLE itself, whose compiled value is a `{ptr,len,cap}` header over the same buffer. So the one shape the guard could not see is the one that reached the use-after-free. With the rebase the borrowed case is correct rather than detected, so the panic is gone rather than widened.
+
+THE VEC SIBLINGS ARE ALREADY SAFE, checked rather than assumed. `Vec.extend_from_slice` / `try_extend_from_slice` carry the same guard UNCONDITIONALLY, so `v.extend_from_slice(v)` panics with a clear message instead of corrupting — measured. They are therefore not this bug, and extending correctness to them is a genuinely separate question that strings do not have: a `Vec[String]` self-append would memcpy the element headers and give every buffer two owners, so it needs a per-element clone, not a rebased memcpy. Left panicking on purpose.
+
+THE FIXTURE SIZE IS LOAD-BEARING, and this is the part worth carrying forward. A 4-byte or 16-byte self-append does NOT trip the sanitizer on the parent commit — realloc extends those in place and frees nothing. Only a buffer large enough to force a real MOVE (40 KB here) makes the dangling read observable. The row's 5,000-iteration preamble was necessary, not incidental, and shrinking the permanent asan fixture would quietly make it vacuous.
+
+THE TWO TESTS DIVIDE EXACTLY AS THE BUG DOES, verified against the parent both ways: the asan test FAILS there (it is the only thing that can see the defect) and the E2E test PASSES there (every value was already correct). The E2E is a regression guard on the rebase, not a bug detector — and within it, line 05 is the one that would catch a WRONG rebase, because it reads the seam (the last 8 bytes of the original and the first 8 of the appended copy) where an off-by-offset shows as shifted text rather than a bad count.
+
+MEASURED against the interpreter as oracle on all three backends at both optimization levels, nine shapes: the `cap == 0` receiver that must NOT be rebased; a heap self-append small enough to print in full; three chained self-appends, each reallocating again; the 40 KB shape with both ends and the seam; a distinct source; a borrowed slice of a DIFFERENT string (the hot path the deleted guard used to sit on); and the empty-source and empty-receiver degenerates. Zero divergences, ASAN clean at both levels.
+
+GATES: fmt / clippy / the full `--features llvm` suite clean, and the asan `-O0` leg is now FULLY green — 1092 passed, 0 failed, matching the quarantine list exactly. The `asan_shared_struct_string_field_reassign_no_leak` fixture that had been the leg's one standing failure was fixed by B-2026-08-15-5 (04e550b0) in a sibling session. |
 | B-2026-08-15-5 | codegen | medium | shared-struct String field reassignment never frees the displaced buffer (hidden at default opt by LICM; -O0 leg caught it) | String joins the container family in release_old_shared_container_field (src/codegen/expr_ops.rs): the displaced buffer gets the same in-place cap-guarded drop through the field GEP before the new value is stored. Fixture comment rewritten to retire the false 'already released' premise; new aliasing fixture asan_shared_struct_string_field_reassign_aliasing pins self-assign, cross-alias, and compound-append shapes. Fixed in 04e550b0. |
 
 </details>
