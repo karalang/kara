@@ -50179,6 +50179,69 @@ fn main() {
         );
     }
 
+    /// B-2026-08-15-24, memory half — the TUPLE-element twin of the fixture
+    /// below, on the same reasoning.
+    ///
+    /// This store did not merely go missing before the fix: it failed the
+    /// BUILD, so no binary existed to check and the displaced value's fate was
+    /// never exercised at all. Making it lower is what makes the overwrite
+    /// observable, and the overwrite must free the old buffer exactly once
+    /// while the caller's element keeps the new one — a leak or a double free
+    /// that the E2E value assertions cannot see either way.
+    ///
+    /// The `mut ref Vec` half runs the identical workload through the arm that
+    /// worked all along (B-2026-08-02-8), so a divergence between the two is a
+    /// slice-specific defect rather than a property of tuple-element stores.
+    #[test]
+    fn asan_tuple_elem_store_through_mut_slice_frees_displaced() {
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> String {
+    let mut s = "";
+    let mut i = 0;
+    while i < n { s = s + "abcdefghij"; i = i + 1; }
+    return s;
+}
+fn set_slice(s: mut Slice[(String, i64)]) {
+    let mut i = 0;
+    while i < s.len() { s[i].0 = mk(12); i = i + 1; }
+}
+fn set_vec(v: mut ref Vec[(String, i64)]) {
+    let mut i = 0;
+    while i < v.len() { v[i].0 = mk(12); i = i + 1; }
+}
+fn set_nested(s: mut Slice[(Vec[String], i64)]) { s[0].0 = ["freshfreshfresh"]; }
+fn main() {
+    let mut ps: Vec[(String, i64)] = Vec.new();
+    ps.push((mk(30), 1));
+    ps.push((mk(40), 2));
+    // Repeated, so a per-store imbalance accumulates instead of hiding in
+    // a single displacement.
+    let mut k = 0;
+    while k < 5 { set_slice(mut ps); k = k + 1; }
+    println(f"{ps[0].0.len()} {ps[1].0.len()}");
+
+    let mut qs: Vec[(String, i64)] = Vec.new();
+    qs.push((mk(30), 1));
+    let mut j = 0;
+    while j < 5 { set_vec(mut qs); j = j + 1; }
+    println(f"{qs[0].0.len()}");
+
+    // A displaced CONTAINER element strands more than one buffer if the old
+    // value is dropped shallowly or not at all.
+    let mut ns: Vec[(Vec[String], i64)] = Vec.new();
+    let seed: Vec[String] = ["oldoldoldoldold", "olderolderolder"];
+    ns.push((seed, 1));
+    set_nested(mut ns);
+    println(f"{ns[0].0[0]} {ns[0].0.len()}");
+    println("end");
+}
+"#,
+            &["120 120", "120", "freshfreshfresh 1", "end"],
+            "tuple_elem_store_through_mut_slice_frees_displaced",
+        );
+    }
+
     /// B-2026-08-15-21, memory half — the field store 9b284cb makes LAND is
     /// also the first one that can displace a heap value on this path.
     ///

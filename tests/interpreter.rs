@@ -33631,3 +33631,46 @@ fn test_field_store_through_mut_slice_param_oracle() {
          }\n");
     assert_eq!(out, "inside=4\n4\n99\n104\n70 80\n42\n");
 }
+
+#[test]
+fn test_tuple_elem_store_through_mut_slice_param_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s
+    // `test_e2e_tuple_elem_store_through_mut_slice_param_reaches_caller`
+    // (B-2026-08-15-24). The interpreter has always applied these writes;
+    // codegen refused to lower them at all (a hard build error, not a wrong
+    // answer), so this pins the values the build side now has to match.
+    let out = run("\n\
+         fn bump_first(s: mut Slice[(i64, i64)]) { s[0].0 = s[0].0 + 1; }\n\
+         fn bump_second(s: mut Slice[(i64, i64)]) { s[0].1 = 99; }\n\
+         fn bump_at(s: mut Slice[(i64, i64)], i: i64) { s[i].0 = 70; }\n\
+         fn bump_all(s: mut Slice[(i64, i64, i64)]) {\n\
+             let mut i = 0;\n\
+             while i < s.len() { s[i].2 = i * 10; i = i + 1; }\n\
+         }\n\
+         fn swap_text(s: mut Slice[(String, i64)]) { s[0].0 = \"replaced\"; }\n\
+         fn bump_vec(v: mut ref Vec[(i64, i64)]) { v[0].0 = v[0].0 + 100; }\n\
+         fn main() {\n\
+             let mut ps: Vec[(i64, i64)] = Vec.new();\n\
+             ps.push((3, 7));\n\
+             ps.push((4, 8));\n\
+             bump_first(mut ps);\n\
+             println(f\"{ps[0].0}\");\n\
+             bump_second(mut ps);\n\
+             println(f\"{ps[0].1}\");\n\
+             bump_at(mut ps, 1);\n\
+             println(f\"{ps[1].0} {ps[0].0}\");\n\
+             bump_vec(mut ps);\n\
+             println(f\"{ps[0].0}\");\n\
+             let mut ts: Vec[(i64, i64, i64)] = Vec.new();\n\
+             ts.push((0, 0, 0));\n\
+             ts.push((0, 0, 0));\n\
+             ts.push((0, 0, 0));\n\
+             bump_all(mut ts);\n\
+             println(f\"{ts[0].2} {ts[1].2} {ts[2].2}\");\n\
+             let mut ss: Vec[(String, i64)] = Vec.new();\n\
+             ss.push((\"original\", 5));\n\
+             swap_text(mut ss);\n\
+             println(f\"{ss[0].0} {ss[0].1}\");\n\
+         }\n");
+    assert_eq!(out, "4\n99\n70 4\n104\n0 10 20\nreplaced 5\n");
+}

@@ -96317,6 +96317,67 @@ fn main() {
         );
     }
 
+    /// B-2026-08-15-24 — the TUPLE-element sibling of B-2026-08-15-21.
+    /// `s[0].0 = v` through a `mut Slice[(A, B)]` param failed the build with
+    /// "tuple-element assignment through this receiver shape is not yet
+    /// lowered". Loud, not silent — which is why it was filed low — but the
+    /// same missing-slice-table cause one function over.
+    ///
+    /// Two halves had to learn about slices separately: -21 taught
+    /// `field_chain_place_ptr` to hand back the element POINTER, and this
+    /// taught `place_chain_aggregate_llvm_type` to hand back the element
+    /// TYPE. After -21 the pointer resolved and the type did not, so the
+    /// store still bailed. The `mut ref Vec` line below is the control that
+    /// worked throughout (B-2026-08-02-8 added the Vec arm and no slice arm).
+    ///
+    /// The `(String, i64)` element is the memory-relevant one: replacing a
+    /// heap element frees the displaced value, and its ASAN twin is
+    /// `asan_tuple_elem_store_through_mut_slice_frees_displaced` in
+    /// `tests/memory_sanitizer.rs`. Paired with an interpreter oracle in
+    /// `tests/interpreter.rs`.
+    #[test]
+    fn test_e2e_tuple_elem_store_through_mut_slice_param_reaches_caller() {
+        assert_eq!(
+            run_program(
+                r#"
+fn bump_first(s: mut Slice[(i64, i64)]) { s[0].0 = s[0].0 + 1; }
+fn bump_second(s: mut Slice[(i64, i64)]) { s[0].1 = 99; }
+fn bump_at(s: mut Slice[(i64, i64)], i: i64) { s[i].0 = 70; }
+fn bump_all(s: mut Slice[(i64, i64, i64)]) {
+    let mut i = 0;
+    while i < s.len() { s[i].2 = i * 10; i = i + 1; }
+}
+fn swap_text(s: mut Slice[(String, i64)]) { s[0].0 = "replaced"; }
+fn bump_vec(v: mut ref Vec[(i64, i64)]) { v[0].0 = v[0].0 + 100; }
+fn main() {
+    let mut ps: Vec[(i64, i64)] = Vec.new();
+    ps.push((3, 7));
+    ps.push((4, 8));
+    bump_first(mut ps);
+    println(f"{ps[0].0}");
+    bump_second(mut ps);
+    println(f"{ps[0].1}");
+    bump_at(mut ps, 1);
+    println(f"{ps[1].0} {ps[0].0}");
+    bump_vec(mut ps);
+    println(f"{ps[0].0}");
+    let mut ts: Vec[(i64, i64, i64)] = Vec.new();
+    ts.push((0, 0, 0));
+    ts.push((0, 0, 0));
+    ts.push((0, 0, 0));
+    bump_all(mut ts);
+    println(f"{ts[0].2} {ts[1].2} {ts[2].2}");
+    let mut ss: Vec[(String, i64)] = Vec.new();
+    ss.push(("original", 5));
+    swap_text(mut ss);
+    println(f"{ss[0].0} {ss[0].1}");
+}
+"#
+            ),
+            Some("4\n99\n70 4\n104\n0 10 20\nreplaced 5\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-21 — a FIELD assignment through a `mut Slice[T]` parameter
     /// emitted NO STORE AT ALL, so the caller's element kept its old value and
     /// `karac check` was clean. Not a write-back problem: the read-back inside

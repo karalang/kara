@@ -6909,11 +6909,24 @@ impl<'ctx> super::Codegen<'ctx> {
             // element type. `field_chain_place_ptr` already resolves the
             // element POINTER for this shape; without this arm the
             // tuple-element store loud-bailed at the aggregate lookup.
+            //
+            // B-2026-08-15-24 — and a `slice[i]` receiver, for the same
+            // reason. A `Slice[T]` param registers `slice_elem_types` and not
+            // `vec_elem_types` (its registrar returns before that insert), so
+            // consulting only the Vec table answered `None` for every slice
+            // and `s[0].0 = x` loud-bailed here even after B-2026-08-15-21
+            // taught `field_chain_place_ptr` to hand back the element pointer.
+            // The pointer half and the type half had to learn about slices
+            // separately; this is the second half.
             ExprKind::Index { object, .. } => {
                 let ExprKind::Identifier(v) = &object.kind else {
                     return None;
                 };
-                match self.vec_elem_types.get(v.as_str())? {
+                let elem = self
+                    .vec_elem_types
+                    .get(v.as_str())
+                    .or_else(|| self.slice_elem_types.get(v.as_str()))?;
+                match elem {
                     BasicTypeEnum::StructType(t) => Some(*t),
                     _ => None,
                 }
