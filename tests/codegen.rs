@@ -62110,6 +62110,107 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-26 — a field assignment through a CHAINED shared parent
+    /// (`outer.inner.field = v`, both `shared struct`) was silently dropped
+    /// under `karac build` while `--interp` applied it. `karac check` passed and
+    /// no surface reported anything; the program just kept the old value.
+    ///
+    /// The walker's own `struct_types` lookup was the whole defect. A
+    /// `shared struct` is registered ONLY in `shared_types`, so
+    /// `nested_store_place_ptr`'s FieldAccess arm answered "not a struct" for
+    /// every shared parent and returned `None` — and `compile_field_store`'s
+    /// guard, which needs both a pointer and a type name, exited through the
+    /// no-op tail. `compile_field_store` had learned the `shared_types`-first
+    /// order in B-2026-07-28-6; the walk it depends on had not, and that arm
+    /// already carried the SAME row's fix for the shared FIELD one line below.
+    ///
+    /// Line 01 is the scalar case, and it is the one that says what this is: no
+    /// heap, no container, no ownership question — a plain `i64` write that
+    /// vanished. Line 02 is the container case, whose displaced `Vec` also has
+    /// to be released now that the store lands (96 bytes, caught only by
+    /// `asan_chained_shared_field_assignment_releases_the_displaced_container`).
+    /// Lines 06 and 08 are the controls that must not move: the depth-1 shared
+    /// store B-2026-08-14-18 covers, and the plain-to-plain nested store that
+    /// has worked all along.
+    #[test]
+    fn test_e2e_chained_shared_field_assignment_lands() {
+        let src = r#"
+shared struct Inner { mut n: i64, mut v: Vec[String] }
+shared struct Outer { mut inner: Inner, mut tag: i64 }
+shared struct L3 { mut n: i64 }
+shared struct L2 { mut c: L3 }
+shared struct L1 { mut b: L2 }
+struct PlainMid { mut inner: Inner }
+struct PlainInner { mut n: i64 }
+struct PlainNest { mut mid: PlainInner }
+
+impl Outer {
+    fn bump(ref self, k: i64) { self.inner.n = k; }
+}
+
+fn viaref(o: ref Outer, k: i64) { o.inner.n = k; }
+
+fn main() {
+    let o = Outer { inner: Inner { n: 5, v: Vec.new() }, tag: 0 };
+    o.inner.n = 9;
+    let b = o.inner;
+    println(f"01 {b.n}");
+
+    let a = o.inner;
+    a.v.push("one");
+    a.v.push("two");
+    let fresh: Vec[String] = Vec.new();
+    o.inner.v = fresh;
+    let c = o.inner;
+    println(f"02 {c.v.len()}");
+
+    let x = L1 { b: L2 { c: L3 { n: 1 } } };
+    x.b.c.n = 42;
+    let m = x.b;
+    let k = m.c;
+    println(f"03 {k.n}");
+
+    o.bump(77i64);
+    let d = o.inner;
+    println(f"04 {d.n}");
+
+    viaref(o, 88i64);
+    let e = o.inner;
+    println(f"05 {e.n}");
+
+    let g = Inner { n: 1, v: Vec.new() };
+    g.n = 3;
+    println(f"06 {g.n}");
+
+    let mut p = PlainMid { inner: Inner { n: 5, v: Vec.new() } };
+    p.inner.n = 11;
+    let q = p.inner;
+    println(f"07 {q.n}");
+
+    let mut pn = PlainNest { mid: PlainInner { n: 2 } };
+    pn.mid.n = 4;
+    println(f"08 {pn.mid.n}");
+
+    o.tag = 6;
+    println(f"09 {o.tag} {o.inner.n}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 9\n\
+                 02 0\n\
+                 03 42\n\
+                 04 77\n\
+                 05 88\n\
+                 06 3\n\
+                 07 11\n\
+                 08 4\n\
+                 09 6 88\n"
+            ),
+        );
+    }
+
     /// B-2026-08-14-28 — the plain-build face of the cluster-walk
     /// use-after-free. Sibling of
     /// `asan_shared_cluster_published_from_a_par_branch`, which is the

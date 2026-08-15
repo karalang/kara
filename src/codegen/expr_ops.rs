@@ -1967,6 +1967,25 @@ impl<'ctx> super::Codegen<'ctx> {
                             &format!("nested_{}_ptr", field),
                         )
                         .unwrap();
+                    // B-2026-08-14-26 — the displaced-container release
+                    // B-2026-08-14-18 gave the DEPTH-1 shared store, applied to
+                    // the nested one. It could not have been needed here before:
+                    // this branch never reached its store at all for a shared
+                    // parent, so nothing was ever displaced. Making the write
+                    // land is what makes the old value's fate observable, and
+                    // without this a `Vec`/`Map`/`Set` field reassigned through
+                    // a chain strands its container — measured at 96 bytes for a
+                    // two-element `Vec[String]`, once per assignment.
+                    //
+                    // The same narrow helper, so the same reasoning holds: a
+                    // shared node's fields ride the RC teardown, and the only
+                    // values the teardown never sees are the ones an assignment
+                    // displaced. `String` is already released on this path and a
+                    // bare `shared T` field needs a release rather than a free,
+                    // so the helper declines both.
+                    if shared_parent && !optshared_field {
+                        self.release_old_shared_container_field(&obj_ty, idx, field_ptr);
+                    }
                     // Field-store width coercion — see
                     // `coerce_to_struct_field_ty`.
                     let new_val = self.coerce_to_struct_field_ty_src(
@@ -2481,6 +2500,39 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(self.resolve_generic_field_te(object, &type_name, &field_te))
     }
 
+    /// One deref when a chain ROOT is a `shared struct` binding
+    /// (B-2026-08-14-26).
+    ///
+    /// `get_data_ptr` returns the alloca for an owned binding, and for a shared
+    /// one that alloca holds an RC HANDLE — so the place the binding denotes is
+    /// the heap node, one load further in. The walk's `FieldAccess` arm already
+    /// knew this about a shared FIELD; nobody had taught it about a shared
+    /// ROOT, because until the layout lookup below learned to consult
+    /// `shared_types` the walk never got past the root to find out.
+    ///
+    /// Depth-1 stores never come through here (`o.n = 9` takes
+    /// `compile_field_store`'s own identifier path), so this only affects
+    /// chains — where returning the slot would GEP the handle word itself and
+    /// write the field into the pointer.
+    fn deref_shared_root_place(
+        &mut self,
+        expr: &Expr,
+        slot: PointerValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let is_shared = self
+            .place_chain_type_name(expr)
+            .and_then(|n| self.shared_types.get(n.as_str()).map(|i| !i.is_enum))
+            .unwrap_or(false);
+        if !is_shared {
+            return slot;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        self.builder
+            .build_load(ptr_ty, slot, "nested.store.root.h")
+            .map(|v| v.into_pointer_value())
+            .unwrap_or(slot)
+    }
+
     /// Place pointer for the parent of a nested field/index store
     /// (`self.inner.x = v`, `p.inner.x = v`, `v[i].inner.x = v`). Mirrors
     /// [`Self::field_chain_place_ptr`]'s field GEP walk but resolves an
@@ -2495,8 +2547,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// which only pass owned / `vec[i]` roots — stay untouched.
     fn nested_store_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
         match &expr.kind {
-            ExprKind::Identifier(name) => self.get_data_ptr(name.as_str()),
-            ExprKind::SelfValue => self.get_data_ptr("self"),
+            ExprKind::Identifier(name) => {
+                let p = self.get_data_ptr(name.as_str())?;
+                Some(self.deref_shared_root_place(expr, p))
+            }
+            ExprKind::SelfValue => {
+                let p = self.get_data_ptr("self")?;
+                Some(self.deref_shared_root_place(expr, p))
+            }
             // B-2026-08-01-35: `field_chain_place_ptr`'s Index arm resolves
             // bare-Identifier containers only, so a FIELD-ROOTED container
             // (`o.hs[i].field = x`) returned None, the nested branch was
@@ -2524,7 +2582,37 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::FieldAccess { object, field } => {
                 let base_ptr = self.nested_store_place_ptr(object)?;
                 let obj_ty = self.place_chain_type_name(object)?;
-                let st = *self.struct_types.get(obj_ty.as_str())?;
+                // B-2026-08-14-26: resolve the parent's GEP layout from
+                // `shared_types` FIRST, falling back to `struct_types` — the
+                // same order `compile_field_store` uses one layer up, and for
+                // the same reason: a `shared struct` is registered ONLY in
+                // `shared_types`, so a `struct_types`-only lookup answers "not
+                // a struct" for every shared parent.
+                //
+                // This arm already carried B-2026-07-28-6's fix for the shared
+                // FIELD (the load below, because a shared field holds a handle
+                // rather than inline storage) while still resolving the shared
+                // PARENT's layout as plain-only. So `o.inner.n = 9` with `o`
+                // shared walked in one level, failed here, and returned None —
+                // and `compile_field_store`'s guard, which needs BOTH the
+                // pointer and the type name, exited through the no-op tail.
+                // The store was silently dropped on every compiled surface with
+                // `karac check` clean and `--interp` applying it, for a plain
+                // `i64` field as much as a container one.
+                //
+                // The shared arm routes through `shared_gep_layout` for the
+                // header shift: a headed node carries a leading refcount word
+                // (two when the type is weak-targeted), so the field index has
+                // to be biased or the GEP lands on the header.
+                let (st, base) = match self
+                    .shared_types
+                    .get(obj_ty.as_str())
+                    .filter(|i| !i.is_enum)
+                    .map(|i| i.heap_type)
+                {
+                    Some(heap_type) => self.shared_gep_layout(&obj_ty, heap_type),
+                    None => (*self.struct_types.get(obj_ty.as_str())?, 0),
+                };
                 let idx = self
                     .struct_field_names
                     .get(obj_ty.as_str())?
@@ -2532,7 +2620,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .position(|n| n == field)? as u32;
                 let slot = self
                     .builder
-                    .build_struct_gep(st, base_ptr, idx, "nested.store.chain.p")
+                    .build_struct_gep(st, base_ptr, idx + base, "nested.store.chain.p")
                     .ok()?;
                 // B-2026-07-28-6: a `shared struct` FIELD holds an RC HANDLE, so
                 // the place it denotes is the heap node — one load away — not the

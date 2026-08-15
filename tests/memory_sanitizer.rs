@@ -48581,4 +48581,48 @@ fn main() {
             "asan_print_a_map_or_set_place_expression_does_not_free_it",
         );
     }
+
+    /// B-2026-08-14-26, memory half — the container a CHAINED shared field
+    /// assignment displaces.
+    ///
+    /// B-2026-08-14-18 gave the DEPTH-1 shared store this release. The nested
+    /// one could not have needed it before: that branch never reached its store
+    /// for a shared parent, so nothing was ever displaced. Making the write land
+    /// is what makes the old value's fate observable — and without the release a
+    /// two-element `Vec[String]` reassigned through the chain strands 96 bytes,
+    /// once per assignment.
+    ///
+    /// Output comparison cannot see this. Every surface prints `0` for the
+    /// re-read length either way; only LeakSanitizer separates a store that
+    /// lands and frees from one that lands and strands. The loop is here so the
+    /// per-assignment cost compounds into something no allocator coincidence
+    /// hides.
+    #[test]
+    fn asan_chained_shared_field_assignment_releases_the_displaced_container() {
+        assert_clean_asan_run(
+            r#"
+shared struct Inner { mut n: i64, mut v: Vec[String] }
+shared struct Outer { mut inner: Inner }
+
+fn main() {
+    let o = Outer { inner: Inner { n: 0, v: Vec.new() } };
+    let mut i = 0i64;
+    while i < 12i64 {
+        let a = o.inner;
+        a.v.push("one");
+        a.v.push("two");
+        let fresh: Vec[String] = Vec.new();
+        o.inner.v = fresh;
+        o.inner.n = i;
+        i = i + 1i64;
+    }
+    let b = o.inner;
+    println(f"{b.v.len()} {b.n}");
+    println("end");
+}
+"#,
+            &["0 11", "end"],
+            "chained_shared_field_assignment_displaced_container",
+        );
+    }
 }
