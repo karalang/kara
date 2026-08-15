@@ -1709,11 +1709,21 @@ impl<'a> super::Resolver<'a> {
                 // Look at target module's top-level items for suggestions,
                 // plus any submodule siblings.
                 let mut candidates_owned: Vec<String> = module_top_level_names(tree, &imp.path);
-                for p in tree.graph.by_path.keys() {
-                    if p.len() == imp.path.len() + 1 && p.starts_with(&imp.path) {
-                        candidates_owned.push(p.last().cloned().unwrap_or_default());
-                    }
-                }
+                // B-2026-08-14-34 leg A — `by_path` is a `HashMap`, and
+                // `suggest_similar` breaks an equal-distance tie on candidate
+                // order, so two sibling submodules equidistant from a typo would
+                // be separated by per-process hash order. Sorted for the same
+                // reason as the scope and impl producers; the top-level names
+                // above keep their position ahead of the siblings.
+                let mut siblings: Vec<String> = tree
+                    .graph
+                    .by_path
+                    .keys()
+                    .filter(|p| p.len() == imp.path.len() + 1 && p.starts_with(&imp.path))
+                    .map(|p| p.last().cloned().unwrap_or_default())
+                    .collect();
+                siblings.sort_unstable();
+                candidates_owned.extend(siblings);
                 let candidates: Vec<&str> = candidates_owned.iter().map(|s| s.as_str()).collect();
                 let suggestion = suggest_similar(&item.name, &candidates);
 

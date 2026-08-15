@@ -578,7 +578,16 @@ impl TypeEnv {
             if imp.target_type != target_type || !impl_args_match(&imp.target_args, target_args) {
                 continue;
             }
-            for name in imp.methods.keys() {
+            // B-2026-08-14-34 leg A — sort each impl's contribution.
+            // `Impl::methods` is a `HashMap`, and `suggest_similar` breaks an
+            // equal-distance tie on candidate order, so `s.goo()` against an
+            // impl carrying `foo` / `boo` / `coo` suggested a different one on
+            // 10 / 8 / 2 of 20 runs of the same binary. Impl ORDER stays as it
+            // is (it is the caller's, and earlier impls should keep winning);
+            // only the arbitrary within-impl order is pinned.
+            let mut impl_names: Vec<&String> = imp.methods.keys().collect();
+            impl_names.sort_unstable();
+            for name in impl_names {
                 if !names.iter().any(|n| n == name) {
                     names.push(name.clone());
                 }

@@ -43,59 +43,84 @@ impl<'a> super::OwnershipChecker<'a> {
     /// in the closure body forced the whole-root capture choice.
     pub(crate) fn emit_rc_fallback_notes(&mut self) {
         let mut notes = Vec::new();
+        // B-2026-08-14-34 leg B — flatten and SORT before building notes.
+        // `rc_values` and its inner maps are `HashMap`s, so walking them
+        // directly emitted the notes in per-process hash order: two RC
+        // fallbacks in one function came out in either order run-to-run
+        // (measured 16/4 over 20 runs of one binary on the same input), and
+        // the order reaches `karac check --output=json`, which the Mend loop
+        // diffs. Note that this was not "sorted with an unstable tie-break" —
+        // there was no ordering at all, which is why the note printed SECOND
+        // could cite the EARLIER column.
+        //
+        // The ordering rule is the one `rc_fallback_queries::analyze` already
+        // applies to the same two maps for the same reason: use-site offset,
+        // then fn key, then binding name. Both surfaces describe the same
+        // sites, so they should not disagree about their order.
+        let mut sites: Vec<(&String, &String, &crate::ownership::RcEntry)> = Vec::new();
         for (fn_key, rc_map) in &self.rc_values {
             if self.suppressed_rc_fn_keys.contains(fn_key) {
                 continue;
             }
-            let arc_set = self.arc_values.get(fn_key);
             for (binding, entry) in rc_map {
-                let is_arc = arc_set.is_some_and(|s| s.contains(binding));
-                let flavor = if is_arc {
-                    "shared (Arc) — promoted: value crosses a parallel region"
-                } else {
-                    "shared (Rc) — value does not cross a parallel region"
-                };
-                let base_message = format!(
-                    "RC fallback inserted for '{}' ({}); {}; consume at line {}:{}, other use at line {}:{}",
-                    entry.binding,
-                    entry.trigger.label(),
-                    flavor,
-                    entry.consume_span.line,
-                    entry.consume_span.column,
-                    entry.other_use_span.line,
-                    entry.other_use_span.column,
-                );
-                let (message, suggestion) =
-                    match self.find_whole_root_closure_reason(fn_key, binding) {
-                        Some((closure_span, reason)) => {
-                            let reason_text = reason.describe(binding);
-                            let enriched = format!(
-                                "{} — closure at line {}:{} captured `{}` whole because {}",
-                                base_message,
-                                closure_span.line,
-                                closure_span.column,
-                                binding,
-                                reason_text,
-                            );
-                            (enriched, Some(Self::slice6_fix_it_suggestion(&reason)))
-                        }
-                        None => (
-                            base_message,
-                            Some(
-                                "restructure to a single ownership path, or accept the RC and silence with #[allow(rc_fallback)]"
-                                    .to_string(),
-                            ),
-                        ),
-                    };
-                notes.push(OwnershipError {
-                    message,
-                    span: entry.other_use_span.clone(),
-                    kind: OwnershipErrorKind::RcFallbackNote,
-                    suggestion,
-                    replacement: None,
-                    consume_span: Some(entry.consume_span.clone()),
-                });
+                sites.push((fn_key, binding, entry));
             }
+        }
+        sites.sort_by(|(ak, ab, ae), (bk, bb, be)| {
+            ae.other_use_span
+                .offset
+                .cmp(&be.other_use_span.offset)
+                .then_with(|| ak.cmp(bk))
+                .then_with(|| ab.cmp(bb))
+        });
+        for (fn_key, binding, entry) in sites {
+            let arc_set = self.arc_values.get(fn_key);
+            let is_arc = arc_set.is_some_and(|s| s.contains(binding));
+            let flavor = if is_arc {
+                "shared (Arc) — promoted: value crosses a parallel region"
+            } else {
+                "shared (Rc) — value does not cross a parallel region"
+            };
+            let base_message = format!(
+                "RC fallback inserted for '{}' ({}); {}; consume at line {}:{}, other use at line {}:{}",
+                entry.binding,
+                entry.trigger.label(),
+                flavor,
+                entry.consume_span.line,
+                entry.consume_span.column,
+                entry.other_use_span.line,
+                entry.other_use_span.column,
+            );
+            let (message, suggestion) =
+                match self.find_whole_root_closure_reason(fn_key, binding) {
+                    Some((closure_span, reason)) => {
+                        let reason_text = reason.describe(binding);
+                        let enriched = format!(
+                            "{} — closure at line {}:{} captured `{}` whole because {}",
+                            base_message,
+                            closure_span.line,
+                            closure_span.column,
+                            binding,
+                            reason_text,
+                        );
+                        (enriched, Some(Self::slice6_fix_it_suggestion(&reason)))
+                    }
+                    None => (
+                        base_message,
+                        Some(
+                            "restructure to a single ownership path, or accept the RC and silence with #[allow(rc_fallback)]"
+                                .to_string(),
+                        ),
+                    ),
+                };
+            notes.push(OwnershipError {
+                message,
+                span: entry.other_use_span.clone(),
+                kind: OwnershipErrorKind::RcFallbackNote,
+                suggestion,
+                replacement: None,
+                consume_span: Some(entry.consume_span.clone()),
+            });
         }
         self.notes.extend(notes);
     }

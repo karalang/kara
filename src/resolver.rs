@@ -581,13 +581,25 @@ impl SymbolTable {
     }
 
     /// Collect all visible names from the current scope chain (for typo suggestions).
+    ///
+    /// Inner scope first — `suggest_similar` keeps the EARLIEST candidate at a
+    /// given distance, so the walk order is what makes a nearer binding win a
+    /// tie. That part is deliberate and preserved; what is added here is a sort
+    /// WITHIN each scope (B-2026-08-14-34 leg A). `Scope::names` is a
+    /// `HashMap`, so two same-scope names at equal distance used to be
+    /// separated by per-process hash order, and the suggestion — plus the
+    /// machine-applicable edit built from it — changed between runs on
+    /// identical input. Names in one scope carry no proximity signal to
+    /// preserve, so alphabetical is the natural stable order.
     pub fn visible_names(&self) -> Vec<&str> {
         let mut names = Vec::new();
         let mut scope_id = self.current_scope;
         loop {
             let scope = &self.scopes[scope_id.0];
-            for name in scope.names.keys() {
-                names.push(name.as_str());
+            let mut scope_names: Vec<&str> = scope.names.keys().map(String::as_str).collect();
+            scope_names.sort_unstable();
+            for name in scope_names {
+                names.push(name);
             }
             match scope.parent {
                 Some(parent) => scope_id = parent,

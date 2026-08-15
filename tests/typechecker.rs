@@ -38186,3 +38186,32 @@ fn compound_assign_still_accepts_every_valid_operand_shape() {
          }",
     );
 }
+
+/// B-2026-08-14-34 leg A, method half — `Env::collect_method_names` walked
+/// `Impl::methods`, a `HashMap`, so a `did you mean` tie among methods on one
+/// impl was decided by per-process hash order: `s.goo()` against `foo` / `boo`
+/// / `coo` picked a different one on 10 / 8 / 2 of 20 runs of the same binary.
+///
+/// This site is NOT one the bug report named; it was found by probing whether
+/// the resolver's scope table was the only hash-ordered candidate source.
+/// Within one impl there is no proximity signal, so the rule is alphabetical.
+#[test]
+fn method_suggestion_tie_is_deterministic_across_runs() {
+    let errors = typecheck_errors(
+        "struct S { x: i64 }\n\
+         impl S {\n\
+             fn foo(ref self) -> i64 { self.x }\n\
+             fn boo(ref self) -> i64 { self.x }\n\
+             fn coo(ref self) -> i64 { self.x }\n\
+         }\n\
+         fn main() { let s = S { x: 1i64 }; println(s.goo()); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("did you mean 'boo'")),
+        "an equal-distance method tie must resolve alphabetically within an \
+         impl, not by HashMap order; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}

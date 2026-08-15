@@ -5702,3 +5702,72 @@ fn enum_non_exhaustive_is_left_alone() {
         resolved.errors
     );
 }
+
+/// B-2026-08-14-34 leg A — the `did you mean` winner must not depend on which
+/// process the compiler is running in.
+///
+/// `SymbolTable::visible_names` walked `Scope::names`, a `HashMap`, and
+/// `suggest_similar` keeps the earliest candidate at a given distance, so an
+/// equal-distance tie among names in the SAME scope was decided by per-process
+/// hash order — measured as a 7 / 7 / 6 three-way split over 20 runs of one
+/// binary on one input. The winner is also written into a machine-applicable
+/// `.replacement`, so `karac fix` applied a different edit run to run.
+///
+/// All three candidates here are distance 1 from `qzb` and live in one scope,
+/// where there is no proximity signal to preserve, so the rule is alphabetical
+/// and the answer is `azb`. Nothing in the prelude is within tolerance, which
+/// keeps the fixture's candidate set entirely under the test's control.
+#[test]
+fn test_did_you_mean_tie_is_deterministic_across_runs() {
+    let src = "fn main() {\n\
+               let zzb = 1i64;\n\
+               let azb = 2i64;\n\
+               let mzb = 3i64;\n\
+               println(zzb + azb + mzb);\n\
+               println(qzb);\n\
+               }";
+    let errors = resolve_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.kind == ResolveErrorKind::UndefinedName)
+        .expect("expected UndefinedName diagnostic");
+    assert_eq!(
+        err.suggestion.as_deref(),
+        Some("azb"),
+        "an equal-distance tie must resolve alphabetically within a scope, not \
+         by HashMap order; got: {}",
+        err.message
+    );
+}
+
+/// The other half of the same rule: a NEARER scope still beats a farther one at
+/// equal distance, which is why the fix sorts within each scope rather than
+/// sorting `visible_names` as a whole.
+///
+/// `azb` is declared in the outer scope and `zzb` in the inner one, both
+/// distance 1 from `qzb`. Alphabetically `azb` would win; by proximity `zzb`
+/// does, and proximity is the better suggestion.
+#[test]
+fn test_did_you_mean_prefers_the_nearer_scope_over_alphabetical() {
+    let src = "fn main() {\n\
+               let azb = 2i64;\n\
+               println(azb);\n\
+               if true {\n\
+               let zzb = 1i64;\n\
+               println(zzb);\n\
+               println(qzb);\n\
+               }\n\
+               }";
+    let errors = resolve_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.kind == ResolveErrorKind::UndefinedName)
+        .expect("expected UndefinedName diagnostic");
+    assert_eq!(
+        err.suggestion.as_deref(),
+        Some("zzb"),
+        "the inner-scope candidate must win the tie — sorting `visible_names` \
+         as a whole would discard scope proximity; got: {}",
+        err.message
+    );
+}

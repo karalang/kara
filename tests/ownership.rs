@@ -11900,3 +11900,56 @@ fn the_par_capture_gate_resolves_a_name_to_its_binding_not_its_spelling() {
         );
     }
 }
+
+/// B-2026-08-14-34 leg B — RC-fallback notes must come out in a stable order.
+///
+/// `emit_rc_fallback_notes` walked `rc_values` and its inner maps, both
+/// `HashMap`s, and pushed straight into `notes`. Two fallbacks in one function
+/// were emitted in either order run-to-run — measured 16 / 4 over 20 runs of
+/// one binary on one input — and that order reaches `karac check
+/// --output=json`, which the Mend loop diffs. This was not an unstable
+/// tie-break but the ABSENCE of any ordering, which is why the note printed
+/// second could cite the earlier column.
+///
+/// Asserted as a PROPERTY (offsets non-decreasing) rather than as a fixed pair
+/// of names: the ordering rule is the one `rc_fallback_queries::analyze`
+/// already applies to the same maps, so the invariant is what must hold, not
+/// one instance of it. Two notes are required for the assertion to say
+/// anything, so that is checked first.
+#[test]
+fn test_rc_fallback_notes_are_emitted_in_source_order() {
+    let src = "fn use2(a: Vec[u8], b: Vec[u8]) -> i64 { a.len() + b.len() }\n\
+               fn main() {\n\
+                   let haystack: Vec[u8] = Vec.filled(4i64, 97u8);\n\
+                   let needle: Vec[u8] = Vec.filled(2i64, 97u8);\n\
+                   let mut sum = 0i64;\n\
+                   for _ in 0..2 { sum = sum + use2(haystack, needle); }\n\
+                   println(sum);\n\
+               }";
+    let parsed = parse(src);
+    let resolved = resolve(&parsed.program);
+    let typed = typecheck(&parsed.program, &resolved);
+    let result = ownershipcheck(&parsed.program, &typed);
+    let notes: Vec<_> = result
+        .notes
+        .iter()
+        .filter(|n| n.kind == OwnershipErrorKind::RcFallbackNote)
+        .collect();
+    assert!(
+        notes.len() >= 2,
+        "fixture must produce at least two RC fallback notes for the ordering \
+         assertion to mean anything; got {}: {:?}",
+        notes.len(),
+        notes.iter().map(|n| n.message.clone()).collect::<Vec<_>>()
+    );
+    let offsets: Vec<usize> = notes.iter().map(|n| n.span.offset).collect();
+    let mut sorted = offsets.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        offsets,
+        sorted,
+        "RC fallback notes must be ordered by use-site offset; got {:?} from: {:?}",
+        offsets,
+        notes.iter().map(|n| n.message.clone()).collect::<Vec<_>>()
+    );
+}
