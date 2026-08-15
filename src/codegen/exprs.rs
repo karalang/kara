@@ -404,6 +404,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     let lhs = self.compile_expr(left)?;
                     let rhs = self.compile_expr(right)?;
+                    // B-2026-08-15-20: re-pin the panic location to THIS node.
+                    // `compile_expr` stamps `current_span` on entry (top of this
+                    // fn), and `emit_panic` bakes whatever it holds into the
+                    // runtime message — so the two operand compiles just above
+                    // left it pointing at the LAST subexpression evaluated
+                    // inside the right operand. Every trap this arm can emit
+                    // (`integer overflow` from `emit_checked_int_arith`,
+                    // `division by zero` / `iN::MIN / -1` from
+                    // `emit_int_div_guards`) belongs to the binary op, not to a
+                    // leaf of its rhs. Measured before the fix: `a * (m + 0i64)`
+                    // blamed the `0i64` literal, and `(a + b) * m` blamed `m` —
+                    // neither of which can overflow — while `--interp` blamed
+                    // the binary expression. Restoring the node's own span makes
+                    // the AOT/JIT column match the interpreter's.
+                    self.current_span = Some(expr.span.clone());
                     // Vector binops aren't lowered to primitive method calls
                     // (only primitives are), so they reach here as raw
                     // `ExprKind::Binary` with no signedness context. Recover the
@@ -712,6 +727,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 let val = self.compile_expr(operand)?;
+                // Re-pin the panic location to THIS node before the op emits
+                // any trap — see the Binary arm above for the full rationale
+                // (`-iN::MIN` traps `integer overflow` through the same
+                // `emit_checked_int_arith` path).
+                self.current_span = Some(expr.span.clone());
                 self.compile_unaryop(op, val)
             }
             ExprKind::Call { callee, args } => self.compile_call(callee, args, &expr.span),

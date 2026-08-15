@@ -1369,8 +1369,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     // a synthesized `ExprKind::Binary` would lose the
                     // type-name's signedness — the AST node carries only the
                     // `BinOp` symbol, not the operand type.
+                    //
+                    // B-2026-08-15-20: the lowering pass rewrites a primitive
+                    // `a * b` into this `i64.mul(a, b)` assoc call *in place*,
+                    // keeping the original `Binary` node's span — so on entry
+                    // `current_span` still points at the source operator
+                    // expression, which is what `emit_panic` must bake into the
+                    // `integer overflow` / `division by zero` message. Compiling
+                    // the two operands overwrites it with the last subexpression
+                    // evaluated inside the RIGHT operand, so snapshot and
+                    // restore. Measured before the fix: `a * (m + 0i64)` blamed
+                    // the `0i64` literal and `(a + b) * m` blamed `m`, neither of
+                    // which can overflow, while `--interp` blamed the binary
+                    // expression — a run-vs-build divergence in the panic
+                    // location. This is where scalar arithmetic actually lands;
+                    // the raw-`Binary` arm in `exprs.rs` only sees operands the
+                    // lowering declined to rewrite.
+                    let op_span = self.current_span.clone();
                     let lhs = self.compile_expr(&_args[0].value)?;
                     let rhs = self.compile_expr(&_args[1].value)?;
+                    self.current_span = op_span;
                     let is_unsigned =
                         matches!(type_name, "u8" | "u16" | "u32" | "u64" | "u128" | "usize");
                     // Narrow integers (8/16/32-bit) are real fixed-width types
@@ -1415,8 +1433,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             if method == "neg" && _args.len() == 1 {
+                // B-2026-08-15-20: give the synthesized node the SOURCE `-a`
+                // span, not the operand's. `compile_expr` stamps `current_span`
+                // from the node it is given and `emit_panic` bakes that into the
+                // `integer overflow` message the checked negate raises on
+                // `-iN::MIN`, so the operand span made AOT blame `a` where
+                // `--interp` blamed the `-`. The lowering rewrite replaced the
+                // `Unary` node's KIND in place, so `current_span` on entry is
+                // still the operator expression's own span. `rewrite_unary`
+                // gates `Neg` to `Int`/`Float`, so this node never keys the
+                // tensor/column side tables under either span.
+                let neg_span = self
+                    .current_span
+                    .clone()
+                    .unwrap_or_else(|| _args[0].value.span.clone());
                 let synth = Expr {
-                    span: _args[0].value.span.clone(),
+                    span: neg_span,
                     kind: ExprKind::Unary {
                         op: UnaryOp::Neg,
                         operand: Box::new(_args[0].value.clone()),

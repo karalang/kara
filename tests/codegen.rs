@@ -48043,6 +48043,129 @@ fn main() {
     // are built via `let mut` + reassignment so neither const-eval nor
     // instcombine folds the fault away before the runtime check.
 
+    /// Pull `(line, column)` out of the AOT panic line
+    /// `panic at <file>:<line>:<col> in <fn>: <msg>`.
+    fn panic_location(stdout: &str) -> Option<(usize, usize)> {
+        let tail = stdout.split("panic at ").nth(1)?;
+        let loc = tail.split(" in ").next()?;
+        let mut parts = loc.rsplitn(3, ':');
+        let col: usize = parts.next()?.trim().parse().ok()?;
+        let line: usize = parts.next()?.trim().parse().ok()?;
+        Some((line, col))
+    }
+
+    /// B-2026-08-15-20 — an arithmetic trap is reported at the expression that
+    /// faulted, and `karac build` agrees with `--interp` on where that is.
+    ///
+    /// `compile_expr` stamps `current_span` on entry and `emit_panic` bakes
+    /// whatever it holds into the runtime message. Compiling the two operands
+    /// overwrote it, so the trap inherited the last subexpression evaluated
+    /// inside the RIGHT operand: `a * (m + 0)` blamed the `0` literal and
+    /// `(a + b) * m` blamed `m`. Neither of those can overflow, and neither
+    /// matched the interpreter, which reports the binary expression — a
+    /// run-vs-build divergence in a diagnostic. The unary sibling had its own
+    /// cause: the `i64.neg` assoc lowering rebuilt the `Unary` node carrying the
+    /// OPERAND's span, so `-iN::MIN` blamed the operand instead of the `-`.
+    ///
+    /// Each case pins the absolute column as well as the parity — agreement
+    /// alone is also satisfied by both backends being wrong in the same way.
+    #[test]
+    fn arithmetic_trap_location_matches_the_interpreter() {
+        // Every program puts the faulting expression on line 3, indented four
+        // spaces after `let c = `, so the expression's first character is at
+        // column 13. A parenthesized left operand reports column 14 instead:
+        // the parser makes parens transparent, so the binary node's span starts
+        // at the first token INSIDE them (`a`), not at the `(`.
+        let cases: [(&str, &str, usize, usize); 4] = [
+            (
+                "mul overflows; the right operand is the deeper expression",
+                r#"
+fn boom(a: i64, b: i64, m: i64) -> i64 {
+    let c = a * (m + 0);
+    return c;
+}
+
+fn main() {
+    println(boom(4611686018427387904, 4611686018427387903, 4));
+}
+"#,
+                3,
+                13,
+            ),
+            (
+                "mul overflows; the left operand is a parenthesized sum",
+                r#"
+fn boom(a: i64, b: i64, m: i64) -> i64 {
+    let c = (a + b) * m;
+    return c;
+}
+
+fn main() {
+    println(boom(4611686018427387904, 4611686018427387903, 4));
+}
+"#,
+                3,
+                14,
+            ),
+            (
+                "division by zero, both operands parenthesized",
+                r#"
+fn boom(a: i64, b: i64, m: i64) -> i64 {
+    let c = (a + 1) / (m + 0);
+    return c;
+}
+
+fn main() {
+    println(boom(1, 1, 0));
+}
+"#,
+                3,
+                14,
+            ),
+            (
+                "checked negate of i64::MIN blames the operator, not the operand",
+                r#"
+fn boom(a: i64) -> i64 {
+    let c = -a;
+    return c;
+}
+
+fn main() {
+    println(boom(-9223372036854775807 - 1));
+}
+"#,
+                3,
+                13,
+            ),
+        ];
+
+        for (label, src, line, col) in cases {
+            let (_out, errs, _trace, _) = karac::run_program_full(src);
+            assert!(
+                !errs.is_empty(),
+                "{label}: the interpreter must trap on this program"
+            );
+            assert_eq!(
+                (errs[0].span.line, errs[0].span.column),
+                (line, col),
+                "{label}: interpreter blamed the wrong location ({})",
+                errs[0].message
+            );
+            if let Some(cap) = run_program_capturing_with_filename(src, "trap.kara") {
+                let got = panic_location(&cap.stdout).unwrap_or_else(|| {
+                    panic!("{label}: no `panic at` location in stdout={:?}", cap.stdout)
+                });
+                assert_eq!(
+                    got,
+                    (line, col),
+                    "{label}: compiled binary blamed a different location than \
+                     the interpreter; stdout={:?}",
+                    cap.stdout
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_e2e_int_overflow_add_traps() {
         let captured = run_program_capturing(
