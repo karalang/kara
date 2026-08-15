@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 252 | 0 |
+| miscompile | 253 | 0 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 122 | 0 |
-| codegen-gap | 112 | 1 |
+| codegen-gap | 112 | 0 |
 | missing-feature | 96 | 0 |
 | perf | 69 | 0 |
 | false-positive | 65 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 888 | 1 |
+| codegen | 889 | 0 |
 | typecheck | 174 | 1 |
 | interp | 146 | 1 |
 | ownership | 51 | 1 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1232 surfaced · 4 open · 1216 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1233 surfaced · 3 open · 1218 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-20 | 2026-08-15 | interp | low | THE INTERPRETER BLAMES AN INTEGER OVERFLOW ON A SUB-EXPRESSION THAT CANNOT OVERFLOW: in `let c = (a + b) * m` with `a + b == 3`, the trap is reported at the column of `a`, not of the multiply that actually trapped. The compiled backends point elsewhere on the same line, so `karac run` and `karac build` give two different locations for one fault. | The span attached to the overflow trap in the interpreter's binary-op evaluation. It appears to carry the LEFT OPERAND's span rather than the operation's — which is indistinguishable from correct whenever the left operand is itself the overflowing op, and wrong whenever it is not. |
-| B-2026-08-15-25 | 2026-08-15 | codegen | medium | A CLOSURE WHOSE BODY IS A BOOL-RETURNING BUILTIN PREDICATE fails LLVM module verification — `|s| s.starts_with("ab")` emits the closure's return as `i64` against the predicate's `i1` ("Function return type does not match operand type of return inst"). Reachable with NO CAPTURE, so it is not a once-callability issue. `|s| s.contains(x)` and `|m| m.len() > n` both build and run, so it is neither "bool closures" nor "container receivers" — it is which method lowering supplies the closure body's tail value. | the closure function's return-type derivation from its body tail (src/codegen/closures.rs) vs. the `i1` produced by the starts_with / ends_with / map.contains / set.contains lowerings. |
 | B-2026-08-15-26 | 2026-08-15 | typecheck | low | THE `OnceFnIntoFnSlot` HELP TEXT PRESCRIBES A CLONE ROUTE THAT DOES NOT COMPILE — split out of B-2026-08-15-22 as its fix shape (3). Both readings of "clone the captured value" were tried and both stay rejected. Not simply deletable: with -22 fixed the reported shape no longer reaches this diagnostic, so which shapes still do — and whether the clone advice is right for THEM — is the open question. | the `OnceFnIntoFnSlot` help text (src/typechecker.rs, the once-callable-closure slot rejection) and the set of shapes that still reach it after B-2026-08-15-22. |
 | B-2026-08-15-27 | 2026-08-15 | ownership | low | CALLING AN `Fn(ref T)` CLOSURE TWICE WITH THE SAME ARGUMENT warns "value moved here, used again here" — the closure's parameter is a BORROW, so the call cannot move it, and the program compiles and runs correctly on every backend. A direct call to `fn f(s: ref String)` does not warn. | the ownership checker's treatment of a CLOSURE call's arguments: it appears to ignore the closure type's declared parameter mode and treat every argument as an owned pass. |
 
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1232 surfaced
 
 </details>
 
-### Fixed (1216)
+### Fixed (1218)
 
-<details><summary>1216 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1218 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9082,6 +9081,132 @@ baseline by construction, which is the point of an oracle.
 
 Gates: full `--features llvm` sweep of all 98 targets, 12547 tests, 0 failures;
 clippy `--all --all-targets` and fmt clean. |
+| B-2026-08-15-25 | codegen | medium | A CLOSURE WHOSE BODY IS A BOOL-RETURNING BUILTIN PREDICATE fails LLVM module verification — `\|s\| s.starts_with("ab")` emits the closure's return as `… | FIXED by f1474ffe, in `compile_closure_expr`'s return-type decision (src/codegen/closures.rs).
+
+THE OVERRIDE ALREADY EXISTED AND WAS TOO NARROW BY ONE PREDICATE. The closure's
+return type comes from the structural heuristic `infer_closure_return_type`, whose
+bottom arm is a bare `i64` — its "I gave up" answer. A repair for that already
+shipped: when the typechecker-recorded `Fn(T) -> R` disagrees, trust the recorded
+type. But the repair was gated on `matches!(recorded, StructType(_))`, so it fired
+for a String/struct/tuple return and DECLINED for every other shape the heuristic
+cannot recover. A `bool` is `i1` — an int — so a closure returning a builtin
+predicate kept the `i64` signature and the body's `ret i1` failed LLVM module
+verification.
+
+THE FIX MOVES THE GATE ONTO THE SENTINEL rather than onto the shape it produced:
+if the heuristic answered `i64` AND the recorded type is anything else, take the
+recorded type. That is the same reasoning the struct case shipped on, just not
+restricted to structs. A genuinely `i64`-returning body is untouched (recorded is
+`i64` too, so the two agree), and a fieldless enum (`a.cmp(b)` → `Ordering`) never
+reaches the gate because its own arm resolves the layout.
+
+THE FIRST VERSION OF THIS GATE WAS TOO WIDE, and the full suite caught it — worth
+recording because the failure pointed the SAME verifier error the other way. Taking
+the recorded type whenever it differed from `i64` also took it for a BORROW return:
+`|a| a` over a borrowed payload records `ref i64`, which lowers to `ptr`, but the
+body deref-on-uses the borrow and returns the pointee, so the closure emitted
+`ret i64` against a `ptr` signature. Two pre-existing tests
+(`test_e2e_map_over_borrowed_heap_payload_returns_the_whole_value`,
+`test_e2e_optres_map_borrowed_scalar_payload`) went red on exactly that.
+
+So `Ref`/`MutRef` records are excluded, and only those — a closure returning a
+handle-backed builtin also lowers to `ptr`, and there the handle IS the value that
+leaves, so the record is right. The old struct-only gate was accidentally correct
+about this one case, which is the reason to name it rather than quietly narrow:
+`infer_closure_return_type`'s own `Identifier` arm already reports the POINTEE for
+a `ref` param (B-2026-08-08-30), so for a borrow the heuristic is the authority and
+the recorded type describes the binding rather than the returned value.
+
+THE ROW UNDERSTATED THE SCOPE, and the parent's own error message is the evidence.
+Building the fixture against the parent emits SIX verifier failures, and one of
+them is `ret i8 %v.elem` — a closure returning `u8`. So this was never a bool
+problem: it was every non-struct return the heuristic cannot recover, and `bool`
+is simply the one the reporting shape happened to use. `vecat` (`-> u8`) is in the
+permanent fixture for exactly that reason — it pins the generalization rather than
+a bool special case.
+
+A SECOND DEFECT HAD TO BE FIXED TO SHIP THIS ONE, and it is the more serious of
+the two. With the return type corrected, the `Map`/`Set` predicate closures stopped
+failing to build and started SEGFAULTING — trading a loud compile error for a
+crash, which is not a change worth shipping on its own. The cause is independent:
+a `Map`/`Set` value IS a pointer, and the closure ABI passes that pointer directly
+(`call %closure_fn(%env, %m)` with `%m` the loaded handle), but a `ref`-declared
+closure param was registered as a borrow, which adds a second load. The body then
+called the runtime with the map's first WORD as a pointer.
+
+That defect was ALREADY LIVE and SILENT: on the parent, `|m| m.len()` over a
+two-entry map compiles, runs, and prints 529. It is filed as B-2026-08-15-28 and
+fixed here because -25 cannot be shipped without it. The IR is unambiguous —
+
+    store ptr %1, ptr %m            ; %1 IS the handle
+    %m.ref.ptr = load ptr, ptr %m   ; -> the handle
+    %map.handle = load ptr, ptr %m.ref.ptr   ; <- one load too many
+
+— and the fix is to skip the borrow registration when the borrowed-of type is a
+`builtin_opaque_ptr_handle`, since the handle already IS the reference.
+
+CONTROLS, because the borrow registration is load-bearing for everything else:
+`ref Vec[u8]` (indexed in the body — the shape B-2026-08-05-15 added it for),
+`ref String`, `ref P` for a user struct, and `ref Vec[String]` all still deref and
+all still return the interpreter's answer. An OWNED `Map` param and a `mut ref Map`
+FUNCTION param are unaffected.
+
+MEASURED against the interpreter as oracle on `--interp`, JIT, `karac build` and
+`KARAC_OPT_LEVEL=0` across thirteen closures: the three String predicates with a
+capture, one with none, `Map.contains_key` and `Set.contains` (each with a hitting
+and a missing key), `Map.len` / `Set.len` returning `i64` through a handle ref, a
+`u8`-returning indexed read, and the four borrow controls. Every closure is invoked
+more than once and both containers are re-read afterwards, so a handle corrupted by
+the old double-deref cannot pass. Zero divergences; ASAN clean at both optimization
+levels; the parent does not build the fixture at all.
+
+TESTS. `test_e2e_closure_over_builtin_predicates_and_handle_refs`
+(tests/codegen.rs) is the detector for both halves, verified FAILING on the parent.
+`msize` / `ssize` are the pins that matter for -28: `|m| m.len()` returned a wrong
+NUMBER rather than crashing, so a fixture that only asked "does it build" would
+have passed while the handle was still being double-dereferenced.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
+suite, and the asan -O0 leg. |
+| B-2026-08-15-28 | codegen | high | A `ref`-DECLARED CLOSURE PARAM OF A HANDLE-BACKED BUILTIN IS DOUBLE-DEREFERENCED — `\|m\| m.len()` over a two-entry `Map` printed 529 under `karac buil… | FIXED by f1474ffe, in the closure param registration (src/codegen/closures.rs),
+alongside B-2026-08-15-25 — not as a convenience, but because -25 could not be
+shipped without it. Correcting -25's return type turned the `Map`/`Set` predicate
+closures from a loud build error into a SEGFAULT, and trading a compile error for
+a crash is not a change worth landing on its own.
+
+THE FIX is one condition: skip the `ref_params` / `signature_ref_params`
+registration when the borrowed-of type is a `builtin_opaque_ptr_handle`. Those
+registrations are what make `load_variable` deref a borrow, which is correct for
+every other `ref` closure param and wrong for a handle, because the handle already
+IS the reference and the closure ABI passes it directly.
+
+READ FROM THE IR RATHER THAN INFERRED. Caller: `%m = load ptr, ptr %m.slot` then
+`call %closure_fn(ptr %env, ptr %m)` — the argument is the handle. Callee, before:
+
+    store ptr %1, ptr %m            ; %1 IS the handle
+    %m.ref.ptr = load ptr, ptr %m   ; -> the handle
+    %map.handle = load ptr, ptr %m.ref.ptr   ; <- one load too many
+    call i64 @karac_map_len(ptr %map.handle)
+
+`len` read the control block's first word as a count (529 for a two-entry map);
+`contains_key` / `contains` dereferenced it and crashed.
+
+CONTROLS, since the borrow registration is load-bearing everywhere else:
+`ref Vec[u8]` indexed in the body (the shape B-2026-08-05-15 leg 2 added it for),
+`ref String`, `ref P` for a user struct, and `ref Vec[String]` all still deref and
+all still match the interpreter. An OWNED `Map` closure param and a `mut ref Map`
+FUNCTION param were already correct and stay so.
+
+TEST: `test_e2e_closure_over_builtin_predicates_and_handle_refs`
+(tests/codegen.rs), verified FAILING on the parent. `msize` / `ssize` are the pins
+that matter here rather than the `contains` lines: `|m| m.len()` returned a wrong
+NUMBER instead of crashing, so a fixture that only asked "does it build" would have
+gone green with the handle still double-dereferenced. That is exactly how this
+survived — the crashing spellings were unreachable behind -25's verifier failure,
+and the one spelling that compiled returned a plausible integer nobody checked.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
+suite (14868 passed, 0 failed), and the asan -O0 leg (1108/0). |
 
 </details>
 
