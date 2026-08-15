@@ -4172,26 +4172,82 @@ impl<'ctx> super::Codegen<'ctx> {
     /// identifier, mirroring `suppress_block_tail_cleanup`'s recursion. No-op for
     /// a local binding (it is not in `owned_vecstr_params`, so
     /// `maybe_defensive_copy_param_arg` returns `val` untouched and the existing
-    /// move-out semantics are preserved) or any non-identifier tail. Emit-order:
-    /// call AFTER the block's frame drains and BEFORE the branch's terminating
-    /// jump to the merge block, so the copy lands in the branch's predecessor and
-    /// the phi picks up the fresh buffer; `emit_vecstr_defensive_copy` reads the
-    /// already-loaded SSA `val`, so a prior source-`cap` zeroing is irrelevant.
+    /// move-out semantics are preserved) or any tail that owns what it yields.
+    /// Emit-order: call AFTER the block's frame drains and BEFORE the branch's
+    /// terminating jump to the merge block, so the copy lands in the branch's
+    /// predecessor and the phi picks up the fresh buffer;
+    /// `emit_vecstr_defensive_copy` reads the already-loaded SSA `val`, so a
+    /// prior source-`cap` zeroing is irrelevant.
+    ///
+    /// B-2026-08-14-32 — the INDEX arm covers the second aliasing source with
+    /// the identical shape. `let w = if c { v[i] } else { .. }` over a
+    /// heap-element container read the element and handed back the container's
+    /// own `{ptr,len,cap}`, and the binding then registered an owned cleanup
+    /// over it: freed once by `w`, once by `v`. The `let` path already defends
+    /// the DIRECT form (`let w = v[i]`) by calling
+    /// `clone_owned_vec_index_element` on its RHS — but that helper matches
+    /// `ExprKind::Index` at the TOP LEVEL, and an `If`/`Match` RHS takes its
+    /// `_ => Ok(val)` arm, so the read one level down inside a branch got no
+    /// clone and an owned track anyway.
+    ///
+    /// It belongs here rather than at the let-site because by the merge the
+    /// value is a phi: cloning THAT would also clone the arms that produced a
+    /// fresh owned temp, leaking the original. Only the arm knows what it
+    /// yielded. That is the same reason the owned-param copy above sits here,
+    /// and why one dispatcher covers both — every `if` / `if let` / `match` /
+    /// closure-tail consumer already routes through it.
+    ///
+    /// The whitelist that lets the direct form elide its clone
+    /// (`vec_index_borrow_spans`) is deliberately NOT consulted: it proves the
+    /// read is a non-escaping borrow, and a branch value that reaches a binding
+    /// escapes by construction. Cloning is the conservative direction, and the
+    /// helper still declines every element that cannot alias
+    /// (trivially-copyable, `weak`, a mistyped monomorph read).
+    ///
+    /// `own_value` says whether anything will actually take ownership of what
+    /// the arms produce, and it gates the element clone ONLY — the owned-param
+    /// copy is unconditional, exactly as before. A discarded statement
+    /// (`if c { v[0] } else { v[1] };`) owns nothing, so a clone there is a pure
+    /// leak: measured at 330 bytes in 20 objects over a 20-iteration loop before
+    /// this parameter existed. It is an explicit argument rather than a field
+    /// read so that every call site has to answer the question; the two
+    /// directions are not symmetric — cloning when we should not is a leak LSan
+    /// catches, and NOT cloning when we should is a double free in a user's
+    /// program.
     pub(super) fn deepcopy_owned_param_branch_tail(
         &mut self,
         tail: &Expr,
         val: BasicValueEnum<'ctx>,
-    ) -> BasicValueEnum<'ctx> {
+        own_value: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         match &tail.kind {
-            ExprKind::Identifier(_) => self.maybe_defensive_copy_param_arg(tail, val),
+            ExprKind::Identifier(_) => Ok(self.maybe_defensive_copy_param_arg(tail, val)),
             ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
                 match b.final_expr.as_deref() {
-                    Some(inner) => self.deepcopy_owned_param_branch_tail(inner, val),
-                    None => val,
+                    Some(inner) => self.deepcopy_owned_param_branch_tail(inner, val, own_value),
+                    None => Ok(val),
                 }
             }
-            _ => val,
+            // `v[i]` and its `unsafe` sibling `v.get_unchecked(i)`. The helper
+            // is the filter — it returns `val` untouched for every shape that is
+            // not one of those two, and for every element type that cannot be
+            // aliased — so nothing else needs enumerating here.
+            _ if own_value => self.clone_owned_vec_index_element(tail, val),
+            _ => Ok(val),
         }
+    }
+
+    /// Will anything OWN the value this branch expression produces?
+    ///
+    /// `head` is the branch's condition (`if`) or scrutinee (`if let` / `match`)
+    /// — the span [`Self::discarded_branch_spans`] is keyed by, and the only one
+    /// the branch compilers hold. False exactly when the pre-pass proved the
+    /// value is discarded; see `compute_discarded_branch_spans` for the
+    /// positions and for why this is a span lookup rather than a flag.
+    pub(super) fn branch_value_is_owned(&self, head: &Expr) -> bool {
+        !self
+            .discarded_branch_spans
+            .contains(&crate::resolver::SpanKey::from_span(&head.span))
     }
 
     /// Defensive-copy shim for retaining consume sites: when `arg_expr`

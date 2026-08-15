@@ -29085,6 +29085,41 @@ fn test_print_a_vec_place_expression() {
     );
 }
 
+/// B-2026-08-14-32 — the interpreter twin of
+/// `tests/codegen.rs::test_e2e_if_arm_vec_element_binding_is_cloned`, same
+/// source and same expected string.
+///
+/// This surface was correct the whole time: it copies values on binding, so an
+/// element read through an `if` / `match` arm was never an alias to begin with.
+/// The bug was compiled-only — a double free on a shape as ordinary as
+/// `let w = if c { v[1] } else { "x" }`. So this test's job is to be the ORACLE
+/// the compiled twin is checked against: the two assert one string, so a codegen
+/// fix that stopped crashing but bound the wrong element, or left the container
+/// holding a freed buffer, would fail the pair rather than quietly redefine what
+/// the shape means.
+#[test]
+fn test_if_arm_vec_element_binding_is_cloned() {
+    assert_eq!(
+        run("fn fresh() -> String { \"zz\" }\n\
+             fn main() {\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 v.push(\"aa\"); v.push(\"bb\"); v.push(\"cc\");\n\
+                 let mut n: Vec[Vec[i64]] = Vec.new();\n\
+                 n.push([1, 2]); n.push([3, 4]);\n\
+                 let a = if v.len() > 1 { v[1] } else { \"x\" };\n\
+                 let b = if v.len() > 1 { v[1] } else { v[0] };\n\
+                 let c = if v.len() > 9 { v[0] } else { fresh() };\n\
+                 let d = match v.len() > 1 { true => v[2], false => \"x\" };\n\
+                 let e = if v.len() > 2 { if v.len() > 9 { v[0] } else { v[1] } } else { \"x\" };\n\
+                 let g = if n.len() > 1 { n[1] } else { n[0] };\n\
+                 if v.len() > 0 { v[0] } else { v[1] };\n\
+                 println(f\"{a} {b} {c} {d} {e} {g[0]}\");\n\
+                 println(f\"{v[0]} {v[1]} {v[2]} {n[1][1]}\");\n\
+             }"),
+        "bb bb zz cc bb 3\naa bb cc 4\n"
+    );
+}
+
 /// B-2026-08-14-19 — the interpreter half of the `String.substring` boundary
 /// fault, twin of `tests/codegen.rs::test_e2e_substring_non_codepoint_boundary_panics`.
 ///

@@ -690,3 +690,176 @@ fn expr_walk_nested_blocks(
         _ => {}
     }
 }
+
+/// Entry point: walk a function body and return the set of `SpanKey`s — keyed by
+/// each `if` / `if let` / `match` expression's CONDITION or SCRUTINEE span — for
+/// every branch expression whose VALUE IS DISCARDED.
+///
+/// B-2026-08-14-32. A branch arm whose tail reads a heap-owning container
+/// element (`if c { v[0] } else { v[1] }`) must clone that element when a
+/// binding will own the result, and must NOT clone it when the result is thrown
+/// away — the clone would have no owner and simply leak. Only the consumer knows
+/// which, so this pass finds the discarding consumers and codegen asks by span.
+///
+/// Keyed on the condition/scrutinee rather than on the branch expression itself
+/// because that is the span `compile_if` / `compile_if_let` / `compile_match`
+/// actually hold; the branch node's own span never reaches them.
+///
+/// A SPAN SET rather than a one-shot flag, and that is the whole point. The
+/// first version of this was a `bool` taken by whichever branch compiled first,
+/// which is correct only when the discarded branch is the very next thing
+/// compiled. It is not: a discarded `if` can sit in a loop body after other
+/// statements, and a block-wrapped one arrives with the block's own statements
+/// compiled first. Each of those took the flag and suppressed the wrong clone —
+/// or, worse, left it set for a nested `let` that genuinely owned its value,
+/// which is the double free this whole mechanism exists to prevent. A span is
+/// immune to compile order.
+///
+/// The discarding positions, all of which LSan measured as leaks before this
+/// pass existed (990 bytes / 60 objects across the three):
+///
+///   - a statement expression (`if c { v[0] } else { v[1] };`)
+///   - a loop body's trailing expression (`for k in .. { if c { .. } else { .. } }`)
+///   - either of those wrapped in a block (`{ if c { .. } else { .. } };`)
+///
+/// Missing a position here costs a leak; wrongly INCLUDING one costs a double
+/// free, so every insertion is a syntactic discard the language guarantees —
+/// never an inference about whether a value happens to be used.
+pub(crate) fn compute_discarded_branch_spans(body: &Block) -> HashSet<SpanKey> {
+    let mut out = HashSet::new();
+    walk_block_for_discards(body, &mut out);
+    out
+}
+
+/// Record `expr` if it is (after peeling block wrappers) a branch expression,
+/// then keep peeling: `{ { if .. } }` discards the inner `if` just as directly.
+///
+/// Discard is INHERITED, which is why this recurses through the branch's own
+/// alternatives rather than stopping at the outermost node. Each of these is
+/// compiled by its OWN `compile_if` / `compile_match` call, looking up its OWN
+/// span, so recording only the outer one leaves the inner ones cloning into a
+/// leak:
+///
+///   - an `else if` chain — every link's value IS the outer `if`'s value
+///   - a plain `else { .. }` block whose tail is itself a branch
+///   - a `match` arm body that is itself an `if` / `match`
+///
+/// The THEN block is deliberately not walked for this: its tail value is the
+/// branch's own value, and the clone for that tail is gated by the branch node
+/// recorded here. Walking it would be recording the same decision twice, under a
+/// span that names something else.
+fn record_discarded_branch(expr: &Expr, out: &mut HashSet<SpanKey>) {
+    match &expr.kind {
+        ExprKind::If {
+            condition,
+            else_branch,
+            ..
+        } => {
+            out.insert(SpanKey::from_span(&condition.span));
+            if let Some(eb) = else_branch.as_deref() {
+                record_discarded_branch(eb, out);
+            }
+        }
+        ExprKind::IfLet {
+            value, else_branch, ..
+        } => {
+            out.insert(SpanKey::from_span(&value.span));
+            if let Some(eb) = else_branch.as_deref() {
+                record_discarded_branch(eb, out);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            out.insert(SpanKey::from_span(&scrutinee.span));
+            for arm in arms {
+                record_discarded_branch(&arm.body, out);
+            }
+        }
+        ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+            if let Some(inner) = b.final_expr.as_deref() {
+                record_discarded_branch(inner, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walk every block reachable from `block`, recording the discarding positions.
+/// The walk itself has to be exhaustive over nested blocks — a discarded `if`
+/// three loops deep leaks exactly as readily as one at the top.
+fn walk_block_for_discards(block: &Block, out: &mut HashSet<SpanKey>) {
+    for stmt in &block.stmts {
+        if let StmtKind::Expr(e) = &stmt.kind {
+            record_discarded_branch(e, out);
+        }
+        walk_stmt_for_discards(stmt, out);
+    }
+    if let Some(fe) = block.final_expr.as_deref() {
+        walk_expr_for_discards(fe, out);
+    }
+}
+
+fn walk_stmt_for_discards(stmt: &Stmt, out: &mut HashSet<SpanKey>) {
+    match &stmt.kind {
+        StmtKind::Expr(e) => walk_expr_for_discards(e, out),
+        StmtKind::Let { value, .. } => walk_expr_for_discards(value, out),
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            walk_expr_for_discards(value, out);
+            walk_block_for_discards(else_block, out);
+        }
+        StmtKind::Assign { target, value, .. } => {
+            walk_expr_for_discards(target, out);
+            walk_expr_for_discards(value, out);
+        }
+        StmtKind::Defer { body } => walk_block_for_discards(body, out),
+        StmtKind::ErrDefer { body, .. } => walk_block_for_discards(body, out),
+        _ => {}
+    }
+}
+
+/// Descend an expression, recording loop bodies' trailing expressions (whose
+/// value the loop discards) and recursing through every nested block.
+fn walk_expr_for_discards(expr: &Expr, out: &mut HashSet<SpanKey>) {
+    match &expr.kind {
+        ExprKind::For { body, .. } | ExprKind::While { body, .. } | ExprKind::Loop { body, .. } => {
+            if let Some(fe) = body.final_expr.as_deref() {
+                record_discarded_branch(fe, out);
+            }
+            walk_block_for_discards(body, out);
+        }
+        ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+            walk_block_for_discards(b, out);
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            walk_expr_for_discards(condition, out);
+            walk_block_for_discards(then_block, out);
+            if let Some(eb) = else_branch.as_deref() {
+                walk_expr_for_discards(eb, out);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            walk_expr_for_discards(value, out);
+            walk_block_for_discards(then_block, out);
+            if let Some(eb) = else_branch.as_deref() {
+                walk_expr_for_discards(eb, out);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            walk_expr_for_discards(scrutinee, out);
+            for arm in arms {
+                walk_expr_for_discards(&arm.body, out);
+            }
+        }
+        _ => {}
+    }
+}

@@ -54,6 +54,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // return), re-applied per arm body below so a bare-arg `Option[shared]`
         // arm leaf gets its per-branch inc.
         let tail = self.tail_ret_inner.take();
+        // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
+        let own_value = self.branch_value_is_owned(scrutinee);
         // Slice 3b: when the scrutinee is a ref-typed identifier
         // (function parameter `f: ref T` / `mut ref T`), obtain the raw
         // scrutinee pointer in addition to the auto-derefed value.
@@ -927,7 +929,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // captured just below. No-op for local/non-param arm tails
                 // (`match opt { Some(v) => v }` — `v` is a payload binding, not
                 // in `owned_vecstr_params`). See `compile_if`.
-                arm_val = self.deepcopy_owned_param_branch_tail(&arm.body, arm_val);
+                arm_val = self.deepcopy_owned_param_branch_tail(&arm.body, arm_val, own_value)?;
                 // Re-read the current bb AFTER drain — the cleanup IR
                 // may have appended new basic blocks (e.g. `cleanup.free`
                 // / `cleanup.skip` for FreeVecBuffer's `cap > 0` guard),

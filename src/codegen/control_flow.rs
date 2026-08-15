@@ -51,6 +51,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // NOT a tail return), then re-arm it for each branch's final expr so
         // a bare-arg `Option[shared]` leaf gets its per-branch inc.
         let tail = self.tail_ret_inner.take();
+        // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
+        let own_value = self.branch_value_is_owned(value);
         let val = self.compile_expr(value)?;
         // B-2026-07-21-8: the if-let route of the ref-chain consuming-read
         // family — `if let Ident(name) = st.tok { <consume name> }` with
@@ -338,7 +340,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // suppression above only skips a local owner's free, leaving a param
             // tail aliasing the caller's arg. See `compile_if`.
             if let (Some(fe), Some(v)) = (then_block.final_expr.as_deref(), then_val) {
-                then_val = Some(self.deepcopy_owned_param_branch_tail(fe, v));
+                then_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
             }
         } else {
             self.scope_cleanup_actions.pop();
@@ -376,7 +378,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Deep-copy an owned-param else-tail — see `compile_if`.
         if !else_terminated {
             if let (Some(fe), Some(v)) = (else_tail, else_val) {
-                else_val = Some(self.deepcopy_owned_param_branch_tail(fe, v));
+                else_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
             }
         }
         let else_end = self.builder.get_insert_block().unwrap();
@@ -1835,6 +1837,8 @@ impl<'ctx> super::Codegen<'ctx> {
         else_branch: Option<&Expr>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let tail = self.tail_ret_inner.take();
+        // Keyed on the condition's span, so compile ORDER is irrelevant.
+        let own_value = self.branch_value_is_owned(condition);
         let cond_val = self.compile_expr(condition)?.into_int_value();
         let fn_val = self.current_fn.unwrap();
         let then_bb = self.context.append_basic_block(fn_val, "then");
@@ -1863,7 +1867,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `then_end_bb` below. No-op for local/non-param tails.
         if !then_terminated {
             if let (Some(fe), Some(v)) = (then_block.final_expr.as_deref(), then_val) {
-                then_val = Some(self.deepcopy_owned_param_branch_tail(fe, v));
+                then_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
             }
         }
         let then_end_bb = self.builder.get_insert_block().unwrap();
@@ -1911,7 +1915,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some();
         if !else_terminated {
             if let (Some(fe), Some(v)) = (else_tail, else_val) {
-                else_val = Some(self.deepcopy_owned_param_branch_tail(fe, v));
+                else_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
             }
         }
         let else_end_bb = self.builder.get_insert_block().unwrap();

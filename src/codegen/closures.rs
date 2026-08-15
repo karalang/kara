@@ -3350,7 +3350,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `compile_function`'s tail does. A no-op unless `t` ultimately
                 // names one of this closure's `owned_vecstr_params`, so the
                 // common fresh-result tail (`|s| wrap(wrap(s))`) is untouched.
-                result = self.deepcopy_owned_param_branch_tail(t, result);
+                // A closure tail is RETURNED, so its value is always owned.
+                result = self.deepcopy_owned_param_branch_tail(t, result, true)?;
                 // B-2026-07-18-46: a captured heap-bearing STRUCT/ENUM returned
                 // whole (`|| w`) — the aggregate sibling of the Vec/String
                 // deep-copy above. The bit-copied capture shallow-aliases the

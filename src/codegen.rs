@@ -2617,6 +2617,17 @@ pub(super) struct Codegen<'ctx> {
     /// returns (which do) without the over/under-count a single merge-block
     /// inc would cause. See docs/implementation_checklist/phase-7-codegen.md.
     pub(crate) tail_ret_inner: Option<StructType<'ctx>>,
+    /// Branch expressions whose VALUE IS DISCARDED, keyed by the span of their
+    /// condition / scrutinee — the span `compile_if` / `compile_if_let` /
+    /// `compile_match` actually hold.
+    ///
+    /// Gates the arm-tail element clone in `deepcopy_owned_param_branch_tail`
+    /// (B-2026-08-14-32). Cloning an arm's borrowed container element is right
+    /// when a binding will own the result and a pure leak when the result is
+    /// thrown away, and only the consumer knows which. Computed per function by
+    /// `compute_discarded_branch_spans`, which documents the discarding
+    /// positions and why the set is keyed by span rather than carried as a flag.
+    pub(crate) discarded_branch_spans: std::collections::HashSet<crate::resolver::SpanKey>,
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
@@ -8268,6 +8279,7 @@ impl<'ctx> Codegen<'ctx> {
             var_option_shared_heap: HashMap::new(),
             ref_option_shared_heap: HashMap::new(),
             tail_ret_inner: None,
+            discarded_branch_spans: std::collections::HashSet::new(),
             soa_layouts: HashMap::new(),
             binding_layouts: HashMap::new(),
             soa_return_locals: std::collections::HashSet::new(),

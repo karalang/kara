@@ -2501,6 +2501,12 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.vec_index_borrow_spans =
             crate::codegen::borrow_elision::compute_vec_index_borrow_spans(&func.body, &heap_elem);
+        // B-2026-08-14-32 — which branch expressions have their value thrown
+        // away. Per function, for the same reason the set above is: both are
+        // span-keyed over THIS body, and carrying either across functions would
+        // let one function's spans answer another's questions.
+        self.discarded_branch_spans =
+            crate::codegen::borrow_elision::compute_discarded_branch_spans(&func.body);
 
         // B-2026-08-01-33 stage 3c — the frozen-element container NAMES are
         // function-scoped and the hint that fills them is span-keyed and

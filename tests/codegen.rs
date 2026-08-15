@@ -48455,6 +48455,54 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-32 — an index read into a heap-owning container, used as the
+    /// value of an `if` / `match` ARM, is cloned for the binding instead of
+    /// aliasing the container.
+    ///
+    /// The `let` path already defended the DIRECT form (`let w = v[1]`) by
+    /// calling `clone_owned_vec_index_element` on its RHS, and elides that clone
+    /// when a pre-pass proves the read is a non-escaping borrow. Both halves
+    /// match `ExprKind::Index` at the TOP LEVEL, so the same read one level down
+    /// inside a branch got neither: no clone, and an owned scope cleanup anyway.
+    /// The binding and the container then freed one buffer, and
+    /// `let w = if c { v[1] } else { "x" }` aborted with
+    /// `free(): double free detected in tcache 2` before the next statement ran.
+    /// `--interp` was correct throughout, so this was compiled-only — hence the
+    /// interpreter twin of the same name.
+    ///
+    /// Every arm shape that crashed is here: an index against a literal, against
+    /// another index, against an owned-returning CALL (the arm that must NOT be
+    /// cloned), a `match` arm, a nested if-expression, and a `Vec[Vec[i64]]` to
+    /// show it was never String-specific. The discarded `if` STATEMENT is the
+    /// leak edge — nothing owns its value, so its arms must not be cloned there.
+    /// The last line re-reads every element AFTER the bindings, which is what
+    /// proves the container still owns intact buffers rather than freed ones.
+    #[test]
+    fn test_e2e_if_arm_vec_element_binding_is_cloned() {
+        assert_eq!(
+            run_program(
+                "fn fresh() -> String { \"zz\" }\n\
+                 fn main() {\n\
+                     let mut v: Vec[String] = Vec.new();\n\
+                     v.push(\"aa\"); v.push(\"bb\"); v.push(\"cc\");\n\
+                     let mut n: Vec[Vec[i64]] = Vec.new();\n\
+                     n.push([1, 2]); n.push([3, 4]);\n\
+                     let a = if v.len() > 1 { v[1] } else { \"x\" };\n\
+                     let b = if v.len() > 1 { v[1] } else { v[0] };\n\
+                     let c = if v.len() > 9 { v[0] } else { fresh() };\n\
+                     let d = match v.len() > 1 { true => v[2], false => \"x\" };\n\
+                     let e = if v.len() > 2 { if v.len() > 9 { v[0] } else { v[1] } } else { \"x\" };\n\
+                     let g = if n.len() > 1 { n[1] } else { n[0] };\n\
+                     if v.len() > 0 { v[0] } else { v[1] };\n\
+                     println(f\"{a} {b} {c} {d} {e} {g[0]}\");\n\
+                     println(f\"{v[0]} {v[1]} {v[2]} {n[1][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("bb bb zz cc bb 3\naa bb cc 4\n"),
+        );
+    }
+
     /// B-2026-08-14-19 — a `String.substring` cut that lands INSIDE a codepoint
     /// faults, instead of handing back the raw bytes.
     ///

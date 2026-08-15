@@ -48727,4 +48727,191 @@ fn main() {
             "compound_append_on_a_local_string_is_balanced",
         );
     }
+
+    #[test]
+    fn asan_if_arm_vec_element_bind_no_double_free() {
+        // B-2026-08-14-32: an index read into a heap-owning container, used as
+        // the value of an `if` / `match` ARM, aliased the container's own
+        // `{ptr, len, cap}` while the binding registered an owned cleanup over
+        // it — freed once by the binding, once by the container.
+        // `let w = if c { v[1] } else { "x" }` aborted with
+        // `free(): double free detected in tcache 2` before the next statement
+        // ran, while the DIRECT form `let w = v[1]` was correct: the let path's
+        // clone and its borrow-elision predicate both match `ExprKind::Index`
+        // at the TOP LEVEL, so the same read one level down inside a branch got
+        // neither the clone nor the elision.
+        //
+        // Every arm shape that crashed is here, plus a read of the container
+        // AFTER the binding to prove the element survived the bind, and a
+        // `Vec[Vec[i64]]` to show it was never String-specific. LOOPED because
+        // the fix's risk is the mirror image — a clone nobody frees — and only
+        // repetition makes that leak unmistakable to LSan.
+        assert_clean_asan_run(
+            r#"
+fn fresh() -> String { "zetazetazetazeta" }
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alphabetalphabet");
+    v.push("gammagammagamma");
+    v.push("deltadeltadeltad");
+    let mut n: Vec[Vec[i64]] = Vec.new();
+    n.push([1, 2]);
+    n.push([3, 4]);
+    let mut k = 0;
+    while k < 20 {
+        let a = if v.len() > 1 { v[1] } else { "x" };
+        let b = if v.len() > 1 { v[1] } else { v[0] };
+        let c = if v.len() > 9 { v[0] } else { fresh() };
+        let d = match v.len() > 1 { true => v[2], false => "x" };
+        let e = if v.len() > 2 { if v.len() > 9 { v[0] } else { v[1] } } else { "x" };
+        let g = if n.len() > 1 { n[1] } else { n[0] };
+        println(f"{a} {b} {c} {d} {e} {g[0]} {v[1]}");
+        k = k + 1;
+    }
+    println("done");
+}
+"#,
+            std::iter::repeat_n(
+                "gammagammagamma gammagammagamma zetazetazetazeta deltadeltadeltad \
+                 gammagammagamma 3 gammagammagamma",
+                20,
+            )
+            .chain(std::iter::once("done"))
+            .collect::<Vec<_>>()
+            .as_slice(),
+            "asan_if_arm_vec_element_bind_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_if_arm_owned_producer_alternative_still_freed() {
+        // B-2026-08-14-32's other direction, and the reason the clone belongs
+        // in the ARM rather than at the if-expression's merge. By the merge the
+        // value is a phi: cloning THAT would also clone the arms that produced
+        // a fresh owned temporary, leaking every original. Only the arm knows
+        // what it yielded.
+        //
+        // So this drives the arms that must NOT be cloned — a call whose return
+        // is owned, a collection literal, a bare local move — through the same
+        // `if` / `match` positions, taking BOTH sides of each branch across the
+        // loop so neither arm goes unexercised.
+        //
+        // Stated plainly, because a test that cannot fail is worse than no
+        // test: this one does NOT fail under either ablation of the fix it ships
+        // with. Removing the arm clone leaves it green, and removing the
+        // discard gate leaves it green — the two siblings cover those. It is a
+        // FORWARD guard on the merge-versus-arm decision: `clone_owned_vec_index_element`
+        // filters by expression kind, so the day someone widens that filter, or
+        // moves the normalization to the phi, these arms start getting cloned
+        // with nobody to free the originals and this goes red at 20 buffers per
+        // site. Both siblings were verified live by ablation; this one is
+        // deliberately kept without that property.
+        assert_clean_asan_run(
+            r#"
+fn mk() -> String { "alphabetalphabet" }
+fn mkv() -> Vec[i64] { [5, 6, 7] }
+fn main() {
+    let mut k = 0;
+    while k < 20 {
+        let even = k % 2 == 0;
+        let a = if even { mk() } else { "gammagammagamma" };
+        let b = match even { true => mkv(), false => [8, 9, 10] };
+        let local = "deltadeltadeltad";
+        let c = if even { local } else { mk() };
+        println(f"{a.len()} {b[0]} {c.len()}");
+        k = k + 1;
+    }
+    println("done");
+}
+"#,
+            ["16 5 16", "15 8 16"]
+                .iter()
+                .cycle()
+                .take(20)
+                .copied()
+                .chain(std::iter::once("done"))
+                .collect::<Vec<_>>()
+                .as_slice(),
+            "asan_if_arm_owned_producer_alternative_still_freed",
+        );
+    }
+
+    #[test]
+    fn asan_discarded_if_arm_element_is_not_cloned() {
+        // B-2026-08-14-32's leak edge, and the reason the arm clone is gated on
+        // whether anything will own the result.
+        //
+        // `if c { v[0] } else { v[1] };` computes an element and throws it away.
+        // Cloning the arm there — exactly what makes the BOUND form correct —
+        // hands the clone to nobody.
+        //
+        // All FOUR discarding positions the language admits are here, and each
+        // one was measured leaking before the gate covering it existed:
+        //
+        //   statement expression            330 bytes / 20 objects
+        //   `for` body trailing expression   \
+        //   `while` body trailing expression  > 990 bytes / 60 objects together
+        //   block-wrapped (`{ if .. };`)     /
+        //
+        // The first three are the reason the gate is a SPAN SET and not the
+        // one-shot flag it started as: a flag is taken by whichever branch
+        // compiles first, which is the discarded one only when it is also the
+        // next thing compiled. In a loop body after other statements, or inside
+        // a block whose own statements compile first, the wrong branch took it.
+        //
+        // The `else if` chain and the `match` arm that is itself an `if` are
+        // here because discard is INHERITED and each link compiles through its
+        // OWN `compile_if`, looking up its OWN span. Recording only the
+        // outermost branch leaves every inner link cloning into a leak — found
+        // by reading the pass back rather than by a failing test, which is why
+        // it is pinned here.
+        //
+        // The nested `let` inside a discarded arm is the mirror hazard: the
+        // suppression must NOT reach it, or that binding stops cloning and the
+        // double free comes back. A span set cannot make that mistake; the flag
+        // could, and did.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alphabetalphabet");
+    v.push("gammagammagamma");
+    v.push("deltadeltadeltad");
+    for j in 0..20 { if j % 2 == 0 { v[0] } else { v[1] } }
+    let mut i = 0;
+    while i < 20 { i = i + 1; { if i % 2 == 0 { v[0] } else { v[1] } }; }
+    let mut e = 0;
+    while e < 20 {
+        if e % 3 == 0 { v[0] } else if e % 3 == 1 { v[1] } else { v[2] };
+        match e % 2 == 0 { true => if e > 5 { v[0] } else { v[1] }, false => v[2] };
+        e = e + 1;
+    }
+    let mut k = 0;
+    while k < 20 {
+        if k % 2 == 0 { v[0] } else { v[1] };
+        match k % 2 == 0 { true => v[1], false => v[2] };
+        if v.len() > 0 {
+            let w = if k % 2 == 0 { v[1] } else { "zetazetazetazeta" };
+            println(f"{w}");
+            v[0]
+        } else { v[2] };
+        k = k + 1;
+        if k > 0 { v[2] } else { v[0] }
+    }
+    println(f"{v[0]} {v[1]} {v[2]}");
+}
+"#,
+            ["gammagammagamma", "zetazetazetazeta"]
+                .iter()
+                .cycle()
+                .take(20)
+                .copied()
+                .chain(std::iter::once(
+                    "alphabetalphabet gammagammagamma deltadeltadeltad",
+                ))
+                .collect::<Vec<_>>()
+                .as_slice(),
+            "asan_discarded_if_arm_element_is_not_cloned",
+        );
+    }
 }
