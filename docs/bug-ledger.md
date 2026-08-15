@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 121 | 1 |
 | codegen-gap | 109 | 1 |
 | missing-feature | 96 | 0 |
-| perf | 67 | 1 |
+| perf | 68 | 1 |
 | false-positive | 63 | 1 |
 | diagnostics | 55 | 1 |
 | crash | 46 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 872 | 5 |
+| codegen | 873 | 5 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 2 |
@@ -124,19 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1207 surfaced · 7 open · 1188 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1208 surfaced · 7 open · 1189 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
 | B-2026-08-14-37 | 2026-08-14 | ownership | low | AN IMMUTABLE `Slice[T]` FORMAL REPORTS ITS OWNED `Vec[T]` ARGUMENT AS MOVED: `fn take(xs: Slice[u8])` called as `take(v)` warns `value 'v' moved here, used again here` on any later use of `v`, even though a read-only slice formal only borrows. | `param_modes_from_signature` (src/ownership.rs) maps `TypeKind::Ref -> Ref`, `MutRef` / `MutSlice -> MutRef`, and EVERYTHING ELSE to `Own` — so a bare `Slice[T]` (immutable) formal falls in the `_` arm and is classified owned. `mut Slice[T]` is correct (it has its own `TypeKind::MutSlice`); only the read-only spelling is wrong. |
 | B-2026-08-14-38 | 2026-08-14 | codegen | low | INDEXING THE RESULT OF A Vec-RETURNING METHOD CALL loud-bails `Index operator applied to non-array type` under `karac build` while `--interp` runs it: `v.clone()[1]`, `v[1..3].to_vec()[0]`, and any other `<method-chain>[i]` whose receiver is a fresh temporary. | `compile_index` (src/codegen/collections.rs) resolves its object through name-keyed registries (`vec_elem_types` / `slice_elem_types` / array slot types); a MethodCall object has no name, so it falls to the generic tail whose ArrayType / VectorType branches cannot match the `{ptr,len,cap}` struct and errors. |
 | B-2026-08-15-1 | 2026-08-15 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints raw bytes, and `m.len()` is a hard codegen error — while the same program with a type annotation, or with plain `Map`/`Set`, is correct on every surface. | The `let` path derives the collection side-tables (`map_key_type_exprs` / `var_elem_type_exprs` / `set_elem_type_exprs` / `sorted_collection_vars`) from the ANNOTATION; the callee's declared return type is never consulted for the `SortedMap` / `SortedSet` heads, so an unannotated call-result binding registers nothing. The plain `Map` / `Set` equivalent registers fine, so the head-gate is the gap, not the call-result shape. |
 | B-2026-08-15-2 | 2026-08-15 | codegen+ownership | high | `s.push_str(s)` ON A HEAP STRING THAT MUST GROW IS A USE-AFTER-FREE: the grow reallocs the destination and the copy then reads through the now-stale SOURCE pointer — 5,000 invalid reads under valgrind on one call. It produces the RIGHT ANSWER anyway, so nothing surfaces. The two SLICE spellings of the same aliasing (`s.push_str(s[a..b])`, and via a `let`) are correctly rejected by the ownership checker; only the whole-value self-append reaches codegen. | Two candidate layers, and the fix should probably be both. CODEGEN: `push_str`'s alias guard in `src/codegen/vec_method.rs` is emitted only under `src_borrowed` — an owned source is assumed not to alias, which is true of a fresh temp but false of the destination itself. The grow path calls `emit_string_buffer_grow` (realloc, may move) and then copies from `src_ptr`, captured before the grow. OWNERSHIP: the checker already rejects `s` borrowed as `Slice[T]` while borrowed as `mut ref T`; the whole-value read of `s` as a `push_str` argument is the same conflict and is not flagged. |
+| B-2026-08-15-3 | 2026-08-15 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capacity 0 and re-grows 8 -> 16 -> ... on every round. Both spellings now compile to the same in-place append as `push_str` (B-2026-08-14-23), so the two are equivalent code and the heuristic disagrees with itself: measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends, entirely from the missing reservation. | `src/presize.rs`. `is_push_to` matches only `ExprKind::MethodCall` with `push`/`push_str`/`push_back`, and `top_level_push_count` counts only `StmtKind::Expr` statements, so `StmtKind::Assign { target: V, value: V + x }` and `StmtKind::CompoundAssign { Add, target: V, .. }` are invisible. `find_fill_bound` additionally BAILS on any non-`Expr` statement between the Let and the loop that mentions `V`, which would reject a prelude `s = s + "seed"` the way it currently folds in a prelude `s.push_str("seed")`. |
 
 ### Wontfix (2)
 
@@ -149,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1207 surfaced
 
 </details>
 
-### Fixed (1188)
+### Fixed (1189)
 
-<details><summary>1188 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1189 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6631,6 +6631,86 @@ somewhere else.
 Full `--features llvm` suite green (2970 codegen, 2221 typechecker, 1521
 interpreter, 1081 memory_sanitizer, 584 drop_differential, 428 ownership, 255
 par_codegen, 4579 across everything else), fmt and clippy `--all-targets` clean. |
+| B-2026-08-14-23 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spe… | FIXED by 645bc75. `s = s + x` and `s += x` now extend the left buffer in place
+instead of allocating a fresh concatenation of both operands.
+
+THE ROW'S IDENTIFYING MEASUREMENT IS THE RIGHT ONE, and it is the cleanest way
+to state the result. Append and prepend cost the same before, because nothing
+was ever reused; they no longer do. On 2,000 x 400 appends, 20 runs each:
+
+                              before      after
+    s = s + lit  (append)     13.5 ms     5.8 ms
+    lit + s      (prepend)    13.1 ms    14.1 ms   <- unchanged, and must be
+    s.push_str(lit)            2.4 ms     2.7 ms   <- unchanged
+    s += lit                  13.9 ms     5.5 ms
+
+And on a SINGLE 800,000-append accumulator the append spelling is now EXACTLY
+level with `push_str` (25 ms vs 26 ms over 5 runs). The row's "the fast path
+already exists, this is not a missing capability but an unreached one" is
+literally true — the fix reaches it.
+
+THE RESIDUAL IN THE 2,000-ROUND SHAPE IS A DIFFERENT MECHANISM, measured rather
+than left as a shrug. `src/presize.rs` rewrites `let mut s = ""` to
+`String.with_capacity(<trip count>)` when it sees the accumulator filled by a
+counted loop — but it recognizes the fill only as a `push`/`push_str` METHOD
+CALL, so the append spellings still start at cap 0 and re-grow 8 -> 16 -> ... ->
+512 on each of the 2,000 rounds. Confirmed in the IR: the `push_str` program
+carries a `with_cap.alloc` of 400 bytes that the `s = s + x` program does not,
+and the two loop bodies are otherwise identical. Filed as B-2026-08-15-3 rather
+than folded in here — it is a pre-sizing heuristic keyed on a spelling, not the
+buffer reuse this row is about.
+
+THE DECLINES ARE THE LOAD-BEARING HALF OF THE FIX. `push_str`'s grow path
+reallocs the destination and then copies from a source pointer captured before
+the grow, so an aliasing source is a use-after-free (B-2026-08-15-2). `s = s + s`
+is CORRECT today precisely because it concatenates through a fresh buffer, so
+routing it into the fast path would have traded a slow program for a broken one.
+Verified at realloc scale: a 40,000-byte `s = s + s` and `s += s` both still
+decline, produce the right answer, and are valgrind-clean.
+
+The aliasing guard is a WHITELIST walker, and the direction is deliberate: any
+`ExprKind` it does not name answers "may alias" and declines. A blacklist that
+forgets a variant returns "no mention" for an expression it never looked inside,
+which here would admit an aliasing append — a memory bug, where the whitelist's
+failure mode is only a lost optimization.
+
+THE ONE THING THAT NEARLY SHIPPED SILENTLY, worth recording because it produced
+a green suite: by codegen time the `Binary` node is usually GONE. `lowering.rs`
+rewrites operators on Named types into operator-trait calls, so `s + "x"`
+arrives as `Call { Path["String","add"], [s, "x"] }`. Matching only `Binary`
+compiled, passed every test, and never fired for the `s = s + x` spelling — but
+the `+=` leg still got 2.5x faster, because it hands its operand over directly
+and never consults the spine matcher. A partial speedup on the sibling spelling
+is exactly the evidence that hides a dead recognizer. Both forms are matched now.
+
+SCOPE NOTE ANSWERED. The row asks whether the same reuse question applies to
+`Vec[T] = Vec[T] + Vec[T]`. It does not: that form does not typecheck
+(`arithmetic operator requires numeric type, found 'Vec<i64>'`), so there is
+nothing to reuse. The in-place path is gated on `string_vars` anyway, so a
+future `Vec` `+` would not silently inherit byte-wise growth.
+
+MEASURED: a static-literal target, an identifier operand, a call-free chain
+(`s + " " + t`), a single call-valued operand (`s + n.to_string()`), an f-string
+operand, an empty operand, a `mut ref String` parameter (which also takes the
+in-place path through `get_data_ptr`), a struct-field target (declines — not an
+Identifier), a prepend, a slice of the target, and both self-append spellings at
+realloc scale. All agree byte-for-byte with the interpreter and are
+valgrind-clean.
+
+PINS. `tests/codegen.rs::string_append_in_place::both_append_spellings_reach_the_in_place_path`
+asserts the structural fact the timing was evidence for (a wall-clock assertion
+would be flaky in CI) and FAILS against the stashed compiler. Its peer,
+`aliasing_and_prepend_shapes_decline_the_in_place_path`, passes both before and
+after — it guards against the fix OVER-reaching, which is the failure mode that
+would be a use-after-free rather than a slowdown. The value pin
+(`test_e2e_string_append_spellings_agree`, with the interpreter twin
+`test_string_append_spellings_agree`) also passes pre-fix, by design: an
+optimization must not change a byte, and it interleaves the admitted shapes with
+the declined ones so a regression in either direction fails there.
+
+Full `--features llvm` suite green (2974 codegen, 1523 interpreter, 1082
+memory_sanitizer, 584 drop_differential, 255 par_codegen, selfhost_codegen, plus
+7221 across everything else), fmt and clippy `--all-targets` clean. |
 | B-2026-08-14-24 | autopar | medium | a disjoint-write loop nested inside an `if` (or a bare block) is INVISIBLE to the auto-parallelisation analysis -- it is not declined with a reason,… | FIXED by 7360ad8.
 
 The cause was NOT the lane's statement walk. Both lanes already descended into
