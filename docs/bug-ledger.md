@@ -8530,7 +8530,11 @@ structs with an owned param -- the only shape that reaches this arm, since
 No test pins this. A test that guards the gate would itself live in the file
 being gated; the real guard is CI running plain `cargo test`, which would have
 caught it at the commit that introduced it. |
-| B-2026-08-15-19 | autopar | medium | `#[par_order_free]` IS SILENTLY IGNORED when the analyzer does not classify the loop as a collect: no fan-out, no diagnostic, and `karac query concur… | FIXED by 8f71ec2. `classify_loop_body` returned a bare `Option`, so all seventeen
+| B-2026-08-15-19 | autopar | medium | `#[par_order_free]` IS SILENTLY IGNORED when the analyzer does not classify the loop as a collect: no fan-out, no diagnostic, and `karac query concur… | FIXED by b5af2c1. (Filed as 8f71ec2 in the close commit's subject; that was the
+PRE-REBASE sha and is not on `main` — the same slip 0a4e1b5 corrected for two
+other rows. The lint cannot catch it in a shallow clone, which is why it has now
+happened three times: it warns "shallow clone — skipped fix-SHA resolvability
+check" and moves on. Allocate the sha AFTER the rebase, not before the push.) `classify_loop_body` returned a bare `Option`, so all seventeen
 of its decline sites collapsed to "no", and a loop carrying the attribute then
 fell out of `recognize_reductions_in_block`'s `else if !par_order_free` arm and
 was recorded NOWHERE — not in `loop_reductions` (it is not a reduction), not in
