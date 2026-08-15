@@ -1275,13 +1275,15 @@ pub(crate) mod windows_iocp_bridge {
     /// `sock` must be a live socket the runtime owns for the duration of the
     /// register/deregister call that consumes the returned source.
     pub(crate) unsafe fn source_from_socket(sock: RawSocket) -> mio::net::TcpStream {
-        // `from_raw_socket` adopts the handle; `from_std` does not re-wrap or
-        // re-validate. Readiness interest (read/write) is identical whether the
-        // socket is a listener or a stream, so a single TcpStream wrapper covers
-        // both register sites — AFD polls the raw handle for READABLE, which is
-        // also accept-readiness for a listening socket.
-        let std_sock = std::net::TcpStream::from_raw_socket(sock);
-        mio::net::TcpStream::from_std(std_sock)
+        unsafe {
+            // `from_raw_socket` adopts the handle; `from_std` does not re-wrap or
+            // re-validate. Readiness interest (read/write) is identical whether the
+            // socket is a listener or a stream, so a single TcpStream wrapper covers
+            // both register sites — AFD polls the raw handle for READABLE, which is
+            // also accept-readiness for a listening socket.
+            let std_sock = std::net::TcpStream::from_raw_socket(sock);
+            mio::net::TcpStream::from_std(std_sock)
+        }
     }
 
     /// Recover the raw handle without running the close (`mem::forget` +
@@ -1335,21 +1337,23 @@ pub(crate) mod windows_iocp_bridge {
         sock: RawSocket,
         op: impl FnOnce(&mut mio::net::TcpStream, bool) -> std::io::Result<super::RegistrationToken>,
     ) -> Option<super::RegistrationToken> {
-        let mut map = sources().lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(source) = map.get_mut(&sock) {
-            // Re-park: re-arm the EXISTING SockState (no new AFD poll).
-            op(source, false).ok()
-        } else {
-            // First park of this socket: adopt it into a fresh source.
-            let mut source = source_from_socket(sock);
-            match op(&mut source, true) {
-                Ok(tok) => {
-                    map.insert(sock, source);
-                    Some(tok)
-                }
-                Err(_) => {
-                    let _ = release(source);
-                    None
+        unsafe {
+            let mut map = sources().lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(source) = map.get_mut(&sock) {
+                // Re-park: re-arm the EXISTING SockState (no new AFD poll).
+                op(source, false).ok()
+            } else {
+                // First park of this socket: adopt it into a fresh source.
+                let mut source = source_from_socket(sock);
+                match op(&mut source, true) {
+                    Ok(tok) => {
+                        map.insert(sock, source);
+                        Some(tok)
+                    }
+                    Err(_) => {
+                        let _ = release(source);
+                        None
+                    }
                 }
             }
         }
@@ -2305,29 +2309,31 @@ pub unsafe extern "C" fn karac_runtime_tcp_connect_start(
     addr_ptr: *const u8,
     addr_len: i64,
 ) -> i64 {
-    use socket2::{Domain, SockAddr, Socket, Type};
-    use std::os::windows::io::IntoRawSocket;
-    if addr_ptr.is_null() || addr_len <= 0 {
-        return -1;
+    unsafe {
+        use socket2::{Domain, SockAddr, Socket, Type};
+        use std::os::windows::io::IntoRawSocket;
+        if addr_ptr.is_null() || addr_len <= 0 {
+            return -1;
+        }
+        let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+        let addr_str = match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return -1,
+        };
+        let sock = match Socket::new(Domain::for_address(socket_addr), Type::STREAM, None) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        if sock.set_nonblocking(true).is_err() {
+            return -1;
+        }
+        let _ = sock.connect(&SockAddr::from(socket_addr));
+        sock.into_raw_socket() as i64
     }
-    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
-    let addr_str = match std::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return -1,
-    };
-    let sock = match Socket::new(Domain::for_address(socket_addr), Type::STREAM, None) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    if sock.set_nonblocking(true).is_err() {
-        return -1;
-    }
-    let _ = sock.connect(&SockAddr::from(socket_addr));
-    sock.into_raw_socket() as i64
 }
 
 /// Windows mirror of [`karac_runtime_tcp_connect_finish`].
@@ -2339,20 +2345,22 @@ pub unsafe extern "C" fn karac_runtime_tcp_connect_start(
 #[cfg(windows)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_connect_finish(fd: i64) -> i64 {
-    use socket2::Socket;
-    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
-    let sock = Socket::from_raw_socket(fd as RawSocket);
-    match sock.take_error() {
-        Ok(None) => sock.into_raw_socket() as i64,
-        Ok(Some(e)) => {
-            let code = net_construct_error_code(&e) as i64;
-            drop(sock);
-            code
-        }
-        Err(e) => {
-            let code = net_construct_error_code(&e) as i64;
-            drop(sock);
-            code
+    unsafe {
+        use socket2::Socket;
+        use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+        let sock = Socket::from_raw_socket(fd as RawSocket);
+        match sock.take_error() {
+            Ok(None) => sock.into_raw_socket() as i64,
+            Ok(Some(e)) => {
+                let code = net_construct_error_code(&e) as i64;
+                drop(sock);
+                code
+            }
+            Err(e) => {
+                let code = net_construct_error_code(&e) as i64;
+                drop(sock);
+                code
+            }
         }
     }
 }
@@ -2682,47 +2690,49 @@ pub extern "C" fn karac_runtime_test_bind_and_print_port() -> i64 {
 #[cfg(windows)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i64 {
-    use socket2::{Domain, Socket, Type};
-    use std::os::windows::io::IntoRawSocket;
-    if addr_ptr.is_null() || addr_len <= 0 {
-        return -1;
-    }
-    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
-    let addr_str = match std::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return -1,
-    };
-    let domain = if socket_addr.is_ipv4() {
-        Domain::IPV4
-    } else {
-        Domain::IPV6
-    };
-    let socket = match Socket::new(domain, Type::STREAM, None) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    let _ = socket.set_reuse_address(true);
-    if let Err(e) = socket.bind(&socket_addr.into()) {
-        return net_construct_error_code(&e) as i64;
-    }
-    if let Err(e) = socket.listen(KARAC_RUNTIME_TCP_LISTEN_BACKLOG) {
-        return net_construct_error_code(&e) as i64;
-    }
-    let listener: std::net::TcpListener = socket.into();
-    if addr_str.rsplit(':').next() == Some("0") {
-        if let Ok(local) = listener.local_addr() {
-            println!("BOUND_PORT={}", local.port());
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
+    unsafe {
+        use socket2::{Domain, Socket, Type};
+        use std::os::windows::io::IntoRawSocket;
+        if addr_ptr.is_null() || addr_len <= 0 {
+            return -1;
         }
+        let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+        let addr_str = match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return -1,
+        };
+        let domain = if socket_addr.is_ipv4() {
+            Domain::IPV4
+        } else {
+            Domain::IPV6
+        };
+        let socket = match Socket::new(domain, Type::STREAM, None) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        let _ = socket.set_reuse_address(true);
+        if let Err(e) = socket.bind(&socket_addr.into()) {
+            return net_construct_error_code(&e) as i64;
+        }
+        if let Err(e) = socket.listen(KARAC_RUNTIME_TCP_LISTEN_BACKLOG) {
+            return net_construct_error_code(&e) as i64;
+        }
+        let listener: std::net::TcpListener = socket.into();
+        if addr_str.rsplit(':').next() == Some("0") {
+            if let Ok(local) = listener.local_addr() {
+                println!("BOUND_PORT={}", local.port());
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
+        }
+        // mio requires non-blocking listeners for AFD readiness registration.
+        let _ = listener.set_nonblocking(true);
+        listener.into_raw_socket() as i64
     }
-    // mio requires non-blocking listeners for AFD readiness registration.
-    let _ = listener.set_nonblocking(true);
-    listener.into_raw_socket() as i64
 }
 
 /// Windows mirror of [`karac_runtime_tcp_accept`].
@@ -2758,27 +2768,29 @@ pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i64) -> i64 {
 #[cfg(windows)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len: i64) -> i64 {
-    use std::os::windows::io::IntoRawSocket;
-    if addr_ptr.is_null() || addr_len <= 0 {
-        return -1;
-    }
-    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
-    let addr_str = match std::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return -1,
-    };
-    match std::net::TcpStream::connect(socket_addr) {
-        Ok(sock) => {
-            // The blocking `connect` has completed; flip to non-blocking for
-            // mio readiness before handing the fd back.
-            let _ = sock.set_nonblocking(true);
-            sock.into_raw_socket() as i64
+    unsafe {
+        use std::os::windows::io::IntoRawSocket;
+        if addr_ptr.is_null() || addr_len <= 0 {
+            return -1;
         }
-        Err(e) => net_construct_error_code(&e) as i64,
+        let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+        let addr_str = match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return -1,
+        };
+        match std::net::TcpStream::connect(socket_addr) {
+            Ok(sock) => {
+                // The blocking `connect` has completed; flip to non-blocking for
+                // mio readiness before handing the fd back.
+                let _ = sock.set_nonblocking(true);
+                sock.into_raw_socket() as i64
+            }
+            Err(e) => net_construct_error_code(&e) as i64,
+        }
     }
 }
 
@@ -2793,31 +2805,33 @@ pub unsafe extern "C" fn karac_runtime_tcp_read(
     buf_ptr: *mut u8,
     buf_len: i64,
 ) -> i64 {
-    use std::io::Read;
-    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
-    if stream_fd < 0 {
-        return -1;
-    }
-    if buf_ptr.is_null() || buf_len <= 0 {
-        return 0;
-    }
-    let buf = std::slice::from_raw_parts_mut(buf_ptr, buf_len as usize);
-    // SAFETY: `stream_fd` comes from a successful accept/connect; borrow it for
-    // the read, then release without closing.
-    let mut stream = std::net::TcpStream::from_raw_socket(stream_fd as RawSocket);
-    let result = match stream.read(buf) {
-        Ok(n) => n as i64,
-        Err(e) => {
-            let errno = e.raw_os_error().unwrap_or(1);
-            if errno > 0 {
-                -(errno as i64)
-            } else {
-                -1
-            }
+    unsafe {
+        use std::io::Read;
+        use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+        if stream_fd < 0 {
+            return -1;
         }
-    };
-    let _ = stream.into_raw_socket();
-    result
+        if buf_ptr.is_null() || buf_len <= 0 {
+            return 0;
+        }
+        let buf = std::slice::from_raw_parts_mut(buf_ptr, buf_len as usize);
+        // SAFETY: `stream_fd` comes from a successful accept/connect; borrow it for
+        // the read, then release without closing.
+        let mut stream = std::net::TcpStream::from_raw_socket(stream_fd as RawSocket);
+        let result = match stream.read(buf) {
+            Ok(n) => n as i64,
+            Err(e) => {
+                let errno = e.raw_os_error().unwrap_or(1);
+                if errno > 0 {
+                    -(errno as i64)
+                } else {
+                    -1
+                }
+            }
+        };
+        let _ = stream.into_raw_socket();
+        result
+    }
 }
 
 /// Windows mirror of [`karac_runtime_tcp_write`].
@@ -2831,31 +2845,33 @@ pub unsafe extern "C" fn karac_runtime_tcp_write(
     buf_ptr: *const u8,
     buf_len: i64,
 ) -> i64 {
-    use std::io::Write;
-    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
-    if stream_fd < 0 {
-        return -1;
-    }
-    if buf_ptr.is_null() || buf_len <= 0 {
-        return 0;
-    }
-    let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
-    // SAFETY: `stream_fd` comes from a successful accept/connect; borrow it for
-    // the write, then release without closing.
-    let mut stream = std::net::TcpStream::from_raw_socket(stream_fd as RawSocket);
-    let result = match stream.write(buf) {
-        Ok(n) => n as i64,
-        Err(e) => {
-            let errno = e.raw_os_error().unwrap_or(1);
-            if errno > 0 {
-                -(errno as i64)
-            } else {
-                -1
-            }
+    unsafe {
+        use std::io::Write;
+        use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+        if stream_fd < 0 {
+            return -1;
         }
-    };
-    let _ = stream.into_raw_socket();
-    result
+        if buf_ptr.is_null() || buf_len <= 0 {
+            return 0;
+        }
+        let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
+        // SAFETY: `stream_fd` comes from a successful accept/connect; borrow it for
+        // the write, then release without closing.
+        let mut stream = std::net::TcpStream::from_raw_socket(stream_fd as RawSocket);
+        let result = match stream.write(buf) {
+            Ok(n) => n as i64,
+            Err(e) => {
+                let errno = e.raw_os_error().unwrap_or(1);
+                if errno > 0 {
+                    -(errno as i64)
+                } else {
+                    -1
+                }
+            }
+        };
+        let _ = stream.into_raw_socket();
+        result
+    }
 }
 
 /// Windows mirror of [`karac_runtime_tcp_close`]. Reconstructs the
@@ -4195,27 +4211,29 @@ pub extern "C" fn karac_runtime_ws_accept(listener_fd: i64) -> i64 {
 /// be a live socket handle.
 #[cfg(windows)]
 unsafe fn ws_send_masked_data_frame(fd: i64, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
-    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
-    if fd < 0 || msg_len < 0 {
-        return -1;
+    unsafe {
+        use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+        if fd < 0 || msg_len < 0 {
+            return -1;
+        }
+        let sock = fd as RawSocket;
+        if msg_ptr.is_null() && msg_len > 0 {
+            return -1;
+        }
+        let mut stream = std::net::TcpStream::from_raw_socket(sock);
+        let payload: &[u8] = if msg_len > 0 {
+            std::slice::from_raw_parts(msg_ptr, msg_len as usize)
+        } else {
+            &[]
+        };
+        let result = if ws_write_masked_frame(&mut stream, opcode, payload) {
+            msg_len
+        } else {
+            -1
+        };
+        let _ = stream.into_raw_socket();
+        result
     }
-    let sock = fd as RawSocket;
-    if msg_ptr.is_null() && msg_len > 0 {
-        return -1;
-    }
-    let mut stream = std::net::TcpStream::from_raw_socket(sock);
-    let payload: &[u8] = if msg_len > 0 {
-        std::slice::from_raw_parts(msg_ptr, msg_len as usize)
-    } else {
-        &[]
-    };
-    let result = if ws_write_masked_frame(&mut stream, opcode, payload) {
-        msg_len
-    } else {
-        -1
-    };
-    let _ = stream.into_raw_socket();
-    result
 }
 
 /// Windows mirror of the unmasked-send shared body. TLS-aware: routes through
@@ -4226,49 +4244,51 @@ unsafe fn ws_send_masked_data_frame(fd: i64, msg_ptr: *const u8, msg_len: i64, o
 /// Same contract as [`ws_send_masked_data_frame`].
 #[cfg(windows)]
 unsafe fn ws_send_data_frame(fd: i64, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
-    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
-    if fd < 0 || msg_len < 0 {
-        return -1;
-    }
-    let sock = fd as RawSocket;
-    if msg_ptr.is_null() && msg_len > 0 {
-        return -1;
-    }
-    let payload: &[u8] = if msg_len > 0 {
-        std::slice::from_raw_parts(msg_ptr, msg_len as usize)
-    } else {
-        &[]
-    };
-
-    // TLS-aware dispatch (step 4b) — `sock` IS the `crate::tls::SessionKey`
-    // (`RawSocket`) on Windows, so a registered TLS session is found here and
-    // the frame is encrypted through rustls. Compiled out without the `tls`
-    // feature (the lean archive carries no sessions). Mirrors the unix body.
-    #[cfg(feature = "tls")]
-    if let Some(session) = crate::tls::lookup_session(sock) {
-        let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
-        let mut tsock = std::net::TcpStream::from_raw_socket(sock);
-        let mut transport = TlsConnIo {
-            conn: &mut sess.conn,
-            sock: &mut tsock,
+    unsafe {
+        use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+        if fd < 0 || msg_len < 0 {
+            return -1;
+        }
+        let sock = fd as RawSocket;
+        if msg_ptr.is_null() && msg_len > 0 {
+            return -1;
+        }
+        let payload: &[u8] = if msg_len > 0 {
+            std::slice::from_raw_parts(msg_ptr, msg_len as usize)
+        } else {
+            &[]
         };
-        let result = if ws_write_unmasked_frame(&mut transport, opcode, payload) {
+
+        // TLS-aware dispatch (step 4b) — `sock` IS the `crate::tls::SessionKey`
+        // (`RawSocket`) on Windows, so a registered TLS session is found here and
+        // the frame is encrypted through rustls. Compiled out without the `tls`
+        // feature (the lean archive carries no sessions). Mirrors the unix body.
+        #[cfg(feature = "tls")]
+        if let Some(session) = crate::tls::lookup_session(sock) {
+            let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
+            let mut tsock = std::net::TcpStream::from_raw_socket(sock);
+            let mut transport = TlsConnIo {
+                conn: &mut sess.conn,
+                sock: &mut tsock,
+            };
+            let result = if ws_write_unmasked_frame(&mut transport, opcode, payload) {
+                msg_len
+            } else {
+                -1
+            };
+            let _ = tsock.into_raw_socket();
+            return result;
+        }
+
+        let mut stream = std::net::TcpStream::from_raw_socket(sock);
+        let result = if ws_write_unmasked_frame(&mut stream, opcode, payload) {
             msg_len
         } else {
             -1
         };
-        let _ = tsock.into_raw_socket();
-        return result;
+        let _ = stream.into_raw_socket();
+        result
     }
-
-    let mut stream = std::net::TcpStream::from_raw_socket(sock);
-    let result = if ws_write_unmasked_frame(&mut stream, opcode, payload) {
-        msg_len
-    } else {
-        -1
-    };
-    let _ = stream.into_raw_socket();
-    result
 }
 
 /// Windows mirror of the recv shared body. TLS-aware: routes through rustls
@@ -4284,35 +4304,38 @@ unsafe fn ws_recv_data_frame(
     out_max_len: i64,
     accept_opcode: u8,
 ) -> i64 {
-    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
-    if fd < 0 || out_max_len < 0 {
-        return -1;
-    }
-    let sock = fd as RawSocket;
-    if out_ptr.is_null() && out_max_len > 0 {
-        return -1;
-    }
+    unsafe {
+        use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+        if fd < 0 || out_max_len < 0 {
+            return -1;
+        }
+        let sock = fd as RawSocket;
+        if out_ptr.is_null() && out_max_len > 0 {
+            return -1;
+        }
 
-    // TLS-aware dispatch (step 4b) — same shape as the send path. `sock` IS the
-    // `crate::tls::SessionKey` (`RawSocket`) on Windows. Compiled out without
-    // the `tls` feature.
-    #[cfg(feature = "tls")]
-    if let Some(session) = crate::tls::lookup_session(sock) {
-        let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
-        let mut tsock = std::net::TcpStream::from_raw_socket(sock);
-        let mut transport = TlsConnIo {
-            conn: &mut sess.conn,
-            sock: &mut tsock,
-        };
-        let result = ws_recv_data_frame_inner(&mut transport, out_ptr, out_max_len, accept_opcode);
-        let _ = tsock.into_raw_socket();
-        return result;
-    }
+        // TLS-aware dispatch (step 4b) — same shape as the send path. `sock` IS the
+        // `crate::tls::SessionKey` (`RawSocket`) on Windows. Compiled out without
+        // the `tls` feature.
+        #[cfg(feature = "tls")]
+        if let Some(session) = crate::tls::lookup_session(sock) {
+            let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
+            let mut tsock = std::net::TcpStream::from_raw_socket(sock);
+            let mut transport = TlsConnIo {
+                conn: &mut sess.conn,
+                sock: &mut tsock,
+            };
+            let result =
+                ws_recv_data_frame_inner(&mut transport, out_ptr, out_max_len, accept_opcode);
+            let _ = tsock.into_raw_socket();
+            return result;
+        }
 
-    let mut stream = std::net::TcpStream::from_raw_socket(sock);
-    let result = ws_recv_data_frame_inner(&mut stream, out_ptr, out_max_len, accept_opcode);
-    let _ = stream.into_raw_socket();
-    result
+        let mut stream = std::net::TcpStream::from_raw_socket(sock);
+        let result = ws_recv_data_frame_inner(&mut stream, out_ptr, out_max_len, accept_opcode);
+        let _ = stream.into_raw_socket();
+        result
+    }
 }
 
 /// Windows mirror of [`karac_runtime_ws_send_text`].
@@ -4326,7 +4349,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_text(
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
-    ws_send_data_frame(fd, msg_ptr, msg_len, 0x1)
+    unsafe { ws_send_data_frame(fd, msg_ptr, msg_len, 0x1) }
 }
 
 /// Windows mirror of [`karac_runtime_ws_send_binary`].
@@ -4340,7 +4363,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_binary(
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
-    ws_send_data_frame(fd, msg_ptr, msg_len, 0x2)
+    unsafe { ws_send_data_frame(fd, msg_ptr, msg_len, 0x2) }
 }
 
 /// Windows mirror of [`karac_runtime_ws_send_text_masked`].
@@ -4354,7 +4377,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_text_masked(
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
-    ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x1)
+    unsafe { ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x1) }
 }
 
 /// Windows mirror of [`karac_runtime_ws_send_binary_masked`].
@@ -4368,7 +4391,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_binary_masked(
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
-    ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x2)
+    unsafe { ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x2) }
 }
 
 /// Windows mirror of [`karac_runtime_ws_recv_text`].
@@ -4382,7 +4405,7 @@ pub unsafe extern "C" fn karac_runtime_ws_recv_text(
     out_ptr: *mut u8,
     out_max_len: i64,
 ) -> i64 {
-    ws_recv_data_frame(fd, out_ptr, out_max_len, 0x1)
+    unsafe { ws_recv_data_frame(fd, out_ptr, out_max_len, 0x1) }
 }
 
 /// Windows mirror of [`karac_runtime_ws_recv_binary`].
@@ -4396,7 +4419,7 @@ pub unsafe extern "C" fn karac_runtime_ws_recv_binary(
     out_ptr: *mut u8,
     out_max_len: i64,
 ) -> i64 {
-    ws_recv_data_frame(fd, out_ptr, out_max_len, 0x2)
+    unsafe { ws_recv_data_frame(fd, out_ptr, out_max_len, 0x2) }
 }
 
 /// Windows mirror of [`karac_runtime_ws_accept`] (plain-TCP WebSocket).

@@ -92,8 +92,10 @@ pub(crate) unsafe fn tcpstream_from_key(k: SessionKey) -> std::net::TcpStream {
 }
 #[cfg(windows)]
 pub(crate) unsafe fn tcpstream_from_key(k: SessionKey) -> std::net::TcpStream {
-    use std::os::windows::io::FromRawSocket;
-    std::net::TcpStream::from_raw_socket(k)
+    unsafe {
+        use std::os::windows::io::FromRawSocket;
+        std::net::TcpStream::from_raw_socket(k)
+    }
 }
 
 /// Reconstruct an owned `TcpListener` from a raw handle, cross-platform.
@@ -110,8 +112,10 @@ pub(crate) unsafe fn tcplistener_from_key(k: SessionKey) -> std::net::TcpListene
 }
 #[cfg(windows)]
 pub(crate) unsafe fn tcplistener_from_key(k: SessionKey) -> std::net::TcpListener {
-    use std::os::windows::io::FromRawSocket;
-    std::net::TcpListener::from_raw_socket(k)
+    unsafe {
+        use std::os::windows::io::FromRawSocket;
+        std::net::TcpListener::from_raw_socket(k)
+    }
 }
 
 /// Relinquish a stream's destructor and return its raw handle as the
