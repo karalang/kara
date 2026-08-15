@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 96 | 0 |
 | perf | 69 | 0 |
 | false-positive | 65 | 1 |
-| diagnostics | 60 | 1 |
+| diagnostics | 60 | 0 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
 | other | 31 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 889 | 0 |
+| codegen | 890 | 0 |
 | typecheck | 174 | 0 |
-| interp | 146 | 1 |
+| interp | 145 | 0 |
 | ownership | 51 | 1 |
 | autopar | 46 | 0 |
 | other | 42 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1233 surfaced · 2 open · 1219 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1233 surfaced · 1 open · 1220 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-15-20 | 2026-08-15 | interp | low | THE INTERPRETER BLAMES AN INTEGER OVERFLOW ON A SUB-EXPRESSION THAT CANNOT OVERFLOW: in `let c = (a + b) * m` with `a + b == 3`, the trap is reported at the column of `a`, not of the multiply that actually trapped. The compiled backends point elsewhere on the same line, so `karac run` and `karac build` give two different locations for one fault. | The span attached to the overflow trap in the interpreter's binary-op evaluation. It appears to carry the LEFT OPERAND's span rather than the operation's — which is indistinguishable from correct whenever the left operand is itself the overflowing op, and wrong whenever it is not. |
 | B-2026-08-15-27 | 2026-08-15 | ownership | low | CALLING AN `Fn(ref T)` CLOSURE TWICE WITH THE SAME ARGUMENT warns "value moved here, used again here" — the closure's parameter is a BORROW, so the call cannot move it, and the program compiles and runs correctly on every backend. A direct call to `fn f(s: ref String)` does not warn. | the ownership checker's treatment of a CLOSURE call's arguments: it appears to ignore the closure type's declared parameter mode and treat every argument as an owned pass. |
 
 ### Wontfix (2)
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1233 surfaced
 
 </details>
 
-### Fixed (1219)
+### Fixed (1220)
 
-<details><summary>1219 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1220 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8743,6 +8742,18 @@ open — an analyzer may decline what it cannot prove — and the kata's README 
 carries an explanation instead of a shrug. Widening the collect recognizer to
 admit per-iteration outer-name writes is a separate question with its own
 soundness obligations. |
+| B-2026-08-15-20 | codegen | low | THE COMPILED BACKENDS REPORT AN ARITHMETIC TRAP AT AN INCIDENTAL COLUMN — whatever subexpression happened to compile last inside the right operand —… | FIXED by 731c5e9. Both compiled backends now report an arithmetic trap at the
+expression that faulted, matching the interpreter. `src/codegen/assoc_call.rs`
+snapshots `current_span` before compiling the two operands of a lowered primitive
+binop (`a * b` reaches codegen as `i64.mul(a, b)`) and restores it afterwards,
+and gives the synthesized `Unary` node of `i64.neg(a)` the source `-a` span
+instead of the operand's; `src/codegen/exprs.rs` re-pins the same span on the
+raw-`Binary` and `Unary` arms the lowering pass declines to rewrite. E2E parity
+test `arithmetic_trap_location_matches_the_interpreter` (tests/codegen.rs) pins
+the interpreter and the compiled binary to one line:column across four shapes:
+overflowing `*` with a deep rhs, overflowing `*` with a parenthesized lhs, `/` by
+zero, and `-i64::MIN`. Verified non-vacuous — it fails on the AOT assertion with
+the source fix stashed and the test kept. |
 | B-2026-08-15-21 | codegen | high | A FIELD ASSIGNMENT THROUGH A `mut Slice[Struct]` PARAMETER IS SILENTLY DROPPED under codegen — `fn bump(s: mut Slice[P]) { s[0].x = s[0].x + 1; }` le… | FIXED in 9b284cb. `field_chain_place_ptr`'s Index arm gated on
 `vec_elem_types`; the registrar for a `Slice[T]` param
 (`register_var_collection_metadata`, src/codegen/types_lowering.rs) writes
