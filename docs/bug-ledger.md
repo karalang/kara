@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 112 | 0 |
 | missing-feature | 96 | 0 |
 | perf | 71 | 2 |
-| false-positive | 67 | 1 |
+| false-positive | 67 | 0 |
 | diagnostics | 60 | 0 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 892 | 2 |
 | typecheck | 174 | 0 |
 | interp | 145 | 0 |
-| ownership | 53 | 1 |
+| ownership | 53 | 0 |
 | autopar | 46 | 0 |
 | other | 42 | 0 |
 | cli | 30 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1237 surfaced · 3 open · 1222 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1237 surfaced · 2 open · 1223 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-30 | 2026-08-15 | codegen | medium | The shuffled-uniform `sort_by` residual closed as `wontfix` in B-2026-08-11-28 at ~1.6x Rust is MATERIALLY LARGER on the canonical Apple-silicon host: 3.70x on kata #252 and 2.04x on kata #253, measured on M5 Pro with 50a50e8 IN the compiler. The disposition was reached entirely on a shared x86 cloud container, and `wontfix` was argued from a residual roughly half this size. Not a regression of 50a50e8 -- that fix is present and the ordered-input win it bought is not in question -- but the remaining gap is bigger than the number the wontfix was decided against, so the disposition deserves re-deciding on this host rather than inheriting. | mono sort_by lowering (natural-run merge sort, 50a50e8) -- shuffled-uniform residual, on arm64 |
-| B-2026-08-15-31 | 2026-08-15 | codegen | medium | The C PARITY that B-2026-08-05-21 bought on kata #246 is an x86-64 result and does NOT hold on arm64: on the M5 kara is 1.57x behind `clang -O3` (kara min ~14.2 ms vs C ~9.0 ms, stable across three independent 60-run rebuilds). The B-2026-08-05-21 fix IS firing here -- the punch loop carries ZERO overflow traps (`b.vs`/`b.vc` absent from main) and effectively no bounds checks (one `b.hs`, one `b.hi`) -- so this is a DIFFERENT mechanism from the x86 one that row closed, not a regression of it. Mechanism not pinned. | arm64 byte-scan punch loop -- kata #246 flat-corpus two-pointer |
-| B-2026-08-15-32 | 2026-08-15 | ownership | low | An `OnceFn()` PARAMETER called twice is NOT reported — `fn run(g: OnceFn()) { g(); g(); }` passes clean, while the identical local (`let g = || apply(cfg); g(); g();`) correctly reports a use-after-move. A once-callable closure invoked twice is exactly what `OnceFn` exists to forbid, so this is a missing report rather than a spurious one — the mirror image of the -27/-29 family. | `once_callable_closures` (src/use_classifier.rs / OwnershipChecker) is populated from `let` bindings whose initializer is a closure whose body consumes a capture; a PARAMETER declared `OnceFn(...)` never enters it, and nothing else consults the declared once-ness at a call site. |
+| B-2026-08-15-31 | 2026-08-15 | codegen | medium | MECHANISM PINNED (was: not pinned). Kata #246's 1.57x deficit to `clang -O3` on arm64 is ENTIRELY LOOP UNROLLING, and karac is at `clang -O2` PARITY. Dynamic counts: kara 527.4M instrs / 66.2M cycles, clang -O3 370.7M / 42.0M, clang -O2 500.5M / 74.4M, clang -O3 -fno-unroll-loops 500.6M / 63.7M. So kara vs equal-treatment C is 1.05x on instructions and 1.06x on wall time, and kara is 11% AHEAD of clang -O2 on cycles. karac's own full-unroll hint machinery is live and working, but declines this loop on THREE independent AST gates in `while_loop_wants_full_unroll`. | control_flow_bce.rs `while_loop_wants_full_unroll` -- converging two-pointer loop with a call and an early return is declined by three gates |
 
 ### Wontfix (2)
 
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1237 surfaced
 
 </details>
 
-### Fixed (1222)
+### Fixed (1223)
 
-<details><summary>1222 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1223 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9441,6 +9440,62 @@ two accepts and GREEN at both for the two controls.
 
 Gates: full `--features llvm` sweep of all 98 targets, 12563 tests, 0 failures;
 clippy `--all --all-targets` and fmt clean. |
+| B-2026-08-15-32 | ownership | low | An `OnceFn()` PARAMETER called twice is NOT reported — `fn run(g: OnceFn()) { g(); g(); }` passes clean, while the identical local (`let g = \|\| apply… | FIXED in eec3aa5. `once_callable_closures` is now seeded from `param_types` for
+every parameter whose declared type is `Type::OnceFunction`, alongside the
+existing `let`-binding inference.
+
+THE ROW'S DIAGNOSIS HELD. "The two halves of once-callability (inferred for
+locals, declared for params) have only the first wired up" is exactly it, and the
+fix is the second half. `Type::Function` is deliberately NOT seeded: a repeatable
+closure may be called any number of times, which is the whole distinction between
+the two annotations, and a control pins it.
+
+SEEDING BROKE AN INVARIANT, and this is the part worth carrying forward. The
+`let` arm only ever INSERTED into the set, which was sound while `let` was the
+only source — a name could not be marked before its own `let`. Parameters are
+marked at function entry, so a `let` shadowing one left the parameter's mark in
+place, and `fn run(g: OnceFn()) { let g = || …; g(); g(); }` reported a move of
+the LOCAL, a repeatable closure that may be called freely. Found in the shape
+sweep, not by a failing test — nothing in the suite covered shadowing here. The
+arm now clears on rebind as well as sets.
+
+The clear is NOT gated on the RHS being a closure: `let g = 5;` shadowing an
+`OnceFn` parameter must clear the mark too, and it produces no capture consume to
+distinguish it from a closure that does.
+
+A PRE-EXISTING FALSE POSITIVE FELL OUT of that clear, with no parameter involved:
+
+    let g = || apply(cfg);        // once-callable
+    let g = || println("y");      // repeatable, shadows it
+    g(); g();                     // reported at the parent commit; clean now
+
+Measured red at b0abfae and green after. The insert-only arm kept the FIRST
+binding's mark alive across the rebind. So the bug this row is about had a twin
+in the mechanism it was extending, and closing one closed both.
+
+ALSO NEWLY REPORTED: two distinct `OnceFn` parameters where only the second is
+reused (`fn run(a: OnceFn(), b: OnceFn()) { a(); b(); b(); }`) — marks are per
+name, not per signature. Silent at the parent commit.
+
+MEASURED AND DELIBERATELY NOT FIXED — an `OnceFn` called inside a LOOP
+(`while i < 3 { g(); }`) is still not reported. Checked the LOCAL twin at the
+parent commit: it misses identically, so this belongs to the dominance analysis
+(a single call site that executes repeatedly is not two dominance-comparable use
+sites), not to once-callability or to parameters. Filing it would be a separate
+row about the CFG predicate; noting it here so the next person does not assume
+this fix covered it. An `OnceFn` called once per branch of an `if` IS correctly
+accepted — exclusive paths, one call executes.
+
+TESTS (`tests/ownership.rs`): seven. Three red at baseline — the parameter
+report, the two-parameter case, and the pre-existing shadowing false positive.
+Four green at baseline, and two of those are green BY CONSTRUCTION rather than by
+luck: the shadowing controls guard this change's own failure mode, which could
+not exist before it. Recorded plainly rather than counted as baseline-verified
+coverage.
+
+Gates: full `--features llvm` sweep of all 98 targets, 12570 tests, 0 failures;
+clippy `--all --all-targets` and fmt clean; run/build/auto-par output identical
+on every fixture (these are warnings, so all four programs compile and run). |
 
 </details>
 
