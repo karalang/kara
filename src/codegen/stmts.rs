@@ -3658,6 +3658,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     if !self.slice_elem_types.contains_key(var_name.as_str()) {
                         if let Some(elem) = self.infer_slice_elem_from_rhs(value) {
                             self.slice_elem_types.insert(var_name.clone(), elem);
+                            // B-2026-08-14-20 — register the element
+                            // `TypeExpr` alongside the LLVM type. Only the
+                            // latter was recorded here, so a slice bound from
+                            // an EXPRESSION (rather than from an annotation,
+                            // which routes through `register_var_from_type_expr`)
+                            // had no source-level element type — and every arm
+                            // that must distinguish an owning element from a
+                            // trivially-copyable one reads exactly that table.
+                            if !self.var_elem_type_exprs.contains_key(var_name.as_str()) {
+                                if let Some(te) = self.slice_elem_type_expr_from_rhs(value) {
+                                    self.var_elem_type_exprs.insert(var_name.clone(), te);
+                                }
+                            }
                         }
                     }
                     // Bounds-check-elision len-alias tracking: `let n = v.len()`

@@ -1264,20 +1264,40 @@ impl<'a> super::TypeChecker<'a> {
         // I/O impls and are retained only for the `env.*` path; the newer
         // resources are baked-impl-only.
 
-        // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]` —
+        // `String.from_utf8(bytes: Slice[u8]) -> Result[String, Utf8Error]` —
         // UTF-8-validating String constructor. Path-keyed sibling of
         // `env.var` above. The peer `Utf8Error` enum is declared in
         // `runtime/stdlib/utf8_error.kara` (prelude); the interpreter
         // dispatch lives at `eval_call.rs` parallel to `Url.decode` /
-        // `Base64.decode`. Codegen is deferred behind a cross-cutting
-        // Result-payload widening — Result's current 1-word payload area
-        // (see `seed_builtin_enum_layouts` in `src/codegen/declarations.rs`)
-        // can't hold a 3-word `String`; widening also requires updating
-        // `compile_question`'s payload-word propagation and Result-scope
-        // drop for nested Vec/String payloads.
-        let vec_u8 = Type::Named {
-            name: "Vec".to_string(),
-            args: vec![Type::UInt(UIntSize::U8)],
+        // `Base64.decode`.
+        //
+        // B-2026-08-14-20 — the parameter is a `Slice[u8]`, not the
+        // `Vec[u8]` it was signed over originally, and the widening is what
+        // makes `String.from_utf8(s.bytes())` — the round trip out of a
+        // String and back — expressible at all: `String.bytes()` hands back
+        // a `Slice[u8]`, and nothing bridged the two, so every caller
+        // starting from an existing String's bytes had to materialize a
+        // second `Vec` through a hand-rolled push loop first.
+        //
+        // A `Vec[u8]` argument still passes: `Slice[T]` accepts an owned
+        // `Vec[T]` / `Array[T, N]` (and their `ref` borrows) at a call
+        // boundary — the general coercion in `types_compatible`. So this is
+        // a pure WIDENING of what typechecks, with no existing call site
+        // rejected.
+        //
+        // It does NOT change the ownership story, which is worth stating
+        // because the type reads like it should: the ownership pass maps an
+        // immutable `Slice[T]` formal to `OwnershipMode::Own`
+        // (`param_modes_from_signature`), so a `Vec[u8]` argument is still
+        // reported moved on reuse — exactly as it is for a user
+        // `fn take(xs: Slice[u8])`. That the runtime never consumes the
+        // bytes (`karac_runtime_cstr_to_string` COPIES them into a fresh
+        // String, and codegen leaves the caller's buffer its own scope-exit
+        // drop) is a property of every slice formal, not of this one, and
+        // tracked separately.
+        let bytes_slice = Type::Slice {
+            element: Box::new(Type::UInt(UIntSize::U8)),
+            mutable: false,
         };
         let result_str_utf8 = Type::Named {
             name: "Result".to_string(),
@@ -1292,7 +1312,7 @@ impl<'a> super::TypeChecker<'a> {
         let from_utf8_sig = FunctionSig {
             generic_params: vec![],
             param_names: vec![Some("bytes".to_string())],
-            params: vec![vec_u8],
+            params: vec![bytes_slice],
             return_type: result_str_utf8,
             where_clause: None,
         };

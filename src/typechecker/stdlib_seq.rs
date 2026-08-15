@@ -1190,6 +1190,28 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 vec_slice
             }
+            // B-2026-08-14-20 — `Slice[T].to_vec() -> Vec[T]`, the
+            // borrowed-view-to-owned-container bridge. Every other `Slice`
+            // method either reads the view or produces another view; without
+            // this one there is no way back to an owned container at all, so a
+            // program holding the result of any `Slice`-returning accessor
+            // (`s.bytes()`, `v.as_slice()`, `v[a..b]`, a `chunks` / `windows`
+            // element) had to hand-roll a push loop to feed an owned-`Vec`
+            // consumer. Answered for `mut Slice[T]` too: copying OUT of a
+            // mutable view is as sound as copying out of a read-only one.
+            "to_vec" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "Slice.to_vec() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![elem.clone()],
+                }
+            }
             // Mutation methods (require mut Slice[T])
             "sort" | "reverse" => {
                 if !mutable {

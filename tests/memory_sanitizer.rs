@@ -48027,6 +48027,83 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-20 — `Slice[T].to_vec()` over HEAP elements, and the
+    /// fresh-owned-temporary argument of `String.from_utf8`.
+    ///
+    /// This is the gate the output comparison cannot be: every line prints the
+    /// same numbers whether or not the memory is right. Three distinct
+    /// failures live here. A `to_vec` that memcpy'd a `String` or `Vec[i64]`
+    /// element instead of deep-cloning it would give the copy and the source
+    /// the SAME inner buffers, and both containers free them at frame exit —
+    /// a double free. A `to_vec` that deep-cloned but whose result was not
+    /// drop-tracked leaks the whole copy. And `String.from_utf8(<fresh owned
+    /// Vec temp>)` — which this row's widening makes reachable as
+    /// `s.bytes().to_vec()` — has no binding to carry a scope-exit drop, so
+    /// nothing freed the argument's buffer (a pre-existing leak on the
+    /// `mk_bytes()` spelling, measured identically on the parent commit).
+    ///
+    /// The `s.bytes()` and `.as_slice()` arguments are the other side of that
+    /// fix: they are BORROWED views, so freeing them would take the source
+    /// String's / Vec's storage with it.
+    #[test]
+    fn asan_slice_to_vec_and_from_utf8_temporaries() {
+        assert_clean_asan_run(
+            r#"
+fn mk_bytes() -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    v.push(104u8); v.push(105u8); v.push(106u8);
+    v
+}
+
+fn main() {
+    let s = "a-fairly-long-subject-string";
+    match String.from_utf8(s.bytes()) { Ok(t) => println(f"{t.len()}"), Err(_) => println("bad") }
+    match String.from_utf8(s.bytes().to_vec()) { Ok(t) => println(f"{t.len()}"), Err(_) => println("bad") }
+    match String.from_utf8(mk_bytes()) { Ok(t) => println(t), Err(_) => println("bad") }
+    let mut named: Vec[u8] = Vec.new();
+    named.push(120u8); named.push(121u8);
+    match String.from_utf8(named.as_slice()) { Ok(t) => println(t), Err(_) => println("bad") }
+    println(f"{named.len()}");
+
+    let words: Vec[String] = ["alphabetical", "betamax", "gamma-ray-burst"];
+    let mut wc = words.as_slice().to_vec();
+    wc[0i64] = "zulu-time-signal";
+    println(f"{wc[0i64]} {words[0i64]}");
+    let again = wc.as_slice().to_vec();
+    println(f"{again[2i64]}");
+    let win = words[1..3].to_vec();
+    println(f"{win.len()} {win[0i64]}");
+
+    let rows: Vec[Vec[i64]] = [[1i64, 2i64, 3i64], [4i64, 5i64, 6i64]];
+    let mut rc = rows.as_slice().to_vec();
+    rc[0i64][0i64] = 77i64;
+    println(f"{rc[0i64][0i64]} {rows[0i64][0i64]}");
+
+    let empty: Vec[String] = Vec.new();
+    println(f"{empty.as_slice().to_vec().len()}");
+    let es = empty.as_slice();
+    println(f"{es.chunks(2i64).len()} {es.windows(2i64).len()}");
+    println("end");
+}
+"#,
+            &[
+                "28",
+                "28",
+                "hij",
+                "xy",
+                "2",
+                "zulu-time-signal alphabetical",
+                "gamma-ray-burst",
+                "2 betamax",
+                "77 1",
+                "0",
+                "0 0",
+                "end",
+            ],
+            "slice_to_vec_and_from_utf8_temporaries",
+        );
+    }
+
     /// B-2026-08-14-15 leg A — a nested container read into a `let` binding
     /// and then probed with a key-taking method.
     ///

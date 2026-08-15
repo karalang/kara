@@ -2562,6 +2562,38 @@ impl<'ctx> super::Codegen<'ctx> {
             index,
         } = &object.kind
         {
+            // B-2026-08-14-20 — a RANGE index is not an element access.
+            // `v[a..b]` produces a `Slice[T]` VIEW, so the element-pointer
+            // lowering below is the wrong shape twice over: it registers the
+            // synth from the container's element `TypeExpr` (`i64` for a
+            // `Vec[i64]`, so the view looks like a scalar) and it GEPs to one
+            // element instead of building a `{ptr, len}` header. Every method
+            // on such a receiver then fell through to the loud "no handler on
+            // variable '__indexed_elem_N'" error while `--interp` ran it —
+            // `v[1..3].len()` as much as `v[1..3].to_vec()`, so this is
+            // method-agnostic, not specific to the method added here. Route it
+            // to the slice-temporary materialization instead, which builds the
+            // header the view actually is.
+            //
+            // Gated by the same `string_typed_exprs` test the String-slice arm
+            // at the head of `compile_indexed_receiver_method` uses, so the two
+            // are mutually exclusive by construction: `s[a..b]` on a String is
+            // a fresh OWNED String, not a view, and must keep its own path.
+            if matches!(&index.kind, ExprKind::Range { .. })
+                && !self
+                    .string_typed_exprs
+                    .contains(&(inner.span.offset, inner.span.length))
+            {
+                if let Some(value) = self.try_compile_nonident_slice_method(
+                    object,
+                    method,
+                    args,
+                    call_span,
+                    args_close_span,
+                )? {
+                    return Ok(value);
+                }
+            }
             return self.compile_indexed_receiver_method(inner, index, method, args, call_span);
         }
 
@@ -5195,19 +5227,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .build_select(keep, raw_count, zero, "cw.cnt")
                                 .unwrap()
                                 .into_int_value();
-                            // One allocation of `count` slice headers. `count`
-                            // can be 0; the allocator returns a non-null
-                            // zero-size block, which the empty Vec then owns
-                            // and frees like any other.
+                            // One allocation of `count` slice headers, and NONE
+                            // when `count` is 0 — see `alloc_buffer_or_null`.
+                            // The original comment here claimed the zero-size
+                            // block "the empty Vec then owns and frees like any
+                            // other"; that was wrong, and `chunks`/`windows` on
+                            // an empty receiver leaked it (B-2026-08-14-20).
                             let hdr_size = slice_ty.size_of().unwrap();
                             let alloc_bytes = self.checked_alloc_bytes(count, hdr_size, "cw")?;
-                            let buf = self
-                                .builder
-                                .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "cw.buf")
-                                .unwrap()
-                                .try_as_basic_value()
-                                .unwrap_basic()
-                                .into_pointer_value();
+                            let buf = self.alloc_buffer_or_null(count, alloc_bytes, "cw")?;
                             let idx = self.create_entry_alloca(fn_val, "cw.i", i64_t.into());
                             let _ = self.builder.build_store(idx, zero);
                             let head = self.context.append_basic_block(fn_val, "cw.head");
@@ -5291,6 +5319,118 @@ impl<'ctx> super::Codegen<'ctx> {
                             agg = self
                                 .builder
                                 .build_insert_value(agg, count, 2, "cw.v.c")
+                                .unwrap()
+                                .into_struct_value();
+                            return Ok(agg.into());
+                        }
+                        // B-2026-08-14-20 — `to_vec()`, the only `Slice`
+                        // method that produces an OWNED container. Everything
+                        // else on this surface either reads the view or cuts
+                        // another view out of it, so this is the one arm whose
+                        // result the caller has to free — hence a fresh
+                        // `{data, len, cap=len}` with `cap == len`, the shape
+                        // every Vec cleanup path already understands.
+                        //
+                        // A trivially-copyable element is one `memcpy` of the
+                        // whole range. A heap element must be DEEP-cloned per
+                        // slot, or the returned Vec and the view's source would
+                        // both own the same inner buffers and both free them:
+                        // `let v = b.to_vec()` over a `Slice[String]` is two
+                        // owners of every String. Same memory-ABI clone helper
+                        // (`clone(src_ptr, dst_ptr)`) the `fill` arm below uses.
+                        "to_vec" => {
+                            if !args.is_empty() {
+                                return Err("Slice.to_vec takes no arguments".to_string());
+                            }
+                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let elem_te = self.var_elem_type_exprs.get(name.as_str()).cloned();
+                            let needs_clone = match elem_te.as_ref() {
+                                Some(te) => !super::vec_method::is_trivially_copyable_te(te),
+                                // Same rule as `fill`: with no element
+                                // `TypeExpr` there is no way to know whether a
+                                // slot owns anything, and guessing "it does
+                                // not" would alias every heap element into a
+                                // double free. Fail loudly instead.
+                                None => {
+                                    return Err(
+                                        "Slice.to_vec: could not resolve the element type in \
+                                         codegen"
+                                            .to_string(),
+                                    )
+                                }
+                            };
+                            let (data, len) = self.slice_data_and_len(slice_ty, slice_ptr, "tv");
+                            let elem_size = {
+                                use inkwell::types::BasicType;
+                                elem_ty.size_of().unwrap()
+                            };
+                            let alloc_bytes = self.checked_alloc_bytes(len, elem_size, "tv")?;
+                            let buf = self.alloc_buffer_or_null(len, alloc_bytes, "tv")?;
+                            if needs_clone {
+                                let te = elem_te.unwrap();
+                                let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+                                let fn_val = self.current_fn.unwrap();
+                                let zero = i64_t.const_zero();
+                                let one = i64_t.const_int(1, false);
+                                let idx = self.create_entry_alloca(fn_val, "tv.i", i64_t.into());
+                                let _ = self.builder.build_store(idx, zero);
+                                let head = self.context.append_basic_block(fn_val, "tv.head");
+                                let body = self.context.append_basic_block(fn_val, "tv.body");
+                                let done = self.context.append_basic_block(fn_val, "tv.done");
+                                self.builder.build_unconditional_branch(head).unwrap();
+                                self.builder.position_at_end(head);
+                                let i = self
+                                    .builder
+                                    .build_load(i64_t, idx, "tv.cur")
+                                    .unwrap()
+                                    .into_int_value();
+                                let go = self
+                                    .builder
+                                    .build_int_compare(inkwell::IntPredicate::SLT, i, len, "tv.go")
+                                    .unwrap();
+                                self.builder
+                                    .build_conditional_branch(go, body, done)
+                                    .unwrap();
+                                self.builder.position_at_end(body);
+                                let src = unsafe {
+                                    self.builder
+                                        .build_gep(elem_ty, data, &[i], "tv.src")
+                                        .unwrap()
+                                };
+                                let dst = unsafe {
+                                    self.builder
+                                        .build_gep(elem_ty, buf, &[i], "tv.dst")
+                                        .unwrap()
+                                };
+                                let _ = self.builder.build_call(
+                                    clone_fn,
+                                    &[src.into(), dst.into()],
+                                    "",
+                                );
+                                let next = self.builder.build_int_add(i, one, "tv.next").unwrap();
+                                let _ = self.builder.build_store(idx, next);
+                                self.builder.build_unconditional_branch(head).unwrap();
+                                self.builder.position_at_end(done);
+                            } else {
+                                self.builder
+                                    .build_memcpy(buf, 1, data, 1, alloc_bytes)
+                                    .map_err(|e| format!("Slice.to_vec memcpy: {e}"))?;
+                            }
+                            let vec_ty = self.vec_struct_type();
+                            let mut agg = vec_ty.get_undef();
+                            agg = self
+                                .builder
+                                .build_insert_value(agg, buf, 0, "tv.v.d")
+                                .unwrap()
+                                .into_struct_value();
+                            agg = self
+                                .builder
+                                .build_insert_value(agg, len, 1, "tv.v.l")
+                                .unwrap()
+                                .into_struct_value();
+                            agg = self
+                                .builder
+                                .build_insert_value(agg, len, 2, "tv.v.c")
                                 .unwrap()
                                 .into_struct_value();
                             return Ok(agg.into());
@@ -7749,6 +7889,37 @@ impl<'ctx> super::Codegen<'ctx> {
                  bind the element to a local first (B-2026-08-02-10)"
             ));
         }
+        // B-2026-08-14-20 — LAST resort before the dispatch-fail error: a
+        // `Slice` builtin method on a NON-IDENTIFIER receiver
+        // (`s.bytes().to_vec()`, `v.as_slice().first()`). The whole `Slice`
+        // method block is identifier-keyed — it looks the receiver up in
+        // `slice_elem_types` by name — so a chained receiver never reached it
+        // and every method but the few the String path answers loud-failed
+        // under `karac build` while running fine under `--interp`.
+        //
+        // Materializing is cheap and carries no cleanup obligation: a slice is
+        // a `{ptr, len}` VIEW that owns nothing, so unlike the fresh-temp `Vec`
+        // sibling above there is no buffer to drop-track — spill the two words
+        // to a slot, register the name, re-dispatch, unregister.
+        //
+        // Placed last on purpose. The syntactic gate (`bytes` / `as_bytes` /
+        // `as_slice` / index) can name a receiver that is NOT a slice —
+        // `Response.bytes()` returns an owned `Vec[u8]` — so the real
+        // discrimination is the compiled value's SHAPE, which costs a
+        // `compile_expr`. Running after every other dispatcher has declined
+        // means the only path left is the error, so a receiver compiled here
+        // and then rejected leaves dead IR in an already-failing compile
+        // rather than a duplicated side effect in a working one.
+        if let Some(result) = self.try_compile_nonident_slice_method(
+            object,
+            method,
+            args,
+            call_span,
+            args_close_span,
+        )? {
+            return Ok(result);
+        }
+
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),
@@ -7804,6 +7975,78 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Extract `(data, len)` (fields 0 and 1) of a `String` / `Vec`
     /// `{ptr, len, cap}` struct value — the subject / replacement arguments of
     /// the regex method arms (and the LazyExpr col/lit-str lowerings).
+    /// Allocate a `count`-element buffer, or hand back `null` when `count` is
+    /// 0 (B-2026-08-14-20).
+    ///
+    /// The empty answer has to be a NULL pointer, not a zero-size block,
+    /// because `FreeVecBuffer` — the cleanup every Vec-producing arm arms — is
+    /// guarded on `cap > 0`. An empty result carries `cap == 0`, so the guard
+    /// skips the free and a zero-size allocation is leaked outright: real
+    /// memory (the allocator still returns a live chunk), invisible at -O2
+    /// where the whole call folds away, and reported by LeakSanitizer at -O0.
+    /// `{null, 0, 0}` is the invariant the empty Vec literal and `Vec.new()`
+    /// already emit, so this makes the computed arms agree with the
+    /// constructed ones.
+    ///
+    /// A branch rather than a `select`: both operands of a select are
+    /// evaluated, so the allocation would still happen on the empty path.
+    fn alloc_buffer_or_null(
+        &mut self,
+        count: inkwell::values::IntValue<'ctx>,
+        alloc_bytes: inkwell::values::IntValue<'ctx>,
+        tag: &str,
+    ) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| format!("codegen: {tag} buffer allocation outside a function"))?;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let zero = self.context.i64_type().const_zero();
+        let pos = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SGT,
+                count,
+                zero,
+                &format!("{tag}.ab.pos"),
+            )
+            .unwrap();
+        let alloc_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{tag}.ab.alloc"));
+        let none_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{tag}.ab.none"));
+        let join_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{tag}.ab.join"));
+        self.builder
+            .build_conditional_branch(pos, alloc_bb, none_bb)
+            .unwrap();
+        self.builder.position_at_end(alloc_bb);
+        let allocated = self
+            .builder
+            .build_call(
+                self.alloc_or_panic_fn,
+                &[alloc_bytes.into()],
+                &format!("{tag}.buf"),
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let alloc_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
+        let phi = self
+            .builder
+            .build_phi(ptr_ty, &format!("{tag}.ab.buf"))
+            .unwrap();
+        phi.add_incoming(&[(&allocated, alloc_end), (&ptr_ty.const_null(), none_bb)]);
+        Ok(phi.as_basic_value().into_pointer_value())
+    }
+
     /// Load a slice header's `{ptr, len}` pair. Shared by the arms that
     /// implement a `Slice` method directly rather than routing it to `Vec`
     /// (B-2026-08-14-9) — each needs exactly these two loads and nothing else
@@ -15277,6 +15520,90 @@ impl<'ctx> super::Codegen<'ctx> {
         matches!(method.as_str(), "unwrap" | "expect") && self.scrutinee_is_borrow_call(object)
     }
 
+    /// B-2026-08-14-20 — a `Slice` builtin method on a NON-IDENTIFIER
+    /// receiver: `s.bytes().to_vec()`, `v.as_slice().first()`,
+    /// `chunks[0].len()`. Sibling of `try_compile_nonident_collection_method`
+    /// (String) and `try_compile_freshtemp_vec_read_method` (Vec), for the
+    /// receiver shape neither of those answers.
+    ///
+    /// Much simpler than the Vec twin, and for one reason: a slice OWNS
+    /// NOTHING. It is a `{ptr, len}` view into somebody else's buffer, so
+    /// there is no fresh-temp to drop-track, no element walk to thread, and no
+    /// span-keyed element table to consult — the two words spill to a slot,
+    /// the synthetic name carries the element type for the duration of the
+    /// re-dispatch, and both come back off the tables immediately after.
+    ///
+    /// Returns `Ok(None)` for anything not provably a slice, leaving the
+    /// caller's dispatch-fail error to fire unchanged: a non-`Slice` method
+    /// name, a receiver shape `infer_slice_elem_from_rhs` cannot type, or —
+    /// the case that makes the shape check mandatory rather than defensive —
+    /// a receiver whose compiled value is not the 2-field header. `bytes()`
+    /// is not slice-exclusive: `Response.bytes()` hands back an owned
+    /// `Vec[u8]`, and reading its 3-field `{ptr,len,cap}` aggregate as a
+    /// slice header would silently mistake `cap` for nothing at all.
+    fn try_compile_nonident_slice_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+        args_close_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Identifier / self receivers already have a name to key on.
+        if matches!(&object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return Ok(None);
+        }
+        // One list rather than two, same as the interpreter's slice gate: a
+        // name outside the builtin `Slice` surface belongs to whatever
+        // dispatcher owns it, not here.
+        if !crate::typechecker::SLICE_BUILTIN_METHODS.contains(&method) {
+            return Ok(None);
+        }
+        let Some(elem_llvm) = self.infer_slice_elem_from_rhs(object) else {
+            return Ok(None);
+        };
+        let elem_te = self.slice_elem_type_expr_from_rhs(object);
+        let cur_fn = self
+            .current_fn
+            .ok_or_else(|| "slice method on a temporary outside a fn".to_string())?;
+
+        let recv_val = self.compile_expr(object)?;
+        let BasicValueEnum::StructValue(sv) = recv_val else {
+            return Ok(None);
+        };
+        if sv.get_type() != self.slice_struct_type() {
+            return Ok(None);
+        }
+        let slot = self.create_entry_alloca(cur_fn, "__srecv_tmp", recv_val.get_type());
+        self.builder.build_store(slot, recv_val).unwrap();
+
+        let synth = format!("__srecv_tmp_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            super::state::VarSlot {
+                ptr: slot,
+                ty: recv_val.get_type(),
+            },
+        );
+        self.slice_elem_types.insert(synth.clone(), elem_llvm);
+        if let Some(te) = elem_te {
+            self.var_elem_type_exprs.insert(synth.clone(), te);
+        }
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: object.span.clone(),
+        };
+        let out = self.compile_method_call(&synth_expr, method, args, call_span, args_close_span);
+
+        // Drop the dispatch-only registrations.
+        self.variables.remove(&synth);
+        self.slice_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+
+        out.map(Some)
+    }
+
     /// General owned-temp tracking, slice 3d — read methods on a FRESH-TEMP
     /// (non-identifier) `Map`/`Set` receiver: `make_map().get(k)`,
     /// `make_map().contains_key(k)`, `make_set().contains(x)`. The Map/Set
@@ -15673,6 +16000,30 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_extract_value(agg, 1, "fu8.len")
             .unwrap()
             .into_int_value();
+        // B-2026-08-14-20 — a FRESH OWNED `Vec[u8]` TEMPORARY argument
+        // (`String.from_utf8(mk_bytes())`, `String.from_utf8(s.bytes().to_vec())`)
+        // has no binding to carry a scope-exit drop, and this path only reads
+        // the range — `karac_runtime_cstr_to_string` copies the bytes into a
+        // fresh String — so nothing ever freed the argument's buffer. Track it
+        // at the enclosing frame's exit, after the pointer and length are
+        // already extracted.
+        //
+        // Both gates are load-bearing. The SHAPE gate keeps the borrow-shaped
+        // arguments out: `s.bytes()` and `v.as_slice()` are 2-field `{ptr,len}`
+        // views into a buffer somebody else owns, and freeing one would take
+        // the source's storage with it. The FRESH-TEMP gate keeps NAMED
+        // arguments out: `String.from_utf8(v)` must leave `v` its own drop.
+        // (`FreeVecBuffer`'s `cap > 0` guard is a third backstop, for a
+        // Vec-shaped borrow that reports itself owned.)
+        if self.llvm_ty_is_vec_struct(vec_val.get_type()) && self.expr_yields_fresh_owned_temp(arg)
+        {
+            let fn_val = self
+                .current_fn
+                .ok_or_else(|| "codegen: String.from_utf8 called outside a function".to_string())?;
+            let slot = self.create_entry_alloca(fn_val, "fu8.tmp", vec_val.get_type());
+            self.builder.build_store(slot, vec_val).unwrap();
+            self.track_vec_var(slot, Some(self.context.i8_type().into()));
+        }
         self.build_utf8_validated_result(data_ptr, data_len)
     }
 

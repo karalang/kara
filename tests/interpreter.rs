@@ -26065,6 +26065,70 @@ fn main() {
     );
 }
 
+/// B-2026-08-14-20 — `Slice[T].to_vec()` returns an INDEPENDENT owned
+/// container, and `String.from_utf8` accepts a borrowed view.
+///
+/// Both halves are interpreter-specific traps rather than restatements of the
+/// codegen test. `Value::Array` is an `Arc`-shared cell, so the obvious
+/// implementation — hand back the receiver, or `.clone()` it — makes the
+/// result an ALIAS of its source: lines 03 and 04 write the copy and read the
+/// SOURCE, which is the only way that failure shows up (04 is the nested case,
+/// where a one-level copy still shares every row). And a `Slice[T]` SLOT is
+/// type-erased here: line 05's `Slice` parameter and line 06's `chunks`
+/// element both arrive as `Value::Array`, not `Value::Slice`, so a
+/// `Value::Slice`-only arm answers `no method 'to_vec' on type 'Vec'` for two
+/// shapes the typechecker accepts.
+#[test]
+fn slice_to_vec_copies_and_from_utf8_takes_a_view() {
+    let out = run_no_errors(
+        r#"
+fn sum_slice(xs: Slice[i64]) -> i64 {
+    let v = xs.to_vec();
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < v.len() { t = t + v[i]; i = i + 1i64; }
+    t
+}
+
+fn main() {
+    let s = "café";
+    match String.from_utf8(s.bytes()) { Ok(t) => println(f"01 {t}"), Err(_) => println("01 bad") }
+    match String.from_utf8(s.bytes().to_vec()) { Ok(t) => println(f"02 {t}"), Err(_) => println("02 bad") }
+
+    let nums: Vec[i64] = [10i64, 20i64, 30i64];
+    let mut copy = nums.as_slice().to_vec();
+    copy[0i64] = 99i64;
+    println(f"03 {copy[0i64]} {nums[0i64]}");
+
+    let rows: Vec[Vec[i64]] = [[1i64, 2i64], [3i64, 4i64]];
+    let mut rc = rows.as_slice().to_vec();
+    rc[0i64][0i64] = 77i64;
+    println(f"04 {rc[0i64][0i64]} {rows[0i64][0i64]}");
+
+    println(f"05 {sum_slice(nums)}");
+
+    let cs = nums.as_slice().chunks(2i64);
+    let c0 = cs[0i64];
+    println(f"06 {c0.to_vec().len()}");
+
+    let words: Vec[String] = ["alpha", "beta"];
+    let wc = words[0..2].to_vec();
+    println(f"07 {wc.len()} {wc[1i64]}");
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "01 café\n\
+         02 café\n\
+         03 99 10\n\
+         04 77 1\n\
+         05 60\n\
+         06 2\n\
+         07 2 beta\n"
+    );
+}
+
 // ── critical_section (interrupt-mask RAII guard) ────────────────
 
 #[test]

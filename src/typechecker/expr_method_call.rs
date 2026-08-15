@@ -130,6 +130,7 @@ pub(crate) const SLICE_BUILTIN_METHODS: &[&str] = &[
     "split_at",
     "split_at_mut",
     "swap",
+    "to_vec",
     "windows",
 ];
 use crate::resolver::{SpanKey, SymbolKind};

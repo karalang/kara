@@ -1617,6 +1617,39 @@ impl<'a> super::Interpreter<'a> {
         let slice_routes_to_user_impl = !crate::typechecker::SLICE_BUILTIN_METHODS
             .contains(&method)
             && self.env.get(&format!("Slice.{method}")).is_some();
+        // B-2026-08-14-20 — `Slice[T].to_vec() -> Vec[T]`. The detached
+        // snapshot below IS the answer, so this could ride the normal
+        // dispatch — but it is answered here, on the `Value::Slice` itself,
+        // so it stays SLICE-ONLY. Past the snapshot a slice receiver is
+        // indistinguishable from a `Vec` one, and the typechecker admits
+        // `to_vec` on neither `Vec` nor `Array`; sharing an arm would hand a
+        // `Vec` receiver back its OWN storage `Arc` (an alias, not a copy)
+        // under `karac run --interp`, which executes past type errors.
+        if method == "to_vec"
+            && !slice_routes_to_user_impl
+            && matches!(obj, Value::Slice { .. } | Value::Array(_))
+        {
+            // `deep_clone_value` IS `to_vec`: its `Slice` arm already
+            // "produces an independent owned snapshot — the original window's
+            // storage is left alone", which is the method's whole contract.
+            //
+            // Both receiver shapes are accepted because a `Slice[T]` SLOT is
+            // type-erased here: a `Vec` coerced at a call boundary
+            // (`fn f(xs: Slice[i64])` called with a `Vec`) and a
+            // `chunks`/`windows` element both arrive as `Value::Array`, so
+            // demanding `Value::Slice` would answer `no method 'to_vec' on
+            // type 'Vec'` for two shapes the typechecker accepts.
+            //
+            // DEEP, not `.clone()`: `Value::Array` is an `Arc`-shared cell, so
+            // a shallow copy of a `Slice[Vec[i64]]` leaves both containers
+            // pointing at the same rows — `copy[0][0] = 99` was then visible
+            // through the source, while codegen (which allocates and
+            // per-element clones) printed the source unchanged. `shared`
+            // elements keep their identity either way; `deep_clone_value`
+            // Arc-bumps those, matching what codegen's per-element clone
+            // helper does for a `shared` element.
+            return crate::interpreter::exec::deep_clone_value(&obj);
+        }
         let obj = match obj {
             Value::Slice {
                 storage,

@@ -961,6 +961,58 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The element `TypeExpr` twin of `infer_slice_elem_from_rhs`, over the
+    /// same four RHS shapes (B-2026-08-14-20).
+    ///
+    /// The LLVM element type its sibling returns says how WIDE a slot is; it
+    /// cannot say whether the slot OWNS anything, because a `String` element
+    /// and a `Vec[i64]` element and a plain three-word struct all lower to the
+    /// same aggregate. Any arm that has to drop or clone per element needs the
+    /// source-level type — `Slice.to_vec` deep-clones a heap element and
+    /// memcpys a trivially-copyable one, and picking wrong either aliases two
+    /// owners onto one buffer or leaks. `let b = s.bytes()` registered the
+    /// LLVM half only, so the element `TypeExpr` table had no entry for any
+    /// slice bound from an expression rather than from an annotation.
+    pub(super) fn slice_elem_type_expr_from_rhs(&self, expr: &Expr) -> Option<TypeExpr> {
+        // `String.bytes()` / `CStr.as_bytes()` are `u8`-fixed at the
+        // typechecker layer, exactly as in the sibling.
+        let u8_te = |span: &crate::token::Span| TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: vec!["u8".to_string()],
+                generic_args: None,
+                span: span.clone(),
+            }),
+            span: span.clone(),
+        };
+        match &expr.kind {
+            ExprKind::MethodCall { object, method, .. }
+                if method == "as_slice" || method == "as_slice_mut" =>
+            {
+                let ExprKind::Identifier(base) = &object.kind else {
+                    return None;
+                };
+                self.var_elem_type_exprs.get(base.as_str()).cloned()
+            }
+            ExprKind::MethodCall { method, .. } if method == "bytes" || method == "as_bytes" => {
+                Some(u8_te(&expr.span))
+            }
+            ExprKind::Index { object, index } => {
+                let ExprKind::Identifier(base) = &object.kind else {
+                    return None;
+                };
+                let elem_te = self.var_elem_type_exprs.get(base.as_str())?;
+                if matches!(&index.kind, ExprKind::Range { .. }) {
+                    // `v[a..b]` — a view over the SAME elements.
+                    return Some(elem_te.clone());
+                }
+                // `chunks[0]` — a scalar index into a `Vec[Slice[T]]` binds one
+                // of the views, so the element is the view's element.
+                slice_inner_type_expr(elem_te)
+            }
+            _ => None,
+        }
+    }
+
     /// Look up the element LLVM type of a known sequence variable (Array,
     /// Vec, or Slice).
     pub(super) fn infer_elem_from_source(&self, object: &Expr) -> Option<BasicTypeEnum<'ctx>> {

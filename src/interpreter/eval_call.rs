@@ -1280,16 +1280,28 @@ impl<'a> super::Interpreter<'a> {
                 // forward-compatibility with future failure modes — none
                 // are produced by this path today.
                 "String.from_utf8" => {
+                    let to_byte = |v: &Value| match v {
+                        Value::Int(i) => *i as u8,
+                        _ => 0,
+                    };
                     let bytes: Vec<u8> = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {
-                            Value::Array(rc) => rc
-                                .read()
-                                .unwrap()
+                            Value::Array(rc) => rc.read().unwrap().iter().map(to_byte).collect(),
+                            // B-2026-08-14-20 — the parameter is signed
+                            // `Slice[u8]` now, so `String.from_utf8(s.bytes())`
+                            // arrives as a borrowed VIEW. Without this arm it
+                            // fell to the `_` below and produced `Ok("")` — a
+                            // silent empty String for a well-formed round trip,
+                            // which is worse than the typecheck error the
+                            // widening removed.
+                            Value::Slice {
+                                storage,
+                                start,
+                                len,
+                                ..
+                            } => storage.read().unwrap()[start..start + len]
                                 .iter()
-                                .map(|v| match v {
-                                    Value::Int(i) => *i as u8,
-                                    _ => 0,
-                                })
+                                .map(to_byte)
                                 .collect(),
                             _ => Vec::new(),
                         }

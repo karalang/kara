@@ -62658,6 +62658,147 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-20 — the `String -> bytes -> String` round trip, plus the
+    /// `Slice[T].to_vec()` that makes any borrowed view reachable to an
+    /// owned-container consumer.
+    ///
+    /// Line 01 is the row's literal repro, which did not typecheck at all:
+    /// `String.bytes()` hands back a `Slice[u8]` and `String.from_utf8` was
+    /// signed over `Vec[u8]`, with nothing bridging them. 03 pins that the
+    /// widening did not cost the old spelling — an owned `Vec[u8]` still
+    /// passes, through the general `Slice[T] <- Vec[T]` call coercion — and 04
+    /// that invalid bytes still reach the `Err` arm rather than being silently
+    /// dropped on the floor.
+    ///
+    /// The rest is `to_vec` shape coverage. 06 is the one that would catch a
+    /// header-aliasing implementation: the copy is written and the SOURCE is
+    /// read back, so returning a view of the same buffer fails here and
+    /// nowhere else. 09 is its nested twin (the interpreter's `Arc`-shared
+    /// cells make the shallow copy the easy mistake on that surface). 11
+    /// covers a `chunks` element and 13 a `Slice` PARAMETER, where the
+    /// interpreter's receiver is a type-erased `Value::Array` rather than a
+    /// `Value::Slice`. 07 and 12 are the range-index and `as_slice_mut`
+    /// receivers, both non-identifier: the whole `Slice` method block is
+    /// identifier-keyed, so a chained receiver reached no arm at all.
+    #[test]
+    fn test_e2e_string_bytes_round_trip_and_slice_to_vec() {
+        let src = r#"
+fn sum_slice(xs: Slice[i64]) -> i64 {
+    let v = xs.to_vec();
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < v.len() { t = t + v[i]; i = i + 1i64; }
+    t
+}
+
+fn main() {
+    let s = "café";
+    match String.from_utf8(s.bytes()) { Ok(t) => println(f"01 {t}"), Err(_) => println("01 bad") }
+    match String.from_utf8(s.bytes().to_vec()) { Ok(t) => println(f"02 {t}"), Err(_) => println("02 bad") }
+
+    let mut ov: Vec[u8] = Vec.new();
+    ov.push(104u8); ov.push(105u8);
+    match String.from_utf8(ov) { Ok(t) => println(f"03 {t}"), Err(_) => println("03 bad") }
+
+    let mut bad: Vec[u8] = Vec.new();
+    bad.push(255u8); bad.push(254u8);
+    match String.from_utf8(bad.as_slice()) { Ok(t) => println(f"04 {t}"), Err(_) => println("04 err") }
+
+    let nums: Vec[i64] = [10i64, 20i64, 30i64, 40i64];
+    let sl = nums.as_slice();
+    let copy = sl.to_vec();
+    println(f"05 {copy.len()} {copy[0i64]} {copy[3i64]}");
+
+    let mut copy2 = nums.as_slice().to_vec();
+    copy2[0i64] = 99i64;
+    println(f"06 {copy2[0i64]} {nums[0i64]}");
+
+    let win = nums[1..3].to_vec();
+    println(f"07 {win.len()} {win[0i64]} {win[1i64]}");
+
+    let words: Vec[String] = ["alpha", "beta", "gamma"];
+    let mut wc = words.as_slice().to_vec();
+    wc[0i64] = "zulu";
+    println(f"08 {wc.len()} {wc[0i64]} {wc[2i64]} {words[0i64]}");
+
+    let rows: Vec[Vec[i64]] = [[1i64, 2i64], [3i64, 4i64]];
+    let mut rc = rows.as_slice().to_vec();
+    rc[0i64][0i64] = 77i64;
+    println(f"09 {rc[0i64][0i64]} {rows[0i64][0i64]}");
+
+    let empty = nums[2..2].to_vec();
+    println(f"10 {empty.len()}");
+
+    let cs = nums.as_slice().chunks(2i64);
+    let c0 = cs[0i64];
+    println(f"11 {c0.to_vec().len()} {cs[1i64].to_vec().len()}");
+
+    let mut m: Vec[i64] = [7i64, 8i64];
+    let mc = m.as_slice_mut().to_vec();
+    println(f"12 {mc.len()} {mc[1i64]}");
+
+    println(f"13 {sum_slice(nums)}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 café\n\
+                 02 café\n\
+                 03 hi\n\
+                 04 err\n\
+                 05 4 10 40\n\
+                 06 99 10\n\
+                 07 2 20 30\n\
+                 08 3 zulu gamma alpha\n\
+                 09 77 1\n\
+                 10 0\n\
+                 11 2 2\n\
+                 12 2 8\n\
+                 13 100\n"
+            ),
+        );
+    }
+
+    /// B-2026-08-14-20, sibling half — a RANGE index as a method receiver.
+    ///
+    /// `v[a..b]` is a `Slice[T]` VIEW, but the indexed-receiver path treated
+    /// every `Index` receiver as an ELEMENT access: it registered the synth
+    /// binding from the container's element type (so a `Vec[i64]` window
+    /// looked like a scalar `i64`) and GEP'd to one element rather than
+    /// building a `{ptr, len}` header. Every method on such a receiver then
+    /// hit the loud "no handler on variable '__indexed_elem_N'" fall-through
+    /// while `--interp` ran the program — method-agnostic, which is why
+    /// `len()` is pinned here alongside the method this row adds.
+    #[test]
+    fn test_e2e_range_index_receiver_is_a_slice_view() {
+        let src = r#"
+fn main() {
+    let nums: Vec[i64] = [10i64, 20i64, 30i64, 40i64, 50i64];
+    println(f"01 {nums[1..4].len()}");
+    println(f"02 {nums[1..4].is_empty()} {nums[2..2].is_empty()}");
+    let w = nums[1..4].to_vec();
+    println(f"03 {w.len()} {w[0i64]} {w[2i64]}");
+    match nums[3..5].first() { Some(x) => println(f"04 {x}"), None => println("04 none") }
+    println(f"05 {nums[0..3].contains(20i64)}");
+    let words: Vec[String] = ["alpha", "beta", "gamma"];
+    let ws = words[1..3].to_vec();
+    println(f"06 {words[1..3].len()} {ws[1i64]}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 3\n\
+                 02 false true\n\
+                 03 3 20 40\n\
+                 04 40\n\
+                 05 true\n\
+                 06 2 gamma\n"
+            ),
+        );
+    }
+
     // ── Oversized enum payload — native boxing ──────────────────────
     //
     // `Option`'s payload area is 3 i64 words, `Result`'s is 5. A struct /
