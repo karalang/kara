@@ -48630,6 +48630,13 @@ fn main() {
         // field neither frees the owner's handle (a double free on the first
         // iteration) nor strands anything (a leak that only 20 iterations makes
         // unmistakable). The value half is the codegen/interpreter twin.
+        // B-2026-08-14-36 made this load-bearing rather than precautionary: that
+        // row DID give the arm ownership of a produced temporary, so what keeps
+        // these spellings safe is now a live predicate
+        // (`print_vec_operand_is_owned_temp`) rather than the absence of any
+        // tracking at all. Tuple element and `Vec[Map]` element are here for the
+        // same reason as the struct field — each reads a handle its container
+        // still owns, and each would be a double free if the predicate widened.
         assert_clean_asan_run(
             r#"
 struct B { m: Map[String, i64], s: Set[String] }
@@ -48639,22 +48646,35 @@ fn main() {
     let mut st: Set[String] = Set.new();
     st.insert("elemelemelemelem");
     let b = B { m: m, s: st };
+    let mut tm: Map[String, i64] = Map.new();
+    tm.insert("tuptuptuptuptup", 2);
+    let t = (tm, 0);
+    let mut vm: Map[String, i64] = Map.new();
+    vm.insert("vecvecvecvecvec", 3);
+    let v: Vec[Map[String, i64]] = [vm];
     let mut k = 0;
     while k < 20 {
         println(f"{b.m}");
         println(b.s);
+        println(f"{t.0}");
+        println(f"{v[0]}");
         k = k + 1;
     }
     println("done");
 }
 "#,
-            &["{keykeykeykeykey: 1}", "Set{elemelemelemelem}"]
-                .iter()
-                .cycle()
-                .take(40)
-                .copied()
-                .chain(std::iter::once("done"))
-                .collect::<Vec<_>>(),
+            &[
+                "{keykeykeykeykey: 1}",
+                "Set{elemelemelemelem}",
+                "{tuptuptuptuptup: 2}",
+                "{vecvecvecvecvec: 3}",
+            ]
+            .iter()
+            .cycle()
+            .take(80)
+            .copied()
+            .chain(std::iter::once("done"))
+            .collect::<Vec<_>>(),
             "asan_print_a_map_or_set_place_expression_does_not_free_it",
         );
     }
@@ -48989,6 +49009,174 @@ fn main() {
                 .collect::<Vec<_>>()
                 .as_slice(),
             "asan_discarded_if_arm_element_is_not_cloned",
+        );
+    }
+
+    /// B-2026-08-14-36 — a `Map` / `Set` TEMPORARY that is printed and never
+    /// bound leaks its WHOLE handle: control block, bucket storage, and every
+    /// stored key. Pre-fix this fixture stranded 94400 bytes over 500
+    /// allocations; the loss scales with the collection's CONTENTS, not a fixed
+    /// header, so a program that prints a freshly-built map in a loop bleeds
+    /// proportionally to its data.
+    ///
+    /// B-2026-08-14-31 gave this arm its render and deliberately left the
+    /// ownership alone — the value was equally unfreed when it printed as an
+    /// address, so that row neither caused nor cured this. What it needed first
+    /// was the per-half drop classification: `FreeMapHandle` decides between
+    /// three different runtime frees plus two shared-half rc_dec walks, and
+    /// getting that wrong in the permissive direction is B-2026-08-14-30, a hard
+    /// double free. The fix reaches the binding path's own derivation through
+    /// `map_cleanup_parts_from_halves` rather than restating it.
+    ///
+    /// Every producer shape the arm serves is here, chosen to exercise a
+    /// different arm of that classification: `String` keys (the key-side
+    /// `{ptr,len,cap}` walk), a `#[derive(Display)]` STRUCT key with a heap
+    /// field (`key_drop_fn` — the per-key release, which the flag walk cannot
+    /// express), `i64` / `Vec[String]` / `Set[String]` values (no value walk,
+    /// the value-side walk, and a nested handle), and both sorted siblings,
+    /// which share the storage and so the same free.
+    ///
+    /// The two arms NOT reachable here are `val_drop_fn` and
+    /// `val_shared_heap_type`: the typechecker refuses `Display` for a
+    /// `Map[K, StructV]` or `Map[K, sharedV]`, so a value owning heap beyond
+    /// the one-level overlay can never reach a display site. They stay covered
+    /// by the binding path's own fixtures, which is the point of sharing one
+    /// derivation rather than writing a second.
+    #[test]
+    fn asan_printed_map_or_set_temporary_frees_its_handle() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, Display)]
+struct P { name: String }
+fn mk() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    let _ = m.insert("kkkkkkkkkkkkkkkk", 1);
+    return m;
+}
+fn mkset() -> Set[String] {
+    let mut s: Set[String] = Set.new();
+    s.insert("eeeeeeeeeeeeeeeeee");
+    return s;
+}
+fn mksorted() -> SortedMap[String, i64] {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    let _ = m.insert("zzzzzzzzzzzzzzzz", 1);
+    let _ = m.insert("aaaaaaaaaaaaaaaa", 2);
+    return m;
+}
+fn mksortedset() -> SortedSet[String] {
+    let mut s: SortedSet[String] = SortedSet.new();
+    s.insert("wwwwwwwwwwwwwwwww");
+    return s;
+}
+fn mkvecval() -> Map[String, Vec[String]] {
+    let mut m: Map[String, Vec[String]] = Map.new();
+    let inner: Vec[String] = ["one_one_one_one", "two_two_two_two"];
+    let _ = m.insert("vvvvvvvvvvvvvvvv", inner);
+    return m;
+}
+fn mknested() -> Map[String, Set[String]] {
+    let mut inner: Set[String] = Set.new();
+    inner.insert("nnnnnnnnnnnnnnnnnn");
+    let mut m: Map[String, Set[String]] = Map.new();
+    let _ = m.insert("qqqqqqqqqqqqqqqq", inner);
+    return m;
+}
+fn mkstructkey() -> Map[P, i64] {
+    let mut m: Map[P, i64] = Map.new();
+    let _ = m.insert(P { name: "pppppppppppppppp" }, 4);
+    return m;
+}
+fn main() {
+    let mut k = 0;
+    while k < 20 {
+        println(f"{mk()}");
+        println(f"{mkset()}");
+        println(f"{mksorted()}");
+        println(f"{mksortedset()}");
+        println(f"{mkvecval()}");
+        println(f"{mknested()}");
+        println(f"{mkstructkey()}");
+        k = k + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "{kkkkkkkkkkkkkkkk: 1}",
+                "Set{eeeeeeeeeeeeeeeeee}",
+                "SortedMap{aaaaaaaaaaaaaaaa: 2, zzzzzzzzzzzzzzzz: 1}",
+                "SortedSet{wwwwwwwwwwwwwwwww}",
+                "{vvvvvvvvvvvvvvvv: [one_one_one_one, two_two_two_two]}",
+                "{qqqqqqqqqqqqqqqq: Set{nnnnnnnnnnnnnnnnnn}}",
+                "{P { name: pppppppppppppppp }: 4}",
+            ]
+            .iter()
+            .cycle()
+            .take(140)
+            .copied()
+            .chain(std::iter::once("done"))
+            .collect::<Vec<_>>(),
+            "asan_printed_map_or_set_temporary_frees_its_handle",
+        );
+    }
+
+    /// The two shapes where the fix above could have been a DOUBLE FREE instead
+    /// of a leak fix, and the reason they are safe.
+    ///
+    /// `print_vec_operand_is_owned_temp` admits any non-borrow-returning call,
+    /// so both of these reach the new drop-tracking: a free function returning
+    /// its by-value parameter's map field, and a `ref self` method returning
+    /// `self.m`. Read as source, each looks like it hands back storage its
+    /// container still owns — which is exactly the aliasing B-2026-08-14-30 was.
+    /// They are not: Kāra's caller-retains convention deep-copies an owned
+    /// argument at callee entry, so the returned handle is genuinely fresh.
+    ///
+    /// Measured, not assumed: this LEAKED 24340 bytes over 140 allocations
+    /// pre-fix and is clean after, which is only possible if the returned
+    /// handle had no other owner. Had either shape been an alias, the fixture
+    /// would report a double free rather than passing — which is why it is kept
+    /// apart from the producer fixture above rather than folded into it.
+    ///
+    /// THE LOOP IS LOAD-BEARING, not decoration. A straight-line version of
+    /// this program — three prints, no `while` — passed against the LEAKING
+    /// compiler: each print site gets its own entry alloca, so at exit every
+    /// stranded handle was still reachable from the stack and LeakSanitizer
+    /// reported nothing. Iterating overwrites those slots and makes the loss
+    /// visible. Do not "simplify" this fixture by unrolling it.
+    #[test]
+    fn asan_printed_map_temporary_from_a_field_returning_callee_is_not_aliased() {
+        assert_clean_asan_run(
+            r#"
+struct B { m: Map[String, i64] }
+impl B {
+    pub fn get_m(ref self) -> Map[String, i64] { return self.m; }
+}
+fn take_field(b: B) -> Map[String, i64] { return b.m; }
+fn mk() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    let _ = m.insert("kkkkkkkkkkkkkkkk", 1);
+    return m;
+}
+fn main() {
+    let mut k = 0;
+    while k < 20 {
+        let b1 = B { m: mk() };
+        println(f"{take_field(b1)}");
+        let b2 = B { m: mk() };
+        println(f"{b2.get_m()}");
+        println(f"{b2.m}");
+        k = k + 1;
+    }
+    println("done");
+}
+"#,
+            &["{kkkkkkkkkkkkkkkk: 1}"; 60]
+                .iter()
+                .copied()
+                .chain(std::iter::once("done"))
+                .collect::<Vec<_>>(),
+            "asan_printed_map_temporary_from_a_field_returning_callee_is_not_aliased",
         );
     }
 }

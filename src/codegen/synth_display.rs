@@ -2742,12 +2742,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the identifier path uses, so the two spellings cannot disagree.
     ///
     /// A bound collection returns through its own slot and takes no ownership,
-    /// mirroring the Vec arm. A materialized temporary is NOT drop-tracked here
-    /// even when it is a producer: `FreeMapHandle` needs the key/value drop
-    /// shape the binding path records, and B-2026-08-14-30 is what over-eager
-    /// ownership on this kind of arm costs. A leaked temporary handle is a
-    /// bounded, LSan-visible loss; a double-freed one is a crash in a user's
-    /// program. Tracked as the residual on this row rather than guessed at.
+    /// mirroring the Vec arm. A materialized temporary IS drop-tracked, under
+    /// the same `print_vec_operand_is_owned_temp` gate the Vec arm uses
+    /// (B-2026-08-14-36): without it, `println(f"{mk()}")` stranded the whole
+    /// handle — control block, bucket storage and every stored key — with no
+    /// other owner to free it. The gate is what keeps that from becoming
+    /// B-2026-08-14-30's double free: a PLACE expression (`b.m`, `v[i]`, `t.0`)
+    /// hands back the container's own handle, not a copy, and freeing it would
+    /// crash a program that was merely leaking.
     pub(super) fn try_compile_map_or_set_display(
         &mut self,
         e: &Expr,
@@ -2777,6 +2779,31 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.unwrap();
         let slot = self.create_entry_alloca(fn_val, "mapset.disp.tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
+        // B-2026-08-14-36 — queue the handle's scope-exit free when this
+        // expression PRODUCED the collection. The per-half drop classification
+        // is the binding path's own, reached through `map_cleanup_parts_from_
+        // halves` rather than re-derived here: it decides which runtime free the
+        // handle gets (plain / drop-vec / per-value drop fn) plus the shared-half
+        // rc_dec walks, and a second copy of that reasoning is how a leak turns
+        // into a double free.
+        if self.print_vec_operand_is_owned_temp(e) {
+            let (k_te, v_te) = match (&map_kv, &set_elem) {
+                (Some((k, v)), _) => (Some(k.clone()), Some(v.clone())),
+                (_, Some(el)) => (Some(el.clone()), None),
+                _ => (None, None),
+            };
+            let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn, key_drop_fn) =
+                self.map_cleanup_parts_from_halves(k_te.as_ref(), v_te.as_ref());
+            self.track_map_var_with_val_drop(
+                slot,
+                key_is_vec,
+                val_is_vec,
+                val_shared,
+                key_shared,
+                val_drop_fn,
+                key_drop_fn,
+            );
+        }
         // B-2026-08-14-35 — `display_map_types` / `display_set_types` admit the
         // sorted siblings (they share the control-block layout and the same
         // fall-through) but keep only the type arguments; the surface name

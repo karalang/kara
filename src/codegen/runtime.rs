@@ -3456,7 +3456,39 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let head = path.segments.first().map(|s| s.as_str()).unwrap_or("");
         let k = nth(path, 0).cloned();
-        let k = k.as_ref();
+        // A set lowers to `Map[T, ()]` — its value half is inert, which the
+        // halves helper expresses as `None` rather than a separate arm.
+        let v = if matches!(head, "Set" | "SortedSet") {
+            None
+        } else {
+            nth(path, 1).cloned()
+        };
+        self.map_cleanup_parts_from_halves(k.as_ref(), v.as_ref())
+    }
+
+    /// The same derivation over the K/V halves directly, for callers that hold
+    /// them without an enclosing `Map[K, V]` / `Set[T]` `TypeExpr` to peel —
+    /// B-2026-08-14-36's display arm resolves a printed collection through the
+    /// span-keyed `display_map_types` / `display_set_types`, which store the
+    /// halves. `val_te` is `None` for a set.
+    ///
+    /// It exists as an EXTRACTION rather than a second implementation on
+    /// purpose: this classification decides which runtime free a handle gets,
+    /// and a copy that drifts from the binding path's is how a leak becomes a
+    /// double free (B-2026-08-14-30, that exact shape, closed the same week).
+    pub(super) fn map_cleanup_parts_from_halves(
+        &mut self,
+        key_te: Option<&TypeExpr>,
+        val_te: Option<&TypeExpr>,
+    ) -> (
+        bool,
+        bool,
+        Option<StructType<'ctx>>,
+        Option<StructType<'ctx>>,
+        Option<FunctionValue<'ctx>>,
+        Option<FunctionValue<'ctx>>,
+    ) {
+        let k = key_te;
         let key_is_vec =
             k.is_some_and(|t| self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(t)));
         let key_shared = k.and_then(|t| self.shared_heap_type_for_type_expr(t));
@@ -3474,10 +3506,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             key_is_vec
         };
-        if head == "Set" {
-            return (key_is_vec, false, key_shared, None, None, key_drop_fn);
-        }
-        let v = nth(path, 1).cloned();
+        let v = val_te;
         let val_is_vec = v
             .as_ref()
             .is_some_and(|t| self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(t)));
