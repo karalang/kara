@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 249 | 0 |
-| leak | 177 | 1 |
+| leak | 178 | 1 |
 | double-free | 129 | 0 |
 | run-vs-build | 121 | 0 |
 | codegen-gap | 109 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 873 | 4 |
+| codegen | 874 | 4 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1209 surfaced · 5 open · 1192 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1210 surfaced · 5 open · 1193 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -147,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1209 surfaced
 
 </details>
 
-### Fixed (1192)
+### Fixed (1193)
 
-<details><summary>1192 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1193 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7395,6 +7395,7 @@ THE UNMEASURED QUESTION IS ANSWERED: NO LEAK. The row closed with "Whether the h
 MEASURED against the interpreter as oracle on all three backends at both optimization levels, nine shapes: the annotated control; the unannotated call result (the repro); ASCENDING iteration through `keys()` and `iter()` — the two lines a registered-but-unmarked binding still gets wrong, and the only ones that separate gap 2 from gap 1; the `contains_key` / `is_empty` / `contains` method surface; the SortedSet twin; a PLACE source (`let bm = h.sm`), which is the same head-gate reached the other way; and the plain `Map` control, which must not move. Zero divergences.
 
 GATES: fmt / clippy / the full `--features llvm` suite clean, and both new tests pass at `-O0`. The asan `-O0` leg flags one fixture, `asan_shared_struct_string_field_reassign_no_leak`, which is B-2026-08-14-25's and contains no map, set or sorted collection of any kind. |
+| B-2026-08-15-5 | codegen | medium | shared-struct String field reassignment never frees the displaced buffer (hidden at default opt by LICM; -O0 leg caught it) | String joins the container family in release_old_shared_container_field (src/codegen/expr_ops.rs): the displaced buffer gets the same in-place cap-guarded drop through the field GEP before the new value is stored. Fixture comment rewritten to retire the false 'already released' premise; new aliasing fixture asan_shared_struct_string_field_reassign_aliasing pins self-assign, cross-alias, and compound-append shapes. Fixed in 04e550b0. |
 
 </details>
 
