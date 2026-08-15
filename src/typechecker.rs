@@ -3971,11 +3971,31 @@ impl<'a> TypeChecker<'a> {
                     name
                 ));
             }
+            // B-2026-08-15-26 — the routes are ordered by what the reader can
+            // actually DO, and every one of them was compiled before being
+            // named here. The clone route used to lead, phrased as a
+            // caller-side fix; it is neither. Measured across the shapes that
+            // still reach this diagnostic (owned user-fn param, `Vec.push`,
+            // `Map.insert`, struct-literal capture, `join`), cloning compiles
+            // only with FOUR things together: the clone inside the body (an
+            // outside clone is consumed just the same and stays `OnceFn`), an
+            // `own` capture prefix (without it the bare closure's `ref`
+            // capture trips the escape check), a `Clone` impl on the captured
+            // type (a plain user struct has no `clone` at all), and an
+            // `allocates` effect on the slot, since cloning allocates and a
+            // bare `Fn()` slot is pure. That last one means editing the
+            // declaration — the same precondition attached to the `OnceFn`
+            // route, which needs none of the other three. So the clone route
+            // is strictly harder than the alternative it was printed above,
+            // and leading with it walked the reader away from the simpler fix.
             msg.push_str(
-                "; help: clone the captured value before the closure body consumes it \
-                 so the closure becomes repeatable, restructure the code to invoke the \
-                 closure locally instead of routing it through this slot, or change the \
-                 slot type to `OnceFn(...)` if you control its declaration",
+                "; help: invoke the closure locally instead of routing it through this \
+                 slot, or change the slot type to `OnceFn(...)` if you control its \
+                 declaration. Cloning the capture is not a caller-side fix here: it \
+                 additionally needs the clone inside the body, an `own` capture prefix, \
+                 `Clone` on the captured type, and an `allocates` effect on the slot — \
+                 so it requires editing the declaration too, where `OnceFn(...)` is the \
+                 smaller change",
             );
             self.type_error(msg, span, TypeErrorKind::OnceFnIntoFnSlot);
             return false;

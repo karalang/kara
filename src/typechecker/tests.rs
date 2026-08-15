@@ -699,13 +699,27 @@ mod once_fn_slot_rejection_tests {
     }
 
     #[test]
-    fn diagnostic_includes_three_concrete_fix_hints() {
-        // Round 12.47 (Step 5a) — diagnostic polish. The OnceFnIntoFnSlot
-        // message must offer the three concrete fixes documented in the
-        // implementation checklist: clone the consumed capture, restructure
-        // to keep the closure local, or change the slot type to `OnceFn`.
-        // Pin each phrase so future edits to the message body don't silently
-        // drop a fix hint.
+    fn diagnostic_offers_only_routes_that_compile() {
+        // B-2026-08-15-26 — was `diagnostic_includes_three_concrete_fix_hints`,
+        // which pinned "clone the captured value" as the FIRST of three
+        // remedies. The clone route does not work the way that phrasing
+        // implies, and this program is the proof: `Cfg` is a plain struct with
+        // no `clone` method at all, so the advice the compiler printed here
+        // could not even be typed out, let alone compiled.
+        //
+        // Measured on the shapes that still reach this diagnostic after
+        // B-2026-08-15-22, cloning compiles only with FOUR things at once —
+        // clone inside the body, an `own` capture prefix, `Clone` on the
+        // captured type, and an `allocates` effect on the slot. The last needs
+        // the declaration edited, which is the precondition the message
+        // attaches to the `OnceFn` route, and that route needs none of the
+        // other three. So the clone route is strictly harder than the one it
+        // was printed above.
+        //
+        // What is pinned now: the two routes that were compiled and work, and
+        // the ABSENCE of the old unqualified clone advice. The negative
+        // assertion is the load-bearing one — a future edit that reinstates
+        // "clone the captured value" as a bare remedy fails here.
         let src = "struct Cfg { name: i64 }\n\
                    fn apply(c: Cfg) { }\n\
                    fn take(f: Fn()) { f() }\n\
@@ -718,19 +732,110 @@ mod once_fn_slot_rejection_tests {
         assert_eq!(hits.len(), 1, "all errors: {:?}", result.errors);
         let msg = &hits[0].message;
         assert!(
-            msg.contains("clone the captured value"),
-            "missing clone hint; got '{}'",
+            msg.contains("invoke the closure locally"),
+            "missing the invoke-locally route; got '{}'",
             msg
         );
         assert!(
-            msg.contains("invoke the closure locally") || msg.contains("restructure"),
-            "missing restructure-locally hint; got '{}'",
+            msg.contains("`OnceFn(...)`"),
+            "missing the OnceFn-slot route; got '{}'",
             msg
         );
         assert!(
-            msg.contains("`OnceFn(...)`") || msg.contains("OnceFn(...)"),
-            "missing OnceFn-slot-change hint; got '{}'",
+            !msg.contains("clone the captured value"),
+            "the unqualified clone remedy is back; it does not compile for this \
+             program (`Cfg` has no `clone`). Got '{}'",
             msg
+        );
+        // When the clone route IS mentioned, its preconditions travel with it —
+        // naming it without them is the defect this row recorded.
+        if msg.contains("Cloning the capture") {
+            for needed in [
+                "`own` capture prefix",
+                "`Clone` on the captured type",
+                "`allocates`",
+            ] {
+                assert!(
+                    msg.contains(needed),
+                    "clone route named without its precondition {needed}; got '{msg}'"
+                );
+            }
+        }
+    }
+
+    /// B-2026-08-15-26 — the routes the diagnostic names must COMPILE, and the
+    /// ones it declines to offer plainly must not. Prose assertions above pin
+    /// the wording; these pin the claims behind it, so the text cannot drift
+    /// away from what the compiler accepts without a test going red.
+    #[test]
+    fn the_offered_routes_actually_compile() {
+        let clean = |src: &str, label: &str| {
+            let result = typecheck_src(src);
+            let hits = errors_of_kind(&result, &TypeErrorKind::OnceFnIntoFnSlot);
+            assert!(
+                hits.is_empty(),
+                "{label}: expected no OnceFnIntoFnSlot; got: {:?}",
+                hits
+            );
+        };
+        let rejected = |src: &str, label: &str| {
+            let result = typecheck_src(src);
+            let hits = errors_of_kind(&result, &TypeErrorKind::OnceFnIntoFnSlot);
+            assert_eq!(hits.len(), 1, "{label}: expected the rejection to stand");
+        };
+
+        // ROUTE: change the slot to `OnceFn(...)`. No clone, no prefix, no
+        // derive — it is the smallest change of the three, which is why the
+        // message now names it before the clone.
+        clean(
+            "struct Cfg { name: i64 }\n\
+             fn apply(c: Cfg) { }\n\
+             fn take(f: OnceFn()) { f() }\n\
+             fn main() {\n\
+                 let cfg = Cfg { name: 7 };\n\
+                 take(|| apply(cfg));\n\
+             }",
+            "OnceFn slot",
+        );
+
+        // ROUTE: invoke locally instead of routing through a slot.
+        clean(
+            "struct Cfg { name: i64 }\n\
+             fn apply(c: Cfg) { }\n\
+             fn main() {\n\
+                 let cfg = Cfg { name: 7 };\n\
+                 let f = || apply(cfg);\n\
+                 f();\n\
+             }",
+            "invoke locally",
+        );
+
+        // NOT A ROUTE: cloning OUTSIDE and capturing the clone. The clone is
+        // consumed exactly as the original was, so the closure is still
+        // once-callable — this is the reading of the old advice that a reader
+        // is most likely to try first, and it changes nothing.
+        rejected(
+            "fn eat(s: String) { }\n\
+             fn take(f: Fn()) { f() }\n\
+             fn main() {\n\
+                 let b = \"x\";\n\
+                 let c = b.clone();\n\
+                 take(|| eat(c));\n\
+             }",
+            "clone outside the body",
+        );
+
+        // NOT A ROUTE ON ITS OWN: the `own` capture prefix without a clone.
+        // Pinned because the new text names `own` as one of the clone route's
+        // preconditions, and a reader could mistake it for a remedy by itself.
+        rejected(
+            "fn eat(s: String) { }\n\
+             fn take(f: Fn()) { f() }\n\
+             fn main() {\n\
+                 let b = \"x\";\n\
+                 take(own || eat(b));\n\
+             }",
+            "own prefix alone",
         );
     }
 }

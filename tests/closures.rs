@@ -313,8 +313,24 @@ fn vec_oncefn_loop_invocation_accepts_oncefn_elements() {
 
 // ── Diagnostic polish (Step 5a) ─────────────────────────────────
 
+/// B-2026-08-15-26 — was `diagnostic_message_includes_all_three_fix_hints`,
+/// the integration-test twin of `src/typechecker/tests.rs`'s
+/// `diagnostic_offers_only_routes_that_compile`. Both pinned "clone the
+/// captured value" as a remedy; neither ever compiled it.
+///
+/// This very program is the counter-example: `Cfg` is a plain struct with no
+/// `clone` method, so the advice could not be written down at all. Cloning
+/// compiles on the shapes that reach this diagnostic only with the clone
+/// inside the body, an `own` capture prefix, `Clone` on the captured type,
+/// and an `allocates` effect on the slot — the last of which means editing
+/// the declaration, which is what the `OnceFn` route asks for and it needs
+/// nothing else.
+///
+/// TWO COPIES IS THE POINT of keeping this one: the wording lived in one
+/// place and was asserted in two, so a fix applied to either alone leaves the
+/// other pinning text that no longer exists. Both are updated together.
 #[test]
-fn diagnostic_message_includes_all_three_fix_hints() {
+fn diagnostic_offers_only_routes_that_compile() {
     let src = "struct Cfg { name: i64 }\n\
                fn apply(c: Cfg) { }\n\
                fn take(f: Fn()) { f() }\n\
@@ -326,18 +342,19 @@ fn diagnostic_message_includes_all_three_fix_hints() {
     let hits = assert_once_fn_into_fn_slot(&result);
     let msg = &hits[0].message;
     assert!(
-        msg.contains("clone the captured value"),
-        "missing clone hint; got '{}'",
-        msg
-    );
-    assert!(
-        msg.contains("invoke the closure locally") || msg.contains("restructure"),
-        "missing restructure-locally hint; got '{}'",
+        msg.contains("invoke the closure locally"),
+        "missing the invoke-locally route; got '{}'",
         msg
     );
     assert!(
         msg.contains("OnceFn(...)"),
-        "missing OnceFn slot-change hint; got '{}'",
+        "missing the OnceFn-slot route; got '{}'",
+        msg
+    );
+    assert!(
+        !msg.contains("clone the captured value"),
+        "the unqualified clone remedy is back; it does not compile for this program \
+         (`Cfg` has no `clone`). Got '{}'",
         msg
     );
 }
