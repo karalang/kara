@@ -49727,4 +49727,62 @@ fn main() {
             "use_after_move_as_call_argument_in_callee",
         );
     }
+
+    /// B-2026-08-15-9 — a fresh-owned `Vec` temporary passed to a BARE-`T`
+    /// generic param that shares its type parameter with a returned sibling.
+    ///
+    /// The row was filed believing the RETURNED param leaked. It does not:
+    /// `echo[T](x: T) -> T { x }` and the forwarding `nest[T](x: T) -> T {
+    /// id(id(x)) }` were both single-free already, because the buffer moves out
+    /// and the caller's result binding frees it exactly once. What leaked was the
+    /// SIBLING — `b` in `pick[T](a: T, b: T) -> T { id(a) }` — rejected for `a`'s
+    /// reason, since the gate tests the declared RETURN TYPE against a type-param
+    /// name both params share. Asymmetric argument sizes are what showed it: a
+    /// 16-element `b` against an 8-element `a` leaks 128 bytes per call, not 64.
+    ///
+    /// `takeout` is the double-free direction and belongs here permanently. Its
+    /// `b` is used only as a `match` scrutinee, which the neighbouring
+    /// `nonescaping_param_names` calls non-escaping — and swapping that predicate
+    /// in at the call site turns this exact line into an ASAN double-free abort,
+    /// because the arm binds the scrutinee and returns it. It passes here by
+    /// being EXCLUDED from materialization, so if the strict rule is ever
+    /// loosened this fixture is what catches it.
+    #[test]
+    fn asan_generic_unused_bare_type_param_temp_arg_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn id[T](v: T) -> T { return v; }
+fn pick[T](a: T, b: T) -> T { return id(a); }
+fn keep[T](a: T, b: T) -> T { return a; }
+fn echo[T](x: T) -> T { return x; }
+fn nest[T](x: T) -> T { return id(id(x)); }
+fn takeout[T](b: T) -> T { match b { v => { return v; } } }
+fn three[T](a: T, b: T, c: T) -> T { return b; }
+fn mk() -> Vec[i64] { let v: Vec[i64] = [10, 20, 30, 40]; return v; }
+fn main() {
+    let x: Vec[i64] = [1, 2, 3, 4, 5, 6, 7, 8];
+    let y: Vec[i64] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    let ns: Vec[String] = ["alphaalphaalpha", "betabetabeta"];
+    let mut k = 0;
+    let mut t = 0;
+    while k < 20 {
+        let r1 = pick(x.clone(), y.clone()); t = t + r1[0];
+        let r2 = keep(x.clone(), y.clone()); t = t + r2[1];
+        let r3 = echo(x.clone()); t = t + r3[2];
+        let r4 = nest(x.clone()); t = t + r4[3];
+        let r5 = takeout(x.clone()); t = t + r5[4];
+        let r6 = three(x.clone(), y.clone(), mk()); t = t + r6[0];
+        let r7 = keep(ns.clone(), ns.clone()); t = t + r7.len();
+        let r8 = keep(x.clone(), [90, 91, 92]); t = t + r8[5];
+        k = k + 1;
+    }
+    println(t);
+    println(x.len());
+    println(ns[1]);
+}
+"#,
+            &["480", "8", "betabetabeta"],
+            "asan_generic_unused_bare_type_param_temp_arg_no_leak",
+        );
+    }
 }

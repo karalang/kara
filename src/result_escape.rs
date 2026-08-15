@@ -91,6 +91,40 @@ pub fn nonescaping_param_names(func: &Function) -> HashSet<String> {
         .collect()
 }
 
+/// Names of `func`'s PARAMETERS that appear NOWHERE in the body.
+///
+/// Strictly stronger than [`nonescaping_param_names`], which also admits a param
+/// used only as a direct `match` scrutinee. That relaxation is right for the RC
+/// residual it was written for — a scrutinee is consumed in place, so releasing
+/// it is safe — but it is NOT safe for a caller that wants to FREE the argument's
+/// buffer after the call, because a match arm can bind the scrutinee and hand it
+/// straight back out:
+///
+/// ```text
+/// fn takeout[T](b: T) -> T { match b { v => { return v; } } }
+/// ```
+///
+/// `b` is counted as a scrutinee use and `v` is a different name, so
+/// `nonescaping_param_names` calls `b` non-escaping — yet the buffer the caller
+/// passed in is exactly what the caller then binds as the RESULT. Freeing the
+/// argument on top of that is a double free, not a leak. `total == 0` cannot be
+/// fooled that way: a param the body never names cannot reach any position at
+/// all. B-2026-08-15-9 uses this one for that reason.
+pub fn unused_param_names(func: &Function) -> HashSet<String> {
+    let mut acc = Acc::default();
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            let (total, _) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0));
+            (total == 0).then(|| name.clone())
+        })
+        .collect()
+}
+
 fn record_use<'a>(acc: &mut Acc<'a>, name: &'a str, scrutinee: bool) {
     let e = acc.counts.entry(name).or_insert((0, 0));
     e.0 += 1;
@@ -532,6 +566,61 @@ mod tests {
     fn returned_param_escapes() {
         let names = nonescaping_params("fn id(r: R) -> R { r }");
         assert!(!names.contains("r"), "returned param `r` must escape");
+    }
+
+    /// Same helper, the strict predicate.
+    fn unused_params(src: &str) -> HashSet<String> {
+        let parsed = crate::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let func = parsed
+            .program
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("no function");
+        unused_param_names(func)
+    }
+
+    /// THE POINT OF HAVING TWO PREDICATES, pinned as a pair so neither drifts
+    /// into the other. `b` is used only as a `match` scrutinee, which
+    /// `nonescaping_param_names` admits — correct for the in-place RC release it
+    /// serves, and wrong for a caller that wants to FREE `b`'s buffer, because
+    /// the arm binds the scrutinee and returns it. Measured under ASAN
+    /// (B-2026-08-15-9): swapping the strict predicate for the loose one at the
+    /// monomorph call site turns this exact shape into a double-free abort.
+    #[test]
+    fn match_scrutinee_param_is_nonescaping_but_not_unused() {
+        let src = "fn takeout(b: T) -> T { match b { v => { return v; } } }";
+        assert!(
+            nonescaping_params(src).contains("b"),
+            "a match-scrutinee-only param is non-escaping by the loose rule"
+        );
+        assert!(
+            !unused_params(src).contains("b"),
+            "...but it IS used, so the strict rule must reject it — the arm hands \
+             the caller's own buffer back out as the result"
+        );
+    }
+
+    /// The shape B-2026-08-15-9 fixes: a param that shares its type parameter
+    /// with a RETURNED sibling but is itself never named. The return-type test
+    /// in `mono.rs` cannot tell the two apart — both are `T` — so it declined
+    /// both; this is what tells them apart.
+    #[test]
+    fn sibling_of_a_returned_param_is_unused() {
+        let names = unused_params("fn pick(a: T, b: T) -> T { return id(a); }");
+        assert!(names.contains("b"), "never-named `b` must be unused");
+        assert!(
+            !names.contains("a"),
+            "`a` reaches the return through a forwarding call and must not be unused"
+        );
     }
 
     #[test]

@@ -1316,6 +1316,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pending_let_elem_type_expr = saved_pending_elem_te;
         let arg_vals: Vec<BasicValueEnum<'ctx>> = arg_vals?;
 
+        // Body walk for B-2026-08-15-9's gate, computed at most once per call
+        // and only when a bare-`T` param the return-type test rejected actually
+        // turns up — most generic calls never touch it.
+        let mut unused_generic_params: Option<std::collections::HashSet<String>> = None;
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
             // B-2026-07-14-12: a fresh-heap `String` TEMP arg to a generic fn
@@ -1377,13 +1381,50 @@ impl<'ctx> super::Codegen<'ctx> {
                     | ExprKind::PrefixCollectionLiteral { .. }
                     | ExprKind::RepeatLiteral { .. }
             );
+            // B-2026-08-15-9 — the third admitting predicate, for a bare-`T`
+            // param the return-type test excluded even though THIS param cannot
+            // be what the callee returns.
+            //
+            // That test asks whether the declared return type mentions the
+            // param's type param NAME, and the name is shared by every param
+            // written with it. So in `fn pick[T](a: T, b: T) -> T { id(a) }`,
+            // `b` is rejected for `a`'s reason: the return can only ever be one
+            // of them, but the gate cannot tell which, so it declines both. The
+            // row this closes was filed on the belief that the RETURNED param
+            // leaked; it does not — `echo[T](x: T) -> T { x }` and the
+            // forwarding `nest[T](x: T) -> T { id(id(x)) }` are both single-free
+            // already, because the buffer moves out and the caller's result
+            // binding frees it exactly once. The leak was always the SIBLING,
+            // and asymmetric argument sizes are what showed it: a 128-byte `b`
+            // against a 64-byte `a` leaks 128 per call.
+            //
+            // `unused_param_names` — not the `nonescaping_param_names` next to
+            // it — is the predicate, and the difference is load-bearing rather
+            // than cautious. That sibling also admits a param used only as a
+            // direct `match` scrutinee, which is safe for the in-place RC
+            // release it was built for but not here: `match b { v => return v }`
+            // type-checks, counts `b` as a scrutinee use, and hands the caller's
+            // own buffer back as the result — freeing it here would be the
+            // second free. A param the body never names at all cannot reach any
+            // position, returns included.
+            let param_cannot_reach_return = Self::generic_param_is_bare_type_param_spelling(
+                &generic_fn,
+                i,
+            ) && matches!(
+                generic_fn.params.get(i).map(|p| &p.pattern.kind),
+                Some(crate::ast::PatternKind::Binding(n))
+                    if unused_generic_params
+                        .get_or_insert_with(|| crate::result_escape::unused_param_names(&generic_fn))
+                        .contains(n.as_str())
+            );
             let is_fresh_vec_temp_for_owned_param = (self.expr_yields_fresh_owned_temp(&a.value)
                 || is_collection_literal_arg)
                 && self.llvm_ty_is_vec_struct(val.get_type())
                 && !self.string_typed_exprs.contains(&arg_key)
                 && !self.rhs_stages_fstr_acc(&a.value)
                 && (Self::generic_param_is_bare_type_param(&generic_fn, i)
-                    || Self::generic_param_is_owned_container(&generic_fn, i));
+                    || Self::generic_param_is_owned_container(&generic_fn, i)
+                    || param_cannot_reach_return);
             if is_fresh_string_temp || is_fresh_vec_temp_for_owned_param {
                 self.materialize_owned_temp(val, arg_key);
             }

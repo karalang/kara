@@ -96225,6 +96225,54 @@ fn main() {
 "#;
         assert_eq!(run_program(src).as_deref(), Some("alphabetical\n"));
     }
+
+    /// B-2026-08-15-9 — bare-`T` generic params across the return relationships
+    /// that decide who frees the argument.
+    ///
+    /// A regression guard, not the detector: the leak is what
+    /// `asan_generic_unused_bare_type_param_temp_arg_no_leak` catches, and every
+    /// value here was already correct. What it pins is the direction this fix
+    /// could go wrong. `takeout` returns its `match` scrutinee and `pick` /
+    /// `nest` reach the return through a forwarding call, so all three are
+    /// shapes where a caller-side drop would collide with the result consumer's
+    /// — a collision ASAN reports as a double free shows up here as a corrupted
+    /// read. `x` and `ns` are re-read at the end, after being cloned into eight
+    /// calls, to pin that nothing freed a buffer their bindings still own.
+    #[test]
+    fn test_e2e_generic_bare_type_param_temp_arg() {
+        assert_eq!(
+            run_program(
+                "fn id[T](v: T) -> T { return v; }\n\
+                 fn pick[T](a: T, b: T) -> T { return id(a); }\n\
+                 fn keep[T](a: T, b: T) -> T { return a; }\n\
+                 fn echo[T](x: T) -> T { return x; }\n\
+                 fn nest[T](x: T) -> T { return id(id(x)); }\n\
+                 fn takeout[T](b: T) -> T { match b { v => { return v; } } }\n\
+                 fn three[T](a: T, b: T, c: T) -> T { return b; }\n\
+                 fn mixed[T](a: T, n: i64) -> i64 { return n; }\n\
+                 fn mk() -> Vec[i64] { let v: Vec[i64] = [10, 20, 30]; return v; }\n\
+                 fn main() {\n\
+                     let x: Vec[i64] = [1, 2, 3, 4, 5];\n\
+                     let y: Vec[i64] = [6, 7, 8];\n\
+                     let ns: Vec[String] = [\"alpha\", \"beta\"];\n\
+                     let r1 = pick(x.clone(), y.clone()); println(r1[0]);\n\
+                     let r2 = keep(x.clone(), y.clone()); println(r2[4]);\n\
+                     let r3 = echo(x.clone()); println(r3[1]);\n\
+                     let r4 = nest(x.clone()); println(r4[2]);\n\
+                     let r5 = takeout(x.clone()); println(r5[3]);\n\
+                     let r6 = three(x.clone(), y.clone(), mk()); println(r6[1]);\n\
+                     println(mixed(x.clone(), 42));\n\
+                     let r7 = pick(ns.clone(), ns.clone()); println(r7[1]);\n\
+                     let r8 = keep(ns.clone(), ns.clone()); println(r8[0]);\n\
+                     let r9 = keep(x.clone(), [90, 91, 92]); println(r9[0]);\n\
+                     println(x.len());\n\
+                     println(y.len());\n\
+                     println(ns[1]);\n\
+                 }\n"
+            ),
+            Some("1\n5\n2\n3\n4\n7\n42\nbeta\nalpha\n1\n5\n3\nbeta\n".to_string())
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]
