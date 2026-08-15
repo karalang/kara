@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 249 | 0 |
 | leak | 177 | 3 |
 | double-free | 129 | 1 |
-| run-vs-build | 120 | 1 |
+| run-vs-build | 121 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
 | perf | 67 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 869 | 6 |
+| codegen | 870 | 6 |
 | typecheck | 171 | 1 |
 | interp | 145 | 0 |
 | ownership | 48 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced · 8 open · 1183 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1204 surfaced · 8 open · 1184 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
@@ -136,8 +136,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-32 | 2026-08-14 | codegen | high | an index read into a heap-owning Vec, used as the value of an `if`/`match` ARM, is freed by both the binding and the container -- `let w = if c { v[i] } else { .. }` aborts with a double free while `let w = v[i]` is correct | src/codegen/stmts.rs:4074 and let_binding_is_borrow_elided (stmts.rs:1581) test only the TOP-LEVEL RHS kind for ExprKind::Index; an index read reached through an If/Match arm is invisible to them, so the binding registers an owned cleanup over a pointer the container still owns. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
-| B-2026-08-14-35 | 2026-08-14 | codegen | medium | `SortedMap` and `SortedSet` print with the WRONG PREFIX under `karac build` on every spelling, bound variable included: `SortedMap{kk: 1}` renders as `{kk: 1}` and `SortedSet{kk}` as `Set{kk}`, so a compiled program's output claims a different type than the one it holds and disagrees with `karac run`. | `emit_map_display_fn` / `emit_set_display_fn` in `src/codegen/synth_display.rs` hard-code the unsorted prefixes and have no Sorted* variant (grep the file for either name: nothing). Both call sites already know the surface type — the identifier arms from the per-variable registries, the span-keyed arm from `display_map_types`' source `Type::Named { name, .. }`, which discards `name` after matching it. |
 | B-2026-08-14-36 | 2026-08-14 | codegen | medium | A `Map` or `Set` TEMPORARY that is printed and not bound leaks its whole handle — `println(f"{mk()}")` in a 40-print loop strands 21440 bytes over 120 allocations, with no other owner to free it. | `try_compile_map_or_set_display` renders without registering a `FreeMapHandle`. Extract the binding path's drop-shape derivation (`src/codegen/maps.rs`, near the `track_map_var_with_val_drop` call — six call sites derive it near-identically today) into a helper over the key/value `TypeExpr`s, then gate the call on `print_vec_operand_is_owned_temp`. |
+| B-2026-08-15-1 | 2026-08-15 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints raw bytes, and `m.len()` is a hard codegen error — while the same program with a type annotation, or with plain `Map`/`Set`, is correct on every surface. | The `let` path derives the collection side-tables (`map_key_type_exprs` / `var_elem_type_exprs` / `set_elem_type_exprs` / `sorted_collection_vars`) from the ANNOTATION; the callee's declared return type is never consulted for the `SortedMap` / `SortedSet` heads, so an unannotated call-result binding registers nothing. The plain `Map` / `Set` equivalent registers fine, so the head-gate is the gap, not the call-result shape. |
 
 ### Wontfix (2)
 
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced
 
 </details>
 
-### Fixed (1183)
+### Fixed (1184)
 
-<details><summary>1183 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1184 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6935,6 +6935,97 @@ a future "just sort it" refactor rather than evidence of the bug.
 Full `--features llvm` suite green (2969 codegen, 2221 typechecker, 1521
 interpreter, 1079 memory_sanitizer, 584 drop_differential, 428 ownership, 356
 resolver, 4443 across everything else), fmt and clippy `--all-targets` clean. |
+| B-2026-08-14-35 | codegen | medium | `SortedMap` and `SortedSet` print with the WRONG PREFIX under `karac build` on every spelling, bound variable included: `SortedMap{kk: 1}` renders as… | FIXED by 097987b. `SortedMap` / `SortedSet` now render under `karac build` with
+their own type name AND in ascending key order, byte-identical to the
+interpreter on every spelling.
+
+THE ROW WAS RIGHT ABOUT THE PREFIX AND RIGHT TO DEMAND THE ORDER CHECK. It was
+never run, and it is the half that mattered:
+
+    program (inserted zebra, apple, mango / 30, 10, 20)
+                                interp                      karac build (pre-fix)
+    SortedMap[String, i64]      SortedMap{apple: 2,         {zebra: 1, apple: 2,
+                                  mango: 3, zebra: 1}         mango: 3}
+    SortedSet[i64]              SortedSet{10, 20, 30}      Set{10, 20, 30}
+    empty SortedMap             SortedMap{}                {}
+    Vec[SortedMap[String,i64]]  [SortedMap{...}]           COMPILER PANIC
+
+So the render was not merely mislabelled: a `SortedMap[String, i64]` printed in
+HASH-BUCKET SEQUENCE under a `Map` label — a collection whose entire purpose is
+deterministic key order, silently emitting a different order than the `for`
+loop, `keys()` and `entries()` on the same value all produce. The row's warning
+was exact: a prefix-only fix would have been a worse bug wearing a correct
+label.
+
+Note the integer `SortedSet` line: `Set{10, 20, 30}` — the CONTENTS came out
+sorted, by coincidence of bucket order for three small ints. That is why the
+regression fixture carries a String-keyed map alongside it, with insertion
+order deliberately unequal to sorted order (zebra/apple/mango, 30/10/20) in
+every case: a scalar-only fixture passes by luck.
+
+THE NESTED SPELLING PANICKED THE COMPILER, which the row did not know.
+`Vec[SortedMap[K, V]]` — or any shape reaching the recursive display dispatcher
+— fell past its Vec/Map/Set arms into the by-name catch-all and aborted with
+`emit_display_fn_for_type: type_name 'SortedMap_String_i64' not yet supported`
+plus a Rust backtrace. Same root cause (no Sorted* arm anywhere in
+`synth_display.rs`), a harder failure.
+
+THE FIX: ONE PAIR OF RENDERERS, SHARING THE ITERATION MECHANISM ALREADY PROVEN.
+`emit_sorted_map_display_fn` / `emit_sorted_set_display_fn` emit
+`SortedMap{`/`SortedSet{` and walk `emit_sorted_keys_buf` by index — the SAME
+call `for (k, v) in m`, `keys()` and `values()` make — looking each value up
+with `karac_map_get`, then freeing the buffer. Reusing that buffer rather than
+re-deriving an order is the point: the render cannot drift from iteration,
+because there is only one ordering mechanism.
+
+Four call sites select it, and all four needed to: the two identifier arms
+(`compile_print` for `println(m)`, `try_compile_collection_display` for
+`f"{m}"`) key off the existing `sorted_collection_vars`; the span-keyed arm
+B-2026-08-14-31 added keys off a new `display_sorted_collection_spans`, because
+`display_map_types` / `display_set_types` admit the sorted siblings and then
+keep only the type ARGUMENTS — the surface name was discarded exactly where it
+decides the renderer. The recursive dispatcher gets `SortedMap`/`SortedSet`
+arms, which is what closes the panic.
+
+WHY THESE TWO RETURN `Result` where the unsorted entry points do not:
+`emit_sorted_key_cmp_fn` declines element types codegen cannot order, and
+rendering those in bucket order under a `SortedMap` label is precisely the bug
+being fixed. The direct entry points propagate cleanly. The recursive
+dispatcher is not `Result`-returning and cannot be made so without threading it
+through every element and field shape in the file, so it panics there with the
+comparator's actionable message instead of a mangled cache key — the convention
+every other unsupported arm in that file already uses, and unreachable in
+practice: the typechecker restricts sorted keys to `Ord` types and separately
+requires `Display`, and codegen's comparator covers every type in that
+intersection.
+
+ONE GAP THE FIX EXPOSED, FIXED WITH IT. The comparator accepted `String` but
+not `str` — the typechecker-internal spelling that `type_to_type_expr` produces
+and that the span-keyed path (a struct field, a call result) therefore hands
+it. Without that one-line widening, this change turned a wrong-prefix render of
+a plain `SortedMap[String, i64]` field into a BUILD FAILURE. Caught by the
+matrix, not by reasoning.
+
+PINNED by three tests. Twinned codegen/interpreter value tests run the fixture
+above across every spelling that reaches a different path — bound local in both
+`f"{}"` and bare-`println` form, struct field, call result, `Vec` element, and
+empty — asserting one shared expected string. An LSan fixture renders String-
+keyed sorted collections 20 times: the sorted path mallocs a key buffer per
+render, so it has two failure modes the iterator path does not — leak the
+buffer, or free the aliasing `{ptr, len, cap}` headers it holds and release a
+key the map still owns.
+
+NOT FIXED, FILED SEPARATELY AS B-2026-08-15-1: an UNANNOTATED `let m = mk()`
+bound to a call returning `SortedMap`/`SortedSet` registers nothing at all — it
+prints its control pointer (`f"{m}"`) or raw bytes (`println(m)`), and
+`m.len()` is a hard codegen error. The annotated form of the same program is
+fine, and the plain `Map`/`Set` equivalent is fine. That is a variable-
+registration gap, not a display one: fixing only its display half would put a
+correct render on a binding whose every method call still fails to compile.
+Measured before this change and unchanged by it.
+
+Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
+and fmt clean. |
 
 </details>
 
