@@ -48205,6 +48205,70 @@ fn main() {
         );
     }
 
+    /// B-2026-08-15-2 — `s.push_str(s)` on a heap string that must grow.
+    ///
+    /// This is the only test that can see the bug. The E2E twin
+    /// (`test_e2e_string_push_str_self_append`) printed every value correctly
+    /// both before and after the fix: `emit_string_buffer_grow` reallocs the
+    /// destination, and the copy then read through the source pointer captured
+    /// BEFORE that realloc — a heap-use-after-free of the whole string, whose
+    /// freed bytes are usually still mapped, so the answer came out right and
+    /// nothing surfaced. Under a different allocator or with concurrent
+    /// allocation it is silent corruption instead of silent success.
+    ///
+    /// THE SIZE IS LOAD-BEARING, measured rather than assumed: a 4-byte or
+    /// 16-byte self-append does NOT trip the sanitizer on the parent commit,
+    /// because realloc extends those in place and frees nothing. Only a buffer
+    /// large enough to force a real MOVE — 40 KB here — makes the dangling
+    /// read observable, which is why the row's repro needed its 5,000-iteration
+    /// preamble and why shrinking this fixture would quietly make it vacuous.
+    ///
+    /// The second half pins the deleted guard. `push_str`'s grow path used to
+    /// PANIC on a borrowed source that overlapped the destination
+    /// ("source slice aliases destination buffer"), emitted only under
+    /// `src_borrowed`; the rebase makes that shape correct rather than
+    /// detected, so the panic is gone and a borrowed slice of a DIFFERENT
+    /// string — the hot path the borrowed-source optimisation exists for —
+    /// must still run clean across a grow.
+    #[test]
+    fn asan_string_push_str_self_append_no_use_after_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut d = String.new();
+    let mut i = 0i64;
+    while i < 5000i64 { d.push_str("abcdefgh"); i = i + 1i64; }
+    d.push_str(d);
+    println(f"{d.len()}");
+    println(d[39992..40000]);
+    println(d[40000..40008]);
+
+    let mut c = String.new();
+    c.push_str("pq");
+    c.push_str(c);
+    c.push_str(c);
+    println(f"{c} {c.len()}");
+
+    let src = "abcdefghijklmnopqrstuvwxyz";
+    let mut out = String.new();
+    let mut j = 0i64;
+    while j < 2000i64 { out.push_str(src[3..9]); j = j + 1i64; }
+    println(f"{out.len()}");
+    println("end");
+}
+"#,
+            &[
+                "80000",
+                "abcdefgh",
+                "abcdefgh",
+                "pqpqpqpq 8",
+                "12000",
+                "end",
+            ],
+            "string_push_str_self_append",
+        );
+    }
+
     /// B-2026-08-14-15 leg A — a nested container read into a `let` binding
     /// and then probed with a key-taking method.
     ///

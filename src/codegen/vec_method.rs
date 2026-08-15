@@ -4063,42 +4063,48 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Required capacity = len + src_len.
                 let new_len = self.builder.build_int_add(len, src_len, "new_len").unwrap();
 
-                // Growth check: if new_len > cap, grow.
-                let fn_val = self.current_fn.unwrap();
-                let grow_bb = self.context.append_basic_block(fn_val, "pstr.grow");
-                let copy_bb = self.context.append_basic_block(fn_val, "pstr.copy");
-                let needs_grow = self
+                // B-2026-08-15-2 — SELF-APPEND. Measure the source's offset into
+                // the destination's buffer BEFORE the grow, so the copy below
+                // can rebuild the pointer from wherever the buffer ends up.
+                //
+                // `s.push_str(s)` is the shape: the argument compiles to a
+                // `{ptr,len,cap}` header aliasing the destination's own buffer,
+                // `emit_string_buffer_grow` reallocs it (which may MOVE it, and
+                // frees the old block when it does), and the copy then read
+                // through the stale `src_ptr` — a heap-use-after-free of the
+                // whole string on every call. It printed the correct answer
+                // anyway, because the freed bytes are usually still mapped, so
+                // nothing surfaced without a sanitizer.
+                //
+                // Rebasing rather than rejecting: the source lies inside
+                // `[data, data + cap)` and the grow preserves those bytes at the
+                // same offsets, so `new_data + offset` names the same content.
+                // That makes the aliasing CORRECT instead of merely detected,
+                // which is what lets the panic below be deleted — and it is what
+                // an `s += s` lowered onto this in-place path (B-2026-08-14-22 /
+                // -23) needs in order to be safe at all.
+                //
+                // `cap` is the OLD capacity, loaded above: a `cap == 0` receiver
+                // (static literal / empty) has an empty range, so `aliases` is
+                // false and the source — which the grow's malloc-and-copy path
+                // leaves untouched — is used as-is.
+                let src_int = self
                     .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, new_len, cap, "needs_grow")
+                    .build_ptr_to_int(src_ptr, i64_t, "pstr.src.int")
                     .unwrap();
-                self.builder
-                    .build_conditional_branch(needs_grow, grow_bb, copy_bb)
+                let data_int = self
+                    .builder
+                    .build_ptr_to_int(data, i64_t, "pstr.data.int")
                     .unwrap();
-
-                // Grow: new_cap = max(new_len, max(4, cap * 2))
-                self.builder.position_at_end(grow_bb);
-                // Aliasing guard — borrowed-source only. A borrowed slice arg
-                // (`out.push_str(src[a..b])`) points INTO `src`'s buffer; if that
-                // buffer is the destination's own (`s.push_str(s[a..b])`), the
-                // `free(data)` below would dangle the source before the copy.
-                // Detect the overlap and panic with a clear message, matching
-                // `Vec.extend_from_slice`'s policy. The common case (distinct
-                // source) never overlaps, so this is a cold, grow-only check; an
-                // owned-temp source is a fresh copy that can't alias, so the
-                // guard is emitted only for the borrowed path.
-                if src_borrowed {
-                    let src_int = self
-                        .builder
-                        .build_ptr_to_int(src_ptr, i64_t, "pstr.src.int")
-                        .unwrap();
-                    let data_int = self
-                        .builder
-                        .build_ptr_to_int(data, i64_t, "pstr.data.int")
-                        .unwrap();
-                    let data_end = self
-                        .builder
-                        .build_int_add(data_int, cap, "pstr.data.end")
-                        .unwrap();
+                let data_end = self
+                    .builder
+                    .build_int_add(data_int, cap, "pstr.data.end")
+                    .unwrap();
+                let src_offset = self
+                    .builder
+                    .build_int_sub(src_int, data_int, "pstr.src.off")
+                    .unwrap();
+                let src_aliases = {
                     let ge = self
                         .builder
                         .build_int_compare(
@@ -4117,19 +4123,33 @@ impl<'ctx> super::Codegen<'ctx> {
                             "pstr.alias.lt",
                         )
                         .unwrap();
-                    let overlap = self.builder.build_and(ge, lt, "pstr.alias").unwrap();
-                    let panic_bb = self.context.append_basic_block(fn_val, "pstr.alias.panic");
-                    let ok_bb = self.context.append_basic_block(fn_val, "pstr.alias.ok");
-                    self.builder
-                        .build_conditional_branch(overlap, panic_bb, ok_bb)
-                        .unwrap();
-                    self.builder.position_at_end(panic_bb);
-                    self.emit_panic(
-                        "String.push_str: source slice aliases destination buffer (use a distinct source when grow is required)",
-                    );
-                    self.builder.build_unreachable().unwrap();
-                    self.builder.position_at_end(ok_bb);
-                }
+                    self.builder.build_and(ge, lt, "pstr.alias").unwrap()
+                };
+
+                // Growth check: if new_len > cap, grow.
+                let fn_val = self.current_fn.unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "pstr.grow");
+                let copy_bb = self.context.append_basic_block(fn_val, "pstr.copy");
+                let needs_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, new_len, cap, "needs_grow")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(needs_grow, grow_bb, copy_bb)
+                    .unwrap();
+
+                // Grow: new_cap = max(new_len, max(4, cap * 2))
+                self.builder.position_at_end(grow_bb);
+                // B-2026-08-15-2 — the borrowed-source aliasing PANIC that stood
+                // here is gone, replaced by the rebase above/below. It fired for
+                // `out.push_str(src[a..b])` when `src` was the destination, on
+                // the reasoning that the grow's `free(data)` dangles the source;
+                // rebasing removes the dangle instead of reporting it, so the
+                // shape is now simply correct. It was also only half a guard: it
+                // was emitted `if src_borrowed` only, because "an owned-temp
+                // source is a fresh copy that can't alias" — true of a temporary
+                // and false of the destination VARIABLE itself, which is exactly
+                // how `s.push_str(s)` walked past it into a use-after-free.
                 let two = i64_t.const_int(2, false);
                 // String byte buffer: floor the first allocation at 8 (not 4),
                 // matching Rust's `RawVec` min-cap for 1-byte elements, so a
@@ -4185,8 +4205,34 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_gep(self.context.i8_type(), cur_data, &[cur_len], "dest")
                         .unwrap()
                 };
+                // B-2026-08-15-2 — rebuild an ALIASING source from the buffer's
+                // current address. `cur_data` is reloaded from the slot, so it
+                // is the post-grow pointer on the grow edge and unchanged on the
+                // no-grow edge — which makes the select the identity there
+                // (`cur_data + offset == data + offset == src_ptr`) and correct
+                // on the other, with no phi needed.
+                //
+                // The two ranges cannot overlap, so a plain `memcpy` stays
+                // valid: the source sits within `[0, len)` of the buffer and the
+                // destination starts AT `len`.
+                let eff_src = {
+                    let rebased = unsafe {
+                        self.builder
+                            .build_gep(
+                                self.context.i8_type(),
+                                cur_data,
+                                &[src_offset],
+                                "pstr.src.rebased",
+                            )
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_select(src_aliases, rebased, src_ptr, "pstr.src.eff")
+                        .unwrap()
+                        .into_pointer_value()
+                };
                 self.builder
-                    .build_memcpy(dest, 1, src_ptr, 1, src_len)
+                    .build_memcpy(dest, 1, eff_src, 1, src_len)
                     .unwrap();
                 // Update len.
                 let updated_len = self

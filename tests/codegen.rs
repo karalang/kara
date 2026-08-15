@@ -29879,6 +29879,91 @@ SortedSet{}
         }
     }
 
+    /// B-2026-08-15-2 — `s.push_str(s)`, the self-append.
+    ///
+    /// The values here were ALREADY correct before the fix — that is the whole
+    /// difficulty of this row. The grow reallocated the destination and the
+    /// copy then read through the stale source pointer, but the freed bytes
+    /// are usually still mapped, so every line below printed exactly what it
+    /// should while committing a heap-use-after-free of the entire string.
+    /// `asan_string_push_str_self_append_no_use_after_free` is the gate; this
+    /// pins that making the aliasing correct did not change any answer.
+    ///
+    /// Line 05 is the one that would catch a WRONG rebase. Everything else
+    /// checks lengths and short contents, which a source pointer rebuilt at
+    /// the wrong offset can still satisfy; 05 reads the seam — the last 8
+    /// bytes of the original and the first 8 of the appended copy — where an
+    /// off-by-offset shows up as shifted text rather than a bad count.
+    ///
+    /// 01 is the `cap == 0` receiver, whose grow mallocs fresh and never frees
+    /// the literal, so it must NOT be rebased; 07 is a borrowed slice of a
+    /// DIFFERENT string, the hot path whose now-deleted alias panic used to
+    /// guard this arm.
+    #[test]
+    fn test_e2e_string_push_str_self_append() {
+        let src = r#"
+fn main() {
+    let mut a = "abc";
+    a.push_str(a);
+    println(f"01 {a} {a.len()}");
+
+    let mut b = String.new();
+    b.push_str("wxyz");
+    b.push_str(b);
+    println(f"02 {b} {b.len()}");
+
+    let mut c = String.new();
+    c.push_str("pq");
+    c.push_str(c);
+    c.push_str(c);
+    c.push_str(c);
+    println(f"03 {c} {c.len()}");
+
+    let mut d = String.new();
+    let mut i = 0i64;
+    while i < 5000i64 { d.push_str("abcdefgh"); i = i + 1i64; }
+    d.push_str(d);
+    println(f"04 {d.len()}");
+    println(f"05 {d[0..8]} {d[39992..40000]} {d[40000..40008]} {d[79992..80000]}");
+
+    let mut e = String.new();
+    e.push_str("hello");
+    let w = "world";
+    e.push_str(w);
+    println(f"06 {e} {e.len()}");
+
+    let s2 = "abcdefghij";
+    let mut out = String.new();
+    out.push_str(s2[2..6]);
+    out.push_str(s2[0..2]);
+    println(f"07 {out} {out.len()}");
+
+    let mut g = String.new();
+    g.push_str("");
+    g.push_str(g);
+    println(f"08 [{g}] {g.len()}");
+    let mut h = String.new();
+    h.push_str("zz");
+    h.push_str("");
+    println(f"09 {h} {h.len()}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 abcabc 6\n\
+                 02 wxyzwxyz 8\n\
+                 03 pqpqpqpqpqpqpqpq 16\n\
+                 04 80000\n\
+                 05 abcdefgh abcdefgh abcdefgh abcdefgh\n\
+                 06 helloworld 10\n\
+                 07 cdefab 6\n\
+                 08 [] 0\n\
+                 09 zz 2\n"
+            ),
+        );
+    }
+
     /// B-2026-08-15-1 — an UNANNOTATED binding of a `SortedMap` / `SortedSet`.
     ///
     /// The row above fixed how these RENDER; this is the spelling it could not
