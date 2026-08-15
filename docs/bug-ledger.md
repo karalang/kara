@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 121 | 0 |
 | codegen-gap | 109 | 0 |
 | missing-feature | 96 | 0 |
-| perf | 68 | 1 |
+| perf | 68 | 0 |
 | false-positive | 63 | 0 |
 | diagnostics | 57 | 0 |
 | crash | 46 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 877 | 2 |
+| codegen | 877 | 1 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1214 surfaced · 2 open · 1200 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1214 surfaced · 1 open · 1201 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-15-3 | 2026-08-15 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capacity 0 and re-grows 8 -> 16 -> ... on every round. Both spellings now compile to the same in-place append as `push_str` (B-2026-08-14-23), so the two are equivalent code and the heuristic disagrees with itself: measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends, entirely from the missing reservation. | `src/presize.rs`. `is_push_to` matches only `ExprKind::MethodCall` with `push`/`push_str`/`push_back`, and `top_level_push_count` counts only `StmtKind::Expr` statements, so `StmtKind::Assign { target: V, value: V + x }` and `StmtKind::CompoundAssign { Add, target: V, .. }` are invisible. `find_fill_bound` additionally BAILS on any non-`Expr` statement between the Let and the loop that mentions `V`, which would reject a prelude `s = s + "seed"` the way it currently folds in a prelude `s.push_str("seed")`. |
 | B-2026-08-15-9 | 2026-08-15 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED TO A BARE-`T` GENERIC PARAM THAT THE CALLEE RETURNS is never dropped -- `pick(x.clone(), y.clone())` on `fn pick[T](a: T, b: T) -> T { id(a) }` strands one buffer per call, while the same forwarding tail in CONTAINER spelling (`a: Vec[T]`) is clean as of B-2026-08-15-7. | `generic_param_is_bare_type_param` (src/codegen/mono.rs) rejects a bare-`T` param whose type param appears in the declared return type, so `compile_generic_call` queues no caller-side materialization for it. Deliberate: B-2026-08-11-3 measured the unguarded version as a real double free on this exact shape and chose the leak as the conservative direction. |
 
 ### Wontfix (2)
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1214 surfaced
 
 </details>
 
-### Fixed (1200)
+### Fixed (1201)
 
-<details><summary>1200 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1201 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7539,6 +7538,100 @@ THE TWO TESTS DIVIDE EXACTLY AS THE BUG DOES, verified against the parent both w
 MEASURED against the interpreter as oracle on all three backends at both optimization levels, nine shapes: the `cap == 0` receiver that must NOT be rebased; a heap self-append small enough to print in full; three chained self-appends, each reallocating again; the 40 KB shape with both ends and the seam; a distinct source; a borrowed slice of a DIFFERENT string (the hot path the deleted guard used to sit on); and the empty-source and empty-receiver degenerates. Zero divergences, ASAN clean at both levels.
 
 GATES: fmt / clippy / the full `--features llvm` suite clean, and the asan `-O0` leg is now FULLY green — 1092 passed, 0 failed, matching the quarantine list exactly. The `asan_shared_struct_string_field_reassign_no_leak` fixture that had been the leg's one standing failure was fixed by B-2026-08-15-5 (04e550b0) in a sibling session. |
+| B-2026-08-15-3 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capa… | FIXED by e8d1093. The two assignment spellings of an append now get the
+same up-front reservation as the method call, and the row's measurement closes
+completely.
+
+THE ROW'S NUMBER, REPRODUCED AND CLOSED. 2,000 rounds x 400 appends, before and
+after built from the same source and timed INTERLEAVED over 25 rounds so drift
+hits every binary equally (medians; the mins track them within 0.1 ms):
+
+                       before     after
+    s.push_str(lit)    2.37 ms    2.31 ms
+    s = s + lit        7.65 ms    2.33 ms
+    s += lit           7.61 ms    2.32 ms
+
+All three spellings are now indistinguishable, which is the right target: what
+the operator spellings were missing is the reservation the method call already
+had, not a better one. Output byte-identical across all six binaries, and peak
+RSS unchanged (8,080-8,184 KB across all six) — the row notes that a mistake
+here costs memory rather than an answer, so the memory was checked and not just
+argued about.
+
+THREE SITES, EXACTLY THE THREE THE TRACKER NAMED, and they had to move together
+because `presize.rs` is complete-or-bail — every analysis helper fails closed on
+a shape it does not understand, so widening one and not the others just relocates
+the bail. `is_push_to` stays as it is (it answers a question about an
+EXPRESSION, which is what the final-expr position needs); the new
+`stmt_appends_to` answers it about a STATEMENT, which is the only position the
+two assignment forms can occupy. `top_level_push_count` and `find_fill_bound`'s
+prelude arm both go through it.
+
+THE SAFETY ARGUMENT CARRIES OVER, AND IS ACTUALLY STRONGER THAN THE ROW CLAIMS.
+The row justifies the widening by B-2026-08-14-23 having made the spellings
+compile to the same in-place append. That is true but it is not what the
+argument needs, and resting on it would make this pass depend on another pass
+having fired. `presize.rs` fires on the grounds that the fill ALREADY
+ALLOCATES, so `new()` -> `with_capacity` adds no effect the function did not
+carry. An append allocates on EITHER path — the in-place grow, or the
+allocate-and-copy concatenation codegen still uses when the operand aliases the
+target (`s = s + s`, which B-2026-08-15-2 requires stay on the slow path). So
+the reservation is licensed by the operation, not by which lowering it reached.
+
+IT ALSO FIXES A PRE-EXISTING OVER-FIRE, which is the half of the change that
+only shows up once both spellings are visible. A body that appends twice in
+MIXED spellings — `s.push_str("x"); s += "y";` — counted one append and
+pre-sized as if the fill were one per iteration. Nothing was wrong (a
+reservation is a hint, and this one merely under-reserves), but the count was
+not honest, and `no_fire_on_mixed_spelling_double_append` fails against the
+pre-fix compiler for that reason rather than as a fire/no-fire regression.
+
+THE REMAINING IMPRECISION IS WORTH ~2%, MEASURED, so no follow-up is filed for
+it. The reservation is the TRIP COUNT, not the trip count times the width of
+what gets appended — so 400 rounds of an 8-byte literal reserve 400 bytes and
+still grow 400 -> 800 -> 1600 -> 3200. Hand-writing the exact reservation
+(`String.with_capacity(3200)`) on the same benchmark gives 2.46 ms against
+2.52 ms for the trip-count reservation: inside the noise. The three saved
+reallocs are not where the 5.3 ms went; going from cap 0 to cap n is.
+
+MATCHING `Binary` ONLY IS CORRECT HERE, AND IS PINNED RATHER THAN ASSUMED.
+Post-lowering, `s + x` is a `Call` to `String.add` — the shape that made a
+`Binary`-only recognizer silently dead in codegen (B-2026-08-14-23's postmortem,
+where the give-away was a partial speedup on the sibling spelling). `presize.rs`
+cannot hit that, because `lower_block` calls `presize_block` before lowering any
+of the block's statements. But its own unit tests cannot SHOW that: they call
+`presize_block` on a freshly parsed body, so they are pre-lowering by
+construction and would pass just as happily if the ordering flipped. The
+pipeline-level test below runs `karac::lower` and reads the emitted IR, so a
+reordering fails there instead of quietly costing 2x.
+
+MEASURED / PROBED: both assignment spellings under `while <`, `while <=` and
+`for`-range; a chain rooted at the target (`s = s + " " + t`); an
+assignment-spelled seed prelude; a balanced if/else whose arms both append by
+assignment; and, on the decline side, a prepend, an assignment not rooted at the
+target, a conditional append, two appends per iteration in both matched and
+mixed spellings, `-=`, a bare reassign prelude, a bound bound after the Let, and
+a giant literal bound.
+
+PINS. `presize_reservation::assign_append_spellings_reserve_up_front` in
+tests/codegen.rs (pipeline-level, reads `str_with_cap.buf` out of the IR) FAILS
+against the stashed compiler, as do seven of the new `src/presize.rs` unit tests
+— the six positives, plus `no_fire_on_mixed_spelling_double_append`, which fails
+there for the over-fire above rather than as a missing reservation. Their peers
+— `non_append_assignment_shapes_still_decline` and the other `no_fire_on_*`
+tests — pass both before and after by design: they guard the widening from
+OVER-reaching, which is the direction that would make the heuristic meaningless
+rather than merely slow.
+
+`fires_for`, the unit harness, now asserts the probe SOURCE PARSES. Every
+`assert!(!fires_for(..))` would otherwise also pass on a source that failed to
+parse, so a typo'd negative probe would read as a deliberate decline forever.
+All 33 still pass with the assertion in, so none of them was vacuous.
+
+GATES: full `--features llvm` suite green (13,714 passed / 0 failed — 2,984
+codegen, 1,523 interpreter, 1,082 memory_sanitizer, 588 drop_differential, 255
+par_codegen, the self-host oracle, plus the rest), fmt and clippy
+`--all-targets` clean. |
 | B-2026-08-15-4 | autopar | low | `cost_gate: "unknown"` conflates "the loop lookup failed" (a compiler bug) with "found it, but the iterable is not a shapeable range" (a legitimate l… | FIXED by 3893197. `cost_gate: "unknown"` now means A COMPILER BUG, every
 time it appears, and a shape the cost model declined says so in its own tag with
 prose that names the shape it wanted instead.
