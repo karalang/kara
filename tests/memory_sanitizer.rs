@@ -48478,9 +48478,25 @@ fn main() {
         // layout-dependent leak" of the four-field fixture; it was this bug,
         // visible whenever the allocations survive to run time). Since
         // B-2026-08-15-5's fix the displaced String rides the same
-        // release_old_shared_container_field arm as the container family, and
-        // this fixture asserts that at every opt level — leak-clean AND
-        // double-free-clean (a second release would trip ASAN here too).
+        // release_old_shared_container_field arm as the container family.
+        //
+        // B-2026-08-14-25 — the same defect from the other end, and the reason
+        // this program is no longer the one described above. As written it was
+        // vacuous at the DEFAULT opt level even after the fix landed: reverting
+        // the release arm and re-running left it GREEN, so only the -O0 leg
+        // gated the bug it was written for. Two independent optimizer effects
+        // were hiding it, and defeating LICM alone is not enough — the concat is
+        // now interpolated (per-iteration, so it cannot be hoisted) AND the
+        // final read is the field's CONTENT rather than `.len()`, which reads
+        // the `{ptr, len, cap}` header and never touches the buffer, letting the
+        // allocation be elided as dead. With both, the pre-fix compiler strands
+        // 693 bytes over 19 allocations at the default opt level.
+        //
+        // The general lesson is the one B-2026-08-14-25's row learned the hard
+        // way: it read this same vacuity as a LAYOUT boundary and filed twelve
+        // probes tabulating which field mixes leaked. Layout was never the axis.
+        // A leak fixture must OBSERVE the value under test, or it measures the
+        // optimizer.
         assert_clean_asan_run(
             r#"
 shared struct P { mut label: String }
@@ -48488,14 +48504,14 @@ fn main() {
     let p = P { label: "seedseedseedseedseed" };
     let mut k = 0;
     while k < 20 {
-        let fresh: String = "epsilonepsilonepsilon" + "zetazetazeta";
+        let fresh: String = f"epsilonepsilonepsilon-{k}-zetazetazeta";
         p.label = fresh;
         k = k + 1;
     }
-    println(f"{p.label.len()}");
+    println(p.label);
 }
 "#,
-            &["33"],
+            &["epsilonepsilonepsilon-19-zetazetazeta"],
             "asan_shared_struct_string_field_reassign_no_leak",
         );
     }
@@ -48511,12 +48527,27 @@ fn main() {
     /// node (`p.label = q.label`), and a compound append through the field
     /// (`p.label = p.label + "x"`), which reads the old buffer during RHS
     /// evaluation — before the release — and displaces it after.
+    ///
+    /// B-2026-08-14-25 adds the CHAINED store (`o.inner.label = …`, a shared
+    /// field of a shared parent). It reaches the same release through a
+    /// different call site in `compile_field_store` — the one B-2026-08-14-26
+    /// taught to land at all — and was covered by nothing.
     #[test]
     fn asan_shared_struct_string_field_reassign_aliasing() {
         assert_clean_asan_run(
             r#"
+shared struct Inner { mut label: String }
+shared struct Outer { mut inner: Inner }
 shared struct P { mut label: String }
 fn main() {
+    let o = Outer { inner: Inner { label: "start" } };
+    let mut n = 0i64;
+    while n < 20i64 {
+        let deep: String = f"kappakappakappakappa-{n}-lambdalambda";
+        o.inner.label = deep;
+        println(o.inner.label);
+        n = n + 1i64;
+    }
     let p = P { label: "seedseedseedseedseed" + "tail" };
     p.label = p.label;
     println(f"{p.label.len()}");
@@ -48531,7 +48562,14 @@ fn main() {
     println(p.label);
 }
 "#,
-            &["24", "24", "seedseedseedseedseedtailxxxxx"],
+            (0..20)
+                .map(|n| format!("kappakappakappakappa-{n}-lambdalambda"))
+                .collect::<Vec<_>>()
+                .iter()
+                .map(String::as_str)
+                .chain(["24", "24", "seedseedseedseedseedtailxxxxx"])
+                .collect::<Vec<_>>()
+                .as_slice(),
             "asan_shared_struct_string_field_reassign_aliasing",
         );
     }
@@ -49430,6 +49468,41 @@ fn main() {
                 .chain(std::iter::once("done"))
                 .collect::<Vec<_>>(),
             "asan_indexing_a_vec_returning_method_call_owns_its_temporary",
+        );
+    }
+
+    /// B-2026-08-14-25, the layout that tells the truth unaided: a `shared
+    /// struct` that is the TARGET of a `weak` reference leaks its displaced
+    /// String even with no read of the field at all, at the default opt level,
+    /// 693 bytes over 19 allocations.
+    ///
+    /// Weak-targeting is not a second defect and changes nothing about the
+    /// release — the field GEP goes through `shared_gep_layout` either way, and
+    /// the two-word header it implies is exactly what that funnel exists to
+    /// handle. What it changes is the optimizer's freedom: the allocations
+    /// survive to run time here, so the leak is visible without the
+    /// interpolated string and content read the sibling fixtures need. That is
+    /// worth its own fixture precisely because it does not depend on defeating
+    /// an optimization to fail — a future opt-level or pipeline change cannot
+    /// quietly turn this one vacuous the way it did the other two.
+    #[test]
+    fn asan_weak_targeted_shared_struct_string_field_reassign_releases_its_buffer() {
+        assert_clean_asan_run(
+            r#"
+shared struct P { mut label: String, mut back: Option[weak P] }
+fn main() {
+    let p = P { label: "start", back: None };
+    let mut i = 0i64;
+    while i < 20i64 {
+        let f: String = f"epsilonepsilonepsilon-{i}-zetazetazeta";
+        p.label = f;
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &["end"],
+            "asan_weak_targeted_shared_struct_string_field_reassign_releases_its_buffer",
         );
     }
 }
