@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 249 | 0 |
+| miscompile | 250 | 1 |
 | leak | 181 | 1 |
 | double-free | 129 | 0 |
 | run-vs-build | 121 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 877 | 1 |
+| codegen | 878 | 2 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1214 surfaced · 1 open · 1201 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1215 surfaced · 2 open · 1201 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-9 | 2026-08-15 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED TO A BARE-`T` GENERIC PARAM THAT THE CALLEE RETURNS is never dropped -- `pick(x.clone(), y.clone())` on `fn pick[T](a: T, b: T) -> T { id(a) }` strands one buffer per call, while the same forwarding tail in CONTAINER spelling (`a: Vec[T]`) is clean as of B-2026-08-15-7. | `generic_param_is_bare_type_param` (src/codegen/mono.rs) rejects a bare-`T` param whose type param appears in the declared return type, so `compile_generic_call` queues no caller-side materialization for it. Deliberate: B-2026-08-11-3 measured the unguarded version as a real double free on this exact shape and chose the leak as the conservative direction. |
+| B-2026-08-15-10 | 2026-08-15 | codegen | high | The `UseAfterMove` DEFENSIVE COPY that `cli.rs` promises works in `main` and IS MISSING IN EVERY OTHER FUNCTION: a `String` moved into a `Map` key and then reused prints GARBAGE BYTES on both compiled backends while the interpreter is correct. `karac check` passes (the diagnostic is a non-fatal warning by design). The same code in `main` is fine, which is why this class keeps reading as fixed. | the `UseAfterMove` defensive-copy emission (`is_fatal_ownership_kind` / cli.rs:1477 documents the promise; B-2026-08-10-21 delivered it for the `{ptr,len,cap}` family). The context discriminator -- `main` vs any other function -- is the new fact. |
 
 ### Wontfix (2)
 
