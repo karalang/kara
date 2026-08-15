@@ -449,34 +449,129 @@ fn disjoint_loop_verdict(
     ))
 }
 
-/// Span-exact sibling of [`find_loop_by_line`].
-fn find_loop_by_span<'a>(block: &'a Block, span: &Span) -> Option<(&'a Block, usize, &'a Expr)> {
+/// How a report entry names the loop it wants back out of the AST.
+///
+/// The two lookups differ ONLY in this predicate — the walk that finds a
+/// candidate is identical, and keeping it in one place is the point of the
+/// enum. Span is the exact form (a nested loop written on its parent's line
+/// shares the parent's line); line is what `LoopReduction` carries.
+enum LoopKey<'k> {
+    Span(&'k Span),
+    Line(usize),
+}
+
+impl LoopKey<'_> {
+    fn matches(&self, e: &Expr) -> bool {
+        match self {
+            LoopKey::Span(s) => e.span.offset == s.offset && e.span.length == s.length,
+            LoopKey::Line(l) => e.span.line == *l,
+        }
+    }
+}
+
+/// Whether `e` is a loop form the cost model knows how to shape.
+///
+/// `WhileLet` is deliberately absent: [`crate::par_cost::extract_loop_shape`]
+/// has no arm for it, so returning one would only travel a little further
+/// before failing. It is still DESCENDED INTO below — a plain `for` nested
+/// inside a `while let` is an ordinary target.
+fn is_shapeable_loop(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        ExprKind::For { .. } | ExprKind::While { .. } | ExprKind::Loop { .. }
+    )
+}
+
+/// Find the loop `key` names anywhere in `block`, with the block that
+/// IMMEDIATELY encloses it and its index in that block's statements.
+///
+/// The returned block/index pair is not incidental — `extract_loop_shape`
+/// hands it to `preceding_stmt_init` to find a `while` loop's `let mut i = 0;`
+/// counter init, which is only correct if the block really is the loop's own
+/// parent. So the walk returns the innermost enclosing block, never an outer
+/// one it happened to start from.
+///
+/// B-2026-08-14-33: the two callers previously walked only `block.stmts`,
+/// recursing into loop bodies alone — never `if`/`match` arms, nested blocks,
+/// or a block's tail expression. A loop one level inside an `if` was invisible,
+/// the lookup returned `None`, and the report degraded to
+/// `fanned_out: false, cost_gate: "unknown"` for a loop that had in fact
+/// fanned out. The report is the only surface a user has for whether auto-par
+/// fired, so that sent people to restructure working code.
+fn find_loop_in_block<'a>(
+    block: &'a Block,
+    key: &LoopKey<'_>,
+) -> Option<(&'a Block, usize, &'a Expr)> {
     for (i, stmt) in block.stmts.iter().enumerate() {
-        let StmtKind::Expr(e) = &stmt.kind else {
-            continue;
-        };
-        if !matches!(
-            e.kind,
-            ExprKind::For { .. } | ExprKind::While { .. } | ExprKind::Loop { .. }
-        ) {
-            continue;
-        }
-        if e.span.offset == span.offset && e.span.length == span.length {
-            return Some((block, i, e));
-        }
-        let inner = match &e.kind {
-            ExprKind::For { body, .. }
-            | ExprKind::While { body, .. }
-            | ExprKind::Loop { body, .. } => Some(body),
+        let sub = match &stmt.kind {
+            StmtKind::Expr(e) => Some(e),
+            StmtKind::Let { value, .. } => Some(value),
             _ => None,
         };
-        if let Some(b) = inner {
-            if let Some(hit) = find_loop_by_span(b, span) {
-                return Some(hit);
-            }
+        if let Some(hit) = sub.and_then(|e| find_loop_in_expr(e, block, i, key)) {
+            return Some(hit);
+        }
+    }
+    // A tail loop has every statement in the block ahead of it, so its
+    // statement index is `stmts.len()`. That is exactly what
+    // `preceding_stmt_init` wants: it reads `stmts[index - 1]`, the last
+    // statement, and never indexes the slot itself.
+    if let Some(fe) = block.final_expr.as_deref() {
+        if let Some(hit) = find_loop_in_expr(fe, block, block.stmts.len(), key) {
+            return Some(hit);
         }
     }
     None
+}
+
+/// Match `expr` itself, then descend through every construct that can carry a
+/// loop in value position. `parent`/`idx` describe the statement `expr` came
+/// from and are only ever returned for a loop found at this level — anything
+/// found inside a nested block is returned with THAT block as its parent.
+fn find_loop_in_expr<'a>(
+    expr: &'a Expr,
+    parent: &'a Block,
+    idx: usize,
+    key: &LoopKey<'_>,
+) -> Option<(&'a Block, usize, &'a Expr)> {
+    if is_shapeable_loop(expr) && key.matches(expr) {
+        return Some((parent, idx, expr));
+    }
+    match &expr.kind {
+        ExprKind::For { body, .. }
+        | ExprKind::While { body, .. }
+        | ExprKind::WhileLet { body, .. }
+        | ExprKind::Loop { body, .. }
+        | ExprKind::LabeledBlock { body, .. } => find_loop_in_block(body, key),
+        ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) | ExprKind::Comptime(b) => {
+            find_loop_in_block(b, key)
+        }
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => find_loop_in_block(then_block, key).or_else(|| {
+            // An `else if` chain arrives here as a nested `If` expression, so
+            // the same descent handles arbitrarily long chains.
+            else_branch
+                .as_deref()
+                .and_then(|e| find_loop_in_expr(e, parent, idx, key))
+        }),
+        ExprKind::Match { arms, .. } => arms
+            .iter()
+            .find_map(|a| find_loop_in_expr(&a.body, parent, idx, key)),
+        _ => None,
+    }
+}
+
+/// Span-exact sibling of [`find_loop_by_line`].
+fn find_loop_by_span<'a>(block: &'a Block, span: &Span) -> Option<(&'a Block, usize, &'a Expr)> {
+    find_loop_in_block(block, &LoopKey::Span(span))
 }
 
 /// Find the AST of the function a concurrency decision is keyed under.
@@ -556,32 +651,7 @@ fn reduction_loop_verdict(
 /// returning its enclosing block and index within it (what
 /// `extract_loop_shape` needs to find a preceding `let mut k = lo;`).
 fn find_loop_by_line(block: &Block, line: usize) -> Option<(&Block, usize, &Expr)> {
-    for (i, stmt) in block.stmts.iter().enumerate() {
-        let StmtKind::Expr(e) = &stmt.kind else {
-            continue;
-        };
-        if matches!(
-            e.kind,
-            ExprKind::For { .. } | ExprKind::While { .. } | ExprKind::Loop { .. }
-        ) {
-            if e.span.line == line {
-                return Some((block, i, e));
-            }
-            // Recurse into the loop body for nested reductions.
-            let inner = match &e.kind {
-                ExprKind::For { body, .. }
-                | ExprKind::While { body, .. }
-                | ExprKind::Loop { body, .. } => Some(body),
-                _ => None,
-            };
-            if let Some(b) = inner {
-                if let Some(hit) = find_loop_by_line(b, line) {
-                    return Some(hit);
-                }
-            }
-        }
-    }
-    None
+    find_loop_in_block(block, &LoopKey::Line(line))
 }
 
 /// Whether `expr` mentions any of `names` as a bare identifier.

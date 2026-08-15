@@ -1697,6 +1697,230 @@ fn test_query_concurrency_reports_fanout_verdict_and_declining_gate() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// B-2026-08-14-33 — the reported verdict must not depend on how deeply the
+/// loop is NESTED, only on the loop.
+///
+/// `query concurrency` is the only surface a user has for whether auto-par
+/// fired. `disjoint_loop_verdict` recovers the loop's AST to run the cost
+/// model over it, and that lookup used to walk statements and loop bodies
+/// alone — never `if`/`match` arms, nested blocks, or a block's tail
+/// expression. A loop one level inside an `if` was invisible to it, so the
+/// lookup returned `None` and the report degraded to
+/// `fanned_out: false, cost_gate: "unknown"` for a loop that HAD fanned out.
+/// That is worse than an unhelpful report: it sent people to restructure
+/// working code (apps/cumulus hoisted a loop out of its guard on the strength
+/// of it, for nothing).
+///
+/// Every shape below carries the SAME loop with the SAME body, so every shape
+/// must produce the same verdict as the unnested baseline. Asserting equality
+/// to the baseline rather than a hardcoded `"fanout"` keeps the test honest if
+/// the cost model is retuned later — it pins the invariant (nesting is
+/// irrelevant), not today's cost constants.
+#[test]
+fn test_query_concurrency_verdict_is_independent_of_loop_nesting() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-nesting-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // A body heavy enough to clear the cost gates, so the baseline is a real
+    // `fanout` rather than a decline — a decline would still be "equal across
+    // shapes" while proving nothing about the interesting path.
+    let body = "let x = (i as f64) * 0.001; \
+                out[i] = x.sin() * x.cos() + x.sqrt() * x.ln() + x.exp() * x.tan();";
+    let lp = format!("for i in 0..n {{ {body} }}");
+    let src = format!(
+        "fn whole_body(out: mut ref Vec[f64], n: i64) {{ {lp} }}\n\
+         fn tail_if(out: mut ref Vec[f64], n: i64, go: bool) {{ if go {{ {lp} }} }}\n\
+         fn tail_block(out: mut ref Vec[f64], n: i64) {{ {{ {lp} }} }}\n\
+         fn stmt_then_if(out: mut ref Vec[f64], n: i64, go: bool) {{ let z = n + 1; if go {{ {lp} }} }}\n\
+         fn else_arm(out: mut ref Vec[f64], n: i64, go: bool) {{ if go {{ }} else {{ {lp} }} }}\n\
+         fn else_if_arm(out: mut ref Vec[f64], n: i64, k: i64) {{ if k == 0 {{ }} else if k == 1 {{ {lp} }} }}\n\
+         fn match_arm(out: mut ref Vec[f64], n: i64, k: i64) {{ match k {{ 0 => {{ {lp} }} _ => {{ }} }} }}\n\
+         fn deep_nest(out: mut ref Vec[f64], n: i64, go: bool, k: i64) {{ \
+            if go {{ match k {{ 0 => {{ {{ {lp} }} }} _ => {{ }} }} }} }}\n\
+         fn main() {{ println(1); }}\n"
+    );
+
+    let path = tmp.join("nesting.kara");
+    std::fs::write(&path, &src).unwrap();
+    let out = karac_bin()
+        .args(["query", "concurrency", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query failed: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let doc: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("query concurrency emitted invalid JSON");
+
+    // (function, fanned_out, cost_gate) for every disjoint-write loop found.
+    let mut seen: Vec<(String, bool, String)> = Vec::new();
+    for f in doc["functions"].as_array().expect("functions array") {
+        let name = f["function"].as_str().unwrap_or("?").to_string();
+        for l in f["disjoint_write_loops"].as_array().into_iter().flatten() {
+            seen.push((
+                name.clone(),
+                l["fanned_out"].as_bool().unwrap_or(false),
+                l["cost_gate"].as_str().unwrap_or("?").to_string(),
+            ));
+        }
+    }
+
+    let shapes = [
+        "whole_body",
+        "tail_if",
+        "tail_block",
+        "stmt_then_if",
+        "else_arm",
+        "else_if_arm",
+        "match_arm",
+        "deep_nest",
+    ];
+    assert_eq!(
+        seen.len(),
+        shapes.len(),
+        "expected one disjoint-write loop per shape; got {seen:?}",
+    );
+
+    let baseline = seen
+        .iter()
+        .find(|(n, _, _)| n == "whole_body")
+        .expect("the unnested baseline must be reported")
+        .clone();
+    assert!(
+        baseline.1 && baseline.2 == "fanout",
+        "the unnested baseline must itself fan out, or this test proves nothing \
+         about nesting; got {baseline:?}",
+    );
+
+    for shape in shapes {
+        let got = seen
+            .iter()
+            .find(|(n, _, _)| n == shape)
+            .unwrap_or_else(|| panic!("no entry for {shape}; got {seen:?}"));
+        assert_ne!(
+            got.2, "unknown",
+            "{shape}: cost_gate is the \"could not recover the loop\" fallback, so the \
+             report is guessing — the lookup walk cannot see this nesting depth",
+        );
+        assert_eq!(
+            (got.1, got.2.as_str()),
+            (baseline.1, baseline.2.as_str()),
+            "{shape}: same loop, same body, different verdict from the unnested \
+             baseline — the report contradicts itself on nesting alone",
+        );
+    }
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// B-2026-08-14-33, reduction half — the same walk-depth defect, the same
+/// invariant, a different report section.
+///
+/// `find_loop_by_span` (disjoint writes) and `find_loop_by_line` (reductions)
+/// were separate copies of one shallow walk, so the misreport came in a pair.
+/// The ledger row only described the disjoint half; this pins the sibling so a
+/// future rewrite of the shared traversal cannot quietly re-break the surface
+/// nobody was looking at.
+#[test]
+fn test_query_concurrency_reduction_verdict_is_independent_of_loop_nesting() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-red-nesting-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // A literal trip count, not a parameter: a param-bound reduction declines
+    // on the variable-K floor, which would make every shape agree on a decline
+    // and prove nothing about the path that matters.
+    let lp = "for i in 0..200000 { s = s + (i * 7919) % 104729 + (i * 31) % 97; }";
+    let src = format!(
+        "fn whole_body() -> i64 {{ let mut s = 0; {lp} return s; }}\n\
+         fn in_if(go: bool) -> i64 {{ let mut s = 0; if go {{ {lp} }} return s; }}\n\
+         fn in_block() -> i64 {{ let mut s = 0; {{ {lp} }} return s; }}\n\
+         fn in_else_if(k: i64) -> i64 {{ let mut s = 0; \
+            if k == 0 {{ }} else if k == 1 {{ {lp} }} return s; }}\n\
+         fn in_match(k: i64) -> i64 {{ let mut s = 0; \
+            match k {{ 0 => {{ {lp} }} _ => {{ }} }} return s; }}\n\
+         fn main() {{ println(1); }}\n"
+    );
+
+    let path = tmp.join("red_nesting.kara");
+    std::fs::write(&path, &src).unwrap();
+    let out = karac_bin()
+        .args(["query", "concurrency", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query failed: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let doc: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("query concurrency emitted invalid JSON");
+
+    let mut seen: Vec<(String, bool, String)> = Vec::new();
+    for f in doc["functions"].as_array().expect("functions array") {
+        let name = f["function"].as_str().unwrap_or("?").to_string();
+        for l in f["loop_reductions"].as_array().into_iter().flatten() {
+            seen.push((
+                name.clone(),
+                l["fanned_out"].as_bool().unwrap_or(false),
+                l["cost_gate"].as_str().unwrap_or("?").to_string(),
+            ));
+        }
+    }
+
+    let shapes = ["whole_body", "in_if", "in_block", "in_else_if", "in_match"];
+    assert_eq!(
+        seen.len(),
+        shapes.len(),
+        "expected one reduction per shape; got {seen:?}",
+    );
+
+    let baseline = seen
+        .iter()
+        .find(|(n, _, _)| n == "whole_body")
+        .expect("the unnested baseline must be reported")
+        .clone();
+    assert!(
+        baseline.1 && baseline.2 == "fanout",
+        "the unnested baseline must itself fan out, or this test proves nothing \
+         about nesting; got {baseline:?}",
+    );
+
+    for shape in shapes {
+        let got = seen
+            .iter()
+            .find(|(n, _, _)| n == shape)
+            .unwrap_or_else(|| panic!("no entry for {shape}; got {seen:?}"));
+        assert_ne!(
+            got.2, "unknown",
+            "{shape}: reduction cost_gate fell back to \"unknown\" — the loop lookup \
+             cannot see this nesting depth",
+        );
+        assert_eq!(
+            (got.1, got.2.as_str()),
+            (baseline.1, baseline.2.as_str()),
+            "{shape}: same reduction, different verdict from the unnested baseline",
+        );
+    }
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// The nested-loop carve-out on the memory-bound gate, query side
 /// (B-2026-07-31-10). Same source as `par_codegen`'s
 /// `test_ir_memory_bound_gate_nested_loop_body_fans_out`, which pins that
