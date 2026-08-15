@@ -33567,3 +33567,31 @@ fn test_user_enum_shadowing_a_prelude_handle_type() {
         );
     }
 }
+
+#[test]
+fn test_vec_shared_struct_clone_temp_original_survives_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s
+    // `test_e2e_vec_shared_struct_clone_temp_original_survives`
+    // (B-2026-08-15-14). The interpreter was always correct here — a
+    // `Vec[shared struct]` clone-temp leaked only under codegen — so this pins
+    // the values the build side must match, and keeps run-vs-build parity
+    // asserted from both ends rather than from the codegen test alone.
+    let out = run("\n\
+         shared struct Node { label: String }\n\
+         fn agg(ns: Vec[Node]) -> i64 { return ns.len(); }\n\
+         fn main() {\n\
+             let mut ns: Vec[Node] = Vec.new();\n\
+             ns.push(Node { label: \"alpha\" });\n\
+             ns.push(Node { label: \"beta\" });\n\
+             ns.push(Node { label: \"gamma\" });\n\
+             let mut k = 0;\n\
+             let mut t = 0;\n\
+             while k < 5 { t = t + agg(ns.clone()); k = k + 1; }\n\
+             println(t);\n\
+             println(ns.clone().len());\n\
+             println(ns[0].label);\n\
+             println(ns[2].label);\n\
+             println(ns.len());\n\
+         }\n");
+    assert_eq!(out, "15\n3\nalpha\ngamma\n3\n");
+}

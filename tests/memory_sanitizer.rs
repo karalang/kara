@@ -665,6 +665,185 @@ fn main() {
         );
     }
 
+    // B-2026-08-15-14 — a `Vec[shared struct]` TEMPORARY (a `.clone()` not
+    // bound to a `let`) freed its buffer while releasing NONE of the element
+    // references the clone had just taken. `karac_clone_Vec_Node` rc-INCs every
+    // element; the temp's `FreeVecBuffer` carried no per-element drop at all,
+    // so each element's RC box leaked once per temp.
+    //
+    // The named-binding sibling (`let c = v.clone();`) has always routed
+    // through `track_vec_of_aggs_var` and was clean — which is the whole
+    // discriminator: `let c = v.clone(); f(c)` leaked nothing, `f(v.clone())`
+    // leaked every element. THREE registration sites materialize such a temp,
+    // and each fixture below covers exactly one, so a partial revert fails a
+    // specific test rather than a random one:
+    //
+    //   (a) by-value call arg      -> `materialize_owned_temp`
+    //                                 (fixed in fd7254d)
+    //   (b) `ref` param call arg   -> `queue_ref_rvalue_arg_cleanup`
+    //   (c) `.len()` on the temp   -> `try_track_len_family_recv_temp`, whose
+    //       typechecker-side table skipped a `Type::Shared` element entirely
+    //
+    // (a) is already covered by `asan_inline_container_temp_arg_releases_its_
+    // elements`; the fixture kept here is the MULTI-ELEMENT form, for the
+    // reason below.
+    //
+    // MULTI-ELEMENT ON PURPOSE. With one element these leak one 32-byte box,
+    // and LSan's conservative stack scan sometimes finds a stale pointer to a
+    // single surviving box and reports CLEAN — measured, on the row's own
+    // one-element repro, as 2 leaked objects where 3 were stranded. A
+    // one-element fixture is therefore a flaky assertion; three elements put
+    // the count beyond that noise.
+
+    #[test]
+    fn asan_vec_shared_struct_clone_temp_by_value_arg_releases_elements() {
+        // (a) the row's own shape, reduced: a clone passed straight into a
+        // by-value `Vec[Node]` param, never bound.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { label: String }
+fn agg(ns: Vec[Node]) -> i64 { return ns.len(); }
+fn main() {
+    let mut ns: Vec[Node] = Vec.new();
+    ns.push(Node { label: "aaaaaaaaaaaaaaaa" });
+    ns.push(Node { label: "bbbbbbbbbbbbbbbb" });
+    ns.push(Node { label: "cccccccccccccccc" });
+    println(agg(ns.clone()));
+}
+"#,
+            &["3"],
+            "asan_vec_shared_struct_clone_temp_by_value_arg_releases_elements",
+        );
+    }
+
+    #[test]
+    fn asan_vec_shared_struct_clone_temp_ref_arg_releases_elements() {
+        // (b) the same temp against a `ref Vec[Node]` param — a DIFFERENT
+        // registration site (`queue_ref_rvalue_arg_cleanup`): the callee only
+        // borrows, so the caller owns the temp and must release its elements.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { label: String }
+fn agg(ns: ref Vec[Node]) -> i64 { return ns.len(); }
+fn main() {
+    let mut ns: Vec[Node] = Vec.new();
+    ns.push(Node { label: "aaaaaaaaaaaaaaaa" });
+    ns.push(Node { label: "bbbbbbbbbbbbbbbb" });
+    ns.push(Node { label: "cccccccccccccccc" });
+    println(agg(ns.clone()));
+}
+"#,
+            &["3"],
+            "asan_vec_shared_struct_clone_temp_ref_arg_releases_elements",
+        );
+    }
+
+    #[test]
+    fn asan_vec_shared_struct_clone_temp_len_chain_releases_elements() {
+        // (c) no user function at all — `v.clone().len()`. The parser gives a
+        // MethodCall its RECEIVER's span, so the chain's scalar result
+        // span-clobbers the receiver's `Vec[T]` in `expr_types` and the
+        // `owned_temp_drops` hint is absent; the dedicated len-family table is
+        // the only signal, and it recorded no `Type::Shared` element.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { label: String }
+fn main() {
+    let mut ns: Vec[Node] = Vec.new();
+    ns.push(Node { label: "aaaaaaaaaaaaaaaa" });
+    ns.push(Node { label: "bbbbbbbbbbbbbbbb" });
+    ns.push(Node { label: "cccccccccccccccc" });
+    println(ns.clone().len());
+}
+"#,
+            &["3"],
+            "asan_vec_shared_struct_clone_temp_len_chain_releases_elements",
+        );
+    }
+
+    #[test]
+    fn asan_vec_shared_struct_clone_temp_nested_heap_field_released() {
+        // The element's own heap is the INDIRECT half: a leaked `Node` box also
+        // strands its `Vec[i64]`. A fix that rc-dec'd the handle but never
+        // reached rc 0 would still leak these, so assert a Node whose field is
+        // itself heap — 242 KB of indirect leak before the fix, vs 96 bytes of
+        // direct.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { data: Vec[i64] }
+fn mk(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { v.push(i); i = i + 1; }
+    return v;
+}
+fn main() {
+    let mut ns: Vec[Node] = Vec.new();
+    ns.push(Node { data: mk(3) });
+    ns.push(Node { data: mk(300) });
+    ns.push(Node { data: mk(3000) });
+    println(ns.clone().len());
+}
+"#,
+            &["3"],
+            "asan_vec_shared_struct_clone_temp_nested_heap_field_released",
+        );
+    }
+
+    #[test]
+    fn asan_vec_shared_struct_clone_temp_repeated_no_over_release() {
+        // The OVER-release guard. Every fixture above would also pass if the
+        // fix released too much, because LSan does not see a double-free —
+        // ASAN does. Clone the same Vec many times in a loop and keep reading
+        // the ORIGINAL afterward: an extra dec per temp drives the shared
+        // count to 0 while `ns` still holds it, which is a use-after-free on
+        // the read and a double-free at `main`'s exit.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { label: String }
+fn agg(ns: Vec[Node]) -> i64 { return ns.len(); }
+fn main() {
+    let mut ns: Vec[Node] = Vec.new();
+    ns.push(Node { label: "aaaaaaaaaaaaaaaa" });
+    ns.push(Node { label: "bbbbbbbbbbbbbbbb" });
+    ns.push(Node { label: "cccccccccccccccc" });
+    let mut k = 0;
+    let mut t = 0;
+    while k < 20 { t = t + agg(ns.clone()); k = k + 1; }
+    println(t);
+    println(ns[0].label);
+    println(ns.len());
+}
+"#,
+            &["60", "aaaaaaaaaaaaaaaa", "3"],
+            "asan_vec_shared_struct_clone_temp_repeated_no_over_release",
+        );
+    }
+
+    #[test]
+    fn asan_vec_shared_enum_clone_temp_releases_elements() {
+        // A `shared ENUM` element rides the same `Type::Shared` predicate and
+        // the same per-element rc-dec. Included because the row's repro used a
+        // shared STRUCT, and a name-keyed fix that happened to cover only
+        // structs would pass every fixture above.
+        assert_clean_asan_run(
+            r#"
+shared enum Shape { Circle(i64), Rect(i64, i64) }
+fn agg(ss: Vec[Shape]) -> i64 { return ss.len(); }
+fn main() {
+    let mut ss: Vec[Shape] = Vec.new();
+    ss.push(Shape.Circle(3i64));
+    ss.push(Shape.Rect(4i64, 5i64));
+    ss.push(Shape.Circle(6i64));
+    println(agg(ss.clone()));
+    println(ss.clone().len());
+}
+"#,
+            &["3", "3"],
+            "asan_vec_shared_enum_clone_temp_releases_elements",
+        );
+    }
+
     #[test]
     fn asan_push_aliased_bare_shared_element_retained_no_uaf() {
         // B-2026-07-21-13: `node.neighbors.push(nodes[j])` — pushing an ALIASING

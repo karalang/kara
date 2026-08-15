@@ -6007,12 +6007,35 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         let span_key = (arg_expr.span.offset, arg_expr.span.length);
         if self.llvm_ty_is_vec_struct(val.get_type()) {
-            let elem_ty = self
-                .owned_temp_drops
-                .get(&span_key)
-                .cloned()
-                .and_then(|te| self.extract_vec_elem_type(&te));
-            self.track_vec_var(slot, elem_ty);
+            let container_te = self.owned_temp_drops.get(&span_key).cloned();
+            let elem_ty = container_te
+                .as_ref()
+                .and_then(|te| self.extract_vec_elem_type(te));
+            // B-2026-08-15-14 (second registration site) — the `ref`-param
+            // sibling of the same shortcut `materialize_owned_temp` had. A
+            // fresh `Vec` rvalue passed to a `ref Vec[T]` param is materialized
+            // HERE, not there, so `agg(ns.clone())` against `ns: ref Vec[Node]`
+            // kept leaking one RC box per element after that fix: the callee
+            // only borrows, so the caller still owns the temp and owes its
+            // elements a release. Same three-way dispatch, deliberately
+            // identical rather than merely similar — the two sites answer one
+            // question ("what drops an element of this container?") and the
+            // whole class of bug here is them answering it differently.
+            let map_elem_drop = container_te
+                .as_ref()
+                .and_then(|te| self.extract_vec_elem_type_expr(te))
+                .and_then(|et| self.vec_elem_map_drop_for_type_expr(&et));
+            let agg_elem_drop = container_te
+                .as_ref()
+                .and_then(|te| self.extract_vec_elem_type_expr(te))
+                .and_then(|et| self.vec_elem_agg_drop_for_type_expr(&et));
+            match (map_elem_drop, agg_elem_drop, elem_ty) {
+                (Some(map_drop), _, _) => self.track_vec_of_maps_var(slot, map_drop),
+                (None, Some(agg_drop), Some(elem_ty)) => {
+                    self.track_vec_of_aggs_var(slot, elem_ty, agg_drop)
+                }
+                _ => self.track_vec_var(slot, elem_ty),
+            }
             return;
         }
         // B-2026-08-01-4 — a fresh owned Drop-bearing STRUCT/ENUM rvalue

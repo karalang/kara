@@ -2213,6 +2213,17 @@ impl<'a> super::TypeChecker<'a> {
                     &resolved,
                     Type::Named { name, args } if args.is_empty() && self.env.enums.contains_key(name)
                 );
+                // A `shared struct` / `shared enum` element (`Vec[Node]`).
+                // Reference-semantic, so the element slot is an 8-byte RC
+                // handle, not an inline aggregate — its per-element drop is the
+                // rc-DEC `vec_elem_agg_drop_for_type_expr` already synthesizes
+                // (`emit_vec_elem_rc_dec_fn`). A shared type resolves to
+                // `Type::Shared`, NOT `Type::Named`, so neither predicate above
+                // sees it and the `len`-family arm skipped recording — leaving
+                // codegen's intercept to fall back to an outer-buffer-only free
+                // that released none of the references the temp's clone took
+                // (B-2026-08-15-14).
+                let is_shared_agg = matches!(&resolved, Type::Shared(_));
                 let record = (recv_is_call
                     && ((is_scalar
                         && matches!(
@@ -2262,7 +2273,7 @@ impl<'a> super::TypeChecker<'a> {
                 // walk, so its absence keeps today's complete outer-buffer
                 // free.
                 if recv_is_call
-                    && (is_string || is_pod_vec || is_user_struct || is_user_enum)
+                    && (is_string || is_pod_vec || is_user_struct || is_user_enum || is_shared_agg)
                     && matches!(method, "len" | "is_empty" | "count")
                 {
                     let te = Self::type_to_type_expr(&resolved);

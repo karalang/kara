@@ -96274,6 +96274,47 @@ fn main() {
         );
     }
 
+    /// B-2026-08-15-14 — a `Vec[shared struct]` clone used as a TEMPORARY
+    /// leaked one RC box per element per temp (the leak gate itself lives in
+    /// `tests/memory_sanitizer.rs`, which is where LSan runs). This is the
+    /// OBSERVABLE twin: the program must compute the right answers and,
+    /// critically, the ORIGINAL Vec must stay intact and readable after five
+    /// clone-temps have been created and dropped. That second half is what an
+    /// over-eager fix breaks — one dec too many per temp drives the shared
+    /// count to zero while `ns` still holds it, and `ns[0].label` then reads
+    /// freed memory. Paired with an interpreter oracle of the same program in
+    /// `tests/interpreter.rs`, so run-vs-build parity is pinned from both ends.
+    ///
+    /// Both spellings of the temp appear on purpose: the by-value call arg
+    /// (fixed in fd7254d) and the `.clone().len()` chain (fixed here) reach
+    /// two different registration sites.
+    #[test]
+    fn test_e2e_vec_shared_struct_clone_temp_original_survives() {
+        assert_eq!(
+            run_program(
+                r#"
+shared struct Node { label: String }
+fn agg(ns: Vec[Node]) -> i64 { return ns.len(); }
+fn main() {
+    let mut ns: Vec[Node] = Vec.new();
+    ns.push(Node { label: "alpha" });
+    ns.push(Node { label: "beta" });
+    ns.push(Node { label: "gamma" });
+    let mut k = 0;
+    let mut t = 0;
+    while k < 5 { t = t + agg(ns.clone()); k = k + 1; }
+    println(t);
+    println(ns.clone().len());
+    println(ns[0].label);
+    println(ns[2].label);
+    println(ns.len());
+}
+"#
+            ),
+            Some("15\n3\nalpha\ngamma\n3\n".to_string())
+        );
+    }
+
     /// The names a user ENUM may shadow without codegen describing it with the
     /// built-in's layout (B-2026-08-15-12).
     ///
