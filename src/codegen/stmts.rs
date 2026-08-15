@@ -70,6 +70,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// roundtrip" arm's choice below: a user `impl Drop` body is fired by the
     /// NLL channel at the OWNER's site, and running the wrapper here would
     /// double it.
+    /// B-2026-08-14-22 — may a compound assignment to the LOCAL binding `name`
+    /// free the buffer its store displaces?
+    ///
+    /// Only when the binding is a registered `{ptr,len,cap}` (String / Vec) AND
+    /// the value about to be stored actually has that shape. Both halves matter:
+    /// the registry answers "does this slot hold a buffer", and the value type
+    /// answers "did this operator produce a new one" — a scalar `n += 1` fails
+    /// the second even if some sibling table were to mis-register the name, so
+    /// the free cannot fire on an integer slot.
+    ///
+    /// Safe unconditionally for the shapes that pass, because String `+`
+    /// (`compile_binop`) always allocates an INDEPENDENT concatenation: the
+    /// displaced buffer has no other owner once the store lands, and the caller
+    /// runs this only after `result` is computed, so the bytes it reads are
+    /// still live. A static-literal or borrowed-view source (`cap == 0`) is a
+    /// no-op inside `emit_free_vec_buffer_if_owned`.
+    fn compound_assign_reclaims_local_buffer(
+        &self,
+        name: &str,
+        result: &BasicValueEnum<'ctx>,
+    ) -> bool {
+        self.vec_elem_types.contains_key(name) && result.get_type() == self.vec_struct_type().into()
+    }
+
     fn reclaim_displaced_ref_param_pointee(
         &mut self,
         name: &str,
@@ -9113,15 +9137,47 @@ impl<'ctx> super::Codegen<'ctx> {
                             // already built its fresh buffer out of the old
                             // contents, and the caller's binding would
                             // otherwise be the only thing that could free the
-                            // buffer this store overwrites. (`+=` on a LOCAL
-                            // String still leaks its displaced buffer — that is
-                            // B-2026-08-14-22, a different arm.)
+                            // buffer this store overwrites. The LOCAL twin of
+                            // that reclaim is just below (B-2026-08-14-22).
                             self.reclaim_displaced_ref_param_pointee(name, inner_ty, ptr);
                             self.builder.build_store(ptr, result).unwrap();
                             return Ok(());
                         }
                     }
                     if let Some(slot) = self.variables.get(name).copied() {
+                        // B-2026-08-14-22 — reclaim the buffer this store
+                        // displaces. `s += x` on a local `String` built a fresh
+                        // concatenation and stored it over the binding without
+                        // releasing what the binding held, so a 20,000-append
+                        // loop peaked at 1.565 GB against a live string of
+                        // 160 KB — the exact sum of every intermediate.
+                        //
+                        // This arm was the ONLY one missing it, which is what
+                        // made the bug look operator-shaped rather than
+                        // arm-shaped: measured after the `mut ref` fix, a field
+                        // target (`h.s += x`), an index target (`v[0] += x`) and
+                        // a `mut ref` parameter all peaked at ~5 MB on the same
+                        // loop, because each reaches a store path that already
+                        // reclaims. Only the bare local fell through to a plain
+                        // `build_store`.
+                        //
+                        // Gated on the binding being a tracked Vec/String, so
+                        // scalar `n += 1` is untouched. Ordered AFTER `result`
+                        // is computed — the concatenation reads the old bytes —
+                        // and `emit_free_vec_buffer_if_owned` is cap-guarded, so
+                        // a static-literal or borrowed-view buffer (`cap == 0`)
+                        // is a no-op. The concat always produces an independent
+                        // buffer, so the displaced one has no other owner.
+                        if self.compound_assign_reclaims_local_buffer(name, &result) {
+                            let elem_abi_size = match self.vec_elem_types.get(name).copied() {
+                                Some(t) => self
+                                    .ensure_target_data()
+                                    .map(|td| td.get_abi_size(&t))
+                                    .unwrap_or(0),
+                                None => 1,
+                            };
+                            self.emit_free_vec_buffer_if_owned(slot.ptr, elem_abi_size);
+                        }
                         self.builder.build_store(slot.ptr, result).unwrap();
                     }
                     return Ok(());

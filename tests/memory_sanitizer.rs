@@ -48681,4 +48681,50 @@ fn main() {
             "asan_sorted_map_and_set_display_frees_its_key_buffer",
         );
     }
+
+    /// B-2026-08-14-22 — `s += x` on a LOCAL `String` must release the buffer
+    /// its store displaces.
+    ///
+    /// The operator built a fresh concatenation and stored it over the binding
+    /// without freeing what the binding held, so every intermediate was
+    /// stranded: a 20,000-append loop peaked at 1.565 GB against a live string
+    /// of 160 KB, the exact sum of the series. The bare local was the only
+    /// target that leaked — a field, an index and a `mut ref` parameter each
+    /// reach a store path that already reclaims — so this fixture appends
+    /// through a plain local on purpose.
+    ///
+    /// The three spellings are pinned together: `push_str` and `s = s + x`
+    /// produce the same string and were already balanced, so a fix that traded
+    /// this leak for a double free in either of them fails here rather than
+    /// somewhere else.
+    #[test]
+    fn asan_compound_append_on_a_local_string_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let k = env.args().len() as i64;
+    let mut piece = String.new(); piece.push_str("abcdefg"); piece.push_str(k.to_string());
+    let mut a = String.new(); a.push_str("seed");
+    let mut b = String.new(); b.push_str("seed");
+    let mut c = String.new(); c.push_str("seed");
+    let mut i = 0i64;
+    while i < 200i64 {
+        a += piece;
+        b.push_str(piece);
+        c = c + piece;
+        i = i + 1i64;
+    }
+    println(a.len());
+    println(b.len());
+    println(c.len());
+}
+"#,
+            // 4 + 200 * 8 for each. `k` is a stable 1 (the binary runs with no
+            // args), appended so `piece` is a heap buffer rather than a static
+            // literal — a `cap == 0` source would make the reclaim a no-op and
+            // hide the thing being asserted.
+            &["1604", "1604", "1604"],
+            "compound_append_on_a_local_string_is_balanced",
+        );
+    }
 }
