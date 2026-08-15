@@ -49852,4 +49852,87 @@ fn main() {
             "asan_autopar_joined_vec_element_struct_binding_no_double_free",
         );
     }
+
+    /// B-2026-08-15-14 — an INLINE container temporary in argument position
+    /// releases its elements, not just its buffer.
+    ///
+    /// `materialize_owned_temp`'s Vec branch kept only the LLVM element type
+    /// and called `track_vec_var`, whose drain reaches an element only when the
+    /// element is itself a `{ptr,len,cap}` or has a direct Vec/String field.
+    /// Every other element kind — an RC handle, a Map handle, a struct whose
+    /// `shared` field the value drop skips by design, a nested Vec — was
+    /// invisible to it, so the temp freed its buffer and stranded one
+    /// allocation per ELEMENT.
+    ///
+    /// THE UNIT IS THE ELEMENT, NOT THE CALL, which is what identifies the
+    /// container temp as the culprit: three elements through one call stranded
+    /// three RC boxes, one element through three calls stranded one. The
+    /// per-call clone/release pairing was balanced all along.
+    ///
+    /// The NAMED spelling of the same clone (`let c = ns.clone(); agg(c)`) was
+    /// always clean — the `let` path already routes through the element-drop
+    /// chooser — so the two spellings of one operation disagreed about who
+    /// releases the elements. Both are here, and the named one is expected to
+    /// pass on either side of the fix: it is the control that says the defect
+    /// is the inline temporary rather than the clone.
+    ///
+    /// The `Vec[Vec[String]]` case earns its place separately: the drain treats
+    /// a per-element drop fn as EXCLUSIVE of its inline recursion, so an
+    /// element routed through both would DOUBLE-FREE rather than leak. It is
+    /// the row that would catch that.
+    #[test]
+    fn asan_inline_container_temp_arg_releases_its_elements() {
+        assert_clean_asan_run(
+            r#"
+shared struct Node { label: String }
+struct Holder { n: Node }
+
+fn count_nodes(ns: Vec[Node]) -> i64 { ns.len() }
+fn count_holders(hs: Vec[Holder]) -> i64 { hs.len() }
+fn count_maps(ms: Vec[Map[String, i64]]) -> i64 { ms.len() }
+fn count_nested(vs: Vec[Vec[String]]) -> i64 { vs.len() }
+
+fn main() {
+    // Three elements, ONE call: the leak scaled with this number.
+    let mut ns: Vec[Node] = Vec.new();
+    ns.push(Node { label: "gammagammagamma" });
+    ns.push(Node { label: "deltadeltadelta" });
+    ns.push(Node { label: "epsilonepsilon0" });
+    println(f"{count_nodes(ns.clone())}");
+
+    // One element, THREE calls: it did not scale with this one.
+    let mut one: Vec[Node] = Vec.new();
+    one.push(Node { label: "zetazetazetazet" });
+    println(f"{count_nodes(one.clone()) + count_nodes(one.clone()) + count_nodes(one.clone())}");
+
+    // The named-binding control — clean before the fix as well.
+    let c = one.clone();
+    println(f"{count_nodes(c)}");
+
+    // A struct whose `shared` field the plain value drop skips by design.
+    let mut hs: Vec[Holder] = Vec.new();
+    hs.push(Holder { n: Node { label: "etaetaetaetaeta" } });
+    println(f"{count_holders(hs.clone())}");
+
+    // A Map handle element — a bare pointer, equally invisible to the drain.
+    let mut ms: Vec[Map[String, i64]] = Vec.new();
+    let mut m: Map[String, i64] = Map.new();
+    let _ = m.insert("thetathetatheta", 1);
+    ms.push(m);
+    println(f"{count_maps(ms.clone())}");
+
+    // The double-free guard: the drain CAN see this one inline, so it must
+    // not also get a per-element drop fn.
+    let mut vs: Vec[Vec[String]] = Vec.new();
+    let inner: Vec[String] = ["iotaiotaiotaiot", "kappakappakappa"];
+    vs.push(inner);
+    println(f"{count_nested(vs.clone())}");
+
+    println("end");
+}
+"#,
+            &["3", "3", "1", "1", "1", "1", "end"],
+            "inline_container_temp_arg_releases_elements",
+        );
+    }
 }

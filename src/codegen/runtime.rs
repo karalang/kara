@@ -2340,14 +2340,74 @@ impl<'ctx> super::Codegen<'ctx> {
         // behavior (outer buffer freed, inner elements leak) — never a
         // double-free or a regression.
         if self.llvm_ty_is_vec_struct(val.get_type()) {
-            let elem_ty = self
-                .owned_temp_drops
-                .get(&span_key)
-                .cloned()
-                .and_then(|te| self.extract_vec_elem_type(&te));
+            let container_te = self.owned_temp_drops.get(&span_key).cloned();
+            let elem_ty = container_te
+                .as_ref()
+                .and_then(|te| self.extract_vec_elem_type(te));
+            // B-2026-08-15-14 — when the hint table DOES have the container's
+            // `TypeExpr`, use the element's own drop fn rather than stopping at
+            // the LLVM element type.
+            //
+            // The comment above describes the missing-entry case honestly, but
+            // this branch used to take the same shortcut even with the entry
+            // PRESENT: it kept only `extract_vec_elem_type`'s LLVM type and
+            // called `track_vec_var`, whose drain reaches an element only when
+            // the element is ITSELF a `{ptr,len,cap}` or has a direct
+            // Vec/String field. A `Vec[shared Node]` element is an 8-byte RC
+            // handle, so the drain saw nothing to do, freed the buffer, and
+            // stranded one 32-byte RC box per ELEMENT — `agg(ns.clone())` leaks
+            // 3 boxes for a 3-element Vec and 1 for a 1-element Vec called
+            // three times, which is what identifies the container rather than
+            // the call as the unit.
+            //
+            // A NAMED binding of the same clone (`let c = ns.clone()`) was
+            // always clean, because the `let` path already routes through this
+            // chooser. The gap was only ever the INLINE temporary — the
+            // argument-position spelling — so the two spellings of one
+            // operation disagreed about who releases the elements.
+            //
+            // `vec_elem_agg_drop_for_type_expr` is the same chooser every
+            // other dispatch site uses, so this fixes more than the shared
+            // case the row reports. MEASURED on the same fixtures, one call of
+            // `agg(vs.clone())` each, before and after:
+            //
+            //   Vec[shared Node]                  32 B / 1 obj   ->  clean
+            //   Vec[Holder], Holder.n shared      32 B / 1 obj   ->  clean
+            //   Vec[Map[String, i64]]            613 B / 4 obj   ->  clean
+            //   Vec[Vec[String]]                  25 B / 2 obj   ->  clean
+            //   Vec[(String, i64)]                clean          ->  clean
+            //   Vec[Option[String]]               clean          ->  clean
+            //
+            // The last two are listed because they are the honest limit of the
+            // claim: the chooser admits tuple and Option/Result elements, but
+            // those were ALREADY reaching a drop here, so this changed nothing
+            // for them. The leak was specific to element kinds the inline
+            // drain cannot see through — an RC handle, a Map handle, a struct
+            // whose shared field it skips by design, and a nested Vec.
+            //
+            // The chooser returns `None` for a plain scalar element, which
+            // needs no per-element drop at all. The drain treats
+            // `elem_agg_drop` as EXCLUSIVE of the inline paths, so a kind that
+            // routed through both would double-free rather than leak — that is
+            // the failure mode this dispatch has to avoid, and the
+            // `Vec[Vec[String]]` row above is the one that would show it.
+            let map_elem_drop = container_te
+                .as_ref()
+                .and_then(|te| self.extract_vec_elem_type_expr(te))
+                .and_then(|et| self.vec_elem_map_drop_for_type_expr(&et));
+            let agg_elem_drop = container_te
+                .as_ref()
+                .and_then(|te| self.extract_vec_elem_type_expr(te))
+                .and_then(|et| self.vec_elem_agg_drop_for_type_expr(&et));
             let slot = self.create_entry_alloca(cur_fn, "__owned_tmp", val.get_type());
             self.builder.build_store(slot, val).unwrap();
-            self.track_vec_var(slot, elem_ty);
+            match (map_elem_drop, agg_elem_drop, elem_ty) {
+                (Some(map_drop), _, _) => self.track_vec_of_maps_var(slot, map_drop),
+                (None, Some(agg_drop), Some(elem_ty)) => {
+                    self.track_vec_of_aggs_var(slot, elem_ty, agg_drop)
+                }
+                _ => self.track_vec_var(slot, elem_ty),
+            }
             return Some(slot);
         }
 

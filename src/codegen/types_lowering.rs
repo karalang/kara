@@ -1107,6 +1107,29 @@ impl<'ctx> super::Codegen<'ctx> {
         None
     }
 
+    /// The element `TypeExpr` of a `Vec[T]` / `VecDeque[T]` — the same
+    /// extraction [`Self::extract_vec_elem_type`] performs, stopping one step
+    /// earlier.
+    ///
+    /// The LLVM type alone cannot pick a per-element drop: `Vec[shared Node]`
+    /// and `Vec[ref X]` are both a bare `ptr`, and two by-shape struct types
+    /// collide. Every drop chooser (`vec_elem_agg_drop_for_type_expr`,
+    /// `vec_elem_map_drop_for_type_expr`) therefore keys on the `TypeExpr`, and
+    /// this is what hands it over at a site that holds only the CONTAINER's.
+    pub(super) fn extract_vec_elem_type_expr(&self, te: &TypeExpr) -> Option<TypeExpr> {
+        let TypeKind::Path(path) = &te.kind else {
+            return None;
+        };
+        let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+        if name != "Vec" && name != "VecDeque" {
+            return None;
+        }
+        match path.generic_args.as_ref()?.first()? {
+            GenericArg::Type(elem_te) => Some(elem_te.clone()),
+            _ => None,
+        }
+    }
+
     /// For an `Option[T]` type expr, return the `FreeVecBuffer`-style
     /// element type used to free the inline `Some` payload's nested heap,
     /// when `T` is a heap-owning `{ptr,len,cap}` value (`String` / `Vec[U]`
