@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 249 | 0 |
-| leak | 177 | 3 |
+| leak | 177 | 2 |
 | double-free | 129 | 1 |
 | run-vs-build | 121 | 1 |
 | codegen-gap | 108 | 0 |
@@ -104,16 +104,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
 | other | 30 | 0 |
-| use-after-free | 19 | 0 |
+| use-after-free | 20 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 870 | 6 |
+| codegen | 871 | 6 |
 | typecheck | 171 | 1 |
 | interp | 145 | 0 |
-| ownership | 48 | 0 |
+| ownership | 49 | 1 |
 | autopar | 42 | 1 |
 | other | 41 | 0 |
 | cli | 30 | 0 |
@@ -124,20 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1204 surfaced · 8 open · 1184 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1205 surfaced · 8 open · 1185 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-20 | 2026-08-14 | typecheck | low | THE `String -> bytes -> String` ROUND TRIP DOES NOT TYPECHECK: `String.from_utf8(s.bytes())` fails with "expected 'Vec<u8>', found 'Slice[u8]'", and `Slice` has no `to_vec()`, so the only way back is a hand-rolled push loop. | `String.bytes()` returns `Slice[u8]`; `String.from_utf8` is signed `(Vec[u8]) -> Result[String, Utf8Error]`. Nothing bridges them — no implicit borrow-to-owned at the argument, and no `Slice.to_vec()` / `Vec.from_slice()`. |
-| B-2026-08-14-22 | 2026-08-14 | codegen | high | `s += x` ON A LOCAL `String` LEAKS THE ENTIRE PREVIOUS BUFFER ON EVERY APPEND: building a 160 KB string with 20,000 appends peaks at 1.5 GB of RSS — the exact sum of every intermediate — where `push_str` and `s = s + x` both peak at 2.5 MB. | The `+=` compound-assignment lowering for `String`. It evidently allocates a fresh concatenation and stores it over the binding without releasing the buffer the binding held. `s = s + x`, which produces the same value through an explicit assignment, DOES release — so the drop of the overwritten value exists and the `+=` path does not reach it. |
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-32 | 2026-08-14 | codegen | high | an index read into a heap-owning Vec, used as the value of an `if`/`match` ARM, is freed by both the binding and the container -- `let w = if c { v[i] } else { .. }` aborts with a double free while `let w = v[i]` is correct | src/codegen/stmts.rs:4074 and let_binding_is_borrow_elided (stmts.rs:1581) test only the TOP-LEVEL RHS kind for ExprKind::Index; an index read reached through an If/Match arm is invisible to them, so the binding registers an owned cleanup over a pointer the container still owns. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
 | B-2026-08-14-36 | 2026-08-14 | codegen | medium | A `Map` or `Set` TEMPORARY that is printed and not bound leaks its whole handle — `println(f"{mk()}")` in a 40-print loop strands 21440 bytes over 120 allocations, with no other owner to free it. | `try_compile_map_or_set_display` renders without registering a `FreeMapHandle`. Extract the binding path's drop-shape derivation (`src/codegen/maps.rs`, near the `track_map_var_with_val_drop` call — six call sites derive it near-identically today) into a helper over the key/value `TypeExpr`s, then gate the call on `print_vec_operand_is_owned_temp`. |
 | B-2026-08-15-1 | 2026-08-15 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints raw bytes, and `m.len()` is a hard codegen error — while the same program with a type annotation, or with plain `Map`/`Set`, is correct on every surface. | The `let` path derives the collection side-tables (`map_key_type_exprs` / `var_elem_type_exprs` / `set_elem_type_exprs` / `sorted_collection_vars`) from the ANNOTATION; the callee's declared return type is never consulted for the `SortedMap` / `SortedSet` heads, so an unannotated call-result binding registers nothing. The plain `Map` / `Set` equivalent registers fine, so the head-gate is the gap, not the call-result shape. |
+| B-2026-08-15-2 | 2026-08-15 | codegen+ownership | high | `s.push_str(s)` ON A HEAP STRING THAT MUST GROW IS A USE-AFTER-FREE: the grow reallocs the destination and the copy then reads through the now-stale SOURCE pointer — 5,000 invalid reads under valgrind on one call. It produces the RIGHT ANSWER anyway, so nothing surfaces. The two SLICE spellings of the same aliasing (`s.push_str(s[a..b])`, and via a `let`) are correctly rejected by the ownership checker; only the whole-value self-append reaches codegen. | Two candidate layers, and the fix should probably be both. CODEGEN: `push_str`'s alias guard in `src/codegen/vec_method.rs` is emitted only under `src_borrowed` — an owned source is assumed not to alias, which is true of a fresh temp but false of the destination itself. The grow path calls `emit_string_buffer_grow` (realloc, may move) and then copies from `src_ptr`, captured before the grow. OWNERSHIP: the checker already rejects `s` borrowed as `Slice[T]` while borrowed as `mut ref T`; the whole-value read of `s` as a `push_str` argument is the same conflict and is not flagged. |
 
 ### Wontfix (2)
 
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1204 surfaced
 
 </details>
 
-### Fixed (1184)
+### Fixed (1185)
 
-<details><summary>1184 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1185 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6538,6 +6538,81 @@ touched) — confirmed by running it against the stashed compiler.
 Full `--features llvm` suite green (2963 codegen, 1517 interpreter, 1074
 memory_sanitizer, 2218 typechecker, 427 ownership, 255 par_codegen, 4574 across
 everything else), fmt and clippy `--all-targets` clean. |
+| B-2026-08-14-22 | codegen | high | `s += x` ON A LOCAL `String` LEAKS THE ENTIRE PREVIOUS BUFFER ON EVERY APPEND: building a 160 KB string with 20,000 appends peaks at 1.5 GB of RSS —… | FIXED by 69abc03. The row's repro reproduces at exactly its number — 1,565,108 KB
+peak RSS against a live string of 160 KB — and lands at 5,440 KB after,
+byte-identical output. It is also 22x faster (871 ms -> 40 ms per run), entirely
+from not touching 1.5 GB of pages.
+
+THE ROW'S TRACKER IS RIGHT AND ITS SCOPE WAS ONE ARM, NOT ONE OPERATOR. The
+tracker says "the `+=` lowering allocates a fresh concatenation and stores it
+over the binding without releasing the buffer the binding held" — correct. But
+`+=` is not what distinguishes the leaking program from the clean one. Measured
+on the same 20,000-append loop with the same operator, after the B-2026-08-14-21
+fix landed:
+
+    s += x        (bare local)          1,565,108 KB   <-- leaks
+    h.s += x      (struct field)            5,440 KB
+    v[0] += x     (index)                   5,440 KB
+    s += x        (`mut ref` param)         5,440 KB
+
+Every other target reaches a store path that ALREADY reclaims; only the bare
+local fell through to a plain `build_store`. So the fix is the missing reclaim
+in that one arm, sitting directly beneath the `mut ref` reclaim added for
+B-2026-08-14-21 — the two are twins and now read as such.
+
+THE GATE HAS TWO HALVES ON PURPOSE. The free fires only when the binding is a
+registered `{ptr,len,cap}` AND the value being stored actually has that shape.
+The registry answers "does this slot hold a buffer"; the value type answers "did
+this operator produce a new one". A scalar `n += 1` fails the second even if a
+sibling table mis-registered the name, so the free cannot reach an integer slot.
+Ordering is load-bearing too: it runs AFTER `result` is computed, because the
+concatenation reads the old bytes, and `emit_free_vec_buffer_if_owned` is
+cap-guarded, so a static-literal or borrowed-view source (`cap == 0`) is a no-op.
+
+THE ROW'S RECOMMENDED FIX WOULD HAVE INTRODUCED A USE-AFTER-FREE, and this is
+the part worth reading before reopening the subject. The note says lowering
+`s += x` to `push_str`'s in-place path "fixes the leak, fixes B-2026-08-14-21,
+and closes the 21x gap in B-2026-08-14-23 at the same time — one change, three
+rows." Measured, `push_str` is not safe to route into:
+
+    s.push_str(s)   on a heap string that must grow
+    -> 5,000 invalid reads under valgrind
+
+`emit_string_buffer_grow` reallocs the destination and the copy then reads from
+the now-stale source pointer. The alias guard exists but is emitted only for a
+BORROWED source (`s.push_str(s[a..b])`), and both slice spellings are rejected
+by the ownership checker anyway; the whole-value self-append is the one that
+reaches codegen. The `+=` spelling of that same program is CLEAN today,
+precisely because it concatenates through a fresh buffer — so routing would have
+traded a leak for a use-after-free in a currently-correct program. Filed
+separately as B-2026-08-15-2.
+
+THE PERF CLAIM IS ALSO NARROWER THAN THE ROW STATES. After this fix `+=` sits
+exactly on its explicit twin `s = s + x` (40 ms each on the 20,000-append loop),
+which is the right target for a row about the leak. The remaining ~24x gap to
+`push_str` (1.7 ms) is the O(n^2) copy that B-2026-08-14-23 covers — and -23 is
+about the `s = s + x` spelling, which this change does not touch. One change,
+one row.
+
+MEASURED: the row's three-spelling table (`+=` / `push_str` / `s = s + x`, all
+160000, all now ~5.4 MB); a static-literal target (`cap == 0`, where the reclaim
+must be a no-op); a heap target; a String-VARIABLE right-hand side; an f-string
+temporary right-hand side; a target moved into a call after the append; a loop
+with an early `break`; a for-loop accumulator; appends into a local that is then
+pushed into a `Vec` each iteration; `s += s` self-append (correct and clean, and
+the case routing to `push_str` would have broken); and the scalar `n += 1` /
+`f += 0.5` controls. All valgrind-clean, all agreeing with the interpreter.
+
+PIN. `tests/memory_sanitizer.rs::asan_compound_append_on_a_local_string_is_balanced`
+FAILS against the stashed compiler under LSan. It appends through a bare local
+on purpose, since that is the only target that leaked, and pins all three
+spellings together: `push_str` and `s = s + x` were already balanced, so a fix
+that traded this leak for a double free in either fails there rather than
+somewhere else.
+
+Full `--features llvm` suite green (2970 codegen, 2221 typechecker, 1521
+interpreter, 1081 memory_sanitizer, 584 drop_differential, 428 ownership, 255
+par_codegen, 4579 across everything else), fmt and clippy `--all-targets` clean. |
 | B-2026-08-14-24 | autopar | medium | a disjoint-write loop nested inside an `if` (or a bare block) is INVISIBLE to the auto-parallelisation analysis -- it is not declined with a reason,… | FIXED by 7360ad8.
 
 The cause was NOT the lane's statement walk. Both lanes already descended into
