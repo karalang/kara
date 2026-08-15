@@ -5670,7 +5670,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    pub(super) fn suppress_source_vec_cleanup_for_arg(&self, arg_expr: &Expr) {
+    pub(super) fn suppress_source_vec_cleanup_for_arg(&mut self, arg_expr: &Expr) {
         self.suppress_source_vec_cleanup_for_arg_ex(arg_expr, true);
     }
 
@@ -6844,7 +6844,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_source_vec_cleanup_for_arg_ex(
-        &self,
+        &mut self,
         arg_expr: &Expr,
         apply_shared_transfer: bool,
     ) {
@@ -6866,6 +6866,40 @@ impl<'ctx> super::Codegen<'ctx> {
             .uam_copied_sites
             .contains(&(arg_expr.span.offset, arg_expr.span.length))
         {
+            return;
+        }
+        // B-2026-08-15-10 — the CALL-ARGUMENT consume site, which the copy half
+        // above cannot reach.
+        //
+        // That half runs at the three positions that compile a moved value
+        // themselves — a `let` RHS and the two struct-literal field inits — and
+        // there is no fourth hook to add, because an ARGUMENT has no shared
+        // compile path: every builtin, method and free-fn lowers its own. So a
+        // move that happens *as an argument* (`index.insert(e.service, 0)`) was
+        // never copied, and this helper then disarmed the source as usual.
+        //
+        // The result was a borrow with no owner, not a double free, which is
+        // why it stayed invisible: the disarm zeroes `e.service.cap`, so the
+        // later reuse reads `{ptr, len, cap: 0}` — the right BYTES, pointing
+        // into the buffer the callee now owns, with a cap that makes every drop
+        // skip it. Nothing double-frees; the value is simply correct until the
+        // consumer is freed. In `main` that is after the last read, so the
+        // program prints the right answer and ASAN is clean, which is exactly
+        // how "this class is fixed" survived: `main` is the one place the
+        // timing hides it. Anywhere else the consumer dies at the callee's
+        // scope exit and the escaping reuse dangles.
+        //
+        // COPY THE SOURCE, NOT THE CONSUMER. By the time a disarm site runs the
+        // consumer has already been handed `{ptr,len,cap}`, so there is nothing
+        // left to intercept on that side — but the source place is still right
+        // here, and it is what this helper already writes to. Giving the SOURCE
+        // a fresh buffer reaches the same end state (two owners, two buffers,
+        // one free each) from the only side still reachable. The site is
+        // recorded in `uam_copied_sites` for the same reason the other half
+        // records: every disarm keys on "a copy really happened", so a source
+        // that now owns its own buffer keeps its cleanup everywhere, not just
+        // at the site that copied it.
+        if self.uam_reclone_source_field(arg_expr) {
             return;
         }
         // B-2026-08-12-27 — a heap FIELD read off a Vec element

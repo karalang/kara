@@ -4695,6 +4695,136 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(copied)
     }
 
+    /// B-2026-08-15-10 — the CALL-ARGUMENT half of the same defensive copy,
+    /// taken from the SOURCE side because that is the only side an argument
+    /// position still has.
+    ///
+    /// [`Self::uam_defensive_copy_field`] copies what the CONSUMER receives,
+    /// which works at the three positions that compile a moved value through a
+    /// single hook (a `let` RHS, the two struct-literal field inits). An
+    /// argument has no such hook — every builtin, method and free-fn lowers its
+    /// own — so a move written as `f(e.field)` reached no copy at all, and the
+    /// disarm in `suppress_source_vec_cleanup_for_arg_ex` ran on schedule.
+    ///
+    /// This runs from inside that disarm instead. The consumer already holds
+    /// `{ptr,len,cap}` by then, so it keeps the ORIGINAL buffer and the source
+    /// field is overwritten with an independent deep copy — the same end state
+    /// the consumer-side copy reaches (two owners, two buffers, one free each),
+    /// approached from the other direction. `Some`/`true` means the source now
+    /// owns its own buffer and its cleanup must stand, so the caller returns
+    /// WITHOUT disarming.
+    ///
+    /// Scoped exactly like the consumer-side field copy, and the scope is the
+    /// safety argument rather than a limitation to apologize for: the same four
+    /// roots are excluded (they already receive an independent buffer from
+    /// `deep_copy_owned_struct_param_field_move`, and copying twice leaks the
+    /// first), `shared` structs are left to the refcount machinery, and only a
+    /// field that is LAID OUT as `{ptr,len,cap}` is touched. A `Map`/`Set`
+    /// handle, an `Option`/`Result` and an enum field keep the behaviour they
+    /// have today. Partial coverage stays MONOTONE that way — every site this
+    /// declines is left exactly as it was, so the change can only remove
+    /// use-after-frees, never introduce a double free at a shape it half-copied.
+    pub(super) fn uam_reclone_source_field(&mut self, arg_expr: &Expr) -> bool {
+        let ExprKind::FieldAccess { object, field } = &arg_expr.kind else {
+            return false;
+        };
+        if !self
+            .uam_consume_sites
+            .contains(&(arg_expr.span.offset, arg_expr.span.length))
+        {
+            return false;
+        }
+        // The same two receiver spellings the disarm below resolves, so the
+        // copy and the skip are defined over one set of shapes.
+        let obj_name = match &object.kind {
+            ExprKind::Identifier(o) => o.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return false,
+        };
+        if self.owned_struct_params.contains(obj_name.as_str())
+            || self.for_loop_owned_agg_vars.contains(obj_name.as_str())
+            || self
+                .borrowed_agg_payload_struct_vars
+                .contains(obj_name.as_str())
+            || self
+                .shared_enum_payload_view_vars
+                .contains_key(obj_name.as_str())
+        {
+            return false;
+        }
+        let Some(slot) = self.variables.get(obj_name.as_str()).copied() else {
+            return false;
+        };
+        // The slot must hold the struct INLINE. A `ref Struct` param's slot is
+        // an 8-byte pointer into the CALLER's frame — the same gate the disarm
+        // applies, and for the same reason: writing a fresh buffer through it
+        // would replace a field the caller still owns.
+        let BasicTypeEnum::StructType(held) = slot.ty else {
+            return false;
+        };
+        let Some(sname) = self.var_type_names.get(obj_name.as_str()).cloned() else {
+            return false;
+        };
+        if self.shared_types.contains_key(sname.as_str()) {
+            return false;
+        }
+        let Some(idx) = self
+            .struct_field_names
+            .get(sname.as_str())
+            .and_then(|ns| ns.iter().position(|n| n == field))
+        else {
+            return false;
+        };
+        // Trust the SLOT's own layout for the shape test, not the declared
+        // type-expr: inside a monomorph a bare-`T` field reads as an erased
+        // placeholder while the slot carries the concrete `{ptr,len,cap}`
+        // (B-2026-08-06-2's lesson at the disarm's own GEP).
+        let vec_ty = self.vec_struct_type();
+        if held.get_field_type_at_index(idx as u32) != Some(vec_ty.into()) {
+            return false;
+        }
+        let fte = self
+            .struct_field_type_exprs
+            .get(sname.as_str())
+            .and_then(|v| v.get(idx))
+            .cloned();
+        let Ok(field_ptr) =
+            self.builder
+                .build_struct_gep(held, slot.ptr, idx as u32, "uam.src.fld")
+        else {
+            return false;
+        };
+        let Ok(cur) = self.builder.build_load(vec_ty, field_ptr, "uam.src.cur") else {
+            return false;
+        };
+        // Element type off the FIELD's declared type — a `Vec[String]` field
+        // has to copy element-deep, or the source's fresh outer buffer would
+        // hold the consumer's element handles and both would free them.
+        let elem_te = fte.as_ref().and_then(|te| match &te.kind {
+            TypeKind::Path(p)
+                if matches!(
+                    p.segments.last().map(|s| s.as_str()),
+                    Some("Vec") | Some("VecDeque")
+                ) =>
+            {
+                p.generic_args.as_ref().and_then(|a| match a.first() {
+                    Some(crate::ast::GenericArg::Type(t)) => Some(t.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        });
+        let elem_ty = fte
+            .as_ref()
+            .and_then(|te| self.extract_vec_elem_type(te))
+            .unwrap_or_else(|| self.context.i8_type().into());
+        let copied = self.emit_vecstr_defensive_copy(cur, elem_ty, elem_te.as_ref());
+        let _ = self.builder.build_store(field_ptr, copied);
+        self.uam_copied_sites
+            .insert((arg_expr.span.offset, arg_expr.span.length));
+        true
+    }
+
     /// B-2026-08-13-19 — the tuple-element half of [`Self::uam_defensive_copy`],
     /// the sibling of [`Self::uam_defensive_copy_field`] one place-expression
     /// spelling over.

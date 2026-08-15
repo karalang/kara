@@ -96151,6 +96151,80 @@ fn main() {
             )
         );
     }
+
+    /// B-2026-08-15-10 — the OUTPUT half of the call-argument defensive copy,
+    /// for hosts where the ASAN gate skips.
+    ///
+    /// The memory error and the wrong answer are one defect seen twice: the
+    /// disarm zeroes the moved field's `cap`, so the reuse becomes a borrow of
+    /// the buffer the consumer now owns. While the consumer is alive that
+    /// borrow reads correctly — which is why the `main`-shaped control below
+    /// passed throughout. It is the CALLEE's scope exit that frees the map and
+    /// turns the escaping reuse into mojibake. `tests/memory_sanitizer.rs`
+    /// names the use-after-free; this names the wrong bytes, and it runs
+    /// everywhere.
+    #[test]
+    fn e2e_uam_moved_field_reused_as_call_argument_in_a_callee() {
+        let src = r#"
+struct Stat { service: String }
+struct Entry { service: String }
+
+fn agg(entries: Vec[Entry]) -> Vec[Stat] {
+    let mut index: Map[String, usize] = Map.new();
+    let mut stats: Vec[Stat] = Vec.new();
+    let mut i = 0;
+    while i < entries.len() {
+        let e = entries[i];
+        let _ = index.insert(e.service, 0 as usize);
+        stats.push(Stat { service: e.service });
+        i = i + 1;
+    }
+    return stats;
+}
+
+fn main() {
+    let mut es: Vec[Entry] = Vec.new();
+    es.push(Entry { service: "alphabetical" });
+    es.push(Entry { service: "betamaximum" });
+    let out = agg(es);
+    println(f"{out[0].service} {out[1].service}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("alphabetical betamaximum\n"),
+            "a field moved as a call argument and reused must keep its own bytes"
+        );
+    }
+
+    /// The same reuse with the consumer OUTLIVING the read. Correct on both
+    /// sides of the fix, and kept for exactly that reason: this is the shape
+    /// every earlier fixture for this class was written in, and it is why the
+    /// class kept reading as closed. A pin that passes before the fix is not
+    /// worthless — it is the control that says where to put the real one.
+    #[test]
+    fn e2e_uam_call_argument_main_shaped_control_is_correct_either_way() {
+        let src = r#"
+struct Stat { service: String }
+struct Entry { service: String }
+
+fn main() {
+    let mut es: Vec[Entry] = Vec.new();
+    es.push(Entry { service: "alphabetical" });
+    let mut index: Map[String, usize] = Map.new();
+    let mut stats: Vec[Stat] = Vec.new();
+    let mut i = 0;
+    while i < es.len() {
+        let e = es[i];
+        let _ = index.insert(e.service, 0 as usize);
+        stats.push(Stat { service: e.service });
+        i = i + 1;
+    }
+    println(stats[0].service);
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("alphabetical\n"));
+    }
 }
 
 #[cfg(feature = "llvm")]

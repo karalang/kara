@@ -49661,4 +49661,70 @@ fn main() {
             "asan_generic_owned_vec_param_temp_arg_no_leak",
         );
     }
+
+    /// B-2026-08-15-10 — a move written as a CALL ARGUMENT, whose source is
+    /// read again afterwards.
+    ///
+    /// THIS PIN LIVES IN A CALLEE ON PURPOSE. The identical program in `main`
+    /// passes against the broken compiler, so a `main`-based fixture would have
+    /// reported green throughout — which is precisely how this class kept
+    /// reading as closed after B-2026-08-10-21. `main` is not a place where the
+    /// defensive copy worked; it is where the damage cannot be observed. The
+    /// disarm zeroes the source's `cap`, so the reuse gets the right BYTES with
+    /// a cap that makes every drop skip them: a borrow of the consumer's buffer.
+    /// Nothing double-frees, ASAN is clean, and the output is correct right up
+    /// until the consumer dies. In `main` it never does before the last read.
+    /// In a callee the map dies at scope exit and the returned `Vec[Stat]`
+    /// carries a dangling pointer out — heap-use-after-free, freed by
+    /// `karac_map_free_with_drop_vec`, read by `karac_string_clone`.
+    ///
+    /// Both spellings of the reuse, both roots that reach the argument position
+    /// (a `let` bound off a Vec index, and an owned struct param), and a
+    /// `Vec[String]` field so a copy that duplicated only the outer buffer
+    /// would surface as a double free of an element rather than passing.
+    #[test]
+    fn asan_use_after_move_as_call_argument_copies_in_a_callee() {
+        assert_clean_asan_run(
+            r#"
+struct Stat { service: String }
+struct Entry { service: String }
+struct Bag { tags: Vec[String] }
+
+fn agg(entries: Vec[Entry]) -> Vec[Stat] {
+    let mut index: Map[String, usize] = Map.new();
+    let mut stats: Vec[Stat] = Vec.new();
+    let mut i = 0;
+    while i < entries.len() {
+        let e = entries[i];
+        let _ = index.insert(e.service, 0 as usize);
+        stats.push(Stat { service: e.service });
+        i = i + 1;
+    }
+    return stats;
+}
+
+fn tag_once(b: Bag) -> Vec[String] {
+    let mut seen: Set[Vec[String]] = Set.new();
+    let _ = seen.insert(b.tags);
+    return b.tags;
+}
+
+fn main() {
+    let mut es: Vec[Entry] = Vec.new();
+    es.push(Entry { service: "alphabetical" });
+    es.push(Entry { service: "betamaximum" });
+    let out = agg(es);
+    println(f"{out[0].service} {out[1].service} {out.len()}");
+
+    let mut tags: Vec[String] = Vec.new();
+    tags.push("gamma-ray-burst");
+    let back = tag_once(Bag { tags: tags });
+    println(f"{back[0]} {back.len()}");
+    println("end");
+}
+"#,
+            &["alphabetical betamaximum 2", "gamma-ray-burst 1", "end"],
+            "use_after_move_as_call_argument_in_callee",
+        );
+    }
 }
