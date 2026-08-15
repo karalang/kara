@@ -9158,6 +9158,110 @@ fn stats_calls_borrow_not_consume() {
     );
 }
 
+// ── B-2026-08-14-37 — a read-only `Slice[T]` formal is a BORROW ──
+
+#[test]
+fn read_only_slice_param_borrows_not_consumes() {
+    // `param_modes_from_signature` mapped `ref T -> Ref`, `mut ref T` /
+    // `mut Slice[T] -> MutRef`, and EVERYTHING ELSE to `Own`. The read-only
+    // `Slice[T]` spelling parses as a plain path (the mutable one has its own
+    // `TypeKind::MutSlice` node), so it landed in that catch-all and every
+    // call consumed its argument: `take(v); v.len()` reported "value 'v'
+    // moved here, used again here".
+    //
+    // It is a borrowed VIEW by construction — the header is `{ptr, len}` with
+    // no `cap`, so the callee cannot free the buffer even in principle, and
+    // `types_compatible` accepts an owned `Vec[T]` into the slot precisely
+    // because the coercion builds a view rather than transferring anything.
+    // Codegen always agreed (the caller keeps its own scope-exit drop); this
+    // was the one pass that thought a move happened.
+    //
+    // The stdlib never caught it because `runtime/stdlib/stats.kara` spells
+    // its params `ref Slice[f64]` — the outer `ref` alone made them borrows,
+    // so `stats_calls_borrow_not_consume` above passes either way.
+    ownership_ok(
+        "fn take(xs: Slice[i64]) -> i64 { xs.len() }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1i64);\n\
+             let a = take(v);\n\
+             let b = take(v);\n\
+             println(a + b + v.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn read_only_slice_param_borrow_survives_mutation_between_calls() {
+    // The borrow ends at the call, so mutating between two of them is legal —
+    // the `Slice[T]` peer of `stats_borrow_then_mutate_then_borrow_ok`.
+    ownership_ok(
+        "fn take(xs: Slice[i64]) -> i64 { xs.len() }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1i64);\n\
+             let a = take(v);\n\
+             v.push(2i64);\n\
+             let b = take(v);\n\
+             println(a + b);\n\
+         }",
+    );
+}
+
+#[test]
+fn read_only_slice_param_takes_heap_elements_without_consuming() {
+    // A `String`-element container is the shape where a spurious move costs
+    // most: the suggested workaround is `v.clone()`, an O(n) deep copy of
+    // every element, to feed a callee that only reads.
+    ownership_ok(
+        "fn count(xs: Slice[String]) -> i64 { xs.len() }\n\
+         fn main() {\n\
+             let mut v: Vec[String] = Vec.new();\n\
+             v.push(\"alpha\");\n\
+             let a = count(v);\n\
+             println(a + count(v) + v.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn read_only_slice_param_of_a_method_borrows_not_consumes() {
+    // The `MethodCall` dispatch path reads a DIFFERENT table
+    // (`method_param_modes`, via `method_arg_is_borrow_position`) than the
+    // free-function path, but both are filled by
+    // `param_modes_from_signature` — so both carried the bug and both are
+    // fixed by the one arm. Inherent and trait impls are separate collector
+    // walks; this covers each.
+    ownership_ok(
+        "struct Runner { n: i64 }\n\
+         impl Runner { fn drive(ref self, xs: Slice[i64]) -> i64 { xs.len() + self.n } }\n\
+         trait Feed { fn feed(ref self, xs: Slice[i64]) -> i64; }\n\
+         impl Feed for Runner { fn feed(ref self, xs: Slice[i64]) -> i64 { xs.len() } }\n\
+         fn main() {\n\
+             let r = Runner { n: 1i64 };\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1i64);\n\
+             println(r.drive(v) + r.drive(v) + r.feed(v) + v.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn mut_slice_param_still_consumes_nothing_and_keeps_its_marker() {
+    // Control: `mut Slice[T]` was already correct (its own syntax node), and
+    // must stay a `MutRef` — not silently widened to `Ref` — or the call-site
+    // `mut` marker rule and the exclusive-borrow rule lose their subject.
+    ownership_ok(
+        "fn clear(xs: mut Slice[i64]) { xs.fill(0i64); }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1i64);\n\
+             clear(mut v);\n\
+             println(v.len());\n\
+         }",
+    );
+}
+
 #[test]
 fn stats_borrow_then_mutate_then_borrow_ok() {
     // A `ref` arg borrow ends at the call, so mutating between two Stats

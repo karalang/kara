@@ -425,13 +425,23 @@ enum ParamMode {
     /// Bare `T` — owned param; the callee entry-copies, so a *caller* binding
     /// passed here is **NonConsuming** (caller-retains; §4).
     Owned,
-    /// `ref T` / `mut ref T` / `mut Slice[T]` — borrow; NonConsuming.
+    /// `ref T` / `mut ref T` / `Slice[T]` / `mut Slice[T]` — borrow;
+    /// NonConsuming.
     Borrow,
 }
 
 fn param_mode(ty: &TypeExpr) -> ParamMode {
     match &ty.kind {
         TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_) => ParamMode::Borrow,
+        // B-2026-08-14-37 — the read-only `Slice[T]` spelling parses as a
+        // plain path, not its own node, so it used to fall to `Owned` here
+        // exactly as it did in `param_modes_from_signature`. The oracle is
+        // the independent check on that pass; if only one of the two learned
+        // this, the oracle would start disagreeing with a now-correct
+        // compiler and its own tests would enforce the old wrong answer.
+        TypeKind::Path(p) if p.segments.last().map(String::as_str) == Some("Slice") => {
+            ParamMode::Borrow
+        }
         _ => ParamMode::Owned,
     }
 }

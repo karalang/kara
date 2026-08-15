@@ -2941,16 +2941,39 @@ fn collect_impl_trait_spans<'t>(ty: &'t TypeExpr, out: &mut Vec<&'t Span>) {
 }
 
 /// Map each parameter's syntactic type to its declared ownership mode.
-/// `ref T` → `Ref`; `mut ref T` / `mut Slice[T]` → `MutRef`; everything
-/// else (bare `T`, including `T` that's a type-param, owned struct, etc.)
-/// → `Own`.
+/// `ref T` / `Slice[T]` → `Ref`; `mut ref T` / `mut Slice[T]` → `MutRef`;
+/// everything else (bare `T`, including `T` that's a type-param, owned
+/// struct, etc.) → `Own`.
+///
+/// B-2026-08-14-37 — the read-only `Slice[T]` spelling used to fall in the
+/// `_` arm and classify as OWNED, so `fn take(xs: Slice[u8])` called as
+/// `take(v)` consumed `v`. It is a BORROWED VIEW by construction: the header
+/// is `{ptr, len}` with no `cap`, so the callee cannot free the buffer even
+/// in principle, and `types_compatible` accepts an owned `Vec[T]` / `Array[T,
+/// N]` into the slot precisely because the coercion creates a view rather
+/// than transferring anything (design.md § Slices). Codegen has always agreed
+/// — the caller keeps its own scope-exit drop — so this was the one pass that
+/// thought a move happened.
+///
+/// The mutable spelling was already right because it has its OWN syntax node
+/// (`TypeKind::MutSlice`); the read-only one parses as a plain path, which is
+/// how it ended up in the catch-all. `slice_kind_from_type` is the shared
+/// answer to "is this formal a slice", already used by
+/// `arg_formal_slice_kind`, so the two cannot drift.
 fn param_modes_from_signature(params: &[Param]) -> Vec<OwnershipMode> {
     params
         .iter()
         .map(|p| match &p.ty.kind {
             TypeKind::Ref(_) => OwnershipMode::Ref,
             TypeKind::MutRef(_) | TypeKind::MutSlice(_) => OwnershipMode::MutRef,
-            _ => OwnershipMode::Own,
+            _ => match slice_kind_from_type(&p.ty) {
+                Some(false) => OwnershipMode::Ref,
+                // `Some(true)` is unreachable — `mut Slice[T]` is
+                // `TypeKind::MutSlice`, matched above — but spell the
+                // mode out rather than falling to `Own` if that changes.
+                Some(true) => OwnershipMode::MutRef,
+                None => OwnershipMode::Own,
+            },
         })
         .collect()
 }

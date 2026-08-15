@@ -1401,11 +1401,16 @@ impl<'a> super::TypeChecker<'a> {
         None
     }
 
+    /// B-2026-08-14-37 — BOTH slice mutabilities are borrow positions. Only
+    /// `mutable: true` was listed, so a closure that passed a captured
+    /// container to a read-only `Slice[T]` formal was judged to CONSUME the
+    /// capture and became once-callable. That is the harder half of the row:
+    /// a spurious move is a warning, but a spuriously-once closure routed
+    /// into an `Fn(...)` slot is a hard `E_ONCE_FN_INTO_FN_SLOT` ERROR whose
+    /// suggestions (clone the container, or widen the slot to `OnceFn`) are
+    /// both wrong for a callee that only reads.
     fn is_borrow_param_type(t: &Type) -> bool {
-        matches!(
-            t,
-            Type::Ref(_) | Type::MutRef(_) | Type::Slice { mutable: true, .. }
-        )
+        matches!(t, Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. })
     }
 
     /// Whether `ty` is the unit type for entry-point purposes — the `()`

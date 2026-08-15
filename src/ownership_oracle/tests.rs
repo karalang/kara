@@ -197,6 +197,49 @@ fn main() { println(0); }
     );
 }
 
+#[test]
+fn read_only_slice_param_does_not_drop_in_callee() {
+    // B-2026-08-14-37 — the oracle's `param_mode` had the same omission as the
+    // real pass: `ref T` / `mut ref T` / `mut Slice[T]` were borrows, and the
+    // READ-ONLY `Slice[T]` spelling — a plain path, not its own syntax node —
+    // fell to `Owned`. Combined with "Slice" being in `is_heap_builtin`, the
+    // model then scheduled a scope-exit drop for a parameter that owns no
+    // allocation at all: a `{ptr, len}` view has no `cap` and cannot free
+    // anything. Codegen emits no such drop, so this was a standing
+    // model-vs-codegen disagreement in the reference implementation — exactly
+    // what the fuzzer differential exists to catch, and it never generated the
+    // shape.
+    let res = oracle(
+        r#"
+fn total(xs: Slice[i64]) -> i64 { return xs.len(); }
+fn main() { println(0); }
+"#,
+    );
+    assert!(res.is_clean());
+    assert!(
+        !drops_in(&res, "total").contains(&"xs".to_string()),
+        "a read-only `Slice[T]` param must NOT drop in the callee — a slice \
+         header owns nothing; got {:?}",
+        drops_in(&res, "total")
+    );
+}
+
+#[test]
+fn mut_slice_param_does_not_drop_in_callee() {
+    // Control: the mutable spelling was already correct, and must stay so.
+    let res = oracle(
+        r#"
+fn wipe(xs: mut Slice[i64]) -> i64 { return xs.len(); }
+fn main() { println(0); }
+"#,
+    );
+    assert!(res.is_clean());
+    assert!(
+        !drops_in(&res, "wipe").contains(&"xs".to_string()),
+        "a `mut Slice[T]` param must NOT drop in the callee — it's a borrow"
+    );
+}
+
 // ─────────────────────── sanity check 1: for-loop-element-escape ────────
 
 #[test]

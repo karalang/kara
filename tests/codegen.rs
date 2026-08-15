@@ -62760,6 +62760,58 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-37 — a read-only `Slice[T]` formal borrows, so the caller
+    /// keeps its container.
+    ///
+    /// The ownership half is checked in `tests/ownership.rs` and the
+    /// once-callability half in `tests/closures.rs`; what this pins is that
+    /// the programs those two now ACCEPT actually run, and run correctly.
+    /// That matters in both directions. Line 03 is the shape that was a hard
+    /// `E_ONCE_FN_INTO_FN_SLOT` error — it could not be built at all — and
+    /// lines 01/02/05 are the ones that merely warned, which means codegen
+    /// was already compiling them with a `use_after_move_consume_sites`
+    /// defensive copy at each flagged reuse. Reclassifying the argument as a
+    /// borrow removes those copies, so the values printed here are the
+    /// evidence that removing them did not change any answer.
+    #[test]
+    fn test_e2e_read_only_slice_param_borrows_its_argument() {
+        let src = r#"
+fn count(xs: Slice[String]) -> i64 { xs.len() }
+fn scount(xs: Slice[i64]) -> i64 { xs.len() }
+fn total(xs: Slice[i64]) -> i64 panics {
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < xs.len() { t = t + xs[i]; i = i + 1i64; }
+    t
+}
+fn twice(f: Fn() -> i64) -> i64 { f() + f() }
+
+fn main() {
+    let words: Vec[String] = ["alphabetical", "betamax", "gamma-ray-burst"];
+    println(f"01 {count(words)} {count(words)} {words[0i64]} {words.len()}");
+
+    let nums: Vec[i64] = [10i64, 20i64, 30i64];
+    println(f"02 {total(nums)} {total(nums)} {total(nums)} {nums[2i64]}");
+
+    println(f"03 {twice(|| scount(nums))}");
+
+    println(f"04 {total(nums.as_slice())} {total(nums[0..2])}");
+
+    println(f"05 {nums.len()} {words[2i64]}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 3 3 alphabetical 3\n\
+                 02 60 60 60 30\n\
+                 03 6\n\
+                 04 60 30\n\
+                 05 3 gamma-ray-burst\n"
+            ),
+        );
+    }
+
     /// B-2026-08-14-20, sibling half — a RANGE index as a method receiver.
     ///
     /// `v[a..b]` is a `Slice[T]` VIEW, but the indexed-receiver path treated

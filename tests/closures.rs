@@ -110,6 +110,43 @@ fn param_fn_slot_accepts_repeatable_closure() {
     assert_no_once_fn_into_fn_slot(&typecheck_src(src));
 }
 
+#[test]
+fn param_fn_slot_accepts_closure_forwarding_to_a_read_only_slice_param() {
+    // B-2026-08-14-37, the half that was a hard ERROR rather than a warning.
+    // `is_borrow_param_type` — the once-callability walker's "is this a borrow
+    // position" test — listed `Type::Slice { mutable: true }` only, so a
+    // closure passing a captured container to a READ-ONLY `Slice[T]` formal
+    // was judged to CONSUME the capture and became `OnceFn`. Routed into an
+    // `Fn(...)` slot that is `E_ONCE_FN_INTO_FN_SLOT`, and both suggestions it
+    // offers are wrong here: cloning the container is an O(n) copy for a
+    // callee that only reads, and widening the slot to `OnceFn` gives up
+    // repeatable invocation the program is entitled to.
+    let src = "fn total(xs: Slice[i64]) -> i64 { xs.len() }\n\
+               fn twice(f: Fn() -> i64) -> i64 { f() + f() }\n\
+               fn main() {\n\
+                   let mut v: Vec[i64] = Vec.new();\n\
+                   v.push(1i64);\n\
+                   println(twice(|| total(v)));\n\
+               }";
+    assert_no_once_fn_into_fn_slot(&typecheck_src(src));
+}
+
+#[test]
+fn param_fn_slot_still_rejects_closure_consuming_into_an_owned_param() {
+    // Control for the row above: widening the borrow-position test must not
+    // make every capture repeatable. A bare owned `Vec[i64]` formal genuinely
+    // consumes, so the closure stays once-callable and the slot still rejects
+    // it.
+    let src = "fn eat(xs: Vec[i64]) -> i64 { xs.len() }\n\
+               fn twice(f: Fn() -> i64) -> i64 { f() + f() }\n\
+               fn main() {\n\
+                   let mut v: Vec[i64] = Vec.new();\n\
+                   v.push(1i64);\n\
+                   println(twice(|| eat(v)));\n\
+               }";
+    assert_once_fn_into_fn_slot(&typecheck_src(src));
+}
+
 // ── Path 2: method receiver ─────────────────────────────────────
 
 #[test]

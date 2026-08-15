@@ -48104,6 +48104,54 @@ fn main() {
         );
     }
 
+    /// B-2026-08-14-37 — reclassifying a read-only `Slice[T]` formal from
+    /// OWNED to BORROW changes what codegen emits, and this is the gate on
+    /// that change being safe.
+    ///
+    /// The reclassification is not diagnostics-only. A `UseAfterMove` is
+    /// non-fatal by design: codegen reads
+    /// `use_after_move_consume_sites` and, at every flagged reuse,
+    /// deep-copies the value AND skips the source's cleanup disarm — both
+    /// halves, because a copy alone leaks the source and a disarm-skip alone
+    /// turns the use-after-free into a double free. Every `count(words)` here
+    /// used to be such a site. With the argument correctly a borrow those
+    /// sites disappear, so the container is now passed and freed exactly once
+    /// by its own scope-exit drop — and the two ways to get that wrong are a
+    /// leak (the defensive copies are gone but something still disarms the
+    /// source) and a double free (the source drops and a stale copy's cleanup
+    /// survives). `String` elements make either one visible; the printed
+    /// values are identical in all three worlds.
+    #[test]
+    fn asan_read_only_slice_param_borrows_its_argument() {
+        assert_clean_asan_run(
+            r#"
+fn count(xs: Slice[String]) -> i64 { xs.len() }
+fn scount(xs: Slice[i64]) -> i64 { xs.len() }
+fn twice(f: Fn() -> i64) -> i64 { f() + f() }
+fn mk() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alphabetical"); v.push("betamax");
+    v
+}
+
+fn main() {
+    let words: Vec[String] = ["alphabetical", "betamax", "gamma-ray-burst"];
+    println(f"{count(words)} {count(words)} {count(words)}");
+    println(f"{words[0i64]} {words.len()}");
+
+    let nums: Vec[i64] = [10i64, 20i64, 30i64];
+    println(f"{twice(|| scount(nums))} {nums.len()}");
+
+    println(f"{count(mk())}");
+    println(f"{count(words.as_slice())} {count(words[0..2])}");
+    println("end");
+}
+"#,
+            &["3 3 3", "alphabetical 3", "6 3", "2", "3 2", "end"],
+            "read_only_slice_param_borrows",
+        );
+    }
+
     /// B-2026-08-14-15 leg A — a nested container read into a `let` binding
     /// and then probed with a key-taking method.
     ///
