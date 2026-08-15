@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 96 | 1 |
 | perf | 67 | 1 |
 | false-positive | 62 | 0 |
-| diagnostics | 55 | 2 |
+| diagnostics | 55 | 1 |
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
 | other | 30 | 0 |
@@ -113,20 +113,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 869 | 6 |
 | typecheck | 171 | 1 |
 | interp | 145 | 0 |
-| ownership | 48 | 1 |
+| ownership | 48 | 0 |
 | autopar | 42 | 1 |
 | other | 41 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
-| resolver | 19 | 1 |
+| resolver | 19 | 0 |
 | parser | 16 | 0 |
 | effect | 5 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced · 9 open · 1182 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced · 8 open · 1183 fixed · 2 wontfix** (2026-05-20 → 2026-08-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-32 | 2026-08-14 | codegen | high | an index read into a heap-owning Vec, used as the value of an `if`/`match` ARM, is freed by both the binding and the container -- `let w = if c { v[i] } else { .. }` aborts with a double free while `let w = v[i]` is correct | src/codegen/stmts.rs:4074 and let_binding_is_borrow_elided (stmts.rs:1581) test only the TOP-LEVEL RHS kind for ExprKind::Index; an index read reached through an If/Match arm is invisible to them, so the binding registers an owned cleanup over a pointer the container still owns. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
-| B-2026-08-14-34 | 2026-08-14 | resolver+ownership | medium | DIAGNOSTIC OUTPUT IS NONDETERMINISTIC RUN-TO-RUN on the same binary and the same input, in two independent places: a resolver "did you mean" suggestion picks a different candidate among equal-distance ties (7/7/6 three-way split over 20 runs), and two `perf[rc-fallback]` diagnostics are emitted in a different ORDER (10/10 over 20 runs). Both reach the `--output=json` surface the Mend loop consumes. | HashMap iteration order leaking into user-visible output, the same mechanism as B-2026-08-14-10 but on the diagnostics side rather than the typechecking side. LEG A: the resolver's suggestion search evidently walks a hash-ordered name table and keeps the first best candidate, so an edit-distance TIE resolves by hash. LEG B: the RC-fallback diagnostics are collected from a hash-ordered map and emitted in iteration order rather than sorted by span. |
 | B-2026-08-14-35 | 2026-08-14 | codegen | medium | `SortedMap` and `SortedSet` print with the WRONG PREFIX under `karac build` on every spelling, bound variable included: `SortedMap{kk: 1}` renders as `{kk: 1}` and `SortedSet{kk}` as `Set{kk}`, so a compiled program's output claims a different type than the one it holds and disagrees with `karac run`. | `emit_map_display_fn` / `emit_set_display_fn` in `src/codegen/synth_display.rs` hard-code the unsorted prefixes and have no Sorted* variant (grep the file for either name: nothing). Both call sites already know the surface type — the identifier arms from the per-variable registries, the span-keyed arm from `display_map_types`' source `Type::Named { name, .. }`, which discards `name` after matching it. |
 | B-2026-08-14-36 | 2026-08-14 | codegen | medium | A `Map` or `Set` TEMPORARY that is printed and not bound leaks its whole handle — `println(f"{mk()}")` in a 40-print loop strands 21440 bytes over 120 allocations, with no other owner to free it. | `try_compile_map_or_set_display` renders without registering a `FreeMapHandle`. Extract the binding path's drop-shape derivation (`src/codegen/maps.rs`, near the `track_map_var_with_val_drop` call — six call sites derive it near-identically today) into a helper over the key/value `TypeExpr`s, then gate the call on `print_vec_operand_is_owned_temp`. |
 
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1203 surfaced
 
 </details>
 
-### Fixed (1182)
+### Fixed (1183)
 
-<details><summary>1182 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1183 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6865,6 +6864,77 @@ frees the owner's handle nor strands anything.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-14-34 | resolver+ownership | medium | DIAGNOSTIC OUTPUT IS NONDETERMINISTIC RUN-TO-RUN on the same binary and the same input, in two independent places: a resolver "did you mean" suggesti… | FIXED by a5cb578. Both legs reproduce exactly as filed and are deterministic
+after: 30/30 identical on each leg's repro, and a three-runs-per-file sweep of
+all 819 `.kara` files in the katas / examples / selfhost corpora reports ZERO
+remaining nondeterminism (each `karac check` is its own process, so three runs
+sample three hash seeds).
+
+THE ROW SAID THE TIE-BREAK RULE WAS A DESIGN QUESTION THE FIX HAD TO ANSWER
+RATHER THAN JUST STABILISE. It is, and the answer is that HALF the rule was
+already there and correct.
+
+`suggest_similar` keeps the EARLIEST candidate at a given distance. That is not
+an accident: `SymbolTable::visible_names` walks scopes INNER TO OUTER, so
+first-wins means a nearer binding beats a farther one — the right answer, and
+one the obvious fix (sort the candidate list inside `suggest_similar`) would
+have destroyed. What was missing is the second half. Where a caller's order
+carries no proximity signal at all — the names within ONE scope, the methods on
+ONE impl, the siblings under ONE module path — it came straight off a `HashMap`.
+So each producer now sorts its own contribution and the full rule reads:
+
+    nearest scope, then alphabetical
+
+Both halves are pinned, deliberately as a PAIR:
+`test_did_you_mean_tie_is_deterministic_across_runs` asserts the alphabetical
+half, and `test_did_you_mean_prefers_the_nearer_scope_over_alphabetical` asserts
+the proximity half with a fixture where the two rules DISAGREE (`azb` outer vs
+`zzb` inner, both distance 1). Without the second test, the sort-everything
+regression passes.
+
+A THIRD SITE THE ROW DID NOT KNOW ABOUT. The row named the resolver's scope
+table and guessed at the rc-fallback map. Probing whether those were the only
+hash-ordered candidate sources found `Env::collect_method_names`, which walks
+`Impl::methods` (a `HashMap`): `s.goo()` against an impl carrying `foo` / `boo`
+/ `coo` suggested a different one on 10 / 8 / 2 of 20 runs. A FOURTH candidate
+(`karac update`'s nearest-package-name) looked like the same shape and is NOT —
+`Resolution::packages` is a `BTreeMap` and was already deterministic. Checked
+rather than assumed, in both directions.
+
+WHY THIS IS WORSE THAN A COSMETIC DIAGNOSTIC WOBBLE, and the part worth keeping:
+the resolver writes the winning suggestion into a machine-applicable
+`TextEdit` (`resolver.rs` `error_undefined_name`). So `karac fix` applied a
+DIFFERENT EDIT to the same file between runs — a nondeterministic source
+rewrite, not just a nondeterministic message.
+
+LEG B WAS NOT AN UNSTABLE TIE-BREAK BUT THE ABSENCE OF ANY ORDERING, which the
+row's own observation had already implied without naming: the note printed
+SECOND cited the EARLIER column. `emit_rc_fallback_notes` walked
+`rc_values` and its inner maps and pushed straight into `notes`. It now flattens
+and sorts by offset, then fn key, then binding — which is not a rule invented
+here but the one `rc_fallback_queries::analyze` ALREADY applies to the same two
+maps for the same reason, with a comment saying so. Two surfaces describing the
+same sites should not disagree about their order, and now they cannot.
+
+PINS AND THEIR HONEST STATUS. A nondeterminism bug cannot be pinned by a single
+run: within one process the `RandomState` is fixed, so a green pre-fix run
+proves nothing. Each pin was therefore measured across process seeds —
+
+    pre-fix   resolver pair       2/8 runs passed BOTH
+              method suggestion   1/8
+              note order         13/25
+    post-fix  all four          100/100 over 25 seeds each
+
+The note-order pin asserts the PROPERTY (offsets non-decreasing) rather than a
+fixed pair of names, since the invariant is what must hold; it checks it has at
+least two notes first, so it cannot pass vacuously on a fixture that stopped
+producing them. The `edit_distance` unit test passes both before and after by
+design — it pins the first-wins rule the fix depends on, and is a guard against
+a future "just sort it" refactor rather than evidence of the bug.
+
+Full `--features llvm` suite green (2969 codegen, 2221 typechecker, 1521
+interpreter, 1079 memory_sanitizer, 584 drop_differential, 428 ownership, 356
+resolver, 4443 across everything else), fmt and clippy `--all-targets` clean. |
 
 </details>
 
