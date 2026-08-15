@@ -131,37 +131,39 @@ pub(crate) unsafe fn seq_spawn(
     result_size: usize,
     result_align: usize,
 ) -> *mut SeqTaskHandle {
-    let (result_buf, result_layout) = if result_size == 0 {
-        (std::ptr::null_mut(), Layout::from_size_align(0, 1).unwrap())
-    } else {
-        let layout = match Layout::from_size_align(result_size, result_align) {
-            Ok(l) => l,
-            Err(_) => return std::ptr::null_mut(),
+    unsafe {
+        let (result_buf, result_layout) = if result_size == 0 {
+            (std::ptr::null_mut(), Layout::from_size_align(0, 1).unwrap())
+        } else {
+            let layout = match Layout::from_size_align(result_size, result_align) {
+                Ok(l) => l,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            let buf = std::alloc::alloc(layout);
+            if buf.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            (buf, layout)
         };
-        let buf = std::alloc::alloc(layout);
-        if buf.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        (buf, layout)
-    };
 
-    let handle = Box::into_raw(Box::new(SeqTaskHandle {
-        state: Cell::new(TASK_STATE_PENDING),
-        result_buf,
-        result_layout,
-        cancel: AtomicBool::new(false),
-        registered: Cell::new(false),
-    }));
+        let handle = Box::into_raw(Box::new(SeqTaskHandle {
+            state: Cell::new(TASK_STATE_PENDING),
+            result_buf,
+            result_layout,
+            cancel: AtomicBool::new(false),
+            registered: Cell::new(false),
+        }));
 
-    READY.with(|q| {
-        q.borrow_mut().push_back(SeqTask {
-            handle,
-            fn_ptr,
-            env,
-        })
-    });
+        READY.with(|q| {
+            q.borrow_mut().push_back(SeqTask {
+                handle,
+                fn_ptr,
+                env,
+            })
+        });
 
-    handle
+        handle
+    }
 }
 
 /// Run one dequeued task to completion and mark its handle terminal.
@@ -171,9 +173,11 @@ pub(crate) unsafe fn seq_spawn(
 /// `task.handle` must still be live (guaranteed: handles are freed only
 /// by join/free, which never leave the task enqueued behind them).
 unsafe fn run_one(task: SeqTask) {
-    let h = &*task.handle;
-    (task.fn_ptr)(task.env, h.result_buf, &h.cancel as *const AtomicBool);
-    h.state.set(TASK_STATE_COMPLETED);
+    unsafe {
+        let h = &*task.handle;
+        (task.fn_ptr)(task.env, h.result_buf, &h.cancel as *const AtomicBool);
+        h.state.set(TASK_STATE_COMPLETED);
+    }
 }
 
 /// Drive the ready queue (FIFO) until `handle` reaches a terminal state.
@@ -192,19 +196,21 @@ unsafe fn run_one(task: SeqTask) {
 /// itself spawn + join), which is sound because the queue borrow is
 /// released before each `run_one` call.
 unsafe fn drive_until_terminal(handle: *mut SeqTaskHandle) {
-    while (*handle).state.get() == TASK_STATE_PENDING {
-        let next = READY.with(|q| q.borrow_mut().pop_front());
-        match next {
-            Some(task) => run_one(task),
-            None => {
-                // A PENDING handle whose task is neither queued nor
-                // completable: the only way here is a task joining its
-                // own handle (self-join deadlocks on native too). Trap
-                // with a diagnosable message rather than spinning.
-                panic!(
-                    "karac sequential scheduler: join on a task that is \
+    unsafe {
+        while (*handle).state.get() == TASK_STATE_PENDING {
+            let next = READY.with(|q| q.borrow_mut().pop_front());
+            match next {
+                Some(task) => run_one(task),
+                None => {
+                    // A PENDING handle whose task is neither queued nor
+                    // completable: the only way here is a task joining its
+                    // own handle (self-join deadlocks on native too). Trap
+                    // with a diagnosable message rather than spinning.
+                    panic!(
+                        "karac sequential scheduler: join on a task that is \
                      neither ready nor complete (self-join deadlock?)"
-                );
+                    );
+                }
             }
         }
     }
@@ -219,14 +225,16 @@ unsafe fn drive_until_terminal(handle: *mut SeqTaskHandle) {
 /// yet joined/freed; `out_slot` writable at the spawn-time size/align or
 /// null for unit-returning tasks.
 pub(crate) unsafe fn seq_task_join(handle: *mut SeqTaskHandle, out_slot: *mut u8) -> u8 {
-    if handle.is_null() {
-        return TASK_STATE_CANCELLED;
+    unsafe {
+        if handle.is_null() {
+            return TASK_STATE_CANCELLED;
+        }
+        // B-2026-06-09-1 — a group-registered handle is freed by the group's
+        // scope-exit drop, not here; an explicit `.join()` drives + copies
+        // the result but leaves the handle alive for the group to reclaim.
+        let do_free = !(*handle).registered.get();
+        seq_task_join_inner(handle, out_slot, do_free)
     }
-    // B-2026-06-09-1 — a group-registered handle is freed by the group's
-    // scope-exit drop, not here; an explicit `.join()` drives + copies
-    // the result but leaves the handle alive for the group to reclaim.
-    let do_free = !(*handle).registered.get();
-    seq_task_join_inner(handle, out_slot, do_free)
 }
 
 /// Drive `handle` to terminal, copy the result into `out_slot` (when
@@ -241,21 +249,23 @@ pub(crate) unsafe fn seq_task_join(handle: *mut SeqTaskHandle, out_slot: *mut u8
 /// `handle` must be live; when `do_free` is false the caller guarantees
 /// a later `do_free = true` call reclaims it exactly once.
 unsafe fn seq_task_join_inner(handle: *mut SeqTaskHandle, out_slot: *mut u8, do_free: bool) -> u8 {
-    drive_until_terminal(handle);
+    unsafe {
+        drive_until_terminal(handle);
 
-    let h = &*handle;
-    let terminal = h.state.get();
-    if terminal == TASK_STATE_COMPLETED
-        && !out_slot.is_null()
-        && !h.result_buf.is_null()
-        && h.result_layout.size() > 0
-    {
-        std::ptr::copy_nonoverlapping(h.result_buf, out_slot, h.result_layout.size());
+        let h = &*handle;
+        let terminal = h.state.get();
+        if terminal == TASK_STATE_COMPLETED
+            && !out_slot.is_null()
+            && !h.result_buf.is_null()
+            && h.result_layout.size() > 0
+        {
+            std::ptr::copy_nonoverlapping(h.result_buf, out_slot, h.result_layout.size());
+        }
+        if do_free {
+            free_handle(handle);
+        }
+        terminal
     }
-    if do_free {
-        free_handle(handle);
-    }
-    terminal
 }
 
 /// Release a handle without transporting a result. A still-pending task
@@ -269,11 +279,13 @@ unsafe fn seq_task_join_inner(handle: *mut SeqTaskHandle, out_slot: *mut u8, do_
 ///
 /// `handle` must be from [`seq_spawn`] and not already joined/freed.
 pub(crate) unsafe fn seq_task_handle_free(handle: *mut SeqTaskHandle) {
-    if handle.is_null() {
-        return;
+    unsafe {
+        if handle.is_null() {
+            return;
+        }
+        drive_until_terminal(handle);
+        free_handle(handle);
     }
-    drive_until_terminal(handle);
-    free_handle(handle);
 }
 
 /// Sequential `karac_runtime_task_detach` (B-2026-06-17-2 / -8). Codegen emits
@@ -290,14 +302,16 @@ pub(crate) unsafe fn seq_task_handle_free(handle: *mut SeqTaskHandle) {
 /// emits this at most once per handle (the handle is discarded), so the free is
 /// claimed exactly once.
 pub(crate) unsafe fn seq_task_detach(handle: *mut SeqTaskHandle) {
-    if handle.is_null() {
-        return;
+    unsafe {
+        if handle.is_null() {
+            return;
+        }
+        if (*handle).registered.get() {
+            return;
+        }
+        drive_until_terminal(handle);
+        free_handle(handle);
     }
-    if (*handle).registered.get() {
-        return;
-    }
-    drive_until_terminal(handle);
-    free_handle(handle);
 }
 
 /// Free a handle and its result buffer. Single free site shared by the
@@ -307,9 +321,11 @@ pub(crate) unsafe fn seq_task_detach(handle: *mut SeqTaskHandle) {
 ///
 /// `handle` must be live and never touched again after this returns.
 unsafe fn free_handle(handle: *mut SeqTaskHandle) {
-    let boxed = Box::from_raw(handle);
-    if !boxed.result_buf.is_null() && boxed.result_layout.size() > 0 {
-        std::alloc::dealloc(boxed.result_buf, boxed.result_layout);
+    unsafe {
+        let boxed = Box::from_raw(handle);
+        if !boxed.result_buf.is_null() && boxed.result_layout.size() > 0 {
+            std::alloc::dealloc(boxed.result_buf, boxed.result_layout);
+        }
     }
 }
 
@@ -320,10 +336,12 @@ unsafe fn free_handle(handle: *mut SeqTaskHandle) {
 ///
 /// `handle` must be live.
 pub(crate) unsafe fn seq_task_state(handle: *const SeqTaskHandle) -> u8 {
-    if handle.is_null() {
-        return TASK_STATE_CANCELLED;
+    unsafe {
+        if handle.is_null() {
+            return TASK_STATE_CANCELLED;
+        }
+        (*handle).state.get()
     }
-    (*handle).state.get()
 }
 
 /// Sequential `TaskGroup` container. `RefCell` instead of the native
@@ -352,13 +370,15 @@ pub(crate) unsafe fn seq_taskgroup_register(
     group: *mut SeqTaskGroupHandle,
     child: *mut SeqTaskHandle,
 ) {
-    if group.is_null() || child.is_null() {
-        return;
+    unsafe {
+        if group.is_null() || child.is_null() {
+            return;
+        }
+        // B-2026-06-09-1 — mark the child group-owned so an explicit
+        // `.join()` waits without freeing; the group is the sole freer.
+        (*child).registered.set(true);
+        (*group).children.borrow_mut().push(child);
     }
-    // B-2026-06-09-1 — mark the child group-owned so an explicit
-    // `.join()` waits without freeing; the group is the sole freer.
-    (*child).registered.set(true);
-    (*group).children.borrow_mut().push(child);
 }
 
 /// Drive every registered child to a terminal state (discarding
@@ -371,19 +391,22 @@ pub(crate) unsafe fn seq_taskgroup_register(
 ///
 /// `group` live, from [`seq_taskgroup_new`], not already freed.
 pub(crate) unsafe fn seq_taskgroup_join_and_free(group: *mut SeqTaskGroupHandle) {
-    if group.is_null() {
-        return;
+    unsafe {
+        if group.is_null() {
+            return;
+        }
+        // Drain outside the borrow so a child that recursively spawns into
+        // the same group can re-borrow `children` without panicking.
+        let children: Vec<*mut SeqTaskHandle> =
+            std::mem::take(&mut *(*group).children.borrow_mut());
+        for child in children {
+            // B-2026-06-09-1 — sole freer: call the inner with `do_free =
+            // true` directly. The public `seq_task_join` would see
+            // `registered == true` and skip the free → leak.
+            let _status = seq_task_join_inner(child, std::ptr::null_mut(), true);
+        }
+        drop(Box::from_raw(group));
     }
-    // Drain outside the borrow so a child that recursively spawns into
-    // the same group can re-borrow `children` without panicking.
-    let children: Vec<*mut SeqTaskHandle> = std::mem::take(&mut *(*group).children.borrow_mut());
-    for child in children {
-        // B-2026-06-09-1 — sole freer: call the inner with `do_free =
-        // true` directly. The public `seq_task_join` would see
-        // `registered == true` and skip the free → leak.
-        let _status = seq_task_join_inner(child, std::ptr::null_mut(), true);
-    }
-    drop(Box::from_raw(group));
 }
 
 /// Flip every registered child's cooperative cancel flag. No sweep —
@@ -396,14 +419,16 @@ pub(crate) unsafe fn seq_taskgroup_join_and_free(group: *mut SeqTaskGroupHandle)
 /// `group` live; registered children live (freed only at group drop,
 /// which cannot overlap a `cancel()` call on the same live group).
 pub(crate) unsafe fn seq_taskgroup_cancel(group: *mut SeqTaskGroupHandle) {
-    if group.is_null() {
-        return;
-    }
-    for &child in (*group).children.borrow().iter() {
-        if !child.is_null() {
-            (*child)
-                .cancel
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+    unsafe {
+        if group.is_null() {
+            return;
+        }
+        for &child in (*group).children.borrow().iter() {
+            if !child.is_null() {
+                (*child)
+                    .cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         }
     }
 }
@@ -443,7 +468,7 @@ mod exports {
         result_size: u64,
         result_align: u64,
     ) -> *mut SeqTaskHandle {
-        seq_spawn(fn_ptr, env, result_size as usize, result_align as usize)
+        unsafe { seq_spawn(fn_ptr, env, result_size as usize, result_align as usize) }
     }
 
     /// Sequential join — see [`seq_task_join`].
@@ -456,7 +481,7 @@ mod exports {
         handle: *mut SeqTaskHandle,
         out_slot: *mut u8,
     ) -> u8 {
-        seq_task_join(handle, out_slot)
+        unsafe { seq_task_join(handle, out_slot) }
     }
 
     /// Sequential drop-without-join — see [`seq_task_handle_free`].
@@ -466,7 +491,7 @@ mod exports {
     /// See [`seq_task_handle_free`].
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_task_handle_free(handle: *mut SeqTaskHandle) {
-        seq_task_handle_free(handle)
+        unsafe { seq_task_handle_free(handle) }
     }
 
     /// Detach a discarded spawn handle — see [`seq_task_detach`]. Codegen emits
@@ -478,7 +503,7 @@ mod exports {
     /// See [`seq_task_detach`].
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_task_detach(handle: *mut SeqTaskHandle) {
-        seq_task_detach(handle)
+        unsafe { seq_task_detach(handle) }
     }
 
     /// Non-joining state read — see [`seq_task_state`].
@@ -488,7 +513,7 @@ mod exports {
     /// See [`seq_task_state`].
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_task_state(handle: *const SeqTaskHandle) -> u8 {
-        seq_task_state(handle)
+        unsafe { seq_task_state(handle) }
     }
 
     /// Sequential `TaskGroup` allocation — see [`seq_taskgroup_new`].
@@ -507,7 +532,7 @@ mod exports {
         group: *mut SeqTaskGroupHandle,
         child: *mut SeqTaskHandle,
     ) {
-        seq_taskgroup_register(group, child)
+        unsafe { seq_taskgroup_register(group, child) }
     }
 
     /// Join barrier at group drop — see [`seq_taskgroup_join_and_free`].
@@ -517,7 +542,7 @@ mod exports {
     /// See [`seq_taskgroup_join_and_free`].
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_taskgroup_join_and_free(group: *mut SeqTaskGroupHandle) {
-        seq_taskgroup_join_and_free(group)
+        unsafe { seq_taskgroup_join_and_free(group) }
     }
 
     /// Cooperative cancel — see [`seq_taskgroup_cancel`].
@@ -527,7 +552,7 @@ mod exports {
     /// See [`seq_taskgroup_cancel`].
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_taskgroup_cancel(group: *mut SeqTaskGroupHandle) {
-        seq_taskgroup_cancel(group)
+        unsafe { seq_taskgroup_cancel(group) }
     }
 }
 
@@ -542,8 +567,10 @@ mod tests {
         result_out: *mut u8,
         _cancel: *const AtomicBool,
     ) {
-        let val = *(env as *const i64);
-        *(result_out as *mut i64) = val + 1;
+        unsafe {
+            let val = *(env as *const i64);
+            *(result_out as *mut i64) = val + 1;
+        }
     }
 
     // Unit wrapper: appends the env's id to a shared order log.
@@ -553,8 +580,10 @@ mod tests {
         _result_out: *mut u8,
         _cancel: *const AtomicBool,
     ) {
-        let (id, log) = *(env as *const (i64, *mut Vec<i64>));
-        (*log).push(id);
+        unsafe {
+            let (id, log) = *(env as *const (i64, *mut Vec<i64>));
+            (*log).push(id);
+        }
     }
 
     // Wrapper that records whether its cancel flag was set when it ran.
@@ -564,8 +593,10 @@ mod tests {
         _result_out: *mut u8,
         cancel: *const AtomicBool,
     ) {
-        let slot = *(env as *const *mut bool);
-        *slot = (*cancel).load(Ordering::Relaxed);
+        unsafe {
+            let slot = *(env as *const *mut bool);
+            *slot = (*cancel).load(Ordering::Relaxed);
+        }
     }
 
     #[test]
@@ -727,7 +758,9 @@ mod tests {
         _result_out: *mut u8,
         _cancel: *const AtomicBool,
     ) {
-        *(env as *mut i64) += 1;
+        unsafe {
+            *(env as *mut i64) += 1;
+        }
     }
 
     #[test]

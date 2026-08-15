@@ -136,108 +136,110 @@ pub(crate) unsafe fn wt_spawn(
     result_size: usize,
     result_align: usize,
 ) -> *mut WasmTaskHandle {
-    let (result_buf, result_layout) = if result_size == 0 {
-        (std::ptr::null_mut(), Layout::from_size_align(0, 1).unwrap())
-    } else {
-        let layout = match Layout::from_size_align(result_size, result_align) {
-            Ok(l) => l,
-            Err(_) => return std::ptr::null_mut(),
-        };
-        let buf = std::alloc::alloc(layout);
-        if buf.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        (buf, layout)
-    };
-
-    let handle_ptr: *mut WasmTaskHandle = Box::into_raw(Box::new(WasmTaskHandle {
-        state: AtomicU8::new(TASK_STATE_PENDING),
-        result_buf,
-        result_layout,
-        cancel: AtomicBool::new(false),
-        notify_mutex: Mutex::new(()),
-        notify_cv: Condvar::new(),
-        registered: AtomicBool::new(false),
-        detached: AtomicBool::new(false),
-        reaped: AtomicBool::new(false),
-    }));
-
-    // Per-task ParCall: 1 work unit, no frame tracking — the
-    // `scheduler.rs` shape.
-    let call = Arc::new(ParCall {
-        cancel: AtomicBool::new(false),
-        remaining: Mutex::new(1),
-        notify: Condvar::new(),
-        spawn_site_id: 0,
-        parent_addr: 0,
-        track_frames: false,
-    });
-
-    // Raw addresses as `usize` so the closure is `Send` without unsafe
-    // impls on the FFI pointer types (the `karac_par_run` pattern).
-    let env_addr = env as usize;
-    let handle_addr = handle_ptr as usize;
-
-    let task = Task {
-        call,
-        branch_idx: 0,
-        run: Box::new(move |_pool_cancel: &AtomicBool| {
-            // SAFETY: handle_ptr is the just-leaked Box; the worker is
-            // the exclusive writer of handle.state until it signals.
-            let handle = unsafe { &*(handle_addr as *const WasmTaskHandle) };
-            let env_ptr = env_addr as *mut c_void;
-            let cancel_ptr = &handle.cancel as *const AtomicBool;
-
-            // `catch_unwind` is a no-op under the release archive's
-            // `panic = "abort"`; it exists for native-test parity (and
-            // for any future unwind-aware wasm profile).
-            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                fn_ptr(env_ptr, handle.result_buf, cancel_ptr);
-            }))
-            .is_err();
-
-            // Mutex-held terminal-state write, then notify — the joiner's
-            // wait_while check observes the post-write state.
-            //
-            // B-2026-06-17-2 parity (wasm-threads): under the same lock, decide
-            // whether this completion must reap a *detached* free-spawn handle (a
-            // discarded `spawn(...)` with no joiner). Deciding under the lock
-            // serializes against `karac_runtime_task_detach`, which takes the same
-            // mutex, so the free is claimed exactly once. Only free-spawn
-            // (unregistered) handles self-reap here — registered children are the
-            // group's to free.
-            let should_free = {
-                let _g = handle
-                    .notify_mutex
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner());
-                let terminal = if panicked {
-                    TASK_STATE_PANICKED
-                } else {
-                    TASK_STATE_COMPLETED
-                };
-                handle.state.store(terminal, Ordering::Release);
-                handle.notify_cv.notify_all();
-                !handle.registered.load(Ordering::Acquire)
-                    && handle.detached.load(Ordering::Acquire)
-                    && !handle.reaped.swap(true, Ordering::AcqRel)
+    unsafe {
+        let (result_buf, result_layout) = if result_size == 0 {
+            (std::ptr::null_mut(), Layout::from_size_align(0, 1).unwrap())
+        } else {
+            let layout = match Layout::from_size_align(result_size, result_align) {
+                Ok(l) => l,
+                Err(_) => return std::ptr::null_mut(),
             };
-            if should_free {
-                // SAFETY: we claimed the sole free via `reaped` under the lock;
-                // nothing else touches the handle after this.
-                unsafe { free_handle(handle_addr as *mut WasmTaskHandle) };
+            let buf = std::alloc::alloc(layout);
+            if buf.is_null() {
+                std::alloc::handle_alloc_error(layout);
             }
-        }),
-    };
+            (buf, layout)
+        };
 
-    let p = pool();
-    {
-        let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
-        q.push_back(task);
+        let handle_ptr: *mut WasmTaskHandle = Box::into_raw(Box::new(WasmTaskHandle {
+            state: AtomicU8::new(TASK_STATE_PENDING),
+            result_buf,
+            result_layout,
+            cancel: AtomicBool::new(false),
+            notify_mutex: Mutex::new(()),
+            notify_cv: Condvar::new(),
+            registered: AtomicBool::new(false),
+            detached: AtomicBool::new(false),
+            reaped: AtomicBool::new(false),
+        }));
+
+        // Per-task ParCall: 1 work unit, no frame tracking — the
+        // `scheduler.rs` shape.
+        let call = Arc::new(ParCall {
+            cancel: AtomicBool::new(false),
+            remaining: Mutex::new(1),
+            notify: Condvar::new(),
+            spawn_site_id: 0,
+            parent_addr: 0,
+            track_frames: false,
+        });
+
+        // Raw addresses as `usize` so the closure is `Send` without unsafe
+        // impls on the FFI pointer types (the `karac_par_run` pattern).
+        let env_addr = env as usize;
+        let handle_addr = handle_ptr as usize;
+
+        let task = Task {
+            call,
+            branch_idx: 0,
+            run: Box::new(move |_pool_cancel: &AtomicBool| {
+                // SAFETY: handle_ptr is the just-leaked Box; the worker is
+                // the exclusive writer of handle.state until it signals.
+                let handle = &*(handle_addr as *const WasmTaskHandle);
+                let env_ptr = env_addr as *mut c_void;
+                let cancel_ptr = &handle.cancel as *const AtomicBool;
+
+                // `catch_unwind` is a no-op under the release archive's
+                // `panic = "abort"`; it exists for native-test parity (and
+                // for any future unwind-aware wasm profile).
+                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    fn_ptr(env_ptr, handle.result_buf, cancel_ptr);
+                }))
+                .is_err();
+
+                // Mutex-held terminal-state write, then notify — the joiner's
+                // wait_while check observes the post-write state.
+                //
+                // B-2026-06-17-2 parity (wasm-threads): under the same lock, decide
+                // whether this completion must reap a *detached* free-spawn handle (a
+                // discarded `spawn(...)` with no joiner). Deciding under the lock
+                // serializes against `karac_runtime_task_detach`, which takes the same
+                // mutex, so the free is claimed exactly once. Only free-spawn
+                // (unregistered) handles self-reap here — registered children are the
+                // group's to free.
+                let should_free = {
+                    let _g = handle
+                        .notify_mutex
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    let terminal = if panicked {
+                        TASK_STATE_PANICKED
+                    } else {
+                        TASK_STATE_COMPLETED
+                    };
+                    handle.state.store(terminal, Ordering::Release);
+                    handle.notify_cv.notify_all();
+                    !handle.registered.load(Ordering::Acquire)
+                        && handle.detached.load(Ordering::Acquire)
+                        && !handle.reaped.swap(true, Ordering::AcqRel)
+                };
+                if should_free {
+                    // SAFETY: we claimed the sole free via `reaped` under the lock;
+                    // nothing else touches the handle after this.
+                    free_handle(handle_addr as *mut WasmTaskHandle);
+                }
+            }),
+        };
+
+        let p = pool();
+        {
+            let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
+            q.push_back(task);
+        }
+        p.cv.notify_all();
+
+        handle_ptr
     }
-    p.cv.notify_all();
-
-    handle_ptr
 }
 
 /// Threaded `karac_runtime_task_join`: Condvar-wait until terminal, copy
@@ -251,14 +253,16 @@ pub(crate) unsafe fn wt_spawn(
 /// joined/freed; `out_slot` writable at the spawn-time size/align or
 /// null for unit-returning tasks.
 pub(crate) unsafe fn wt_task_join(handle: *mut WasmTaskHandle, out_slot: *mut u8) -> u8 {
-    if handle.is_null() {
-        return TASK_STATE_CANCELLED;
+    unsafe {
+        if handle.is_null() {
+            return TASK_STATE_CANCELLED;
+        }
+        // B-2026-06-09-1 — a group-registered handle is freed by the group's
+        // scope-exit drop, not here; an explicit `.join()` waits + copies the
+        // result but leaves the handle alive for the group to reclaim.
+        let do_free = !(*handle).registered.load(Ordering::Acquire);
+        wt_task_join_inner(handle, out_slot, do_free)
     }
-    // B-2026-06-09-1 — a group-registered handle is freed by the group's
-    // scope-exit drop, not here; an explicit `.join()` waits + copies the
-    // result but leaves the handle alive for the group to reclaim.
-    let do_free = !(*handle).registered.load(Ordering::Acquire);
-    wt_task_join_inner(handle, out_slot, do_free)
 }
 
 /// Condvar-wait `handle` to terminal, copy its result into `out_slot`
@@ -273,29 +277,31 @@ pub(crate) unsafe fn wt_task_join(handle: *mut WasmTaskHandle, out_slot: *mut u8
 /// `handle` must be live; when `do_free` is false the caller guarantees
 /// a later `do_free = true` call reclaims it exactly once.
 unsafe fn wt_task_join_inner(handle: *mut WasmTaskHandle, out_slot: *mut u8, do_free: bool) -> u8 {
-    let h = &*handle;
+    unsafe {
+        let h = &*handle;
 
-    let guard = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
-    let final_guard = h
-        .notify_cv
-        .wait_while(guard, |_| {
-            h.state.load(Ordering::Acquire) == TASK_STATE_PENDING
-        })
-        .unwrap_or_else(|p| p.into_inner());
+        let guard = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
+        let final_guard = h
+            .notify_cv
+            .wait_while(guard, |_| {
+                h.state.load(Ordering::Acquire) == TASK_STATE_PENDING
+            })
+            .unwrap_or_else(|p| p.into_inner());
 
-    let terminal = h.state.load(Ordering::Acquire);
-    if terminal == TASK_STATE_COMPLETED
-        && !out_slot.is_null()
-        && !h.result_buf.is_null()
-        && h.result_layout.size() > 0
-    {
-        std::ptr::copy_nonoverlapping(h.result_buf, out_slot, h.result_layout.size());
+        let terminal = h.state.load(Ordering::Acquire);
+        if terminal == TASK_STATE_COMPLETED
+            && !out_slot.is_null()
+            && !h.result_buf.is_null()
+            && h.result_layout.size() > 0
+        {
+            std::ptr::copy_nonoverlapping(h.result_buf, out_slot, h.result_layout.size());
+        }
+        drop(final_guard);
+        if do_free {
+            free_handle(handle);
+        }
+        terminal
     }
-    drop(final_guard);
-    if do_free {
-        free_handle(handle);
-    }
-    terminal
 }
 
 /// Release a handle without joining. Same contract (and same "task must
@@ -309,10 +315,12 @@ unsafe fn wt_task_join_inner(handle: *mut WasmTaskHandle, out_slot: *mut u8, do_
 /// `handle` from [`wt_spawn`], not already joined/freed, and its task
 /// must have reached a terminal state (no worker still holds it).
 pub(crate) unsafe fn wt_task_handle_free(handle: *mut WasmTaskHandle) {
-    if handle.is_null() {
-        return;
+    unsafe {
+        if handle.is_null() {
+            return;
+        }
+        free_handle(handle);
     }
-    free_handle(handle);
 }
 
 /// Detach a discarded spawn handle (B-2026-06-17-2 / -8). Codegen emits this for
@@ -331,19 +339,21 @@ pub(crate) unsafe fn wt_task_handle_free(handle: *mut WasmTaskHandle) {
 /// already freed. Codegen emits this only for discarded handles, so it runs at
 /// most once per handle and never races an explicit `.join()`.
 pub(crate) unsafe fn wt_task_detach(handle: *mut WasmTaskHandle) {
-    if handle.is_null() {
-        return;
-    }
-    let h = &*handle;
-    let should_free = {
-        let _g = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
-        h.detached.store(true, Ordering::Release);
-        !h.registered.load(Ordering::Acquire)
-            && h.state.load(Ordering::Acquire) != TASK_STATE_PENDING
-            && !h.reaped.swap(true, Ordering::AcqRel)
-    };
-    if should_free {
-        free_handle(handle);
+    unsafe {
+        if handle.is_null() {
+            return;
+        }
+        let h = &*handle;
+        let should_free = {
+            let _g = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
+            h.detached.store(true, Ordering::Release);
+            !h.registered.load(Ordering::Acquire)
+                && h.state.load(Ordering::Acquire) != TASK_STATE_PENDING
+                && !h.reaped.swap(true, Ordering::AcqRel)
+        };
+        if should_free {
+            free_handle(handle);
+        }
     }
 }
 
@@ -355,9 +365,11 @@ pub(crate) unsafe fn wt_task_detach(handle: *mut WasmTaskHandle) {
 ///
 /// `handle` must be live and never touched again after this returns.
 unsafe fn free_handle(handle: *mut WasmTaskHandle) {
-    let boxed = Box::from_raw(handle);
-    if !boxed.result_buf.is_null() && boxed.result_layout.size() > 0 {
-        std::alloc::dealloc(boxed.result_buf, boxed.result_layout);
+    unsafe {
+        let boxed = Box::from_raw(handle);
+        if !boxed.result_buf.is_null() && boxed.result_layout.size() > 0 {
+            std::alloc::dealloc(boxed.result_buf, boxed.result_layout);
+        }
     }
 }
 
@@ -368,10 +380,12 @@ unsafe fn free_handle(handle: *mut WasmTaskHandle) {
 ///
 /// `handle` must be live.
 pub(crate) unsafe fn wt_task_state(handle: *const WasmTaskHandle) -> u8 {
-    if handle.is_null() {
-        return TASK_STATE_CANCELLED;
+    unsafe {
+        if handle.is_null() {
+            return TASK_STATE_CANCELLED;
+        }
+        (*handle).state.load(Ordering::Acquire)
     }
-    (*handle).state.load(Ordering::Acquire)
 }
 
 /// Threaded `TaskGroup` container — `scheduler.rs::KaracTaskGroupHandle`
@@ -404,15 +418,17 @@ pub(crate) unsafe fn wt_taskgroup_register(
     group: *mut WasmTaskGroupHandle,
     child: *mut WasmTaskHandle,
 ) {
-    if group.is_null() || child.is_null() {
-        return;
+    unsafe {
+        if group.is_null() || child.is_null() {
+            return;
+        }
+        // B-2026-06-09-1 — mark the child group-owned so an explicit
+        // `.join()` waits without freeing; the group is the sole freer.
+        (*child).registered.store(true, Ordering::Release);
+        let g = &*group;
+        let mut children = g.children.lock().unwrap_or_else(|p| p.into_inner());
+        children.push(child);
     }
-    // B-2026-06-09-1 — mark the child group-owned so an explicit
-    // `.join()` waits without freeing; the group is the sole freer.
-    (*child).registered.store(true, Ordering::Release);
-    let g = &*group;
-    let mut children = g.children.lock().unwrap_or_else(|p| p.into_inner());
-    children.push(child);
 }
 
 /// Join every registered child (discarding results — the design.md
@@ -425,21 +441,23 @@ pub(crate) unsafe fn wt_taskgroup_register(
 ///
 /// `group` live, from [`wt_taskgroup_new`], not already freed.
 pub(crate) unsafe fn wt_taskgroup_join_and_free(group: *mut WasmTaskGroupHandle) {
-    if group.is_null() {
-        return;
+    unsafe {
+        if group.is_null() {
+            return;
+        }
+        let children: Vec<*mut WasmTaskHandle> = {
+            let g = &*group;
+            let mut guard = g.children.lock().unwrap_or_else(|p| p.into_inner());
+            std::mem::take(&mut *guard)
+        };
+        for child in children {
+            // B-2026-06-09-1 — sole freer: call the inner with `do_free =
+            // true` directly. The public `wt_task_join` would see
+            // `registered == true` and skip the free → leak.
+            let _status = wt_task_join_inner(child, std::ptr::null_mut(), true);
+        }
+        drop(Box::from_raw(group));
     }
-    let children: Vec<*mut WasmTaskHandle> = {
-        let g = &*group;
-        let mut guard = g.children.lock().unwrap_or_else(|p| p.into_inner());
-        std::mem::take(&mut *guard)
-    };
-    for child in children {
-        // B-2026-06-09-1 — sole freer: call the inner with `do_free =
-        // true` directly. The public `wt_task_join` would see
-        // `registered == true` and skip the free → leak.
-        let _status = wt_task_join_inner(child, std::ptr::null_mut(), true);
-    }
-    drop(Box::from_raw(group));
 }
 
 /// Flip every registered child's cooperative cancel flag, under the
@@ -452,18 +470,20 @@ pub(crate) unsafe fn wt_taskgroup_join_and_free(group: *mut WasmTaskGroupHandle)
 /// `group` live; registered children live (freed only at group drop,
 /// which cannot overlap a `cancel()` call on the same live group).
 pub(crate) unsafe fn wt_taskgroup_cancel(group: *mut WasmTaskGroupHandle) {
-    if group.is_null() {
-        return;
-    }
-    let g = &*group;
-    let children = g.children.lock().unwrap_or_else(|p| p.into_inner());
-    for &child in children.iter() {
-        if child.is_null() {
-            continue;
+    unsafe {
+        if group.is_null() {
+            return;
         }
-        // SAFETY: each registered child handle is live for the group's
-        // lifetime. Same-module access to the private `cancel` flag.
-        (*child).cancel.store(true, Ordering::Release);
+        let g = &*group;
+        let children = g.children.lock().unwrap_or_else(|p| p.into_inner());
+        for &child in children.iter() {
+            if child.is_null() {
+                continue;
+            }
+            // SAFETY: each registered child handle is live for the group's
+            // lifetime. Same-module access to the private `cancel` flag.
+            (*child).cancel.store(true, Ordering::Release);
+        }
     }
 }
 
@@ -498,7 +518,7 @@ mod exports {
         result_size: u64,
         result_align: u64,
     ) -> *mut WasmTaskHandle {
-        wt_spawn(fn_ptr, env, result_size as usize, result_align as usize)
+        unsafe { wt_spawn(fn_ptr, env, result_size as usize, result_align as usize) }
     }
 
     /// Threaded join — see [`wt_task_join`].
@@ -511,7 +531,7 @@ mod exports {
         handle: *mut WasmTaskHandle,
         out_slot: *mut u8,
     ) -> u8 {
-        wt_task_join(handle, out_slot)
+        unsafe { wt_task_join(handle, out_slot) }
     }
 
     /// Drop-without-join — see [`wt_task_handle_free`].
@@ -521,7 +541,7 @@ mod exports {
     /// See [`wt_task_handle_free`].
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_task_handle_free(handle: *mut WasmTaskHandle) {
-        wt_task_handle_free(handle)
+        unsafe { wt_task_handle_free(handle) }
     }
 
     /// Detach a discarded spawn handle — see [`wt_task_detach`]. Codegen emits
@@ -533,7 +553,7 @@ mod exports {
     /// See [`wt_task_detach`].
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_task_detach(handle: *mut WasmTaskHandle) {
-        wt_task_detach(handle)
+        unsafe { wt_task_detach(handle) }
     }
 
     /// Non-joining state read — see [`wt_task_state`].
@@ -543,7 +563,7 @@ mod exports {
     /// See [`wt_task_state`].
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_task_state(handle: *const WasmTaskHandle) -> u8 {
-        wt_task_state(handle)
+        unsafe { wt_task_state(handle) }
     }
 
     /// Threaded `TaskGroup` allocation — see [`wt_taskgroup_new`].
@@ -562,7 +582,7 @@ mod exports {
         group: *mut WasmTaskGroupHandle,
         child: *mut WasmTaskHandle,
     ) {
-        wt_taskgroup_register(group, child)
+        unsafe { wt_taskgroup_register(group, child) }
     }
 
     /// Join barrier at group drop — see [`wt_taskgroup_join_and_free`].
@@ -574,7 +594,7 @@ mod exports {
     pub unsafe extern "C" fn karac_runtime_taskgroup_join_and_free(
         group: *mut WasmTaskGroupHandle,
     ) {
-        wt_taskgroup_join_and_free(group)
+        unsafe { wt_taskgroup_join_and_free(group) }
     }
 
     /// Cooperative cancel — see [`wt_taskgroup_cancel`].
@@ -584,7 +604,7 @@ mod exports {
     /// See [`wt_taskgroup_cancel`].
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_taskgroup_cancel(group: *mut WasmTaskGroupHandle) {
-        wt_taskgroup_cancel(group)
+        unsafe { wt_taskgroup_cancel(group) }
     }
 
     /// 16-aligned scratch shadow stack for the JS glue's main-thread
@@ -670,8 +690,10 @@ mod tests {
         result_out: *mut u8,
         _cancel: *const AtomicBool,
     ) {
-        let val = *(env as *const i64);
-        *(result_out as *mut i64) = val + 1;
+        unsafe {
+            let val = *(env as *const i64);
+            *(result_out as *mut i64) = val + 1;
+        }
     }
 
     // Wrapper that records the executing thread's id (hashed to u64)
@@ -682,10 +704,12 @@ mod tests {
         _result_out: *mut u8,
         _cancel: *const AtomicBool,
     ) {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::hash::DefaultHasher::new();
-        std::thread::current().id().hash(&mut hasher);
-        *(env as *mut u64) = hasher.finish();
+        unsafe {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::hash::DefaultHasher::new();
+            std::thread::current().id().hash(&mut hasher);
+            *(env as *mut u64) = hasher.finish();
+        }
     }
 
     // Wrapper that bumps a shared counter (env points at AtomicU32).
@@ -694,7 +718,9 @@ mod tests {
         _result_out: *mut u8,
         _cancel: *const AtomicBool,
     ) {
-        (*(env as *const AtomicU32)).fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            (*(env as *const AtomicU32)).fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     // Wrapper that spin-waits for its cancel flag, then records that it
@@ -704,11 +730,13 @@ mod tests {
         _result_out: *mut u8,
         cancel: *const AtomicBool,
     ) {
-        let seen = *(env as *const *const AtomicBool);
-        while !(*cancel).load(Ordering::Relaxed) {
-            std::thread::yield_now();
+        unsafe {
+            let seen = *(env as *const *const AtomicBool);
+            while !(*cancel).load(Ordering::Relaxed) {
+                std::thread::yield_now();
+            }
+            (*seen).store(true, Ordering::SeqCst);
         }
-        (*seen).store(true, Ordering::SeqCst);
     }
 
     // Lock-probe fixture: a child that takes the group's children lock
@@ -726,13 +754,15 @@ mod tests {
         _result_out: *mut u8,
         _cancel: *const AtomicBool,
     ) {
-        let penv = &*(env as *const LockProbeEnv);
-        // Acquires the group's children lock; the join drain is
-        // currently waiting on this child's terminal state. (Flips our
-        // own cancel flag as a side effect — benign; this wrapper never
-        // polls it.)
-        wt_taskgroup_cancel(penv.group);
-        (*penv.counter).fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            let penv = &*(env as *const LockProbeEnv);
+            // Acquires the group's children lock; the join drain is
+            // currently waiting on this child's terminal state. (Flips our
+            // own cancel flag as a side effect — benign; this wrapper never
+            // polls it.)
+            wt_taskgroup_cancel(penv.group);
+            (*penv.counter).fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     #[test]

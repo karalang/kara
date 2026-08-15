@@ -27,7 +27,7 @@ unsafe fn strong_ptr(b: *mut u8) -> *mut i64 {
 
 #[inline]
 unsafe fn weak_ptr(b: *mut u8) -> *mut i64 {
-    (b as *mut i64).add(1)
+    unsafe { (b as *mut i64).add(1) }
 }
 
 /// `weak += 1`. Returns the same box — a weak reference IS the same pointer;

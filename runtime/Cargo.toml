@@ -292,3 +292,14 @@ rcgen = { version = "0.14", default-features = false, features = ["pem", "ring",
 # `[profile.release.package.karac-runtime]` block + the close-out under
 # `docs/implementation_checklist/phase-7-codegen.md § "Phase 1
 # binary-size optimization"` for context.
+
+# Permanent safety ratchet (owner item 2, 2026-08-14): every unsafe operation
+# inside an `unsafe fn` needs its own explicit `unsafe {}` block, and every
+# public `unsafe fn` needs a `# Safety` doc section. This crate IS the unsafe
+# surface of the language -- every compiled Kara binary links it -- so the
+# discipline is denied at the build level, not requested in review.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+missing_safety_doc = "deny"

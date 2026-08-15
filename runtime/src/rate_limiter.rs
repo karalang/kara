@@ -82,30 +82,32 @@ pub unsafe extern "C" fn karac_runtime_rate_limiter_try_acquire(
     key_ptr: *const u8,
     key_len: i64,
 ) -> u8 {
-    if rl.is_null() {
-        return 0;
-    }
-    let now = Instant::now();
-    let key: Vec<u8> = if key_ptr.is_null() || key_len <= 0 {
-        Vec::new()
-    } else {
-        std::slice::from_raw_parts(key_ptr, key_len as usize).to_vec()
-    };
-    let rate = (*rl).rate;
-    let capacity = (*rl).capacity;
-    let mut buckets = (*rl).buckets.lock().unwrap();
-    let bucket = buckets.entry(key).or_insert(TokenBucket {
-        tokens: capacity,
-        last: now,
-    });
-    let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
-    bucket.tokens = (bucket.tokens + elapsed * rate).min(capacity);
-    bucket.last = now;
-    if bucket.tokens >= 1.0 {
-        bucket.tokens -= 1.0;
-        1
-    } else {
-        0
+    unsafe {
+        if rl.is_null() {
+            return 0;
+        }
+        let now = Instant::now();
+        let key: Vec<u8> = if key_ptr.is_null() || key_len <= 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(key_ptr, key_len as usize).to_vec()
+        };
+        let rate = (*rl).rate;
+        let capacity = (*rl).capacity;
+        let mut buckets = (*rl).buckets.lock().unwrap();
+        let bucket = buckets.entry(key).or_insert(TokenBucket {
+            tokens: capacity,
+            last: now,
+        });
+        let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * rate).min(capacity);
+        bucket.last = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -118,10 +120,12 @@ pub unsafe extern "C" fn karac_runtime_rate_limiter_try_acquire(
 /// null); consumes it.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_rate_limiter_drop(rl: *mut KaracRateLimiter) {
-    if rl.is_null() {
-        return;
+    unsafe {
+        if rl.is_null() {
+            return;
+        }
+        drop(Box::from_raw(rl));
     }
-    drop(Box::from_raw(rl));
 }
 
 #[cfg(test)]
@@ -129,7 +133,7 @@ mod tests {
     use super::*;
 
     unsafe fn try_acq(rl: *mut KaracRateLimiter, key: &str) -> u8 {
-        karac_runtime_rate_limiter_try_acquire(rl, key.as_ptr(), key.len() as i64)
+        unsafe { karac_runtime_rate_limiter_try_acquire(rl, key.as_ptr(), key.len() as i64) }
     }
 
     #[test]

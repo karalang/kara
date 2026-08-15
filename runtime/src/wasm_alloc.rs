@@ -46,32 +46,38 @@ struct LibcAlloc;
 
 unsafe impl GlobalAlloc for LibcAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if layout.align() <= MALLOC_ALIGN {
-            malloc(layout.size())
-        } else {
-            // C11 `aligned_alloc` requires size to be a multiple of the
-            // alignment; round up (the Layout API caps align at 2^29, so
-            // this cannot overflow a wasm32 usize for any allocatable
-            // size).
-            let size = layout.size().next_multiple_of(layout.align());
-            aligned_alloc(layout.align(), size) as *mut u8
+        unsafe {
+            if layout.align() <= MALLOC_ALIGN {
+                malloc(layout.size())
+            } else {
+                // C11 `aligned_alloc` requires size to be a multiple of the
+                // alignment; round up (the Layout API caps align at 2^29, so
+                // this cannot overflow a wasm32 usize for any allocatable
+                // size).
+                let size = layout.size().next_multiple_of(layout.align());
+                aligned_alloc(layout.align(), size) as *mut u8
+            }
         }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if layout.align() <= MALLOC_ALIGN {
-            calloc(1, layout.size())
-        } else {
-            let ptr = self.alloc(layout);
-            if !ptr.is_null() {
-                std::ptr::write_bytes(ptr, 0, layout.size());
+        unsafe {
+            if layout.align() <= MALLOC_ALIGN {
+                calloc(1, layout.size())
+            } else {
+                let ptr = self.alloc(layout);
+                if !ptr.is_null() {
+                    std::ptr::write_bytes(ptr, 0, layout.size());
+                }
+                ptr
             }
-            ptr
         }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-        free(ptr as *mut c_void);
+        unsafe {
+            free(ptr as *mut c_void);
+        }
     }
 }
 

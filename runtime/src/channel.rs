@@ -142,13 +142,15 @@ impl KaracChannel {
     /// # Safety
     /// `ch` must be live; consumes one `total` reference.
     unsafe fn release_total(ch: *mut KaracChannel) {
-        if (*ch).total.fetch_sub(1, Ordering::Release) != 1 {
-            return;
+        unsafe {
+            if (*ch).total.fetch_sub(1, Ordering::Release) != 1 {
+                return;
+            }
+            // Last reference. Acquire-fence so this thread sees every write made
+            // through every other end before we run the destructor (Arc pattern).
+            fence(Ordering::Acquire);
+            drop(Box::from_raw(ch));
         }
-        // Last reference. Acquire-fence so this thread sees every write made
-        // through every other end before we run the destructor (Arc pattern).
-        fence(Ordering::Acquire);
-        drop(Box::from_raw(ch));
     }
 }
 
@@ -156,8 +158,10 @@ impl KaracChannel {
 /// got-a-value path). Shared by `recv` and `try_recv`.
 #[inline]
 unsafe fn deliver(blob: &[u8], out_ptr: *mut u8, elem_size: usize) {
-    if elem_size != 0 && !out_ptr.is_null() {
-        std::ptr::copy_nonoverlapping(blob.as_ptr(), out_ptr, elem_size);
+    unsafe {
+        if elem_size != 0 && !out_ptr.is_null() {
+            std::ptr::copy_nonoverlapping(blob.as_ptr(), out_ptr, elem_size);
+        }
     }
 }
 
@@ -165,8 +169,10 @@ unsafe fn deliver(blob: &[u8], out_ptr: *mut u8, elem_size: usize) {
 /// reads a well-defined zero-value.
 #[inline]
 unsafe fn deliver_empty(out_ptr: *mut u8, elem_size: usize) {
-    if elem_size != 0 && !out_ptr.is_null() {
-        std::ptr::write_bytes(out_ptr, 0, elem_size);
+    unsafe {
+        if elem_size != 0 && !out_ptr.is_null() {
+            std::ptr::write_bytes(out_ptr, 0, elem_size);
+        }
     }
 }
 
@@ -193,16 +199,18 @@ pub extern "C" fn karac_runtime_channel_new() -> *mut KaracChannel {
 /// `ch` must be a live pointer returned by `karac_runtime_channel_new`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_channel_clone(ch: *mut KaracChannel) -> *mut KaracChannel {
-    if ch.is_null() {
-        return ch;
+    unsafe {
+        if ch.is_null() {
+            return ch;
+        }
+        // Relaxed: the new reference is created from an existing live one, so a
+        // happens-before already exists (Arc's own reasoning). The receiver-side
+        // `closed` check re-reads under the lock, so a sender count bumped here is
+        // observed correctly there.
+        (*ch).senders.fetch_add(1, Ordering::Relaxed);
+        (*ch).total.fetch_add(1, Ordering::Relaxed);
+        ch
     }
-    // Relaxed: the new reference is created from an existing live one, so a
-    // happens-before already exists (Arc's own reasoning). The receiver-side
-    // `closed` check re-reads under the lock, so a sender count bumped here is
-    // observed correctly there.
-    (*ch).senders.fetch_add(1, Ordering::Relaxed);
-    (*ch).total.fetch_add(1, Ordering::Relaxed);
-    ch
 }
 
 /// `karac_runtime_channel_drop_sender(ch)` — drop a `Sender` end. Decrements
@@ -214,20 +222,22 @@ pub unsafe extern "C" fn karac_runtime_channel_clone(ch: *mut KaracChannel) -> *
 /// `ch` must be live; consumes one sender + one `total` reference.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_channel_drop_sender(ch: *mut KaracChannel) {
-    if ch.is_null() {
-        return;
-    }
-    if (*ch).senders.fetch_sub(1, Ordering::Release) == 1 {
-        // Last sender. Set `closed` UNDER the lock so a receiver's
-        // empty-and-not-closed check + park is synchronized against it (no
-        // lost wakeup), then wake all parked receivers.
-        {
-            let mut inner = (*ch).inner.lock().unwrap();
-            inner.closed = true;
+    unsafe {
+        if ch.is_null() {
+            return;
         }
-        (*ch).not_empty.notify_all();
+        if (*ch).senders.fetch_sub(1, Ordering::Release) == 1 {
+            // Last sender. Set `closed` UNDER the lock so a receiver's
+            // empty-and-not-closed check + park is synchronized against it (no
+            // lost wakeup), then wake all parked receivers.
+            {
+                let mut inner = (*ch).inner.lock().unwrap();
+                inner.closed = true;
+            }
+            (*ch).not_empty.notify_all();
+        }
+        KaracChannel::release_total(ch);
     }
-    KaracChannel::release_total(ch);
 }
 
 /// `karac_runtime_channel_drop_receiver(ch)` — drop the `Receiver` end. No
@@ -238,10 +248,12 @@ pub unsafe extern "C" fn karac_runtime_channel_drop_sender(ch: *mut KaracChannel
 /// `ch` must be live; consumes one `total` reference.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_channel_drop_receiver(ch: *mut KaracChannel) {
-    if ch.is_null() {
-        return;
+    unsafe {
+        if ch.is_null() {
+            return;
+        }
+        KaracChannel::release_total(ch);
     }
-    KaracChannel::release_total(ch);
 }
 
 /// `karac_runtime_channel_send(ch, val_ptr, elem_size)` — copy `elem_size`
@@ -259,18 +271,20 @@ pub unsafe extern "C" fn karac_runtime_channel_send(
     val_ptr: *const u8,
     elem_size: u64,
 ) {
-    if ch.is_null() {
-        return;
+    unsafe {
+        if ch.is_null() {
+            return;
+        }
+        let elem_size = elem_size as usize;
+        let mut blob = vec![0u8; elem_size].into_boxed_slice();
+        if elem_size != 0 && !val_ptr.is_null() {
+            std::ptr::copy_nonoverlapping(val_ptr, blob.as_mut_ptr(), elem_size);
+        }
+        // Enqueue UNDER the lock (sets the non-empty condition the receiver's
+        // park predicate checks), then signal one waiter.
+        (*ch).inner.lock().unwrap().queue.push_back(blob);
+        (*ch).not_empty.notify_one();
     }
-    let elem_size = elem_size as usize;
-    let mut blob = vec![0u8; elem_size].into_boxed_slice();
-    if elem_size != 0 && !val_ptr.is_null() {
-        std::ptr::copy_nonoverlapping(val_ptr, blob.as_mut_ptr(), elem_size);
-    }
-    // Enqueue UNDER the lock (sets the non-empty condition the receiver's
-    // park predicate checks), then signal one waiter.
-    (*ch).inner.lock().unwrap().queue.push_back(blob);
-    (*ch).not_empty.notify_one();
 }
 
 /// `karac_runtime_channel_set_elem_drop(ch, drop_fn)` — record the element's
@@ -289,10 +303,12 @@ pub unsafe extern "C" fn karac_runtime_channel_set_elem_drop(
     ch: *mut KaracChannel,
     drop_fn: *mut u8,
 ) {
-    if ch.is_null() {
-        return;
+    unsafe {
+        if ch.is_null() {
+            return;
+        }
+        (*ch).elem_drop.store(drop_fn as *mut (), Ordering::Release);
     }
-    (*ch).elem_drop.store(drop_fn as *mut (), Ordering::Release);
 }
 
 /// `karac_runtime_channel_recv(ch, out_ptr, elem_size) -> u8` — **blocking**
@@ -315,28 +331,32 @@ pub unsafe extern "C" fn karac_runtime_channel_recv(
     out_ptr: *mut u8,
     elem_size: u64,
 ) -> u8 {
-    if ch.is_null() {
-        return 0;
+    unsafe {
+        if ch.is_null() {
+            return 0;
+        }
+        channel_recv_impl(ch, out_ptr, elem_size as usize)
     }
-    channel_recv_impl(ch, out_ptr, elem_size as usize)
 }
 
 /// Blocking `recv` body for threads-targets: park on the `Condvar` while the
 /// queue is empty and the channel is open.
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 unsafe fn channel_recv_impl(ch: *mut KaracChannel, out_ptr: *mut u8, elem_size: usize) -> u8 {
-    let mut inner = (*ch).inner.lock().unwrap();
-    loop {
-        if let Some(blob) = inner.queue.pop_front() {
-            deliver(&blob, out_ptr, elem_size);
-            return 1;
+    unsafe {
+        let mut inner = (*ch).inner.lock().unwrap();
+        loop {
+            if let Some(blob) = inner.queue.pop_front() {
+                deliver(&blob, out_ptr, elem_size);
+                return 1;
+            }
+            if inner.closed {
+                deliver_empty(out_ptr, elem_size);
+                return 0;
+            }
+            // Empty and open → park until `send` / last-sender-drop signals.
+            inner = (*ch).not_empty.wait(inner).unwrap();
         }
-        if inner.closed {
-            deliver_empty(out_ptr, elem_size);
-            return 0;
-        }
-        // Empty and open → park until `send` / last-sender-drop signals.
-        inner = (*ch).not_empty.wait(inner).unwrap();
     }
 }
 
@@ -346,14 +366,16 @@ unsafe fn channel_recv_impl(ch: *mut KaracChannel, out_ptr: *mut u8, elem_size: 
 /// phase-10 entry).
 #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
 unsafe fn channel_recv_impl(ch: *mut KaracChannel, out_ptr: *mut u8, elem_size: usize) -> u8 {
-    match (*ch).inner.lock().unwrap().queue.pop_front() {
-        Some(blob) => {
-            deliver(&blob, out_ptr, elem_size);
-            1
-        }
-        None => {
-            deliver_empty(out_ptr, elem_size);
-            0
+    unsafe {
+        match (*ch).inner.lock().unwrap().queue.pop_front() {
+            Some(blob) => {
+                deliver(&blob, out_ptr, elem_size);
+                1
+            }
+            None => {
+                deliver_empty(out_ptr, elem_size);
+                0
+            }
         }
     }
 }
@@ -373,19 +395,21 @@ pub unsafe extern "C" fn karac_runtime_channel_try_recv(
     out_ptr: *mut u8,
     elem_size: u64,
 ) -> u8 {
-    if ch.is_null() {
-        return 0;
-    }
-    let elem_size = elem_size as usize;
-    let popped = (*ch).inner.lock().unwrap().queue.pop_front();
-    match popped {
-        Some(blob) => {
-            deliver(&blob, out_ptr, elem_size);
-            1
+    unsafe {
+        if ch.is_null() {
+            return 0;
         }
-        None => {
-            deliver_empty(out_ptr, elem_size);
-            0
+        let elem_size = elem_size as usize;
+        let popped = (*ch).inner.lock().unwrap().queue.pop_front();
+        match popped {
+            Some(blob) => {
+                deliver(&blob, out_ptr, elem_size);
+                1
+            }
+            None => {
+                deliver_empty(out_ptr, elem_size);
+                0
+            }
         }
     }
 }
@@ -402,10 +426,12 @@ pub unsafe extern "C" fn karac_runtime_channel_try_recv(
 /// `ch` must be live (or null, which reports 0).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_channel_pending(ch: *mut KaracChannel) -> u64 {
-    if ch.is_null() {
-        return 0;
+    unsafe {
+        if ch.is_null() {
+            return 0;
+        }
+        (*ch).inner.lock().unwrap().queue.len() as u64
     }
-    (*ch).inner.lock().unwrap().queue.len() as u64
 }
 
 #[cfg(test)]
@@ -414,19 +440,25 @@ mod tests {
 
     // Helper: round-trip an i64 (elem_size 8) through a channel.
     unsafe fn send_i64(ch: *mut KaracChannel, v: i64) {
-        karac_runtime_channel_send(ch, &v as *const i64 as *const u8, 8);
+        unsafe {
+            karac_runtime_channel_send(ch, &v as *const i64 as *const u8, 8);
+        }
     }
     // Blocking recv (parks while empty + open on this native test target).
     unsafe fn recv_i64(ch: *mut KaracChannel) -> (u8, i64) {
-        let mut out: i64 = -1;
-        let got = karac_runtime_channel_recv(ch, &mut out as *mut i64 as *mut u8, 8);
-        (got, out)
+        unsafe {
+            let mut out: i64 = -1;
+            let got = karac_runtime_channel_recv(ch, &mut out as *mut i64 as *mut u8, 8);
+            (got, out)
+        }
     }
     // Non-blocking try_recv.
     unsafe fn try_recv_i64(ch: *mut KaracChannel) -> (u8, i64) {
-        let mut out: i64 = -1;
-        let got = karac_runtime_channel_try_recv(ch, &mut out as *mut i64 as *mut u8, 8);
-        (got, out)
+        unsafe {
+            let mut out: i64 = -1;
+            let got = karac_runtime_channel_try_recv(ch, &mut out as *mut i64 as *mut u8, 8);
+            (got, out)
+        }
     }
 
     #[test]

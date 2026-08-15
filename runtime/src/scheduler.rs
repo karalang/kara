@@ -192,127 +192,129 @@ pub unsafe extern "C" fn karac_runtime_spawn(
     result_size: usize,
     result_align: usize,
 ) -> *mut KaracTaskHandle {
-    // Allocate the result buffer (or skip for unit-returning tasks).
-    let (result_buf, result_layout) = if result_size == 0 {
-        (
-            std::ptr::null_mut(),
-            // A zero-size layout with align 1 satisfies the Drop path's
-            // "layout matches the allocation" requirement when result_buf
-            // is null — we skip dealloc in that case, but Layout demands
-            // a valid align value regardless.
-            Layout::from_size_align(0, 1).unwrap(),
-        )
-    } else {
-        let layout = match Layout::from_size_align(result_size, result_align) {
-            Ok(l) => l,
-            Err(_) => return std::ptr::null_mut(),
-        };
-        let buf = std::alloc::alloc(layout);
-        if buf.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        (buf, layout)
-    };
-
-    // Leak the handle to produce a stable raw pointer. Drop happens in
-    // `karac_runtime_task_join` / `karac_runtime_task_handle_free`.
-    let handle_box = Box::new(KaracTaskHandle {
-        state: AtomicU8::new(TASK_STATE_PENDING),
-        result_buf,
-        result_layout,
-        cancel: AtomicBool::new(false),
-        notify_mutex: Mutex::new(()),
-        notify_cv: Condvar::new(),
-        coro_slot: std::ptr::null_mut(),
-        registered: AtomicBool::new(false),
-        detached: AtomicBool::new(false),
-        reaped: AtomicBool::new(false),
-    });
-    let handle_ptr: *mut KaracTaskHandle = Box::into_raw(handle_box);
-
-    // Per-task ParCall: 1 work unit, no frame tracking. Reuses the
-    // existing pool dispatch path so spawn-tasks and par-tasks contend
-    // for the same workers.
-    let call = Arc::new(ParCall {
-        cancel: AtomicBool::new(false),
-        remaining: Mutex::new(1),
-        notify: Condvar::new(),
-        spawn_site_id: 0,
-        parent_addr: 0,
-        track_frames: false,
-    });
-
-    // Capture raw addresses as `usize` so the closure stays `Send`
-    // without requiring an `unsafe impl` for the FFI pointers (same
-    // pattern as `karac_par_run` / `karac_par_reduce`).
-    let env_addr = env as usize;
-    let handle_addr = handle_ptr as usize;
-
-    let task = Task {
-        call,
-        branch_idx: 0,
-        run: Box::new(move |_pool_cancel: &AtomicBool| {
-            // SAFETY: handle_ptr is the just-leaked Box; nothing else
-            // owns or aliases it before this closure runs. The worker is
-            // the exclusive writer of handle.state until it signals.
-            let handle = unsafe { &*(handle_addr as *const KaracTaskHandle) };
-            let env_ptr = env_addr as *mut c_void;
-            let cancel_ptr = &handle.cancel as *const AtomicBool;
-
-            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                fn_ptr(env_ptr, handle.result_buf, cancel_ptr);
-            }))
-            .is_err();
-
-            // Take the mutex, write the terminal state, then notify.
-            // Holding the mutex during the write ensures the joiner's
-            // wait_while check observes the post-write state.
-            //
-            // B-2026-06-17-2 — under the same lock, decide whether this
-            // completion is responsible for reaping a *detached* free-spawn
-            // handle (a discarded `spawn(...);` with no joiner to free it).
-            // Deciding under the lock serializes against the detach path
-            // ([`karac_runtime_task_detach`]), which takes the same mutex, so
-            // the free is claimed exactly once: whichever party observes
-            // "detached AND terminal" second sets `reaped` and frees, and the
-            // first never touches the handle after releasing the lock. Only
-            // free-spawn (unregistered), non-coro handles self-reap here —
-            // registered children are the group's to free (the register-time
-            // sweep), and coro free-spawn completion is the dispatcher's.
-            let should_free = {
-                let _g = handle
-                    .notify_mutex
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner());
-                let terminal = if panicked {
-                    TASK_STATE_PANICKED
-                } else {
-                    TASK_STATE_COMPLETED
-                };
-                handle.state.store(terminal, Ordering::Release);
-                handle.notify_cv.notify_all();
-                !handle.registered.load(Ordering::Acquire)
-                    && handle.coro_slot.is_null()
-                    && handle.detached.load(Ordering::Acquire)
-                    && !handle.reaped.swap(true, Ordering::AcqRel)
+    unsafe {
+        // Allocate the result buffer (or skip for unit-returning tasks).
+        let (result_buf, result_layout) = if result_size == 0 {
+            (
+                std::ptr::null_mut(),
+                // A zero-size layout with align 1 satisfies the Drop path's
+                // "layout matches the allocation" requirement when result_buf
+                // is null — we skip dealloc in that case, but Layout demands
+                // a valid align value regardless.
+                Layout::from_size_align(0, 1).unwrap(),
+            )
+        } else {
+            let layout = match Layout::from_size_align(result_size, result_align) {
+                Ok(l) => l,
+                Err(_) => return std::ptr::null_mut(),
             };
-            if should_free {
-                // SAFETY: we claimed the sole free via `reaped` under the
-                // lock; the handle is detached (no joiner) and the detach
-                // path observed `reaped` set, so no other reference remains.
-                unsafe { free_handle(handle_addr as *mut KaracTaskHandle) };
+            let buf = std::alloc::alloc(layout);
+            if buf.is_null() {
+                std::alloc::handle_alloc_error(layout);
             }
-        }),
-    };
+            (buf, layout)
+        };
 
-    let p = pool();
-    {
-        let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
-        q.push_back(task);
+        // Leak the handle to produce a stable raw pointer. Drop happens in
+        // `karac_runtime_task_join` / `karac_runtime_task_handle_free`.
+        let handle_box = Box::new(KaracTaskHandle {
+            state: AtomicU8::new(TASK_STATE_PENDING),
+            result_buf,
+            result_layout,
+            cancel: AtomicBool::new(false),
+            notify_mutex: Mutex::new(()),
+            notify_cv: Condvar::new(),
+            coro_slot: std::ptr::null_mut(),
+            registered: AtomicBool::new(false),
+            detached: AtomicBool::new(false),
+            reaped: AtomicBool::new(false),
+        });
+        let handle_ptr: *mut KaracTaskHandle = Box::into_raw(handle_box);
+
+        // Per-task ParCall: 1 work unit, no frame tracking. Reuses the
+        // existing pool dispatch path so spawn-tasks and par-tasks contend
+        // for the same workers.
+        let call = Arc::new(ParCall {
+            cancel: AtomicBool::new(false),
+            remaining: Mutex::new(1),
+            notify: Condvar::new(),
+            spawn_site_id: 0,
+            parent_addr: 0,
+            track_frames: false,
+        });
+
+        // Capture raw addresses as `usize` so the closure stays `Send`
+        // without requiring an `unsafe impl` for the FFI pointers (same
+        // pattern as `karac_par_run` / `karac_par_reduce`).
+        let env_addr = env as usize;
+        let handle_addr = handle_ptr as usize;
+
+        let task = Task {
+            call,
+            branch_idx: 0,
+            run: Box::new(move |_pool_cancel: &AtomicBool| {
+                // SAFETY: handle_ptr is the just-leaked Box; nothing else
+                // owns or aliases it before this closure runs. The worker is
+                // the exclusive writer of handle.state until it signals.
+                let handle = &*(handle_addr as *const KaracTaskHandle);
+                let env_ptr = env_addr as *mut c_void;
+                let cancel_ptr = &handle.cancel as *const AtomicBool;
+
+                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    fn_ptr(env_ptr, handle.result_buf, cancel_ptr);
+                }))
+                .is_err();
+
+                // Take the mutex, write the terminal state, then notify.
+                // Holding the mutex during the write ensures the joiner's
+                // wait_while check observes the post-write state.
+                //
+                // B-2026-06-17-2 — under the same lock, decide whether this
+                // completion is responsible for reaping a *detached* free-spawn
+                // handle (a discarded `spawn(...);` with no joiner to free it).
+                // Deciding under the lock serializes against the detach path
+                // ([`karac_runtime_task_detach`]), which takes the same mutex, so
+                // the free is claimed exactly once: whichever party observes
+                // "detached AND terminal" second sets `reaped` and frees, and the
+                // first never touches the handle after releasing the lock. Only
+                // free-spawn (unregistered), non-coro handles self-reap here —
+                // registered children are the group's to free (the register-time
+                // sweep), and coro free-spawn completion is the dispatcher's.
+                let should_free = {
+                    let _g = handle
+                        .notify_mutex
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    let terminal = if panicked {
+                        TASK_STATE_PANICKED
+                    } else {
+                        TASK_STATE_COMPLETED
+                    };
+                    handle.state.store(terminal, Ordering::Release);
+                    handle.notify_cv.notify_all();
+                    !handle.registered.load(Ordering::Acquire)
+                        && handle.coro_slot.is_null()
+                        && handle.detached.load(Ordering::Acquire)
+                        && !handle.reaped.swap(true, Ordering::AcqRel)
+                };
+                if should_free {
+                    // SAFETY: we claimed the sole free via `reaped` under the
+                    // lock; the handle is detached (no joiner) and the detach
+                    // path observed `reaped` set, so no other reference remains.
+                    free_handle(handle_addr as *mut KaracTaskHandle);
+                }
+            }),
+        };
+
+        let p = pool();
+        {
+            let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
+            q.push_back(task);
+        }
+        p.cv.notify_all();
+
+        handle_ptr
     }
-    p.cv.notify_all();
-
-    handle_ptr
 }
 
 /// Coroutine-spawn wrapper signature (A2 slice 5a). Codegen emits one per
@@ -487,16 +489,18 @@ pub unsafe extern "C" fn karac_runtime_task_join(
     handle: *mut KaracTaskHandle,
     out_slot: *mut u8,
 ) -> u8 {
-    if handle.is_null() {
-        return TASK_STATE_CANCELLED;
+    unsafe {
+        if handle.is_null() {
+            return TASK_STATE_CANCELLED;
+        }
+        // B-2026-06-09-1 — a handle registered with a `TaskGroup` is freed by
+        // the group's scope-exit `karac_runtime_taskgroup_join_and_free`, not
+        // here. An explicit `.join()` on such a handle must wait + copy the
+        // result but leave the handle alive for the group to reclaim; freeing
+        // it here too would double-consume it (use-after-free at group drop).
+        let do_free = !(*handle).registered.load(Ordering::Acquire);
+        join_inner(handle, out_slot, do_free)
     }
-    // B-2026-06-09-1 — a handle registered with a `TaskGroup` is freed by
-    // the group's scope-exit `karac_runtime_taskgroup_join_and_free`, not
-    // here. An explicit `.join()` on such a handle must wait + copy the
-    // result but leave the handle alive for the group to reclaim; freeing
-    // it here too would double-consume it (use-after-free at group drop).
-    let do_free = !(*handle).registered.load(Ordering::Acquire);
-    join_inner(handle, out_slot, do_free)
 }
 
 /// Wait for `handle`'s task to reach a terminal state, copy its result
@@ -516,61 +520,63 @@ pub unsafe extern "C" fn karac_runtime_task_join(
 /// `do_free` is false the caller guarantees a later call with
 /// `do_free = true` reclaims it exactly once.
 unsafe fn join_inner(handle: *mut KaracTaskHandle, out_slot: *mut u8, do_free: bool) -> u8 {
-    let h = &*handle;
+    unsafe {
+        let h = &*handle;
 
-    // A2 slice 5a — coroutine-spawn handle: completion is the dispatcher
-    // signalling the bound slot (the worker that ramped it is long gone and
-    // never stores a terminal state on the normal path). Wait on the slot,
-    // not the worker's `notify_cv`. A `PENDING` state after the slot fires
-    // means the coroutine completed normally (the run-closure left state
-    // untouched); a non-PENDING state is the ramp-panic override.
-    if !h.coro_slot.is_null() {
-        crate::event_loop::karac_runtime_park_slot_wait(h.coro_slot);
-        let st = h.state.load(Ordering::Acquire);
-        let terminal = if st == TASK_STATE_PENDING {
-            TASK_STATE_COMPLETED
-        } else {
-            st
-        };
+        // A2 slice 5a — coroutine-spawn handle: completion is the dispatcher
+        // signalling the bound slot (the worker that ramped it is long gone and
+        // never stores a terminal state on the normal path). Wait on the slot,
+        // not the worker's `notify_cv`. A `PENDING` state after the slot fires
+        // means the coroutine completed normally (the run-closure left state
+        // untouched); a non-PENDING state is the ramp-panic override.
+        if !h.coro_slot.is_null() {
+            crate::event_loop::karac_runtime_park_slot_wait(h.coro_slot);
+            let st = h.state.load(Ordering::Acquire);
+            let terminal = if st == TASK_STATE_PENDING {
+                TASK_STATE_COMPLETED
+            } else {
+                st
+            };
+            if do_free {
+                free_handle(handle);
+            }
+            return terminal;
+        }
+
+        // Wait until the worker writes a terminal state.
+        let guard = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
+        let _final_guard = h
+            .notify_cv
+            .wait_while(guard, |_| {
+                h.state.load(Ordering::Acquire) == TASK_STATE_PENDING
+            })
+            .unwrap_or_else(|p| p.into_inner());
+
+        let terminal = h.state.load(Ordering::Acquire);
+
+        // On successful completion, transfer the result into the caller's
+        // slot. The worker's release-store + our acquire-load orders the
+        // memcpy after the wrapper's result write.
+        if terminal == TASK_STATE_COMPLETED
+            && !out_slot.is_null()
+            && !h.result_buf.is_null()
+            && h.result_layout.size() > 0
+        {
+            std::ptr::copy_nonoverlapping(h.result_buf, out_slot, h.result_layout.size());
+        }
+
+        // Drop the result buffer + reclaim the handle (unless a registering
+        // group owns the free — see `do_free`).
+        // Re-take ownership of the Box and let it drop the handle struct;
+        // the result buffer is freed manually since it was alloc'd via
+        // `std::alloc::alloc`, not boxed.
+        drop(_final_guard);
         if do_free {
             free_handle(handle);
         }
-        return terminal;
+
+        terminal
     }
-
-    // Wait until the worker writes a terminal state.
-    let guard = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
-    let _final_guard = h
-        .notify_cv
-        .wait_while(guard, |_| {
-            h.state.load(Ordering::Acquire) == TASK_STATE_PENDING
-        })
-        .unwrap_or_else(|p| p.into_inner());
-
-    let terminal = h.state.load(Ordering::Acquire);
-
-    // On successful completion, transfer the result into the caller's
-    // slot. The worker's release-store + our acquire-load orders the
-    // memcpy after the wrapper's result write.
-    if terminal == TASK_STATE_COMPLETED
-        && !out_slot.is_null()
-        && !h.result_buf.is_null()
-        && h.result_layout.size() > 0
-    {
-        std::ptr::copy_nonoverlapping(h.result_buf, out_slot, h.result_layout.size());
-    }
-
-    // Drop the result buffer + reclaim the handle (unless a registering
-    // group owns the free — see `do_free`).
-    // Re-take ownership of the Box and let it drop the handle struct;
-    // the result buffer is freed manually since it was alloc'd via
-    // `std::alloc::alloc`, not boxed.
-    drop(_final_guard);
-    if do_free {
-        free_handle(handle);
-    }
-
-    terminal
 }
 
 /// Release a `KaracTaskHandle` without joining. For TaskGroup-side
@@ -593,10 +599,12 @@ unsafe fn join_inner(handle: *mut KaracTaskHandle, out_slot: *mut u8, do_free: b
 /// for ensuring no other thread holds a reference.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_task_handle_free(handle: *mut KaracTaskHandle) {
-    if handle.is_null() {
-        return;
+    unsafe {
+        if handle.is_null() {
+            return;
+        }
+        free_handle(handle);
     }
-    free_handle(handle);
 }
 
 /// Free a `KaracTaskHandle` and its result buffer.
@@ -606,19 +614,21 @@ pub unsafe extern "C" fn karac_runtime_task_handle_free(handle: *mut KaracTaskHa
 /// Same contract as `karac_runtime_task_handle_free`. Internal helper
 /// shared between the join + free paths.
 unsafe fn free_handle(handle: *mut KaracTaskHandle) {
-    // Take ownership of the buffer fields before dropping the Box so we
-    // can dealloc through the saved Layout.
-    let boxed = Box::from_raw(handle);
-    if !boxed.result_buf.is_null() && boxed.result_layout.size() > 0 {
-        std::alloc::dealloc(boxed.result_buf, boxed.result_layout);
+    unsafe {
+        // Take ownership of the buffer fields before dropping the Box so we
+        // can dealloc through the saved Layout.
+        let boxed = Box::from_raw(handle);
+        if !boxed.result_buf.is_null() && boxed.result_layout.size() > 0 {
+            std::alloc::dealloc(boxed.result_buf, boxed.result_layout);
+        }
+        // A2 slice 5a — free the bound completion slot for a coroutine-spawn
+        // handle. The coroutine has signalled it (the join's slot-wait returned)
+        // and will not touch it again, so this is the single free site.
+        if !boxed.coro_slot.is_null() {
+            crate::event_loop::karac_runtime_park_slot_free(boxed.coro_slot);
+        }
+        // `boxed` drops here, releasing the Mutex / Condvar / AtomicU8 / etc.
     }
-    // A2 slice 5a — free the bound completion slot for a coroutine-spawn
-    // handle. The coroutine has signalled it (the join's slot-wait returned)
-    // and will not touch it again, so this is the single free site.
-    if !boxed.coro_slot.is_null() {
-        crate::event_loop::karac_runtime_park_slot_free(boxed.coro_slot);
-    }
-    // `boxed` drops here, releasing the Mutex / Condvar / AtomicU8 / etc.
 }
 
 /// B-2026-06-17-2 — non-blocking test for "this registered child is detached
@@ -639,15 +649,17 @@ unsafe fn free_handle(handle: *mut KaracTaskHandle) {
 ///
 /// `child` must be a non-null live `*mut KaracTaskHandle`.
 unsafe fn child_is_terminal_detached(child: *mut KaracTaskHandle) -> bool {
-    let h = &*child;
-    if !h.detached.load(Ordering::Acquire) {
-        return false;
-    }
-    if !h.coro_slot.is_null() {
-        crate::event_loop::karac_runtime_park_slot_done(h.coro_slot)
-    } else {
-        let _g = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
-        h.state.load(Ordering::Acquire) != TASK_STATE_PENDING
+    unsafe {
+        let h = &*child;
+        if !h.detached.load(Ordering::Acquire) {
+            return false;
+        }
+        if !h.coro_slot.is_null() {
+            crate::event_loop::karac_runtime_park_slot_done(h.coro_slot)
+        } else {
+            let _g = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
+            h.state.load(Ordering::Acquire) != TASK_STATE_PENDING
+        }
     }
 }
 
@@ -663,10 +675,12 @@ unsafe fn child_is_terminal_detached(child: *mut KaracTaskHandle) -> bool {
 /// `karac_runtime_spawn` and not already freed.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_task_state(handle: *const KaracTaskHandle) -> u8 {
-    if handle.is_null() {
-        return TASK_STATE_CANCELLED;
+    unsafe {
+        if handle.is_null() {
+            return TASK_STATE_CANCELLED;
+        }
+        (*handle).state.load(Ordering::Acquire)
     }
-    (*handle).state.load(Ordering::Acquire)
 }
 
 /// B-2026-06-17-2 — mark a `spawn`/`tg.spawn` handle **detached**. Codegen
@@ -704,45 +718,49 @@ pub unsafe extern "C" fn karac_runtime_task_state(handle: *const KaracTaskHandle
 /// it runs at most once per handle and never races an explicit `.join()`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_task_detach(handle: *mut KaracTaskHandle) {
-    if handle.is_null() {
-        return;
-    }
-
-    // Coroutine handle (coro_slot non-null): the worker only ramped the
-    // coroutine and is long gone, so the worker-side self-reap never applies.
-    let coro_slot = (*handle).coro_slot;
-    if !coro_slot.is_null() {
-        (*handle).detached.store(true, Ordering::Release);
-        if (*handle).registered.load(Ordering::Acquire) {
-            // Registered (`tg.spawn`) coro child: the group's register-time
-            // sweep reaps it (terminal peek via `park_slot_done`). Just flag it.
+    unsafe {
+        if handle.is_null() {
             return;
         }
-        // B-2026-06-17-3 — free-spawn coro: no group, no joiner. Arm the slot so
-        // the coroutine's completion signal frees handle+slot; if it has already
-        // completed, free now. The slot `done` lock claims the free exactly once
-        // against the completion signal.
-        let already_done =
-            crate::event_loop::karac_runtime_park_slot_arm_reap(coro_slot, handle as *mut c_void);
-        if already_done {
+
+        // Coroutine handle (coro_slot non-null): the worker only ramped the
+        // coroutine and is long gone, so the worker-side self-reap never applies.
+        let coro_slot = (*handle).coro_slot;
+        if !coro_slot.is_null() {
+            (*handle).detached.store(true, Ordering::Release);
+            if (*handle).registered.load(Ordering::Acquire) {
+                // Registered (`tg.spawn`) coro child: the group's register-time
+                // sweep reaps it (terminal peek via `park_slot_done`). Just flag it.
+                return;
+            }
+            // B-2026-06-17-3 — free-spawn coro: no group, no joiner. Arm the slot so
+            // the coroutine's completion signal frees handle+slot; if it has already
+            // completed, free now. The slot `done` lock claims the free exactly once
+            // against the completion signal.
+            let already_done = crate::event_loop::karac_runtime_park_slot_arm_reap(
+                coro_slot,
+                handle as *mut c_void,
+            );
+            if already_done {
+                free_handle(handle);
+            }
+            return;
+        }
+
+        // Non-coro handle: self-reap handshake with the pool worker (B-2026-06-17-2).
+        let should_free = {
+            let h = &*handle;
+            let _g = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
+            h.detached.store(true, Ordering::Release);
+            // Mirror the worker's claim (see `karac_runtime_spawn`): only a
+            // terminal, unregistered handle self-reaps, exactly once.
+            !h.registered.load(Ordering::Acquire)
+                && h.state.load(Ordering::Acquire) != TASK_STATE_PENDING
+                && !h.reaped.swap(true, Ordering::AcqRel)
+        };
+        if should_free {
             free_handle(handle);
         }
-        return;
-    }
-
-    // Non-coro handle: self-reap handshake with the pool worker (B-2026-06-17-2).
-    let should_free = {
-        let h = &*handle;
-        let _g = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
-        h.detached.store(true, Ordering::Release);
-        // Mirror the worker's claim (see `karac_runtime_spawn`): only a
-        // terminal, unregistered handle self-reaps, exactly once.
-        !h.registered.load(Ordering::Acquire)
-            && h.state.load(Ordering::Acquire) != TASK_STATE_PENDING
-            && !h.reaped.swap(true, Ordering::AcqRel)
-    };
-    if should_free {
-        free_handle(handle);
     }
 }
 
@@ -760,11 +778,13 @@ pub unsafe extern "C" fn karac_runtime_task_detach(handle: *mut KaracTaskHandle)
 /// slot (a detached, unregistered coro handle), not already freed.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_reap_detached_coro_handle(handle: *mut c_void) {
-    let handle = handle as *mut KaracTaskHandle;
-    if handle.is_null() {
-        return;
+    unsafe {
+        let handle = handle as *mut KaracTaskHandle;
+        if handle.is_null() {
+            return;
+        }
+        free_handle(handle);
     }
-    free_handle(handle);
 }
 
 // ── TaskGroup container — slice 5 ──────────────────────────────────────────
@@ -838,39 +858,41 @@ pub unsafe extern "C" fn karac_runtime_taskgroup_register(
     group: *mut KaracTaskGroupHandle,
     child: *mut KaracTaskHandle,
 ) {
-    if group.is_null() || child.is_null() {
-        return;
-    }
-    // B-2026-06-09-1 — mark the child group-owned so an explicit
-    // `.join()` on it waits without freeing; the group is the sole freer.
-    (*child).registered.store(true, Ordering::Release);
-    let g = &*group;
-    let mut children = g.children.lock().unwrap_or_else(|p| p.into_inner());
-    children.push(child);
-
-    // B-2026-06-17-2 — eager-reap detached, completed children. The canonical
-    // server shape `loop { tg.spawn(|| handle(conn)) }` creates the group once
-    // and never exits its scope, so without this every completed child's
-    // handle (+ park slot, for the coro path) is retained in `children`
-    // forever — ~100 B/conn, unbounded. Sweeping here bounds the Vec to the
-    // count of concurrently-live children (~conc): each freshly registered
-    // spawn pays one O(live) pass that frees any sibling that has since
-    // finished. Only **detached** children (the discarded fire-and-forget
-    // shape) are reaped — a child whose handle the user retained for `.join()`
-    // is never detached, so it stays for scope-exit `join_and_free`, preserving
-    // the structured wait guarantee and the B-2026-06-09-1 sole-freer
-    // invariant. `child_is_terminal_detached` is a UAF-safe non-blocking probe.
-    children.retain(|&c| {
-        if child_is_terminal_detached(c) {
-            // Detached + terminal + registered: the group is the sole freer and
-            // no joiner exists, so free now and drop from the Vec — scope-exit
-            // `join_and_free` then never sees (and never double-frees) it.
-            free_handle(c);
-            false
-        } else {
-            true
+    unsafe {
+        if group.is_null() || child.is_null() {
+            return;
         }
-    });
+        // B-2026-06-09-1 — mark the child group-owned so an explicit
+        // `.join()` on it waits without freeing; the group is the sole freer.
+        (*child).registered.store(true, Ordering::Release);
+        let g = &*group;
+        let mut children = g.children.lock().unwrap_or_else(|p| p.into_inner());
+        children.push(child);
+
+        // B-2026-06-17-2 — eager-reap detached, completed children. The canonical
+        // server shape `loop { tg.spawn(|| handle(conn)) }` creates the group once
+        // and never exits its scope, so without this every completed child's
+        // handle (+ park slot, for the coro path) is retained in `children`
+        // forever — ~100 B/conn, unbounded. Sweeping here bounds the Vec to the
+        // count of concurrently-live children (~conc): each freshly registered
+        // spawn pays one O(live) pass that frees any sibling that has since
+        // finished. Only **detached** children (the discarded fire-and-forget
+        // shape) are reaped — a child whose handle the user retained for `.join()`
+        // is never detached, so it stays for scope-exit `join_and_free`, preserving
+        // the structured wait guarantee and the B-2026-06-09-1 sole-freer
+        // invariant. `child_is_terminal_detached` is a UAF-safe non-blocking probe.
+        children.retain(|&c| {
+            if child_is_terminal_detached(c) {
+                // Detached + terminal + registered: the group is the sole freer and
+                // no joiner exists, so free now and drop from the Vec — scope-exit
+                // `join_and_free` then never sees (and never double-frees) it.
+                free_handle(c);
+                false
+            } else {
+                true
+            }
+        });
+    }
 }
 
 /// Block until every registered child has reached a terminal state,
@@ -897,27 +919,29 @@ pub unsafe extern "C" fn karac_runtime_taskgroup_register(
 /// `karac_runtime_taskgroup_new` and not already freed.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_taskgroup_join_and_free(group: *mut KaracTaskGroupHandle) {
-    if group.is_null() {
-        return;
+    unsafe {
+        if group.is_null() {
+            return;
+        }
+        // Drain children outside the lock so a child whose closure body
+        // calls `tg.spawn(...)` recursively (unlikely but defensible)
+        // doesn't deadlock on a re-entrant lock acquire.
+        let children: Vec<*mut KaracTaskHandle> = {
+            let g = &*group;
+            let mut guard = g.children.lock().unwrap_or_else(|p| p.into_inner());
+            std::mem::take(&mut *guard)
+        };
+        for child in children {
+            // `join_inner` blocks until terminal, frees the handle, returns
+            // the terminal discriminant (v1 discards it). Call with
+            // `do_free = true` directly — the group is the sole freer of a
+            // registered child, and going through the FFI `..._task_join`
+            // would see `registered == true` and skip the free → leak.
+            let _status = join_inner(child, std::ptr::null_mut(), true);
+        }
+        // Reclaim the group itself.
+        drop(Box::from_raw(group));
     }
-    // Drain children outside the lock so a child whose closure body
-    // calls `tg.spawn(...)` recursively (unlikely but defensible)
-    // doesn't deadlock on a re-entrant lock acquire.
-    let children: Vec<*mut KaracTaskHandle> = {
-        let g = &*group;
-        let mut guard = g.children.lock().unwrap_or_else(|p| p.into_inner());
-        std::mem::take(&mut *guard)
-    };
-    for child in children {
-        // `join_inner` blocks until terminal, frees the handle, returns
-        // the terminal discriminant (v1 discards it). Call with
-        // `do_free = true` directly — the group is the sole freer of a
-        // registered child, and going through the FFI `..._task_join`
-        // would see `registered == true` and skip the free → leak.
-        let _status = join_inner(child, std::ptr::null_mut(), true);
-    }
-    // Reclaim the group itself.
-    drop(Box::from_raw(group));
 }
 
 /// Signal cooperative cancellation to every child task registered with the
@@ -945,33 +969,35 @@ pub unsafe extern "C" fn karac_runtime_taskgroup_join_and_free(group: *mut Karac
 /// at group drop, which cannot overlap a `cancel()` call on the same live group.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_taskgroup_cancel(group: *mut KaracTaskGroupHandle) {
-    if group.is_null() {
-        return;
-    }
-    {
-        let g = &*group;
-        // Hold the children lock for the flip so a concurrent `register` (a
-        // child closure recursively spawning into the same group) cannot race
-        // the walk. Released before requesting the sweep so the wake path
-        // never couples with the children lock.
-        let children = g.children.lock().unwrap_or_else(|p| p.into_inner());
-        for &child in children.iter() {
-            if child.is_null() {
-                continue;
-            }
-            // SAFETY: each registered child handle is live for the group's
-            // lifetime (freed only at group drop, exclusive with this call).
-            // Same-module access to the private `cancel` flag.
-            (*child).cancel.store(true, Ordering::Release);
+    unsafe {
+        if group.is_null() {
+            return;
         }
+        {
+            let g = &*group;
+            // Hold the children lock for the flip so a concurrent `register` (a
+            // child closure recursively spawning into the same group) cannot race
+            // the walk. Released before requesting the sweep so the wake path
+            // never couples with the children lock.
+            let children = g.children.lock().unwrap_or_else(|p| p.into_inner());
+            for &child in children.iter() {
+                if child.is_null() {
+                    continue;
+                }
+                // SAFETY: each registered child handle is live for the group's
+                // lifetime (freed only at group drop, exclusive with this call).
+                // Same-module access to the private `cancel` flag.
+                (*child).cancel.store(true, Ordering::Release);
+            }
+        }
+        // Slice 5c trigger: the flags are flipped (Release). Now drive a sweep so a
+        // child parked on an idle fd (no readiness wakeup forthcoming) is torn down
+        // promptly instead of hanging the group's join. `request_cancel_sweep`'s
+        // per-shard stores are Release-ordered after the flag flips above, and the
+        // dispatcher consumes them with an AcqRel swap — so every flipped flag is
+        // visible to the sweep that observes the request.
+        crate::event_loop::karac_runtime_request_cancel_sweep();
     }
-    // Slice 5c trigger: the flags are flipped (Release). Now drive a sweep so a
-    // child parked on an idle fd (no readiness wakeup forthcoming) is torn down
-    // promptly instead of hanging the group's join. `request_cancel_sweep`'s
-    // per-shard stores are Release-ordered after the flag flips above, and the
-    // dispatcher consumes them with an AcqRel swap — so every flipped flag is
-    // visible to the sweep that observes the request.
-    crate::event_loop::karac_runtime_request_cancel_sweep();
 }
 
 #[cfg(test)]
@@ -987,8 +1013,10 @@ mod tests {
         result_out: *mut u8,
         _cancel: *const AtomicBool,
     ) {
-        let val = *(env as *const i64);
-        *(result_out as *mut i64) = val + 1;
+        unsafe {
+            let val = *(env as *const i64);
+            *(result_out as *mut i64) = val + 1;
+        }
     }
 
     // Spawn-side wrapper that increments a shared AtomicU32 in env (no
@@ -998,8 +1026,10 @@ mod tests {
         _result_out: *mut u8,
         _cancel: *const AtomicBool,
     ) {
-        let counter = &*(env as *const AtomicU32);
-        counter.fetch_add(1, AtomicOrdering::Relaxed);
+        unsafe {
+            let counter = &*(env as *const AtomicU32);
+            counter.fetch_add(1, AtomicOrdering::Relaxed);
+        }
     }
 
     #[test]
@@ -1339,7 +1369,9 @@ mod tests {
         slot: *mut crate::event_loop::KaracParkSlot,
         _cancel: *const AtomicBool,
     ) {
-        crate::event_loop::karac_runtime_park_slot_signal(slot);
+        unsafe {
+            crate::event_loop::karac_runtime_park_slot_signal(slot);
+        }
     }
 
     /// Ramp stand-in that parks and never self-completes — the test drives the
@@ -1547,21 +1579,23 @@ mod tests {
         slot: *mut crate::event_loop::KaracParkSlot,
         _cancel: *const AtomicBool,
     ) {
-        let probe = &*(env as *const RampProbe);
-        let delay = probe.delay_ms;
-        let slot_addr = slot as usize;
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(delay));
-            // SAFETY: the test keeps the handle (and thus the slot) alive
-            // until join returns; the signal happens-before the join wakes.
-            unsafe {
-                crate::event_loop::karac_runtime_park_slot_signal(
-                    slot_addr as *mut crate::event_loop::KaracParkSlot,
-                );
-            }
-        });
-        // The ramp itself returns at once — the worker thread is now free.
-        probe.ran.store(true, AtomicOrdering::Release);
+        unsafe {
+            let probe = &*(env as *const RampProbe);
+            let delay = probe.delay_ms;
+            let slot_addr = slot as usize;
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(delay));
+                // SAFETY: the test keeps the handle (and thus the slot) alive
+                // until join returns; the signal happens-before the join wakes.
+                {
+                    crate::event_loop::karac_runtime_park_slot_signal(
+                        slot_addr as *mut crate::event_loop::KaracParkSlot,
+                    );
+                }
+            });
+            // The ramp itself returns at once — the worker thread is now free.
+            probe.ran.store(true, AtomicOrdering::Release);
+        }
     }
 
     /// The join of a non-blocking coroutine-spawn handle waits on the bound
@@ -1684,10 +1718,12 @@ mod tests {
         result_out: *mut u8,
         _cancel: *const AtomicBool,
     ) {
-        let iters = *(env as *const u64);
-        let v = busy_work(iters);
-        if !result_out.is_null() {
-            *(result_out as *mut u64) = v;
+        unsafe {
+            let iters = *(env as *const u64);
+            let v = busy_work(iters);
+            if !result_out.is_null() {
+                *(result_out as *mut u64) = v;
+            }
         }
     }
 
@@ -1695,8 +1731,10 @@ mod tests {
     /// count; runs `busy_work` and discards the result (par branches in
     /// the write-only fan-out shape don't return a value).
     unsafe extern "C" fn busy_branch(ctx: *mut c_void, _cancel: *const AtomicBool) {
-        let iters = *(ctx as *const u64);
-        let _ = busy_work(iters);
+        unsafe {
+            let iters = *(ctx as *const u64);
+            let _ = busy_work(iters);
+        }
     }
 
     /// Median of `f` over `iters` measured runs after `warmup` discarded

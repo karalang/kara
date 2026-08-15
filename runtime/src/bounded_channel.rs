@@ -89,20 +89,22 @@ pub unsafe extern "C" fn karac_runtime_bounded_channel_send(
     val_ptr: *const u8,
     elem_size: u64,
 ) -> u8 {
-    if ch.is_null() {
-        return 0;
+    unsafe {
+        if ch.is_null() {
+            return 0;
+        }
+        let elem_size = elem_size as usize;
+        let mut queue = (*ch).queue.lock().unwrap();
+        if queue.len() >= (*ch).capacity {
+            return 0;
+        }
+        let mut blob = vec![0u8; elem_size].into_boxed_slice();
+        if elem_size != 0 && !val_ptr.is_null() {
+            std::ptr::copy_nonoverlapping(val_ptr, blob.as_mut_ptr(), elem_size);
+        }
+        queue.push_back(blob);
+        1
     }
-    let elem_size = elem_size as usize;
-    let mut queue = (*ch).queue.lock().unwrap();
-    if queue.len() >= (*ch).capacity {
-        return 0;
-    }
-    let mut blob = vec![0u8; elem_size].into_boxed_slice();
-    if elem_size != 0 && !val_ptr.is_null() {
-        std::ptr::copy_nonoverlapping(val_ptr, blob.as_mut_ptr(), elem_size);
-    }
-    queue.push_back(blob);
-    1
 }
 
 /// `karac_runtime_bounded_channel_recv(ch, out_ptr, elem_size) -> u8` —
@@ -119,23 +121,25 @@ pub unsafe extern "C" fn karac_runtime_bounded_channel_recv(
     out_ptr: *mut u8,
     elem_size: u64,
 ) -> u8 {
-    if ch.is_null() {
-        return 0;
-    }
-    let elem_size = elem_size as usize;
-    let popped = (*ch).queue.lock().unwrap().pop_front();
-    match popped {
-        Some(blob) => {
-            if elem_size != 0 && !out_ptr.is_null() {
-                std::ptr::copy_nonoverlapping(blob.as_ptr(), out_ptr, elem_size);
-            }
-            1
+    unsafe {
+        if ch.is_null() {
+            return 0;
         }
-        None => {
-            if elem_size != 0 && !out_ptr.is_null() {
-                std::ptr::write_bytes(out_ptr, 0, elem_size);
+        let elem_size = elem_size as usize;
+        let popped = (*ch).queue.lock().unwrap().pop_front();
+        match popped {
+            Some(blob) => {
+                if elem_size != 0 && !out_ptr.is_null() {
+                    std::ptr::copy_nonoverlapping(blob.as_ptr(), out_ptr, elem_size);
+                }
+                1
             }
-            0
+            None => {
+                if elem_size != 0 && !out_ptr.is_null() {
+                    std::ptr::write_bytes(out_ptr, 0, elem_size);
+                }
+                0
+            }
         }
     }
 }
@@ -149,10 +153,12 @@ pub unsafe extern "C" fn karac_runtime_bounded_channel_recv(
 /// (or null); consumes it.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_bounded_channel_drop(ch: *mut KaracBoundedChannel) {
-    if ch.is_null() {
-        return;
+    unsafe {
+        if ch.is_null() {
+            return;
+        }
+        drop(Box::from_raw(ch));
     }
-    drop(Box::from_raw(ch));
 }
 
 #[cfg(test)]
@@ -164,12 +170,14 @@ mod tests {
     const FAIL_FAST: u8 = 1;
 
     unsafe fn send_i64(ch: *mut KaracBoundedChannel, v: i64) -> u8 {
-        karac_runtime_bounded_channel_send(ch, &v as *const i64 as *const u8, 8)
+        unsafe { karac_runtime_bounded_channel_send(ch, &v as *const i64 as *const u8, 8) }
     }
     unsafe fn recv_i64(ch: *mut KaracBoundedChannel) -> (u8, i64) {
-        let mut out: i64 = -1;
-        let got = karac_runtime_bounded_channel_recv(ch, &mut out as *mut i64 as *mut u8, 8);
-        (got, out)
+        unsafe {
+            let mut out: i64 = -1;
+            let got = karac_runtime_bounded_channel_recv(ch, &mut out as *mut i64 as *mut u8, 8);
+            (got, out)
+        }
     }
 
     #[test]

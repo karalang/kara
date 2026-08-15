@@ -1,5 +1,22 @@
 //! Open-addressing hash map for compiled Kāra programs.
 //!
+//! ## Safety — the shared C-ABI contract
+//!
+//! Every `karac_map_*` entry point below is called from compiler-emitted code,
+//! and unless its own `# Safety` section says otherwise it requires:
+//!
+//! * `map` is a live pointer from `karac_map_new` for THIS key/val layout,
+//!   not yet passed to any `karac_map_free*` — only the free fns tolerate
+//!   null; the access fns dereference unconditionally.
+//! * `key` / `val` point to readable blobs of exactly the `key_size` /
+//!   `val_size` the map was constructed with; `out_*` pointers are writable
+//!   at the same widths.
+//! * No concurrent access: the map is single-owner state, never shared across
+//!   Kāra tasks without the compiler proving exclusivity (effect system).
+//! * The constructed `hash_fn` / `eq_fn` stay valid for the map's lifetime
+//!   and agree with each other (eq ⇒ equal hashes).
+//!
+//!
 //! The map is type-erased: keys and values are raw byte blobs. The compiler
 //! passes `key_size`/`val_size` at construction time and emits concrete
 //! `hash_fn`/`eq_fn` function pointers for the monomorphised K type.
@@ -127,19 +144,21 @@ impl KaracMap {
         hash_fn: unsafe extern "C" fn(*const c_void) -> u64,
         eq_fn: unsafe extern "C" fn(*const c_void, *const c_void) -> bool,
     ) -> *mut Self {
-        let (status, kv) = Self::alloc_storage(INITIAL_CAPACITY, key_size, val_size);
-        let map = Box::new(KaracMap {
-            status,
-            kv,
-            capacity: INITIAL_CAPACITY,
-            len: 0,
-            tombstones: 0,
-            key_size,
-            val_size,
-            hash_fn,
-            eq_fn,
-        });
-        Box::into_raw(map)
+        unsafe {
+            let (status, kv) = Self::alloc_storage(INITIAL_CAPACITY, key_size, val_size);
+            let map = Box::new(KaracMap {
+                status,
+                kv,
+                capacity: INITIAL_CAPACITY,
+                len: 0,
+                tombstones: 0,
+                key_size,
+                val_size,
+                hash_fn,
+                eq_fn,
+            });
+            Box::into_raw(map)
+        }
     }
 
     unsafe fn alloc_storage(
@@ -147,35 +166,42 @@ impl KaracMap {
         key_size: usize,
         val_size: usize,
     ) -> (*mut u8, *mut u8) {
-        let status_layout = Layout::array::<u8>(capacity).unwrap();
-        let status = alloc(status_layout);
-        ptr::write_bytes(status, BUCKET_EMPTY, capacity);
+        unsafe {
+            let status_layout = Layout::array::<u8>(capacity).unwrap();
+            let status = alloc(status_layout);
+            ptr::write_bytes(status, BUCKET_EMPTY, capacity);
 
-        let kv_size = (key_size + val_size).max(1);
-        let kv_layout = Layout::array::<u8>(capacity * kv_size).unwrap();
-        let kv = alloc(kv_layout);
+            let kv_size = (key_size + val_size).max(1);
+            let kv_layout = Layout::array::<u8>(capacity * kv_size).unwrap();
+            let kv = alloc(kv_layout);
 
-        (status, kv)
+            (status, kv)
+        }
     }
 
     unsafe fn free_storage(&mut self) {
-        let status_layout = Layout::array::<u8>(self.capacity).unwrap();
-        dealloc(self.status, status_layout);
+        unsafe {
+            let status_layout = Layout::array::<u8>(self.capacity).unwrap();
+            dealloc(self.status, status_layout);
 
-        let kv_size = (self.key_size + self.val_size).max(1);
-        let kv_layout = Layout::array::<u8>(self.capacity * kv_size).unwrap();
-        dealloc(self.kv, kv_layout);
+            let kv_size = (self.key_size + self.val_size).max(1);
+            let kv_layout = Layout::array::<u8>(self.capacity * kv_size).unwrap();
+            dealloc(self.kv, kv_layout);
+        }
     }
 
     #[inline]
     unsafe fn key_ptr(&self, slot: usize) -> *const c_void {
-        self.kv.add(slot * (self.key_size + self.val_size)) as *const c_void
+        unsafe { self.kv.add(slot * (self.key_size + self.val_size)) as *const c_void }
     }
 
     #[inline]
     unsafe fn val_ptr(&self, slot: usize) -> *const c_void {
-        self.kv
-            .add(slot * (self.key_size + self.val_size) + self.key_size) as *const c_void
+        unsafe {
+            self.kv
+                .add(slot * (self.key_size + self.val_size) + self.key_size)
+                as *const c_void
+        }
     }
 
     /// Free the heap `{ptr, len, cap}` buffer whose 24-byte header starts at
@@ -189,10 +215,12 @@ impl KaracMap {
     /// never call this on a scalar field.
     #[inline]
     unsafe fn free_heap_field(base: *const u8) {
-        let data_ptr = ptr::read_unaligned(base as *const *mut u8);
-        let cap = ptr::read_unaligned(base.add(16) as *const i64);
-        if cap > 0 && !data_ptr.is_null() {
-            free(data_ptr as *mut c_void);
+        unsafe {
+            let data_ptr = ptr::read_unaligned(base as *const *mut u8);
+            let cap = ptr::read_unaligned(base.add(16) as *const i64);
+            if cap > 0 && !data_ptr.is_null() {
+                free(data_ptr as *mut c_void);
+            }
         }
     }
 
@@ -201,7 +229,9 @@ impl KaracMap {
     /// `{ptr,len,cap}` (codegen `drop_key != 0`).
     #[inline]
     unsafe fn free_stored_key(&self, slot: usize) {
-        Self::free_heap_field(self.key_ptr(slot) as *const u8);
+        unsafe {
+            Self::free_heap_field(self.key_ptr(slot) as *const u8);
+        }
     }
 
     /// Release the bucket's STORED value buffer at `slot` (see
@@ -210,124 +240,136 @@ impl KaracMap {
     /// `karac_map_remove_old`, which MOVES the value out to the caller.
     #[inline]
     unsafe fn free_stored_val(&self, slot: usize) {
-        Self::free_heap_field(self.val_ptr(slot) as *const u8);
+        unsafe {
+            Self::free_heap_field(self.val_ptr(slot) as *const u8);
+        }
     }
 
     // Find an occupied slot holding `key`. Returns Some(slot) or None.
     unsafe fn lookup(&self, key: *const c_void) -> Option<usize> {
-        let hash = (self.hash_fn)(key);
-        let ctrl = ctrl_of(hash);
-        let start = (hash as usize) & (self.capacity - 1);
-        for i in 0..self.capacity {
-            let slot = (start + i) & (self.capacity - 1);
-            let s = *self.status.add(slot);
-            if s == BUCKET_EMPTY {
-                return None;
+        unsafe {
+            let hash = (self.hash_fn)(key);
+            let ctrl = ctrl_of(hash);
+            let start = (hash as usize) & (self.capacity - 1);
+            for i in 0..self.capacity {
+                let slot = (start + i) & (self.capacity - 1);
+                let s = *self.status.add(slot);
+                if s == BUCKET_EMPTY {
+                    return None;
+                }
+                // The tag test rejects a non-matching key WITHOUT dereferencing it,
+                // which is the whole point of the control byte — see the module
+                // header. It also subsumes the occupancy test: `ctrl >= 0x80` and
+                // both sentinels are below it, so a sentinel can never compare
+                // equal. Past it, `eq_fn` runs only on a real hit or a ~1/128 tag
+                // collision.
+                if s == ctrl && (self.eq_fn)(self.key_ptr(slot), key) {
+                    return Some(slot);
+                }
             }
-            // The tag test rejects a non-matching key WITHOUT dereferencing it,
-            // which is the whole point of the control byte — see the module
-            // header. It also subsumes the occupancy test: `ctrl >= 0x80` and
-            // both sentinels are below it, so a sentinel can never compare
-            // equal. Past it, `eq_fn` runs only on a real hit or a ~1/128 tag
-            // collision.
-            if s == ctrl && (self.eq_fn)(self.key_ptr(slot), key) {
-                return Some(slot);
-            }
+            None
         }
-        None
     }
 
     // Find the slot to write a new key into. Returns the slot, whether the key
     // already exists (update vs. fresh insert), and the control byte the caller
     // must store — callers cannot derive it themselves without re-hashing.
     unsafe fn find_insert_slot(&self, key: *const c_void) -> (usize, bool, u8) {
-        let hash = (self.hash_fn)(key);
-        let ctrl = ctrl_of(hash);
-        let start = (hash as usize) & (self.capacity - 1);
-        let mut first_tombstone: Option<usize> = None;
-        for i in 0..self.capacity {
-            let slot = (start + i) & (self.capacity - 1);
-            let s = *self.status.add(slot);
-            if s == BUCKET_EMPTY {
-                let target = first_tombstone.unwrap_or(slot);
-                return (target, false, ctrl);
-            }
-            if s == BUCKET_TOMBSTONE {
-                if first_tombstone.is_none() {
-                    first_tombstone = Some(slot);
+        unsafe {
+            let hash = (self.hash_fn)(key);
+            let ctrl = ctrl_of(hash);
+            let start = (hash as usize) & (self.capacity - 1);
+            let mut first_tombstone: Option<usize> = None;
+            for i in 0..self.capacity {
+                let slot = (start + i) & (self.capacity - 1);
+                let s = *self.status.add(slot);
+                if s == BUCKET_EMPTY {
+                    let target = first_tombstone.unwrap_or(slot);
+                    return (target, false, ctrl);
                 }
-                continue;
+                if s == BUCKET_TOMBSTONE {
+                    if first_tombstone.is_none() {
+                        first_tombstone = Some(slot);
+                    }
+                    continue;
+                }
+                // Occupied: same tag-first test as `lookup`.
+                if s == ctrl && (self.eq_fn)(self.key_ptr(slot), key) {
+                    return (slot, true, ctrl);
+                }
             }
-            // Occupied: same tag-first test as `lookup`.
-            if s == ctrl && (self.eq_fn)(self.key_ptr(slot), key) {
-                return (slot, true, ctrl);
-            }
+            // Should not reach here if resize policy is respected.
+            (first_tombstone.unwrap_or(0), false, ctrl)
         }
-        // Should not reach here if resize policy is respected.
-        (first_tombstone.unwrap_or(0), false, ctrl)
     }
 
     unsafe fn insert(&mut self, key: *const c_void, val: *const c_void) {
-        // Resize when (occupied + tombstones) / capacity > 3/4.
-        //
-        // This bound is LOAD-BEARING beyond load factor: it is what leaves at
-        // least a quarter of the buckets EMPTY, which is the termination proof
-        // for a linear probe that has no trip counter. Codegen's
-        // `MapLookupProbe::Unbounded` / `SlotWalk` forms (B-2026-08-07-16,
-        // `KARAC_MAP_PROBE`, off by default) drop their `i >= cap` test and
-        // rely on it. Weaken the fraction toward 1 and those forms spin
-        // forever on a miss — see that enum before changing it.
-        if (self.len + self.tombstones + 1) * 4 > self.capacity * 3 {
-            self.resize();
-        }
-        let (slot, exists, ctrl) = self.find_insert_slot(key);
-        let was_tombstone = *self.status.add(slot) == BUCKET_TOMBSTONE;
-        let kv_offset = slot * (self.key_size + self.val_size);
-        if !exists {
-            ptr::copy_nonoverlapping(key as *const u8, self.kv.add(kv_offset), self.key_size);
-            self.len += 1;
-            if was_tombstone {
-                self.tombstones -= 1;
+        unsafe {
+            // Resize when (occupied + tombstones) / capacity > 3/4.
+            //
+            // This bound is LOAD-BEARING beyond load factor: it is what leaves at
+            // least a quarter of the buckets EMPTY, which is the termination proof
+            // for a linear probe that has no trip counter. Codegen's
+            // `MapLookupProbe::Unbounded` / `SlotWalk` forms (B-2026-08-07-16,
+            // `KARAC_MAP_PROBE`, off by default) drop their `i >= cap` test and
+            // rely on it. Weaken the fraction toward 1 and those forms spin
+            // forever on a miss — see that enum before changing it.
+            if (self.len + self.tombstones + 1) * 4 > self.capacity * 3 {
+                self.resize();
             }
+            let (slot, exists, ctrl) = self.find_insert_slot(key);
+            let was_tombstone = *self.status.add(slot) == BUCKET_TOMBSTONE;
+            let kv_offset = slot * (self.key_size + self.val_size);
+            if !exists {
+                ptr::copy_nonoverlapping(key as *const u8, self.kv.add(kv_offset), self.key_size);
+                self.len += 1;
+                if was_tombstone {
+                    self.tombstones -= 1;
+                }
+            }
+            ptr::copy_nonoverlapping(
+                val as *const u8,
+                self.kv.add(kv_offset + self.key_size),
+                self.val_size,
+            );
+            *self.status.add(slot) = ctrl;
         }
-        ptr::copy_nonoverlapping(
-            val as *const u8,
-            self.kv.add(kv_offset + self.key_size),
-            self.val_size,
-        );
-        *self.status.add(slot) = ctrl;
     }
 
     unsafe fn get(&self, key: *const c_void, out_val: *mut c_void) -> bool {
-        if let Some(slot) = self.lookup(key) {
-            ptr::copy_nonoverlapping(
-                self.val_ptr(slot) as *const u8,
-                out_val as *mut u8,
-                self.val_size,
-            );
-            true
-        } else {
-            false
+        unsafe {
+            if let Some(slot) = self.lookup(key) {
+                ptr::copy_nonoverlapping(
+                    self.val_ptr(slot) as *const u8,
+                    out_val as *mut u8,
+                    self.val_size,
+                );
+                true
+            } else {
+                false
+            }
         }
     }
 
     unsafe fn remove(&mut self, key: *const c_void, drop_key: bool, drop_val: bool) -> bool {
-        if let Some(slot) = self.lookup(key) {
-            // The bool `remove` discards both halves, so free each heap
-            // `{ptr,len,cap}` the tombstone would orphan. `free-with-drop`
-            // only walks OCCUPIED slots, so a tombstoned buffer leaks
-            // otherwise. (The `remove_old` variant instead MOVES the value
-            // out to the caller and frees only the key.)
-            if drop_key {
-                self.free_stored_key(slot);
+        unsafe {
+            if let Some(slot) = self.lookup(key) {
+                // The bool `remove` discards both halves, so free each heap
+                // `{ptr,len,cap}` the tombstone would orphan. `free-with-drop`
+                // only walks OCCUPIED slots, so a tombstoned buffer leaks
+                // otherwise. (The `remove_old` variant instead MOVES the value
+                // out to the caller and frees only the key.)
+                if drop_key {
+                    self.free_stored_key(slot);
+                }
+                if drop_val {
+                    self.free_stored_val(slot);
+                }
+                self.vacate(slot);
+                true
+            } else {
+                false
             }
-            if drop_val {
-                self.free_stored_val(slot);
-            }
-            self.vacate(slot);
-            true
-        } else {
-            false
         }
     }
 
@@ -384,15 +426,17 @@ impl KaracMap {
     /// not branch on it.
     #[inline]
     unsafe fn vacate(&mut self, slot: usize) {
-        let mask = self.capacity - 1;
-        self.len -= 1;
-        let run_end = *self.status.add((slot + 1) & mask) == BUCKET_EMPTY;
-        *self.status.add(slot) = if run_end {
-            BUCKET_EMPTY
-        } else {
-            BUCKET_TOMBSTONE
-        };
-        self.tombstones += usize::from(!run_end);
+        unsafe {
+            let mask = self.capacity - 1;
+            self.len -= 1;
+            let run_end = *self.status.add((slot + 1) & mask) == BUCKET_EMPTY;
+            *self.status.add(slot) = if run_end {
+                BUCKET_EMPTY
+            } else {
+                BUCKET_TOMBSTONE
+            };
+            self.tombstones += usize::from(!run_end);
+        }
     }
 
     /// Pick the next table width when the load-factor trigger fires.
@@ -438,26 +482,28 @@ impl KaracMap {
     }
 
     unsafe fn resize(&mut self) {
-        let new_cap = self.next_capacity();
-        let (new_status, new_kv) = Self::alloc_storage(new_cap, self.key_size, self.val_size);
+        unsafe {
+            let new_cap = self.next_capacity();
+            let (new_status, new_kv) = Self::alloc_storage(new_cap, self.key_size, self.val_size);
 
-        let old_status = self.status;
-        let old_kv = self.kv;
-        let old_cap = self.capacity;
+            let old_status = self.status;
+            let old_kv = self.kv;
+            let old_cap = self.capacity;
 
-        self.status = new_status;
-        self.kv = new_kv;
-        self.capacity = new_cap;
-        self.len = 0;
-        self.tombstones = 0;
+            self.status = new_status;
+            self.kv = new_kv;
+            self.capacity = new_cap;
+            self.len = 0;
+            self.tombstones = 0;
 
-        self.rehash_from(old_status, old_kv, old_cap);
+            self.rehash_from(old_status, old_kv, old_cap);
 
-        let status_layout = Layout::array::<u8>(old_cap).unwrap();
-        dealloc(old_status, status_layout);
-        let kv_layout =
-            Layout::array::<u8>(old_cap * (self.key_size + self.val_size).max(1)).unwrap();
-        dealloc(old_kv, kv_layout);
+            let status_layout = Layout::array::<u8>(old_cap).unwrap();
+            dealloc(old_status, status_layout);
+            let kv_layout =
+                Layout::array::<u8>(old_cap * (self.key_size + self.val_size).max(1)).unwrap();
+            dealloc(old_kv, kv_layout);
+        }
     }
 
     /// Move every occupied bucket of a just-replaced table into `self`'s fresh
@@ -499,25 +545,27 @@ impl KaracMap {
     /// `self`'s own storage must be freshly allocated (all-`BUCKET_EMPTY`) with
     /// capacity strictly greater than the live count in the old table.
     unsafe fn rehash_from(&mut self, old_status: *const u8, old_kv: *const u8, old_cap: usize) {
-        let kv_size = self.key_size + self.val_size;
-        let mask = self.capacity - 1;
-        for i in 0..old_cap {
-            if !is_occupied(*old_status.add(i)) {
-                continue;
+        unsafe {
+            let kv_size = self.key_size + self.val_size;
+            let mask = self.capacity - 1;
+            for i in 0..old_cap {
+                if !is_occupied(*old_status.add(i)) {
+                    continue;
+                }
+                let src = old_kv.add(i * kv_size);
+                let hash = (self.hash_fn)(src as *const c_void);
+                let mut slot = (hash as usize) & mask;
+                // Terminates: the destination has strictly more buckets than the
+                // number of keys being replayed, so an EMPTY slot always exists.
+                while *self.status.add(slot) != BUCKET_EMPTY {
+                    slot = (slot + 1) & mask;
+                }
+                ptr::copy_nonoverlapping(src, self.kv.add(slot * kv_size), kv_size);
+                // The tag is re-derived, not carried over: it depends only on the
+                // hash, which is the one thing this loop must recompute anyway.
+                *self.status.add(slot) = ctrl_of(hash);
+                self.len += 1;
             }
-            let src = old_kv.add(i * kv_size);
-            let hash = (self.hash_fn)(src as *const c_void);
-            let mut slot = (hash as usize) & mask;
-            // Terminates: the destination has strictly more buckets than the
-            // number of keys being replayed, so an EMPTY slot always exists.
-            while *self.status.add(slot) != BUCKET_EMPTY {
-                slot = (slot + 1) & mask;
-            }
-            ptr::copy_nonoverlapping(src, self.kv.add(slot * kv_size), kv_size);
-            // The tag is re-derived, not carried over: it depends only on the
-            // hash, which is the one thing this loop must recompute anyway.
-            *self.status.add(slot) = ctrl_of(hash);
-            self.len += 1;
         }
     }
 
@@ -531,27 +579,29 @@ impl KaracMap {
         key_size: usize,
         val_size: usize,
     ) -> Option<(*mut u8, *mut u8)> {
-        let status_layout = Layout::array::<u8>(capacity).ok()?;
-        let status = alloc(status_layout);
-        if status.is_null() {
-            return None;
-        }
-        ptr::write_bytes(status, BUCKET_EMPTY, capacity);
+        unsafe {
+            let status_layout = Layout::array::<u8>(capacity).ok()?;
+            let status = alloc(status_layout);
+            if status.is_null() {
+                return None;
+            }
+            ptr::write_bytes(status, BUCKET_EMPTY, capacity);
 
-        let kv_size = (key_size + val_size).max(1);
-        let kv_layout = match Layout::array::<u8>(capacity * kv_size) {
-            Ok(l) => l,
-            Err(_) => {
+            let kv_size = (key_size + val_size).max(1);
+            let kv_layout = match Layout::array::<u8>(capacity * kv_size) {
+                Ok(l) => l,
+                Err(_) => {
+                    dealloc(status, status_layout);
+                    return None;
+                }
+            };
+            let kv = alloc(kv_layout);
+            if kv.is_null() {
                 dealloc(status, status_layout);
                 return None;
             }
-        };
-        let kv = alloc(kv_layout);
-        if kv.is_null() {
-            dealloc(status, status_layout);
-            return None;
+            Some((status, kv))
         }
-        Some((status, kv))
     }
 
     /// Fallible sibling of [`resize`]: picks the next width via
@@ -562,39 +612,41 @@ impl KaracMap {
     /// returned as `Err(bytes)`. The new storage is allocated *before* any
     /// `self` field is mutated, so the failure path needs no rollback.
     unsafe fn try_resize(&mut self) -> Result<(), u64> {
-        // Same live-count-driven width choice as `resize` (B-2026-07-31-21);
-        // on the fallible path the same-capacity compaction is also the
-        // OOM-friendlier allocation.
-        let new_cap = self.next_capacity();
-        let (new_status, new_kv) =
-            match Self::alloc_storage_fallible(new_cap, self.key_size, self.val_size) {
-                Some(pair) => pair,
-                None => {
-                    let kv_size = (self.key_size + self.val_size).max(1);
-                    let bytes = (new_cap as u64)
-                        .saturating_add((new_cap as u64).saturating_mul(kv_size as u64));
-                    return Err(bytes);
-                }
-            };
+        unsafe {
+            // Same live-count-driven width choice as `resize` (B-2026-07-31-21);
+            // on the fallible path the same-capacity compaction is also the
+            // OOM-friendlier allocation.
+            let new_cap = self.next_capacity();
+            let (new_status, new_kv) =
+                match Self::alloc_storage_fallible(new_cap, self.key_size, self.val_size) {
+                    Some(pair) => pair,
+                    None => {
+                        let kv_size = (self.key_size + self.val_size).max(1);
+                        let bytes = (new_cap as u64)
+                            .saturating_add((new_cap as u64).saturating_mul(kv_size as u64));
+                        return Err(bytes);
+                    }
+                };
 
-        let old_status = self.status;
-        let old_kv = self.kv;
-        let old_cap = self.capacity;
+            let old_status = self.status;
+            let old_kv = self.kv;
+            let old_cap = self.capacity;
 
-        self.status = new_status;
-        self.kv = new_kv;
-        self.capacity = new_cap;
-        self.len = 0;
-        self.tombstones = 0;
+            self.status = new_status;
+            self.kv = new_kv;
+            self.capacity = new_cap;
+            self.len = 0;
+            self.tombstones = 0;
 
-        self.rehash_from(old_status, old_kv, old_cap);
+            self.rehash_from(old_status, old_kv, old_cap);
 
-        let status_layout = Layout::array::<u8>(old_cap).unwrap();
-        dealloc(old_status, status_layout);
-        let kv_layout =
-            Layout::array::<u8>(old_cap * (self.key_size + self.val_size).max(1)).unwrap();
-        dealloc(old_kv, kv_layout);
-        Ok(())
+            let status_layout = Layout::array::<u8>(old_cap).unwrap();
+            dealloc(old_status, status_layout);
+            let kv_layout =
+                Layout::array::<u8>(old_cap * (self.key_size + self.val_size).max(1)).unwrap();
+            dealloc(old_kv, kv_layout);
+            Ok(())
+        }
     }
 }
 
@@ -605,6 +657,11 @@ struct KaracMapIter {
 
 // ── Public C ABI ─────────────────────────────────────────────────────────────
 
+/// # Safety
+/// `hash_fn` / `eq_fn` must be sound to call on every `key_size`-byte blob the
+/// caller will ever pass this map, for the map's whole lifetime; they must
+/// agree (eq ⇒ equal hashes). The returned pointer owns the map — release it
+/// through exactly one `karac_map_free*` call.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_new(
     key_size: usize,
@@ -612,17 +669,24 @@ pub unsafe extern "C" fn karac_map_new(
     hash_fn: unsafe extern "C" fn(*const c_void) -> u64,
     eq_fn: unsafe extern "C" fn(*const c_void, *const c_void) -> bool,
 ) -> *mut c_void {
-    KaracMap::new(key_size, val_size, hash_fn, eq_fn) as *mut c_void
+    unsafe { KaracMap::new(key_size, val_size, hash_fn, eq_fn) as *mut c_void }
 }
 
+/// # Safety
+/// `map` is null (no-op) or a live `karac_map_new` pointer not freed before;
+/// after this call it is dangling. Entries are NOT recursively dropped — for
+/// heap-owning keys/values codegen must route through the `_with_drop_vec` /
+/// `_with_val_drop_fn` variants or the stored buffers leak.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_free(map: *mut c_void) {
-    if map.is_null() {
-        return;
+    unsafe {
+        if map.is_null() {
+            return;
+        }
+        let mut m = Box::from_raw(map as *mut KaracMap);
+        m.free_storage();
+        // Box drop frees the KaracMap allocation itself.
     }
-    let mut m = Box::from_raw(map as *mut KaracMap);
-    m.free_storage();
-    // Box drop frees the KaracMap allocation itself.
 }
 
 /// `karac_map_free` variant that recursively drops per-entry Vec / String
@@ -655,30 +719,38 @@ pub unsafe extern "C" fn karac_map_free(map: *mut c_void) {
 /// or non-Vec heap-owning values in Maps / Sets were never released.
 /// Replaces the narrower `karac_map_free_with_val_drop_vec` (val-only)
 /// helper.
+/// # Safety
+/// As `karac_map_free`, plus the **layout contract** above: a nonzero
+/// `drop_key` / `drop_val` asserts that half of every live slot is exactly the
+/// 24-byte `{ptr,len,cap}` runtime Vec/String struct whose `ptr` (when
+/// `cap > 0`) is a live malloc allocation this map uniquely owns — it is
+/// passed to `free`, so an alias or a borrowed view here is a double-free.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_free_with_drop_vec(
     map: *mut c_void,
     drop_key: i32,
     drop_val: i32,
 ) {
-    if map.is_null() {
-        return;
-    }
-    let mut m = Box::from_raw(map as *mut KaracMap);
-    if drop_key != 0 || drop_val != 0 {
-        for slot in 0..m.capacity {
-            if !is_occupied(*m.status.add(slot)) {
-                continue;
-            }
-            if drop_key != 0 {
-                m.free_stored_key(slot);
-            }
-            if drop_val != 0 {
-                m.free_stored_val(slot);
+    unsafe {
+        if map.is_null() {
+            return;
+        }
+        let mut m = Box::from_raw(map as *mut KaracMap);
+        if drop_key != 0 || drop_val != 0 {
+            for slot in 0..m.capacity {
+                if !is_occupied(*m.status.add(slot)) {
+                    continue;
+                }
+                if drop_key != 0 {
+                    m.free_stored_key(slot);
+                }
+                if drop_val != 0 {
+                    m.free_stored_val(slot);
+                }
             }
         }
+        m.free_storage();
     }
-    m.free_storage();
 }
 
 /// `karac_map_free` variant that runs a synthesized per-VALUE drop function
@@ -699,44 +771,61 @@ pub unsafe extern "C" fn karac_map_free_with_drop_vec(
 /// touching the blob storage itself — exactly the synthesized
 /// `karac_drop_<T>(ptr)` family's contract. A null fn is tolerated
 /// (degrades to `karac_map_free_with_drop_vec(map, drop_key, 0)`).
+/// # Safety
+/// As `karac_map_free`; `drop_key` carries `karac_map_free_with_drop_vec`'s
+/// key-side layout contract. A non-null `val_drop_fn` must be sound to call on
+/// a pointer to every live value blob IN PLACE, freeing only the value's owned
+/// heap (never the blob storage), and must not touch the map reentrantly.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_free_with_val_drop_fn(
     map: *mut c_void,
     drop_key: i32,
     val_drop_fn: Option<unsafe extern "C" fn(*mut c_void)>,
 ) {
-    if map.is_null() {
-        return;
-    }
-    let mut m = Box::from_raw(map as *mut KaracMap);
-    if drop_key != 0 || val_drop_fn.is_some() {
-        for slot in 0..m.capacity {
-            if !is_occupied(*m.status.add(slot)) {
-                continue;
-            }
-            if drop_key != 0 {
-                m.free_stored_key(slot);
-            }
-            if let Some(f) = val_drop_fn {
-                f(m.val_ptr(slot) as *mut c_void);
+    unsafe {
+        if map.is_null() {
+            return;
+        }
+        let mut m = Box::from_raw(map as *mut KaracMap);
+        if drop_key != 0 || val_drop_fn.is_some() {
+            for slot in 0..m.capacity {
+                if !is_occupied(*m.status.add(slot)) {
+                    continue;
+                }
+                if drop_key != 0 {
+                    m.free_stored_key(slot);
+                }
+                if let Some(f) = val_drop_fn {
+                    f(m.val_ptr(slot) as *mut c_void);
+                }
             }
         }
+        m.free_storage();
     }
-    m.free_storage();
 }
 
+/// # Safety
+/// Shared contract above. The key and value bytes are bit-copied in; if the
+/// map already owned an equal key, the OLD value is overwritten without being
+/// dropped — codegen must use `karac_map_insert_old` when the value owns heap.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_insert(
     map: *mut c_void,
     key: *const c_void,
     val: *const c_void,
 ) {
-    (*(map as *mut KaracMap)).insert(key, val);
+    unsafe {
+        (*(map as *mut KaracMap)).insert(key, val);
+    }
 }
 
 /// Inserts `key → val`. If `key` already existed, copies the **old** value into
 /// `out_old_val` and returns `true`. If it was a fresh insertion, returns `false`
 /// and leaves `out_old_val` untouched. Matches `Map.insert → Option[V]` semantics.
+/// # Safety
+/// Shared contract above; `out_old_val` must be writable for `val_size` bytes.
+/// On `true`, ownership of the OLD value's heap (if any) moves to the caller
+/// through `out_old_val` — the caller must drop it or it leaks.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_insert_old(
     map: *mut c_void,
@@ -744,35 +833,37 @@ pub unsafe extern "C" fn karac_map_insert_old(
     val: *const c_void,
     out_old_val: *mut c_void,
 ) -> bool {
-    let m = &mut *(map as *mut KaracMap);
-    // Resize before probing so find_insert_slot always finds a slot.
-    if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
-        m.resize();
-    }
-    let (slot, exists, ctrl) = m.find_insert_slot(key);
-    let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
-    let kv_offset = slot * (m.key_size + m.val_size);
-    if exists {
-        // Copy old value out before overwriting.
+    unsafe {
+        let m = &mut *(map as *mut KaracMap);
+        // Resize before probing so find_insert_slot always finds a slot.
+        if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
+            m.resize();
+        }
+        let (slot, exists, ctrl) = m.find_insert_slot(key);
+        let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
+        let kv_offset = slot * (m.key_size + m.val_size);
+        if exists {
+            // Copy old value out before overwriting.
+            ptr::copy_nonoverlapping(
+                m.kv.add(kv_offset + m.key_size),
+                out_old_val as *mut u8,
+                m.val_size,
+            );
+        } else {
+            ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
+            m.len += 1;
+            if was_tombstone {
+                m.tombstones -= 1;
+            }
+        }
         ptr::copy_nonoverlapping(
+            val as *const u8,
             m.kv.add(kv_offset + m.key_size),
-            out_old_val as *mut u8,
             m.val_size,
         );
-    } else {
-        ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
-        m.len += 1;
-        if was_tombstone {
-            m.tombstones -= 1;
-        }
+        *m.status.add(slot) = ctrl;
+        exists
     }
-    ptr::copy_nonoverlapping(
-        val as *const u8,
-        m.kv.add(kv_offset + m.key_size),
-        m.val_size,
-    );
-    *m.status.add(slot) = ctrl;
-    exists
 }
 
 /// Fallible sibling of [`karac_map_insert_old`]: the runtime backing for the
@@ -794,6 +885,9 @@ pub unsafe extern "C" fn karac_map_insert_old(
 /// construction and wrap it in `Result.Ok`. Growth is the *only* allocation an
 /// insert performs (the slot write is copy-only), so making `try_resize`
 /// fallible makes the whole operation fallible.
+/// # Safety
+/// As `karac_map_insert_old`; additionally `out_failed_bytes` is null or
+/// writable. On the OOM return the map is unchanged and nothing moved.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_try_insert(
     map: *mut c_void,
@@ -802,43 +896,45 @@ pub unsafe extern "C" fn karac_map_try_insert(
     out_old_val: *mut c_void,
     out_failed_bytes: *mut u64,
 ) -> i32 {
-    let m = &mut *(map as *mut KaracMap);
-    // Grow before probing so find_insert_slot always finds a slot — but do it
-    // fallibly. On OOM the map is unchanged; report the attempted bytes.
-    if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
-        if let Err(bytes) = m.try_resize() {
-            if !out_failed_bytes.is_null() {
-                *out_failed_bytes = bytes;
+    unsafe {
+        let m = &mut *(map as *mut KaracMap);
+        // Grow before probing so find_insert_slot always finds a slot — but do it
+        // fallibly. On OOM the map is unchanged; report the attempted bytes.
+        if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
+            if let Err(bytes) = m.try_resize() {
+                if !out_failed_bytes.is_null() {
+                    *out_failed_bytes = bytes;
+                }
+                return 2;
             }
-            return 2;
         }
-    }
-    let (slot, exists, ctrl) = m.find_insert_slot(key);
-    let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
-    let kv_offset = slot * (m.key_size + m.val_size);
-    if exists {
+        let (slot, exists, ctrl) = m.find_insert_slot(key);
+        let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
+        let kv_offset = slot * (m.key_size + m.val_size);
+        if exists {
+            ptr::copy_nonoverlapping(
+                m.kv.add(kv_offset + m.key_size),
+                out_old_val as *mut u8,
+                m.val_size,
+            );
+        } else {
+            ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
+            m.len += 1;
+            if was_tombstone {
+                m.tombstones -= 1;
+            }
+        }
         ptr::copy_nonoverlapping(
+            val as *const u8,
             m.kv.add(kv_offset + m.key_size),
-            out_old_val as *mut u8,
             m.val_size,
         );
-    } else {
-        ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
-        m.len += 1;
-        if was_tombstone {
-            m.tombstones -= 1;
+        *m.status.add(slot) = ctrl;
+        if exists {
+            1
+        } else {
+            0
         }
-    }
-    ptr::copy_nonoverlapping(
-        val as *const u8,
-        m.kv.add(kv_offset + m.key_size),
-        m.val_size,
-    );
-    *m.status.add(slot) = ctrl;
-    if exists {
-        1
-    } else {
-        0
     }
 }
 
@@ -861,6 +957,11 @@ pub unsafe extern "C" fn karac_map_try_insert(
 /// This is the allocation-free counter/lookup-map fast path: callers pass a
 /// borrowed slice view instead of a freshly-`malloc`'d owned `String`, so the
 /// only allocation across a long run is one per *distinct* key.
+/// # Safety
+/// As `karac_map_insert_old`, narrowed to a `String` key (`key_size == 24`):
+/// `key` may be a BORROWED `{ptr,len,cap}` view — on fresh insertion the
+/// runtime clones the bytes into an owned buffer, so the borrow only needs to
+/// outlive this call, not the map.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_insert_borrowed_str_old(
     map: *mut c_void,
@@ -868,65 +969,71 @@ pub unsafe extern "C" fn karac_map_insert_borrowed_str_old(
     val: *const c_void,
     out_old_val: *mut c_void,
 ) -> bool {
-    let m = &mut *(map as *mut KaracMap);
-    debug_assert_eq!(m.key_size, 24, "borrowed-str insert requires a String key");
-    if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
-        m.resize();
-    }
-    // hash_fn / eq_fn read the borrowed view's {ptr, len} — identical to an
-    // owned String key — so probing works unchanged.
-    let (slot, exists, ctrl) = m.find_insert_slot(key);
-    let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
-    let kv_offset = slot * (m.key_size + m.val_size);
-    if exists {
+    unsafe {
+        let m = &mut *(map as *mut KaracMap);
+        debug_assert_eq!(m.key_size, 24, "borrowed-str insert requires a String key");
+        if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
+            m.resize();
+        }
+        // hash_fn / eq_fn read the borrowed view's {ptr, len} — identical to an
+        // owned String key — so probing works unchanged.
+        let (slot, exists, ctrl) = m.find_insert_slot(key);
+        let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
+        let kv_offset = slot * (m.key_size + m.val_size);
+        if exists {
+            ptr::copy_nonoverlapping(
+                m.kv.add(kv_offset + m.key_size),
+                out_old_val as *mut u8,
+                m.val_size,
+            );
+        } else {
+            // Deep-copy the borrowed bytes into an owned, NUL-terminated buffer so
+            // the stored key never aliases the caller's source string.
+            let src_data = ptr::read_unaligned(key as *const *const u8);
+            let src_len = ptr::read_unaligned((key as *const u8).add(8) as *const i64);
+            let n = src_len as usize;
+            let owned_ptr: *mut u8 = if n == 0 {
+                ptr::null_mut()
+            } else {
+                let layout = Layout::array::<u8>(n + 1).unwrap();
+                let p = alloc(layout);
+                ptr::copy_nonoverlapping(src_data, p, n);
+                *p.add(n) = 0;
+                p
+            };
+            let kslot = m.kv.add(kv_offset);
+            ptr::write_unaligned(kslot as *mut *mut u8, owned_ptr);
+            ptr::write_unaligned(kslot.add(8) as *mut i64, src_len);
+            // cap == len marks an owned buffer the free path will release.
+            ptr::write_unaligned(kslot.add(16) as *mut i64, src_len);
+            m.len += 1;
+            if was_tombstone {
+                m.tombstones -= 1;
+            }
+        }
         ptr::copy_nonoverlapping(
+            val as *const u8,
             m.kv.add(kv_offset + m.key_size),
-            out_old_val as *mut u8,
             m.val_size,
         );
-    } else {
-        // Deep-copy the borrowed bytes into an owned, NUL-terminated buffer so
-        // the stored key never aliases the caller's source string.
-        let src_data = ptr::read_unaligned(key as *const *const u8);
-        let src_len = ptr::read_unaligned((key as *const u8).add(8) as *const i64);
-        let n = src_len as usize;
-        let owned_ptr: *mut u8 = if n == 0 {
-            ptr::null_mut()
-        } else {
-            let layout = Layout::array::<u8>(n + 1).unwrap();
-            let p = alloc(layout);
-            ptr::copy_nonoverlapping(src_data, p, n);
-            *p.add(n) = 0;
-            p
-        };
-        let kslot = m.kv.add(kv_offset);
-        ptr::write_unaligned(kslot as *mut *mut u8, owned_ptr);
-        ptr::write_unaligned(kslot.add(8) as *mut i64, src_len);
-        // cap == len marks an owned buffer the free path will release.
-        ptr::write_unaligned(kslot.add(16) as *mut i64, src_len);
-        m.len += 1;
-        if was_tombstone {
-            m.tombstones -= 1;
-        }
+        *m.status.add(slot) = ctrl;
+        exists
     }
-    ptr::copy_nonoverlapping(
-        val as *const u8,
-        m.kv.add(kv_offset + m.key_size),
-        m.val_size,
-    );
-    *m.status.add(slot) = ctrl;
-    exists
 }
 
 /// Returns `true` and copies the value into `out_val` if the key exists.
 /// Returns `false` and leaves `out_val` untouched otherwise.
+/// # Safety
+/// Shared contract above; `out_val` writable for `val_size` bytes. The copy
+/// written on `true` is a bit-copy — for a heap-owning value it ALIASES the
+/// stored buffer; the caller must not free through it.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_get(
     map: *const c_void,
     key: *const c_void,
     out_val: *mut c_void,
 ) -> bool {
-    (*(map as *const KaracMap)).get(key, out_val)
+    unsafe { (*(map as *const KaracMap)).get(key, out_val) }
 }
 
 /// Returns `true` if the key was present and has been removed.
@@ -940,6 +1047,10 @@ pub unsafe extern "C" fn karac_map_get(
 /// frees only the key. **Not currently wired by codegen** — `Map.remove` /
 /// `Set.remove` lower to `karac_map_remove_old` — but kept correct for the
 /// exported ABI (see `runtime/src/lib.rs` keep list).
+/// # Safety
+/// Shared contract above. Nonzero `drop_key` / `drop_val` carry the
+/// `karac_map_free_with_drop_vec` layout contract for the STORED key / value,
+/// which are freed here (both halves are discarded).
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_remove(
     map: *mut c_void,
@@ -947,7 +1058,7 @@ pub unsafe extern "C" fn karac_map_remove(
     drop_key: i32,
     drop_val: i32,
 ) -> bool {
-    (*(map as *mut KaracMap)).remove(key, drop_key != 0, drop_val != 0)
+    unsafe { (*(map as *mut KaracMap)).remove(key, drop_key != 0, drop_val != 0) }
 }
 
 /// Removes `key`. If it existed, copies the **old** value into `out_old_val` and
@@ -960,6 +1071,10 @@ pub unsafe extern "C" fn karac_map_remove(
 /// nonzero = "key is a heap `{ptr,len,cap}` Vec/String") gates that free; the
 /// tombstone would otherwise orphan the stored key buffer, since
 /// `karac_map_free_with_drop_vec` only walks OCCUPIED slots.
+/// # Safety
+/// Shared contract above; `out_old_val` writable for `val_size` bytes. On
+/// `true` the value's heap moves out to the caller via `out_old_val`; nonzero
+/// `drop_key` carries the layout contract for the STORED key, which is freed.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_remove_old(
     map: *mut c_void,
@@ -967,20 +1082,22 @@ pub unsafe extern "C" fn karac_map_remove_old(
     out_old_val: *mut c_void,
     drop_key: i32,
 ) -> bool {
-    let m = &mut *(map as *mut KaracMap);
-    if let Some(slot) = m.lookup(key) {
-        ptr::copy_nonoverlapping(
-            m.val_ptr(slot) as *const u8,
-            out_old_val as *mut u8,
-            m.val_size,
-        );
-        if drop_key != 0 {
-            m.free_stored_key(slot);
+    unsafe {
+        let m = &mut *(map as *mut KaracMap);
+        if let Some(slot) = m.lookup(key) {
+            ptr::copy_nonoverlapping(
+                m.val_ptr(slot) as *const u8,
+                out_old_val as *mut u8,
+                m.val_size,
+            );
+            if drop_key != 0 {
+                m.free_stored_key(slot);
+            }
+            m.vacate(slot);
+            true
+        } else {
+            false
         }
-        m.vacate(slot);
-        true
-    } else {
-        false
     }
 }
 
@@ -994,45 +1111,55 @@ pub unsafe extern "C" fn karac_map_remove_old(
 /// key that is the `{ptr,len,cap}` header — an ALIAS into the map's owned
 /// buffer, valid for the read-only ordered walk); the caller frees ONLY the
 /// returned buffer via `free`, never the individual keys.
+/// # Safety
+/// Shared contract above; `out_len` must be writable. `cmp_fn` must be sound
+/// on every pair of stored key blobs and totally ordered. The returned buffer
+/// (caller frees via `free`) holds BIT-COPIES of the key slots — for `String`
+/// keys these alias map-owned buffers, valid only while the map lives and only
+/// for reading; freeing a copied key double-frees.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_sorted_keys(
     map: *const c_void,
     out_len: *mut usize,
     cmp_fn: unsafe extern "C" fn(*const c_void, *const c_void) -> i32,
 ) -> *mut u8 {
-    let m = &*(map as *const KaracMap);
-    let n = m.len;
-    if !out_len.is_null() {
-        *out_len = n;
-    }
-    if n == 0 {
-        return ptr::null_mut();
-    }
-    let ks = m.key_size;
-    // Gather pointers to each live key slot, sort by the comparator, then gather
-    // the sorted keys into the output buffer. Sorting pointers (not the bytes)
-    // keeps the comparator operating on the map's stable key storage.
-    let mut keys: Vec<*const u8> = Vec::with_capacity(n);
-    for slot in 0..m.capacity {
-        if is_occupied(*m.status.add(slot)) {
-            keys.push(m.key_ptr(slot) as *const u8);
+    unsafe {
+        let m = &*(map as *const KaracMap);
+        let n = m.len;
+        if !out_len.is_null() {
+            *out_len = n;
         }
+        if n == 0 {
+            return ptr::null_mut();
+        }
+        let ks = m.key_size;
+        // Gather pointers to each live key slot, sort by the comparator, then gather
+        // the sorted keys into the output buffer. Sorting pointers (not the bytes)
+        // keeps the comparator operating on the map's stable key storage.
+        let mut keys: Vec<*const u8> = Vec::with_capacity(n);
+        for slot in 0..m.capacity {
+            if is_occupied(*m.status.add(slot)) {
+                keys.push(m.key_ptr(slot) as *const u8);
+            }
+        }
+        keys.sort_by(|&a, &b| cmp_fn(a as *const c_void, b as *const c_void).cmp(&0));
+        let buf = alloc(Layout::array::<u8>(n * ks).unwrap());
+        if buf.is_null() {
+            crate::fatal::write_stderr(b"panic: out of memory\n");
+            std::process::abort();
+        }
+        for (i, &kp) in keys.iter().enumerate() {
+            ptr::copy_nonoverlapping(kp, buf.add(i * ks), ks);
+        }
+        buf
     }
-    keys.sort_by(|&a, &b| cmp_fn(a as *const c_void, b as *const c_void).cmp(&0));
-    let buf = alloc(Layout::array::<u8>(n * ks).unwrap());
-    if buf.is_null() {
-        crate::fatal::write_stderr(b"panic: out of memory\n");
-        std::process::abort();
-    }
-    for (i, &kp) in keys.iter().enumerate() {
-        ptr::copy_nonoverlapping(kp, buf.add(i * ks), ks);
-    }
-    buf
 }
 
+/// # Safety
+/// Shared contract above.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_contains(map: *const c_void, key: *const c_void) -> bool {
-    (*(map as *const KaracMap)).lookup(key).is_some()
+    unsafe { (*(map as *const KaracMap)).lookup(key).is_some() }
 }
 
 /// Probe-and-insert-on-vacant. Used by `Map.entry(k)` chains whose
@@ -1048,29 +1175,37 @@ pub unsafe extern "C" fn karac_map_contains(map: *const c_void, key: *const c_vo
 /// pointer — is stable for the rest of the call. The returned pointer is
 /// valid until the next mutating call on the same map (matches the Rust
 /// `HashMap::entry` lifetime contract).
+/// # Safety
+/// Shared contract above; `out_slot_ptr` must be writable. On a Vacant hit the
+/// key is bit-copied in and the value slot is returned UNINITIALIZED — the
+/// caller must write `val_size` bytes before any read. The returned pointer is
+/// into bucket storage: it is invalidated by ANY map mutation (insert / remove
+/// / clear / free) and must not outlive the next one.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_entry(
     map: *mut c_void,
     key: *const c_void,
     out_slot_ptr: *mut *mut c_void,
 ) -> bool {
-    let m = &mut *(map as *mut KaracMap);
-    if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
-        m.resize();
-    }
-    let (slot, exists, ctrl) = m.find_insert_slot(key);
-    if !exists {
-        let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
-        let kv_offset = slot * (m.key_size + m.val_size);
-        ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
-        *m.status.add(slot) = ctrl;
-        m.len += 1;
-        if was_tombstone {
-            m.tombstones -= 1;
+    unsafe {
+        let m = &mut *(map as *mut KaracMap);
+        if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
+            m.resize();
         }
+        let (slot, exists, ctrl) = m.find_insert_slot(key);
+        if !exists {
+            let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
+            let kv_offset = slot * (m.key_size + m.val_size);
+            ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
+            *m.status.add(slot) = ctrl;
+            m.len += 1;
+            if was_tombstone {
+                m.tombstones -= 1;
+            }
+        }
+        *out_slot_ptr = m.val_ptr(slot) as *mut c_void;
+        exists
     }
-    *out_slot_ptr = m.val_ptr(slot) as *mut c_void;
-    exists
 }
 
 /// Read-only lookup variant used to lower `Map.entry(k)` chains whose
@@ -1082,24 +1217,32 @@ pub unsafe extern "C" fn karac_map_entry(
 /// On Occupied: writes the value-half pointer to `out_slot_ptr`, returns
 /// `true`. On Vacant: leaves `out_slot_ptr` untouched, returns `false`.
 /// Pointer lifetime matches `karac_map_entry`'s contract.
+/// # Safety
+/// Shared contract above; `out_slot_ptr` must be writable. The pointer written
+/// on `true` has `karac_map_entry`'s lifetime contract: dead after the next
+/// map mutation.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_lookup_slot(
     map: *mut c_void,
     key: *const c_void,
     out_slot_ptr: *mut *mut c_void,
 ) -> bool {
-    let m = &*(map as *const KaracMap);
-    if let Some(slot) = m.lookup(key) {
-        *out_slot_ptr = m.val_ptr(slot) as *mut c_void;
-        true
-    } else {
-        false
+    unsafe {
+        let m = &*(map as *const KaracMap);
+        if let Some(slot) = m.lookup(key) {
+            *out_slot_ptr = m.val_ptr(slot) as *mut c_void;
+            true
+        } else {
+            false
+        }
     }
 }
 
+/// # Safety
+/// Shared contract above (live map pointer).
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_len(map: *const c_void) -> u64 {
-    (*(map as *const KaracMap)).len as u64
+    unsafe { (*(map as *const KaracMap)).len as u64 }
 }
 
 /// Removes every entry from `map`. Resets `len` and `tombstones` to 0 and
@@ -1107,12 +1250,18 @@ pub unsafe extern "C" fn karac_map_len(map: *const c_void) -> u64 {
 /// capacity is preserved — matches the Rust `HashMap::clear` contract. The
 /// `kv` byte buffer is left untouched (its contents become unreachable but
 /// remain allocated for reuse on subsequent inserts).
+/// # Safety
+/// Shared contract above. Entries are NOT recursively dropped — the
+/// `_with_drop_vec` / `_with_val_drop_fn` variants own that, same split as the
+/// free family.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_clear(map: *mut c_void) {
-    let m = &mut *(map as *mut KaracMap);
-    ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
-    m.len = 0;
-    m.tombstones = 0;
+    unsafe {
+        let m = &mut *(map as *mut KaracMap);
+        ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
+        m.len = 0;
+        m.tombstones = 0;
+    }
 }
 
 /// `karac_map_clear` variant that releases per-entry `Vec`/`String` heap
@@ -1128,43 +1277,49 @@ pub unsafe extern "C" fn karac_map_clear(map: *mut c_void) {
 /// frees only *occupied* slots, and after a clear there are none). Shared-half
 /// refcounts are decremented codegen-side before this call, mirroring the
 /// free path.
+/// # Safety
+/// As `karac_map_clear`, with `karac_map_free_with_drop_vec`'s layout contract
+/// on nonzero `drop_key` / `drop_val` (stored halves are freed, map survives
+/// empty).
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_clear_with_drop_vec(
     map: *mut c_void,
     drop_key: i32,
     drop_val: i32,
 ) {
-    if map.is_null() {
-        return;
-    }
-    let m = &mut *(map as *mut KaracMap);
-    if drop_key != 0 || drop_val != 0 {
-        let entry_stride = m.key_size + m.val_size;
-        for slot in 0..m.capacity {
-            if !is_occupied(*m.status.add(slot)) {
-                continue;
-            }
-            if drop_key != 0 {
-                let key_base = m.kv.add(slot * entry_stride);
-                let data_ptr = ptr::read_unaligned(key_base as *const *mut u8);
-                let cap = ptr::read_unaligned(key_base.add(16) as *const i64);
-                if cap > 0 && !data_ptr.is_null() {
-                    free(data_ptr as *mut c_void);
+    unsafe {
+        if map.is_null() {
+            return;
+        }
+        let m = &mut *(map as *mut KaracMap);
+        if drop_key != 0 || drop_val != 0 {
+            let entry_stride = m.key_size + m.val_size;
+            for slot in 0..m.capacity {
+                if !is_occupied(*m.status.add(slot)) {
+                    continue;
                 }
-            }
-            if drop_val != 0 {
-                let val_base = m.kv.add(slot * entry_stride + m.key_size);
-                let data_ptr = ptr::read_unaligned(val_base as *const *mut u8);
-                let cap = ptr::read_unaligned(val_base.add(16) as *const i64);
-                if cap > 0 && !data_ptr.is_null() {
-                    free(data_ptr as *mut c_void);
+                if drop_key != 0 {
+                    let key_base = m.kv.add(slot * entry_stride);
+                    let data_ptr = ptr::read_unaligned(key_base as *const *mut u8);
+                    let cap = ptr::read_unaligned(key_base.add(16) as *const i64);
+                    if cap > 0 && !data_ptr.is_null() {
+                        free(data_ptr as *mut c_void);
+                    }
+                }
+                if drop_val != 0 {
+                    let val_base = m.kv.add(slot * entry_stride + m.key_size);
+                    let data_ptr = ptr::read_unaligned(val_base as *const *mut u8);
+                    let cap = ptr::read_unaligned(val_base.add(16) as *const i64);
+                    if cap > 0 && !data_ptr.is_null() {
+                        free(data_ptr as *mut c_void);
+                    }
                 }
             }
         }
+        ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
+        m.len = 0;
+        m.tombstones = 0;
     }
-    ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
-    m.len = 0;
-    m.tombstones = 0;
 }
 
 /// `karac_map_clear` variant for a VALUE with a synthesized drop fn
@@ -1172,34 +1327,44 @@ pub unsafe extern "C" fn karac_map_clear_with_drop_vec(
 /// `karac_map_free_with_val_drop_fn`: runs `val_drop_fn` on every live
 /// entry's value blob (and frees `{ptr,len,cap}` keys per `drop_key`)
 /// before resetting the statuses. The map stays alive and reusable.
+/// # Safety
+/// As `karac_map_clear`, with `karac_map_free_with_val_drop_fn`'s contracts:
+/// key side by layout flag, value side by in-place drop fn.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_clear_with_val_drop_fn(
     map: *mut c_void,
     drop_key: i32,
     val_drop_fn: Option<unsafe extern "C" fn(*mut c_void)>,
 ) {
-    if map.is_null() {
-        return;
-    }
-    let m = &mut *(map as *mut KaracMap);
-    if drop_key != 0 || val_drop_fn.is_some() {
-        for slot in 0..m.capacity {
-            if !is_occupied(*m.status.add(slot)) {
-                continue;
-            }
-            if drop_key != 0 {
-                m.free_stored_key(slot);
-            }
-            if let Some(f) = val_drop_fn {
-                f(m.val_ptr(slot) as *mut c_void);
+    unsafe {
+        if map.is_null() {
+            return;
+        }
+        let m = &mut *(map as *mut KaracMap);
+        if drop_key != 0 || val_drop_fn.is_some() {
+            for slot in 0..m.capacity {
+                if !is_occupied(*m.status.add(slot)) {
+                    continue;
+                }
+                if drop_key != 0 {
+                    m.free_stored_key(slot);
+                }
+                if let Some(f) = val_drop_fn {
+                    f(m.val_ptr(slot) as *mut c_void);
+                }
             }
         }
+        ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
+        m.len = 0;
+        m.tombstones = 0;
     }
-    ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
-    m.len = 0;
-    m.tombstones = 0;
 }
 
+/// # Safety
+/// `map` must outlive the returned iterator, which borrows it unconditionally.
+/// Any map mutation invalidates the iterator (buckets may rehash); the next
+/// `karac_map_iter_next` after one is undefined. Release with
+/// `karac_map_iter_free`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_iter_new(map: *const c_void) -> *mut c_void {
     let iter = Box::new(KaracMapIter {
@@ -1211,35 +1376,46 @@ pub unsafe extern "C" fn karac_map_iter_new(map: *const c_void) -> *mut c_void {
 
 /// Advances the iterator. Copies the next key into `out_key` and value into
 /// `out_val`. Returns `true` if a pair was written, `false` when exhausted.
+/// # Safety
+/// `iter` is a live `karac_map_iter_new` pointer whose map has not been
+/// mutated or freed since; `out_key` / `out_val` writable at the map's widths.
+/// Copies are bit-copies — heap-owning halves ALIAS stored buffers.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_iter_next(
     iter: *mut c_void,
     out_key: *mut c_void,
     out_val: *mut c_void,
 ) -> bool {
-    let it = &mut *(iter as *mut KaracMapIter);
-    let m = &*it.map;
-    while it.index < m.capacity {
-        let i = it.index;
-        it.index += 1;
-        if is_occupied(*m.status.add(i)) {
-            let kv_size = m.key_size + m.val_size;
-            ptr::copy_nonoverlapping(m.kv.add(i * kv_size), out_key as *mut u8, m.key_size);
-            ptr::copy_nonoverlapping(
-                m.kv.add(i * kv_size + m.key_size),
-                out_val as *mut u8,
-                m.val_size,
-            );
-            return true;
+    unsafe {
+        let it = &mut *(iter as *mut KaracMapIter);
+        let m = &*it.map;
+        while it.index < m.capacity {
+            let i = it.index;
+            it.index += 1;
+            if is_occupied(*m.status.add(i)) {
+                let kv_size = m.key_size + m.val_size;
+                ptr::copy_nonoverlapping(m.kv.add(i * kv_size), out_key as *mut u8, m.key_size);
+                ptr::copy_nonoverlapping(
+                    m.kv.add(i * kv_size + m.key_size),
+                    out_val as *mut u8,
+                    m.val_size,
+                );
+                return true;
+            }
         }
+        false
     }
-    false
 }
 
+/// # Safety
+/// `iter` is null (no-op) or a live `karac_map_iter_new` pointer, not freed
+/// twice; dangling after this call.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_iter_free(iter: *mut c_void) {
-    if !iter.is_null() {
-        drop(Box::from_raw(iter as *mut KaracMapIter));
+    unsafe {
+        if !iter.is_null() {
+            drop(Box::from_raw(iter as *mut KaracMapIter));
+        }
     }
 }
 
@@ -1322,14 +1498,16 @@ mod tests {
     #[test]
     fn tagged_probe_survives_tombstones_and_resize() {
         unsafe extern "C" fn hash_i64(k: *const c_void) -> u64 {
-            // Deliberately WEAK in the low bits so buckets collide and probe
-            // chains get long: the tag lives in the high bits, so this is the
-            // shape that exercises it.
-            let v = *(k as *const i64) as u64;
-            v.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            unsafe {
+                // Deliberately WEAK in the low bits so buckets collide and probe
+                // chains get long: the tag lives in the high bits, so this is the
+                // shape that exercises it.
+                let v = *(k as *const i64) as u64;
+                v.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            }
         }
         unsafe extern "C" fn eq_i64(a: *const c_void, b: *const c_void) -> bool {
-            *(a as *const i64) == *(b as *const i64)
+            unsafe { *(a as *const i64) == *(b as *const i64) }
         }
 
         unsafe {
@@ -1412,12 +1590,16 @@ mod tests {
     use std::ffi::c_void;
 
     unsafe extern "C" fn i64_hash(k: *const c_void) -> u64 {
-        // Trivial identity-ish hash; adequate for a correctness test.
-        let v = std::ptr::read_unaligned(k as *const i64);
-        (v as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        unsafe {
+            // Trivial identity-ish hash; adequate for a correctness test.
+            let v = std::ptr::read_unaligned(k as *const i64);
+            (v as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        }
     }
     unsafe extern "C" fn i64_eq(a: *const c_void, b: *const c_void) -> bool {
-        std::ptr::read_unaligned(a as *const i64) == std::ptr::read_unaligned(b as *const i64)
+        unsafe {
+            std::ptr::read_unaligned(a as *const i64) == std::ptr::read_unaligned(b as *const i64)
+        }
     }
 
     /// `karac_map_try_insert` success paths: fresh insert returns 0, an update
@@ -1503,13 +1685,15 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static HASH_CALLS: AtomicU64 = AtomicU64::new(0);
         unsafe extern "C" fn hash_i64(p: *const c_void) -> u64 {
-            HASH_CALLS.fetch_add(1, Ordering::Relaxed);
-            // splitmix64 — a real mix so the probe chains look like
-            // production, not sequential-cluster worst cases.
-            let mut z = (*(p as *const i64) as u64).wrapping_add(0x9e3779b97f4a7c15);
-            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-            z ^ (z >> 31)
+            unsafe {
+                HASH_CALLS.fetch_add(1, Ordering::Relaxed);
+                // splitmix64 — a real mix so the probe chains look like
+                // production, not sequential-cluster worst cases.
+                let mut z = (*(p as *const i64) as u64).wrapping_add(0x9e3779b97f4a7c15);
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+                z ^ (z >> 31)
+            }
         }
         unsafe extern "C" fn eq_i64(a: *const c_void, b: *const c_void) -> bool {
             unsafe { *(a as *const i64) == *(b as *const i64) }
@@ -1603,27 +1787,31 @@ mod tests {
     /// is `0x80` for small keys (the tag lives in bits 57..63), which is fine —
     /// `eq_fn` then does the discriminating, same as a real tag collision.
     unsafe extern "C" fn hash_identity(p: *const c_void) -> u64 {
-        *(p as *const i64) as u64
+        unsafe { *(p as *const i64) as u64 }
     }
     unsafe extern "C" fn eq_i64_t(a: *const c_void, b: *const c_void) -> bool {
         unsafe { *(a as *const i64) == *(b as *const i64) }
     }
 
     unsafe fn put(map: *mut c_void, k: i64, v: i64) {
-        super::karac_map_insert(
-            map,
-            &k as *const i64 as *const c_void,
-            &v as *const i64 as *const c_void,
-        );
+        unsafe {
+            super::karac_map_insert(
+                map,
+                &k as *const i64 as *const c_void,
+                &v as *const i64 as *const c_void,
+            );
+        }
     }
     unsafe fn del(map: *mut c_void, k: i64) -> bool {
-        let mut old: i64 = 0;
-        super::karac_map_remove_old(
-            map,
-            &k as *const i64 as *const c_void,
-            &mut old as *mut i64 as *mut c_void,
-            0,
-        )
+        unsafe {
+            let mut old: i64 = 0;
+            super::karac_map_remove_old(
+                map,
+                &k as *const i64 as *const c_void,
+                &mut old as *mut i64 as *mut c_void,
+                0,
+            )
+        }
     }
 
     /// B-2026-08-05-4 — `vacate` releases a bucket outright instead of
@@ -1709,7 +1897,7 @@ mod tests {
     #[test]
     fn churn_against_reference_map_never_loses_a_key() {
         unsafe extern "C" fn hash_colliding(p: *const c_void) -> u64 {
-            (*(p as *const i64) as u64) % 16
+            unsafe { (*(p as *const i64) as u64) % 16 }
         }
         use std::collections::HashMap;
         unsafe {

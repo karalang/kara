@@ -144,42 +144,44 @@ pub unsafe extern "C" fn karac_runtime_pool_begin_acquire(
     out_fn_ptr: *mut i64,
     out_env_ptr: *mut i64,
 ) -> i32 {
-    if pool.is_null() {
-        return POOL_ACQUIRE_CLOSED;
-    }
-    let p = &*pool;
-    let mut inner = p.inner.lock().unwrap();
-    if let Some(blob) = inner.slots.pop() {
-        // Reuse an idle slot: copy its bytes out, mark checked out.
-        let n = p.elem_size.min(blob.len());
-        if !out_val.is_null() && n > 0 {
-            std::ptr::copy_nonoverlapping(blob.as_ptr(), out_val, n);
+    unsafe {
+        if pool.is_null() {
+            return POOL_ACQUIRE_CLOSED;
         }
-        let conn_id = inner.next_conn_id;
-        inner.next_conn_id += 1;
-        inner.checked_out.insert(conn_id);
-        if !out_conn_id.is_null() {
-            *out_conn_id = conn_id;
+        let p = &*pool;
+        let mut inner = p.inner.lock().unwrap();
+        if let Some(blob) = inner.slots.pop() {
+            // Reuse an idle slot: copy its bytes out, mark checked out.
+            let n = p.elem_size.min(blob.len());
+            if !out_val.is_null() && n > 0 {
+                std::ptr::copy_nonoverlapping(blob.as_ptr(), out_val, n);
+            }
+            let conn_id = inner.next_conn_id;
+            inner.next_conn_id += 1;
+            inner.checked_out.insert(conn_id);
+            if !out_conn_id.is_null() {
+                *out_conn_id = conn_id;
+            }
+            POOL_ACQUIRE_GOT_IDLE
+        } else if inner.active_count < p.max_connections {
+            // Reserve a mint: bump the active count and hand the fat pointer back.
+            inner.active_count += 1;
+            let conn_id = inner.next_conn_id;
+            inner.next_conn_id += 1;
+            inner.checked_out.insert(conn_id);
+            if !out_conn_id.is_null() {
+                *out_conn_id = conn_id;
+            }
+            if !out_fn_ptr.is_null() {
+                *out_fn_ptr = p.create_fn_ptr;
+            }
+            if !out_env_ptr.is_null() {
+                *out_env_ptr = p.create_env_ptr;
+            }
+            POOL_ACQUIRE_NEED_MINT
+        } else {
+            POOL_ACQUIRE_AT_CAP
         }
-        POOL_ACQUIRE_GOT_IDLE
-    } else if inner.active_count < p.max_connections {
-        // Reserve a mint: bump the active count and hand the fat pointer back.
-        inner.active_count += 1;
-        let conn_id = inner.next_conn_id;
-        inner.next_conn_id += 1;
-        inner.checked_out.insert(conn_id);
-        if !out_conn_id.is_null() {
-            *out_conn_id = conn_id;
-        }
-        if !out_fn_ptr.is_null() {
-            *out_fn_ptr = p.create_fn_ptr;
-        }
-        if !out_env_ptr.is_null() {
-            *out_env_ptr = p.create_env_ptr;
-        }
-        POOL_ACQUIRE_NEED_MINT
-    } else {
-        POOL_ACQUIRE_AT_CAP
     }
 }
 
@@ -198,21 +200,23 @@ pub unsafe extern "C" fn karac_runtime_pool_release(
     conn_id: i64,
     val: *const u8,
 ) {
-    if pool.is_null() {
-        return;
+    unsafe {
+        if pool.is_null() {
+            return;
+        }
+        let p = &*pool;
+        let mut inner = p.inner.lock().unwrap();
+        if !inner.checked_out.remove(&conn_id) {
+            // Already returned (idempotent) or never issued here (cross-pool).
+            return;
+        }
+        let n = p.elem_size;
+        let mut blob = vec![0u8; n].into_boxed_slice();
+        if !val.is_null() && n > 0 {
+            std::ptr::copy_nonoverlapping(val, blob.as_mut_ptr(), n);
+        }
+        inner.slots.push(blob);
     }
-    let p = &*pool;
-    let mut inner = p.inner.lock().unwrap();
-    if !inner.checked_out.remove(&conn_id) {
-        // Already returned (idempotent) or never issued here (cross-pool).
-        return;
-    }
-    let n = p.elem_size;
-    let mut blob = vec![0u8; n].into_boxed_slice();
-    if !val.is_null() && n > 0 {
-        std::ptr::copy_nonoverlapping(val, blob.as_mut_ptr(), n);
-    }
-    inner.slots.push(blob);
 }
 
 /// `karac_runtime_pool_drop(pool)` — free the pool and every idle slot blob.
@@ -226,10 +230,12 @@ pub unsafe extern "C" fn karac_runtime_pool_release(
 /// consumes it.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_pool_drop(pool: *mut KaracPool) {
-    if pool.is_null() {
-        return;
+    unsafe {
+        if pool.is_null() {
+            return;
+        }
+        drop(Box::from_raw(pool));
     }
-    drop(Box::from_raw(pool));
 }
 
 #[cfg(test)]
@@ -240,26 +246,28 @@ mod tests {
     // synthesize a `T` (an i64 counter here) the way codegen would after
     // calling the closure, recording it via release on hand-back.
     unsafe fn acquire_i64(pool: *mut KaracPool, next_val: &mut i64) -> Option<(i64, i64)> {
-        let mut out_val: i64 = 0;
-        let mut conn_id: i64 = 0;
-        let mut fn_ptr: i64 = 0;
-        let mut env_ptr: i64 = 0;
-        let status = karac_runtime_pool_begin_acquire(
-            pool,
-            &mut out_val as *mut i64 as *mut u8,
-            &mut conn_id,
-            &mut fn_ptr,
-            &mut env_ptr,
-        );
-        match status {
-            POOL_ACQUIRE_GOT_IDLE => Some((out_val, conn_id)),
-            POOL_ACQUIRE_NEED_MINT => {
-                // codegen would indirect-call the closure here; simulate.
-                let minted = *next_val;
-                *next_val += 1;
-                Some((minted, conn_id))
+        unsafe {
+            let mut out_val: i64 = 0;
+            let mut conn_id: i64 = 0;
+            let mut fn_ptr: i64 = 0;
+            let mut env_ptr: i64 = 0;
+            let status = karac_runtime_pool_begin_acquire(
+                pool,
+                &mut out_val as *mut i64 as *mut u8,
+                &mut conn_id,
+                &mut fn_ptr,
+                &mut env_ptr,
+            );
+            match status {
+                POOL_ACQUIRE_GOT_IDLE => Some((out_val, conn_id)),
+                POOL_ACQUIRE_NEED_MINT => {
+                    // codegen would indirect-call the closure here; simulate.
+                    let minted = *next_val;
+                    *next_val += 1;
+                    Some((minted, conn_id))
+                }
+                _ => None,
             }
-            _ => None,
         }
     }
 

@@ -116,8 +116,10 @@ impl std::fmt::Display for ExprNode {
 /// count (the borrow side of the ABI — every argument position). The
 /// `from_raw`/`into_raw` juggling is contained to the FFI shims here.
 unsafe fn expr_borrow(h: *const ExprNode) -> Arc<ExprNode> {
-    Arc::increment_strong_count(h);
-    Arc::from_raw(h)
+    unsafe {
+        Arc::increment_strong_count(h);
+        Arc::from_raw(h)
+    }
 }
 
 fn expr_new(n: ExprNode) -> *const ExprNode {
@@ -147,17 +149,19 @@ fn lazy_abort(msg: &str) -> ! {
 }
 
 unsafe fn str_from_raw(ptr: *const u8, len: usize) -> String {
-    if ptr.is_null() {
-        return String::new();
+    unsafe {
+        if ptr.is_null() {
+            return String::new();
+        }
+        String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned()
     }
-    String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned()
 }
 
 #[no_mangle]
 /// # Safety
 /// `ptr`/`len` must describe a readable UTF-8ish byte range.
 pub unsafe extern "C" fn karac_lazy_expr_col(ptr: *const u8, len: usize) -> *const ExprNode {
-    expr_new(ExprNode::Col(str_from_raw(ptr, len)))
+    unsafe { expr_new(ExprNode::Col(str_from_raw(ptr, len))) }
 }
 
 #[no_mangle]
@@ -174,7 +178,7 @@ pub extern "C" fn karac_lazy_expr_lit_float(v: f64) -> *const ExprNode {
 /// # Safety
 /// `ptr`/`len` must describe a readable byte range.
 pub unsafe extern "C" fn karac_lazy_expr_lit_str(ptr: *const u8, len: usize) -> *const ExprNode {
-    expr_new(ExprNode::LitStr(str_from_raw(ptr, len)))
+    unsafe { expr_new(ExprNode::LitStr(str_from_raw(ptr, len))) }
 }
 
 #[no_mangle]
@@ -190,14 +194,16 @@ pub unsafe extern "C" fn karac_lazy_expr_cmp(
     lhs: *const ExprNode,
     rhs: *const ExprNode,
 ) -> *const ExprNode {
-    if op >= 6 {
-        lazy_abort("LazyExpr: invalid comparison op code (compiler bug)");
+    unsafe {
+        if op >= 6 {
+            lazy_abort("LazyExpr: invalid comparison op code (compiler bug)");
+        }
+        expr_new(ExprNode::Cmp {
+            op,
+            lhs: expr_borrow(lhs),
+            rhs: expr_borrow(rhs),
+        })
     }
-    expr_new(ExprNode::Cmp {
-        op,
-        lhs: expr_borrow(lhs),
-        rhs: expr_borrow(rhs),
-    })
 }
 
 #[no_mangle]
@@ -208,19 +214,21 @@ pub unsafe extern "C" fn karac_lazy_expr_bool(
     a: *const ExprNode,
     b: *const ExprNode,
 ) -> *const ExprNode {
-    let (a, b) = (expr_borrow(a), expr_borrow(b));
-    expr_new(match op {
-        0 => ExprNode::And(a, b),
-        1 => ExprNode::Or(a, b),
-        _ => lazy_abort("LazyExpr: invalid boolean op code (compiler bug)"),
-    })
+    unsafe {
+        let (a, b) = (expr_borrow(a), expr_borrow(b));
+        expr_new(match op {
+            0 => ExprNode::And(a, b),
+            1 => ExprNode::Or(a, b),
+            _ => lazy_abort("LazyExpr: invalid boolean op code (compiler bug)"),
+        })
+    }
 }
 
 #[no_mangle]
 /// # Safety
 /// `x` must be a live expr handle (borrowed).
 pub unsafe extern "C" fn karac_lazy_expr_not(x: *const ExprNode) -> *const ExprNode {
-    expr_new(ExprNode::Not(expr_borrow(x)))
+    unsafe { expr_new(ExprNode::Not(expr_borrow(x))) }
 }
 
 #[no_mangle]
@@ -231,7 +239,9 @@ pub unsafe extern "C" fn karac_lazy_expr_not(x: *const ExprNode) -> *const ExprN
 /// # Safety
 /// `x` must be a live expr handle.
 pub unsafe extern "C" fn karac_lazy_expr_retain(x: *const ExprNode) {
-    Arc::increment_strong_count(x);
+    unsafe {
+        Arc::increment_strong_count(x);
+    }
 }
 
 #[no_mangle]
@@ -242,14 +252,16 @@ pub unsafe extern "C" fn karac_lazy_expr_arith(
     lhs: *const ExprNode,
     rhs: *const ExprNode,
 ) -> *const ExprNode {
-    if op >= 4 {
-        lazy_abort("LazyExpr: invalid arithmetic op code (compiler bug)");
+    unsafe {
+        if op >= 4 {
+            lazy_abort("LazyExpr: invalid arithmetic op code (compiler bug)");
+        }
+        expr_new(ExprNode::Arith {
+            op,
+            lhs: expr_borrow(lhs),
+            rhs: expr_borrow(rhs),
+        })
     }
-    expr_new(ExprNode::Arith {
-        op,
-        lhs: expr_borrow(lhs),
-        rhs: expr_borrow(rhs),
-    })
 }
 
 #[no_mangle]
@@ -258,7 +270,7 @@ pub unsafe extern "C" fn karac_lazy_expr_arith(
 /// # Safety
 /// `x` must be a live expr handle (borrowed).
 pub unsafe extern "C" fn karac_lazy_expr_desc(x: *const ExprNode) -> *const ExprNode {
-    expr_new(ExprNode::Desc(expr_borrow(x)))
+    unsafe { expr_new(ExprNode::Desc(expr_borrow(x))) }
 }
 
 #[no_mangle]
@@ -267,13 +279,15 @@ pub unsafe extern "C" fn karac_lazy_expr_desc(x: *const ExprNode) -> *const Expr
 /// # Safety
 /// `arg` must be a live expr handle (borrowed).
 pub unsafe extern "C" fn karac_lazy_expr_agg(op: i64, arg: *const ExprNode) -> *const ExprNode {
-    if !(0..=4).contains(&op) {
-        lazy_abort("LazyExpr: invalid aggregate op code (compiler bug)");
+    unsafe {
+        if !(0..=4).contains(&op) {
+            lazy_abort("LazyExpr: invalid aggregate op code (compiler bug)");
+        }
+        expr_new(ExprNode::Agg {
+            op: op as u64,
+            arg: expr_borrow(arg),
+        })
     }
-    expr_new(ExprNode::Agg {
-        op: op as u64,
-        arg: expr_borrow(arg),
-    })
 }
 
 #[no_mangle]
@@ -287,17 +301,21 @@ pub unsafe extern "C" fn karac_lazy_expr_alias(
     name_ptr: *const u8,
     name_len: usize,
 ) -> *const ExprNode {
-    expr_new(ExprNode::Alias {
-        name: str_from_raw(name_ptr, name_len),
-        expr: expr_borrow(expr),
-    })
+    unsafe {
+        expr_new(ExprNode::Alias {
+            name: str_from_raw(name_ptr, name_len),
+            expr: expr_borrow(expr),
+        })
+    }
 }
 
 #[no_mangle]
 /// # Safety
 /// `x` must be a live expr handle; one count is released.
 pub unsafe extern "C" fn karac_lazy_expr_release(x: *const ExprNode) {
-    drop(Arc::from_raw(x));
+    unsafe {
+        drop(Arc::from_raw(x));
+    }
 }
 
 // ── Frame + plan ────────────────────────────────────────────────
@@ -386,8 +404,10 @@ pub struct LazyGb {
 }
 
 unsafe fn plan_borrow(h: *const LazyPlan) -> Arc<LazyPlan> {
-    Arc::increment_strong_count(h);
-    Arc::from_raw(h)
+    unsafe {
+        Arc::increment_strong_count(h);
+        Arc::from_raw(h)
+    }
 }
 
 fn plan_new(p: LazyPlan) -> *const LazyPlan {
@@ -395,8 +415,10 @@ fn plan_new(p: LazyPlan) -> *const LazyPlan {
 }
 
 unsafe fn gb_borrow(h: *const LazyGb) -> Arc<LazyGb> {
-    Arc::increment_strong_count(h);
-    Arc::from_raw(h)
+    unsafe {
+        Arc::increment_strong_count(h);
+        Arc::from_raw(h)
+    }
 }
 
 /// Clone an op list (ExprNode / sub-plan arcs are shared, not
@@ -409,25 +431,29 @@ fn clone_ops(ops: &[PlanOp]) -> Vec<PlanOp> {
 /// pointer (each element is the Kāra `{ handle_id: i64 }` POD struct —
 /// an 8-byte handle word), borrowing every handle.
 unsafe fn exprs_from_raw(data: *const u8, count: usize) -> Vec<Arc<ExprNode>> {
-    let mut out = Vec::with_capacity(count);
-    for i in 0..count {
-        let word = *(data.add(i * 8) as *const i64);
-        out.push(expr_borrow(word as *const ExprNode));
+    unsafe {
+        let mut out = Vec::with_capacity(count);
+        for i in 0..count {
+            let word = *(data.add(i * 8) as *const i64);
+            out.push(expr_borrow(word as *const ExprNode));
+        }
+        out
     }
-    out
 }
 
 /// Read `count` Strings off a `Vec[String]` DATA pointer (`count`
 /// contiguous 24-byte Kāra String aggregates `{ptr+0, len+8, cap+16}`).
 unsafe fn strings_from_raw(elems: *const u8, count: usize) -> Vec<String> {
-    let mut out = Vec::with_capacity(count);
-    for i in 0..count {
-        let cell = elems.add(i * 24);
-        let sptr = *(cell as *const *const u8);
-        let slen = *(cell.add(8) as *const i64) as usize;
-        out.push(str_from_raw(sptr, slen));
+    unsafe {
+        let mut out = Vec::with_capacity(count);
+        for i in 0..count {
+            let cell = elems.add(i * 24);
+            let sptr = *(cell as *const *const u8);
+            let slen = *(cell.add(8) as *const i64) as usize;
+            out.push(str_from_raw(sptr, slen));
+        }
+        out
     }
-    out
 }
 
 #[no_mangle]
@@ -437,14 +463,18 @@ unsafe fn strings_from_raw(elems: *const u8, count: usize) -> Vec<String> {
 /// # Safety
 /// `plan` must be a live plan handle.
 pub unsafe extern "C" fn karac_lazy_retain(plan: *const LazyPlan) {
-    Arc::increment_strong_count(plan);
+    unsafe {
+        Arc::increment_strong_count(plan);
+    }
 }
 
 #[no_mangle]
 /// # Safety
 /// `plan` must be a live plan handle; one count is released.
 pub unsafe extern "C" fn karac_lazy_release(plan: *const LazyPlan) {
-    drop(Arc::from_raw(plan));
+    unsafe {
+        drop(Arc::from_raw(plan));
+    }
 }
 
 #[no_mangle]
@@ -454,14 +484,18 @@ pub unsafe extern "C" fn karac_lazy_release(plan: *const LazyPlan) {
 /// # Safety
 /// `gb` must be a live LazyGb handle.
 pub unsafe extern "C" fn karac_lazy_gb_retain(gb: *const LazyGb) {
-    Arc::increment_strong_count(gb);
+    unsafe {
+        Arc::increment_strong_count(gb);
+    }
 }
 
 #[no_mangle]
 /// # Safety
 /// `gb` must be a live LazyGb handle; one count is released.
 pub unsafe extern "C" fn karac_lazy_gb_release(gb: *const LazyGb) {
-    drop(Arc::from_raw(gb));
+    unsafe {
+        drop(Arc::from_raw(gb));
+    }
 }
 
 // ── Plan builders ───────────────────────────────────────────────
@@ -477,27 +511,31 @@ pub unsafe extern "C" fn karac_lazy_select(
     elems: *const u8,
     count: usize,
 ) -> *const LazyPlan {
-    let p = plan_borrow(plan);
-    let cols = strings_from_raw(elems, count);
-    let mut ops = clone_ops(&p.ops);
-    ops.push(PlanOp::Select(cols));
-    plan_new(LazyPlan {
-        frame: Arc::clone(&p.frame),
-        ops,
-    })
+    unsafe {
+        let p = plan_borrow(plan);
+        let cols = strings_from_raw(elems, count);
+        let mut ops = clone_ops(&p.ops);
+        ops.push(PlanOp::Select(cols));
+        plan_new(LazyPlan {
+            frame: Arc::clone(&p.frame),
+            ops,
+        })
+    }
 }
 
 #[no_mangle]
 /// # Safety
 /// `plan` is borrowed.
 pub unsafe extern "C" fn karac_lazy_limit(plan: *const LazyPlan, n: i64) -> *const LazyPlan {
-    let p = plan_borrow(plan);
-    let mut ops = clone_ops(&p.ops);
-    ops.push(PlanOp::Limit(n.max(0)));
-    plan_new(LazyPlan {
-        frame: Arc::clone(&p.frame),
-        ops,
-    })
+    unsafe {
+        let p = plan_borrow(plan);
+        let mut ops = clone_ops(&p.ops);
+        ops.push(PlanOp::Limit(n.max(0)));
+        plan_new(LazyPlan {
+            frame: Arc::clone(&p.frame),
+            ops,
+        })
+    }
 }
 
 #[no_mangle]
@@ -507,14 +545,16 @@ pub unsafe extern "C" fn karac_lazy_filter(
     plan: *const LazyPlan,
     pred: *const ExprNode,
 ) -> *const LazyPlan {
-    let p = plan_borrow(plan);
-    let e = expr_borrow(pred);
-    let mut ops = clone_ops(&p.ops);
-    ops.push(PlanOp::Filter(e));
-    plan_new(LazyPlan {
-        frame: Arc::clone(&p.frame),
-        ops,
-    })
+    unsafe {
+        let p = plan_borrow(plan);
+        let e = expr_borrow(pred);
+        let mut ops = clone_ops(&p.ops);
+        ops.push(PlanOp::Filter(e));
+        plan_new(LazyPlan {
+            frame: Arc::clone(&p.frame),
+            ops,
+        })
+    }
 }
 
 #[no_mangle]
@@ -526,17 +566,19 @@ pub unsafe extern "C" fn karac_lazy_sort(
     keys: *const u8,
     count: usize,
 ) -> *const LazyPlan {
-    if count == 0 {
-        lazy_abort("LazyFrame.sort needs at least one key");
+    unsafe {
+        if count == 0 {
+            lazy_abort("LazyFrame.sort needs at least one key");
+        }
+        let p = plan_borrow(plan);
+        let keys = exprs_from_raw(keys, count);
+        let mut ops = clone_ops(&p.ops);
+        ops.push(PlanOp::Sort(keys));
+        plan_new(LazyPlan {
+            frame: Arc::clone(&p.frame),
+            ops,
+        })
     }
-    let p = plan_borrow(plan);
-    let keys = exprs_from_raw(keys, count);
-    let mut ops = clone_ops(&p.ops);
-    ops.push(PlanOp::Sort(keys));
-    plan_new(LazyPlan {
-        frame: Arc::clone(&p.frame),
-        ops,
-    })
 }
 
 #[no_mangle]
@@ -551,12 +593,14 @@ pub unsafe extern "C" fn karac_lazy_group_by(
     keys: *const u8,
     count: usize,
 ) -> *const LazyGb {
-    if count == 0 {
-        lazy_abort("LazyFrame.group_by needs at least one key");
+    unsafe {
+        if count == 0 {
+            lazy_abort("LazyFrame.group_by needs at least one key");
+        }
+        let p = plan_borrow(plan);
+        let keys = exprs_from_raw(keys, count);
+        Arc::into_raw(Arc::new(LazyGb { plan: p, keys }))
     }
-    let p = plan_borrow(plan);
-    let keys = exprs_from_raw(keys, count);
-    Arc::into_raw(Arc::new(LazyGb { plan: p, keys }))
 }
 
 #[no_mangle]
@@ -570,20 +614,22 @@ pub unsafe extern "C" fn karac_lazy_agg(
     aggs: *const u8,
     count: usize,
 ) -> *const LazyPlan {
-    if count == 0 {
-        lazy_abort("LazyGroupBy.agg needs at least one aggregate");
+    unsafe {
+        if count == 0 {
+            lazy_abort("LazyGroupBy.agg needs at least one aggregate");
+        }
+        let g = gb_borrow(gb);
+        let aggs = exprs_from_raw(aggs, count);
+        let mut ops = clone_ops(&g.plan.ops);
+        ops.push(PlanOp::GroupBy {
+            keys: g.keys.clone(),
+            aggs,
+        });
+        plan_new(LazyPlan {
+            frame: Arc::clone(&g.plan.frame),
+            ops,
+        })
     }
-    let g = gb_borrow(gb);
-    let aggs = exprs_from_raw(aggs, count);
-    let mut ops = clone_ops(&g.plan.ops);
-    ops.push(PlanOp::GroupBy {
-        keys: g.keys.clone(),
-        aggs,
-    });
-    plan_new(LazyPlan {
-        frame: Arc::clone(&g.plan.frame),
-        ops,
-    })
 }
 
 #[no_mangle]
@@ -597,18 +643,20 @@ pub unsafe extern "C" fn karac_lazy_join(
     on: *const u8,
     count: usize,
 ) -> *const LazyPlan {
-    if count == 0 {
-        lazy_abort("LazyFrame.join needs at least one key");
+    unsafe {
+        if count == 0 {
+            lazy_abort("LazyFrame.join needs at least one key");
+        }
+        let p = plan_borrow(plan);
+        let right = plan_borrow(other);
+        let on = strings_from_raw(on, count);
+        let mut ops = clone_ops(&p.ops);
+        ops.push(PlanOp::Join { right, on });
+        plan_new(LazyPlan {
+            frame: Arc::clone(&p.frame),
+            ops,
+        })
     }
-    let p = plan_borrow(plan);
-    let right = plan_borrow(other);
-    let on = strings_from_raw(on, count);
-    let mut ops = clone_ops(&p.ops);
-    ops.push(PlanOp::Join { right, on });
-    plan_new(LazyPlan {
-        frame: Arc::clone(&p.frame),
-        ops,
-    })
 }
 
 #[no_mangle]
@@ -620,17 +668,19 @@ pub unsafe extern "C" fn karac_lazy_with_columns(
     exprs: *const u8,
     count: usize,
 ) -> *const LazyPlan {
-    if count == 0 {
-        lazy_abort("LazyFrame.with_columns needs at least one entry");
+    unsafe {
+        if count == 0 {
+            lazy_abort("LazyFrame.with_columns needs at least one entry");
+        }
+        let p = plan_borrow(plan);
+        let exprs = exprs_from_raw(exprs, count);
+        let mut ops = clone_ops(&p.ops);
+        ops.push(PlanOp::WithColumns(exprs));
+        plan_new(LazyPlan {
+            frame: Arc::clone(&p.frame),
+            ops,
+        })
     }
-    let p = plan_borrow(plan);
-    let exprs = exprs_from_raw(exprs, count);
-    let mut ops = clone_ops(&p.ops);
-    ops.push(PlanOp::WithColumns(exprs));
-    plan_new(LazyPlan {
-        frame: Arc::clone(&p.frame),
-        ops,
-    })
 }
 
 // ── Constant folding + CSE (lockstep port of `fold_lazy_expr`) ──
@@ -2032,106 +2082,108 @@ fn eval_ops(source: &[FrameCol], ops: &[PlanOp]) -> Result<Vec<FrameCol>, String
 /// `df_ctrl` must be a live DataFrame control block per the layout
 /// contract above.
 pub unsafe extern "C" fn karac_lazy_new(df_ctrl: *const u8) -> *const LazyPlan {
-    let entries = *(df_ctrl as *const *const u8);
-    let n_cols = *(df_ctrl.add(8) as *const i64) as usize;
-    let mut cols: Vec<FrameCol> = Vec::with_capacity(n_cols);
-    for i in 0..n_cols {
-        let e = entries.add(i * 40);
-        let name_ptr = *(e as *const *const u8);
-        let name_len = *(e.add(8) as *const i64) as usize;
-        let col_ctrl = *(e.add(16) as *const *const u8);
-        let elem_size = *(e.add(24) as *const i64);
-        let kind = *(e.add(32) as *const i64);
-        let name = str_from_raw(name_ptr, name_len);
-        let data_ptr = *(col_ctrl as *const *const u8);
-        let bitmap = *(col_ctrl.add(8) as *const *const u8);
-        let rows = *(col_ctrl.add(16) as *const i64) as usize;
-        let is_valid = |row: usize| -> bool {
-            bitmap.is_null() || (*bitmap.add(row / 8) >> (row % 8)) & 1 == 1
-        };
-        let mut valid = Vec::with_capacity(rows);
-        let data = match (kind, elem_size) {
-            (0, 1) => {
-                let mut v = Vec::with_capacity(rows);
-                for r in 0..rows {
-                    valid.push(is_valid(r));
-                    v.push(*data_ptr.add(r) != 0);
+    unsafe {
+        let entries = *(df_ctrl as *const *const u8);
+        let n_cols = *(df_ctrl.add(8) as *const i64) as usize;
+        let mut cols: Vec<FrameCol> = Vec::with_capacity(n_cols);
+        for i in 0..n_cols {
+            let e = entries.add(i * 40);
+            let name_ptr = *(e as *const *const u8);
+            let name_len = *(e.add(8) as *const i64) as usize;
+            let col_ctrl = *(e.add(16) as *const *const u8);
+            let elem_size = *(e.add(24) as *const i64);
+            let kind = *(e.add(32) as *const i64);
+            let name = str_from_raw(name_ptr, name_len);
+            let data_ptr = *(col_ctrl as *const *const u8);
+            let bitmap = *(col_ctrl.add(8) as *const *const u8);
+            let rows = *(col_ctrl.add(16) as *const i64) as usize;
+            let is_valid = |row: usize| -> bool {
+                bitmap.is_null() || (*bitmap.add(row / 8) >> (row % 8)) & 1 == 1
+            };
+            let mut valid = Vec::with_capacity(rows);
+            let data = match (kind, elem_size) {
+                (0, 1) => {
+                    let mut v = Vec::with_capacity(rows);
+                    for r in 0..rows {
+                        valid.push(is_valid(r));
+                        v.push(*data_ptr.add(r) != 0);
+                    }
+                    ColData::Bool(v)
                 }
-                ColData::Bool(v)
-            }
-            (1, 1 | 2 | 4 | 8) | (2, 1 | 2 | 4 | 8) => {
-                let mut v = Vec::with_capacity(rows);
-                for r in 0..rows {
-                    valid.push(is_valid(r));
-                    let p = data_ptr.add(r * elem_size as usize);
-                    let raw: i64 = match (kind, elem_size) {
-                        (1, 1) => *(p as *const i8) as i64,
-                        (1, 2) => *(p as *const i16) as i64,
-                        (1, 4) => *(p as *const i32) as i64,
-                        (1, 8) => *(p as *const i64),
-                        (2, 1) => *p as i64,
-                        (2, 2) => *(p as *const u16) as i64,
-                        (2, 4) => *(p as *const u32) as i64,
-                        _ => {
-                            let u = *(p as *const u64);
-                            if u > i64::MAX as u64 {
-                                lazy_abort(
-                                    "LazyFrame: u64 column value exceeds the i64 evaluation \
+                (1, 1 | 2 | 4 | 8) | (2, 1 | 2 | 4 | 8) => {
+                    let mut v = Vec::with_capacity(rows);
+                    for r in 0..rows {
+                        valid.push(is_valid(r));
+                        let p = data_ptr.add(r * elem_size as usize);
+                        let raw: i64 = match (kind, elem_size) {
+                            (1, 1) => *(p as *const i8) as i64,
+                            (1, 2) => *(p as *const i16) as i64,
+                            (1, 4) => *(p as *const i32) as i64,
+                            (1, 8) => *(p as *const i64),
+                            (2, 1) => *p as i64,
+                            (2, 2) => *(p as *const u16) as i64,
+                            (2, 4) => *(p as *const u32) as i64,
+                            _ => {
+                                let u = *(p as *const u64);
+                                if u > i64::MAX as u64 {
+                                    lazy_abort(
+                                        "LazyFrame: u64 column value exceeds the i64 evaluation \
                                      range supported by the v1 lazy engine",
-                                );
+                                    );
+                                }
+                                u as i64
                             }
-                            u as i64
-                        }
-                    };
-                    v.push(raw);
+                        };
+                        v.push(raw);
+                    }
+                    ColData::I64(v)
                 }
-                ColData::I64(v)
-            }
-            (3, 4 | 8) => {
-                let mut v = Vec::with_capacity(rows);
-                for r in 0..rows {
-                    valid.push(is_valid(r));
-                    let p = data_ptr.add(r * elem_size as usize);
-                    v.push(if elem_size == 4 {
-                        *(p as *const f32) as f64
-                    } else {
-                        *(p as *const f64)
-                    });
+                (3, 4 | 8) => {
+                    let mut v = Vec::with_capacity(rows);
+                    for r in 0..rows {
+                        valid.push(is_valid(r));
+                        let p = data_ptr.add(r * elem_size as usize);
+                        v.push(if elem_size == 4 {
+                            *(p as *const f32) as f64
+                        } else {
+                            *(p as *const f64)
+                        });
+                    }
+                    ColData::F64(v)
                 }
-                ColData::F64(v)
-            }
-            (4, _) => {
-                let mut v = Vec::with_capacity(rows);
-                for r in 0..rows {
-                    valid.push(is_valid(r));
-                    let cell = data_ptr.add(r * 24);
-                    let sptr = *(cell as *const *const u8);
-                    let slen = *(cell.add(8) as *const i64) as usize;
-                    v.push(if sptr.is_null() {
-                        String::new()
-                    } else {
-                        str_from_raw(sptr, slen)
-                    });
+                (4, _) => {
+                    let mut v = Vec::with_capacity(rows);
+                    for r in 0..rows {
+                        valid.push(is_valid(r));
+                        let cell = data_ptr.add(r * 24);
+                        let sptr = *(cell as *const *const u8);
+                        let slen = *(cell.add(8) as *const i64) as usize;
+                        v.push(if sptr.is_null() {
+                            String::new()
+                        } else {
+                            str_from_raw(sptr, slen)
+                        });
+                    }
+                    ColData::Str(v)
                 }
-                ColData::Str(v)
-            }
-            _ => lazy_abort(
-                "LazyFrame: unsupported column dtype for the v1 lazy engine \
+                _ => lazy_abort(
+                    "LazyFrame: unsupported column dtype for the v1 lazy engine \
                  (supported: bool / signed / unsigned ints, f32/f64, String)",
-            ),
-        };
-        cols.push(FrameCol {
-            name,
-            data,
-            valid,
-            kind,
-            elem_size,
-        });
+                ),
+            };
+            cols.push(FrameCol {
+                name,
+                data,
+                valid,
+                kind,
+                elem_size,
+            });
+        }
+        plan_new(LazyPlan {
+            frame: Arc::new(Frame { cols }),
+            ops: Vec::new(),
+        })
     }
-    plan_new(LazyPlan {
-        frame: Arc::new(Frame { cols }),
-        ops: Vec::new(),
-    })
 }
 
 #[no_mangle]
@@ -2143,35 +2195,41 @@ pub unsafe extern "C" fn karac_lazy_new(df_ctrl: *const u8) -> *const LazyPlan {
 /// # Safety
 /// `plan` must be a live plan handle; `out_len` writable.
 pub unsafe extern "C" fn karac_lazy_explain(plan: *const LazyPlan, out_len: *mut i64) -> *mut u8 {
-    let p = plan_borrow(plan);
-    let text = render_explain(&p);
-    *out_len = text.len() as i64;
-    let buf = crate::alloc::karac_alloc_or_panic(text.len().max(1));
-    std::ptr::copy_nonoverlapping(text.as_ptr(), buf, text.len());
-    buf
+    unsafe {
+        let p = plan_borrow(plan);
+        let text = render_explain(&p);
+        *out_len = text.len() as i64;
+        let buf = crate::alloc::karac_alloc_or_panic(text.len().max(1));
+        std::ptr::copy_nonoverlapping(text.as_ptr(), buf, text.len());
+        buf
+    }
 }
 
 /// Twin of file.rs `df_alloc_zeroed` — malloc-compatible zeroed block
 /// (8-aligned) the caller's ordinary FreeDataFrame path frees.
 unsafe fn lz_alloc_zeroed(size: usize) -> *mut u8 {
-    if size == 0 {
-        return std::ptr::null_mut();
+    unsafe {
+        if size == 0 {
+            return std::ptr::null_mut();
+        }
+        let layout = std::alloc::Layout::from_size_align(size.max(8), 8).unwrap();
+        let p = std::alloc::alloc_zeroed(layout);
+        if p.is_null() {
+            lazy_abort("LazyFrame: allocation failed");
+        }
+        p
     }
-    let layout = std::alloc::Layout::from_size_align(size.max(8), 8).unwrap();
-    let p = std::alloc::alloc_zeroed(layout);
-    if p.is_null() {
-        lazy_abort("LazyFrame: allocation failed");
-    }
-    p
 }
 
 unsafe fn lz_alloc_bytes(bytes: &[u8]) -> *mut u8 {
-    if bytes.is_empty() {
-        return std::ptr::null_mut();
+    unsafe {
+        if bytes.is_empty() {
+            return std::ptr::null_mut();
+        }
+        let p = lz_alloc_zeroed(bytes.len());
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+        p
     }
-    let p = lz_alloc_zeroed(bytes.len());
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
-    p
 }
 
 #[no_mangle]
@@ -2189,73 +2247,75 @@ unsafe fn lz_alloc_bytes(bytes: &[u8]) -> *mut u8 {
 /// # Safety
 /// `plan` must be a live plan handle.
 pub unsafe extern "C" fn karac_lazy_collect(plan: *const LazyPlan) -> *mut u8 {
-    let p = plan_borrow(plan);
-    // Validation authority first, exactly like interpreter collect.
-    if let Err(msg) = fold_plan(&p.frame, &p.ops) {
-        lazy_abort(&msg);
-    }
-    let out_cols = match eval_ops(&p.frame.cols, &p.ops) {
-        Ok(v) => v,
-        Err(msg) => lazy_abort(&msg),
-    };
-    let width = out_cols.len();
-    let rows = cols_height(&out_cols);
-    let entries = lz_alloc_zeroed(width * 40);
-    for (ci, col) in out_cols.iter().enumerate() {
-        let data = lz_alloc_zeroed(rows * col.elem_size.max(1) as usize);
-        let bitmap = lz_alloc_zeroed(rows.div_ceil(8));
-        for r in 0..rows {
-            if !col.valid[r] {
-                continue; // NULL: zeroed data cell + bitmap bit 0
-            }
-            *bitmap.add(r / 8) |= 1 << (r % 8);
-            let cell = data.add(r * col.elem_size as usize);
-            match &col.data {
-                ColData::Bool(v) => *cell = v[r] as u8,
-                ColData::I64(v) => {
-                    let raw = v[r];
-                    match (col.kind, col.elem_size) {
-                        (1, 1) => *(cell as *mut i8) = raw as i8,
-                        (1, 2) => *(cell as *mut i16) = raw as i16,
-                        (1, 4) => *(cell as *mut i32) = raw as i32,
-                        (1, 8) => *(cell as *mut i64) = raw,
-                        (2, 1) => *cell = raw as u8,
-                        (2, 2) => *(cell as *mut u16) = raw as u16,
-                        (2, 4) => *(cell as *mut u32) = raw as u32,
-                        _ => *(cell as *mut u64) = raw as u64,
-                    }
-                }
-                ColData::F64(v) => {
-                    if col.elem_size == 4 {
-                        *(cell as *mut f32) = v[r] as f32;
-                    } else {
-                        *(cell as *mut f64) = v[r];
-                    }
-                }
-                ColData::Str(v) => {
-                    let s = &v[r];
-                    let sptr = lz_alloc_bytes(s.as_bytes());
-                    *(cell as *mut *mut u8) = sptr;
-                    *(cell.add(8) as *mut i64) = s.len() as i64;
-                    *(cell.add(16) as *mut i64) = s.len() as i64; // cap == len → owned
-                }
-            }
+    unsafe {
+        let p = plan_borrow(plan);
+        // Validation authority first, exactly like interpreter collect.
+        if let Err(msg) = fold_plan(&p.frame, &p.ops) {
+            lazy_abort(&msg);
         }
-        let col_ctrl = lz_alloc_zeroed(32);
-        *(col_ctrl as *mut *mut u8) = data;
-        *(col_ctrl.add(8) as *mut *mut u8) = bitmap;
-        *(col_ctrl.add(16) as *mut i64) = rows as i64;
-        *(col_ctrl.add(24) as *mut i64) = rows as i64;
-        let e = entries.add(ci * 40);
-        *(e as *mut *mut u8) = lz_alloc_bytes(col.name.as_bytes());
-        *(e.add(8) as *mut i64) = col.name.len() as i64;
-        *(e.add(16) as *mut *mut u8) = col_ctrl;
-        *(e.add(24) as *mut i64) = col.elem_size;
-        *(e.add(32) as *mut i64) = col.kind;
+        let out_cols = match eval_ops(&p.frame.cols, &p.ops) {
+            Ok(v) => v,
+            Err(msg) => lazy_abort(&msg),
+        };
+        let width = out_cols.len();
+        let rows = cols_height(&out_cols);
+        let entries = lz_alloc_zeroed(width * 40);
+        for (ci, col) in out_cols.iter().enumerate() {
+            let data = lz_alloc_zeroed(rows * col.elem_size.max(1) as usize);
+            let bitmap = lz_alloc_zeroed(rows.div_ceil(8));
+            for r in 0..rows {
+                if !col.valid[r] {
+                    continue; // NULL: zeroed data cell + bitmap bit 0
+                }
+                *bitmap.add(r / 8) |= 1 << (r % 8);
+                let cell = data.add(r * col.elem_size as usize);
+                match &col.data {
+                    ColData::Bool(v) => *cell = v[r] as u8,
+                    ColData::I64(v) => {
+                        let raw = v[r];
+                        match (col.kind, col.elem_size) {
+                            (1, 1) => *(cell as *mut i8) = raw as i8,
+                            (1, 2) => *(cell as *mut i16) = raw as i16,
+                            (1, 4) => *(cell as *mut i32) = raw as i32,
+                            (1, 8) => *(cell as *mut i64) = raw,
+                            (2, 1) => *cell = raw as u8,
+                            (2, 2) => *(cell as *mut u16) = raw as u16,
+                            (2, 4) => *(cell as *mut u32) = raw as u32,
+                            _ => *(cell as *mut u64) = raw as u64,
+                        }
+                    }
+                    ColData::F64(v) => {
+                        if col.elem_size == 4 {
+                            *(cell as *mut f32) = v[r] as f32;
+                        } else {
+                            *(cell as *mut f64) = v[r];
+                        }
+                    }
+                    ColData::Str(v) => {
+                        let s = &v[r];
+                        let sptr = lz_alloc_bytes(s.as_bytes());
+                        *(cell as *mut *mut u8) = sptr;
+                        *(cell.add(8) as *mut i64) = s.len() as i64;
+                        *(cell.add(16) as *mut i64) = s.len() as i64; // cap == len → owned
+                    }
+                }
+            }
+            let col_ctrl = lz_alloc_zeroed(32);
+            *(col_ctrl as *mut *mut u8) = data;
+            *(col_ctrl.add(8) as *mut *mut u8) = bitmap;
+            *(col_ctrl.add(16) as *mut i64) = rows as i64;
+            *(col_ctrl.add(24) as *mut i64) = rows as i64;
+            let e = entries.add(ci * 40);
+            *(e as *mut *mut u8) = lz_alloc_bytes(col.name.as_bytes());
+            *(e.add(8) as *mut i64) = col.name.len() as i64;
+            *(e.add(16) as *mut *mut u8) = col_ctrl;
+            *(e.add(24) as *mut i64) = col.elem_size;
+            *(e.add(32) as *mut i64) = col.kind;
+        }
+        let df_ctrl = lz_alloc_zeroed(24);
+        *(df_ctrl as *mut *mut u8) = entries;
+        *(df_ctrl.add(8) as *mut i64) = width as i64;
+        *(df_ctrl.add(16) as *mut i64) = width as i64;
+        df_ctrl
     }
-    let df_ctrl = lz_alloc_zeroed(24);
-    *(df_ctrl as *mut *mut u8) = entries;
-    *(df_ctrl.add(8) as *mut i64) = width as i64;
-    *(df_ctrl.add(16) as *mut i64) = width as i64;
-    df_ctrl
 }

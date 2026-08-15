@@ -68,38 +68,40 @@ enum Slot {
 /// `data` must point to at least `(row + 1) * elem_size` readable bytes laid
 /// out as codegen emits for `(kind, elem_size)`.
 unsafe fn read_slot(data: *const u8, row: usize, elem_size: i64, kind: i64) -> Option<Slot> {
-    let p = data.add(row * elem_size as usize);
-    Some(match (kind, elem_size) {
-        (kind::SIGNED, 1) => Slot::Int(i64::from(*(p as *const i8))),
-        (kind::SIGNED, 2) => Slot::Int(i64::from(*(p as *const i16))),
-        (kind::SIGNED, 4) => Slot::Int(i64::from(*(p as *const i32))),
-        (kind::SIGNED, 8) => Slot::Int(*(p as *const i64)),
-        (kind::UNSIGNED, 1) => Slot::Int(i64::from(*p)),
-        (kind::UNSIGNED, 2) => Slot::Int(i64::from(*(p as *const u16))),
-        (kind::UNSIGNED, 4) => Slot::Int(i64::from(*(p as *const u32))),
-        // A u64 above i64::MAX wraps, matching the interpreter's `Value::Int`
-        // (also i64) — the two stay identical, both lossy at the same point.
-        (kind::UNSIGNED, 8) => Slot::Int(*(p as *const u64) as i64),
-        (kind::FLOAT, 4) => Slot::Float(f64::from(*(p as *const f32))),
-        (kind::FLOAT, 8) => Slot::Float(*(p as *const f64)),
-        (kind::OTHER, 1) => Slot::Bool(*p != 0),
-        (kind::STRING, _) => {
-            // String element: the 24-byte `{ ptr, i64 len, i64 cap }` struct
-            // inline in the data buffer.
-            let sptr = *(p as *const *const u8);
-            let slen = *(p.add(8) as *const i64);
-            let s = if sptr.is_null() || slen <= 0 {
-                String::new()
-            } else {
-                String::from_utf8_lossy(std::slice::from_raw_parts(sptr, slen as usize))
-                    .into_owned()
-            };
-            Slot::Str(s)
-        }
-        // Unknown (kind, size) — treat as a null slot rather than risk UB.
-        // New element classes must extend this table.
-        _ => return None,
-    })
+    unsafe {
+        let p = data.add(row * elem_size as usize);
+        Some(match (kind, elem_size) {
+            (kind::SIGNED, 1) => Slot::Int(i64::from(*(p as *const i8))),
+            (kind::SIGNED, 2) => Slot::Int(i64::from(*(p as *const i16))),
+            (kind::SIGNED, 4) => Slot::Int(i64::from(*(p as *const i32))),
+            (kind::SIGNED, 8) => Slot::Int(*(p as *const i64)),
+            (kind::UNSIGNED, 1) => Slot::Int(i64::from(*p)),
+            (kind::UNSIGNED, 2) => Slot::Int(i64::from(*(p as *const u16))),
+            (kind::UNSIGNED, 4) => Slot::Int(i64::from(*(p as *const u32))),
+            // A u64 above i64::MAX wraps, matching the interpreter's `Value::Int`
+            // (also i64) — the two stay identical, both lossy at the same point.
+            (kind::UNSIGNED, 8) => Slot::Int(*(p as *const u64) as i64),
+            (kind::FLOAT, 4) => Slot::Float(f64::from(*(p as *const f32))),
+            (kind::FLOAT, 8) => Slot::Float(*(p as *const f64)),
+            (kind::OTHER, 1) => Slot::Bool(*p != 0),
+            (kind::STRING, _) => {
+                // String element: the 24-byte `{ ptr, i64 len, i64 cap }` struct
+                // inline in the data buffer.
+                let sptr = *(p as *const *const u8);
+                let slen = *(p.add(8) as *const i64);
+                let s = if sptr.is_null() || slen <= 0 {
+                    String::new()
+                } else {
+                    String::from_utf8_lossy(std::slice::from_raw_parts(sptr, slen as usize))
+                        .into_owned()
+                };
+                Slot::Str(s)
+            }
+            // Unknown (kind, size) — treat as a null slot rather than risk UB.
+            // New element classes must extend this table.
+            _ => return None,
+        })
+    }
 }
 
 /// Validity bit `row` of a compiled column's null bitmap (1 = valid). A null
@@ -111,10 +113,12 @@ unsafe fn read_slot(data: *const u8, row: usize, elem_size: i64, kind: i64) -> O
 /// `bitmap`, when non-null, must point to at least `row / 8 + 1` readable
 /// bytes.
 unsafe fn is_valid(bitmap: *const u8, row: usize) -> bool {
-    if bitmap.is_null() {
-        return true;
+    unsafe {
+        if bitmap.is_null() {
+            return true;
+        }
+        (*bitmap.add(row / 8) >> (row % 8)) & 1 == 1
     }
-    (*bitmap.add(row / 8) >> (row % 8)) & 1 == 1
 }
 
 /// Build the Arrow `(DataType, array)` for a decoded column. Applies the two
@@ -190,13 +194,15 @@ fn write_ipc(fields: Vec<Field>, arrays: Vec<Arc<dyn Array>>) -> Option<Vec<u8>>
 ///
 /// `out_len`, when non-null, must point to a writable `i64`.
 unsafe fn emit_buffer(bytes: &[u8], out_len: *mut i64) -> *mut u8 {
-    let len = bytes.len();
-    if !out_len.is_null() {
-        *out_len = len as i64;
+    unsafe {
+        let len = bytes.len();
+        if !out_len.is_null() {
+            *out_len = len as i64;
+        }
+        let buf = crate::alloc::karac_alloc_or_panic(if len == 0 { 1 } else { len });
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
+        buf
     }
-    let buf = crate::alloc::karac_alloc_or_panic(if len == 0 { 1 } else { len });
-    core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
-    buf
 }
 
 /// Decode every slot of a compiled Column control block — `{ ptr data, ptr
@@ -209,22 +215,24 @@ unsafe fn emit_buffer(bytes: &[u8], out_len: *mut i64) -> *mut u8 {
 /// `col_ctrl`, when non-null, must be a live Column control block laid out as
 /// above, with a data buffer holding `len` slots of `elem_size` bytes.
 unsafe fn read_column_slots(col_ctrl: *const u8, elem_size: i64, kind: i64) -> Vec<Option<Slot>> {
-    if col_ctrl.is_null() {
-        return Vec::new();
-    }
-    let data = *(col_ctrl as *const *const u8);
-    let bitmap = *(col_ctrl.add(8) as *const *const u8);
-    let len = (*(col_ctrl.add(16) as *const i64)).max(0) as usize;
+    unsafe {
+        if col_ctrl.is_null() {
+            return Vec::new();
+        }
+        let data = *(col_ctrl as *const *const u8);
+        let bitmap = *(col_ctrl.add(8) as *const *const u8);
+        let len = (*(col_ctrl.add(16) as *const i64)).max(0) as usize;
 
-    let mut slots: Vec<Option<Slot>> = Vec::with_capacity(len);
-    for row in 0..len {
-        slots.push(if is_valid(bitmap, row) && !data.is_null() {
-            read_slot(data, row, elem_size, kind)
-        } else {
-            None
-        });
+        let mut slots: Vec<Option<Slot>> = Vec::with_capacity(len);
+        for row in 0..len {
+            slots.push(if is_valid(bitmap, row) && !data.is_null() {
+                read_slot(data, row, elem_size, kind)
+            } else {
+                None
+            });
+        }
+        slots
     }
-    slots
 }
 
 /// `col.to_arrow_ipc() -> Vec[u8]` — serialize a compiled `Column` to a
@@ -244,14 +252,16 @@ pub unsafe extern "C" fn karac_arrow_column_to_ipc(
     kind: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    let slots = read_column_slots(col_ctrl, elem_size, kind);
-    let (dt, arr) = slots_to_arrow(&slots, kind, elem_size);
-    match write_ipc(vec![Field::new("col", dt, true)], vec![arr]) {
-        Some(bytes) => emit_buffer(&bytes, out_len),
-        // An arrow-side failure yields an empty stream rather than aborting the
-        // program — the same "surface it as data" posture as the other
-        // buffer-returning runtime entrypoints.
-        None => emit_buffer(&[], out_len),
+    unsafe {
+        let slots = read_column_slots(col_ctrl, elem_size, kind);
+        let (dt, arr) = slots_to_arrow(&slots, kind, elem_size);
+        match write_ipc(vec![Field::new("col", dt, true)], vec![arr]) {
+            Some(bytes) => emit_buffer(&bytes, out_len),
+            // An arrow-side failure yields an empty stream rather than aborting the
+            // program — the same "surface it as data" posture as the other
+            // buffer-returning runtime entrypoints.
+            None => emit_buffer(&[], out_len),
+        }
     }
 }
 
@@ -276,37 +286,39 @@ pub unsafe extern "C" fn karac_arrow_dataframe_to_ipc(
     df_ctrl: *const u8,
     out_len: *mut i64,
 ) -> *mut u8 {
-    if df_ctrl.is_null() {
-        return emit_buffer(&[], out_len);
-    }
-    let entries = *(df_ctrl as *const *const u8);
-    let n_cols = (*(df_ctrl.add(8) as *const i64)).max(0) as usize;
+    unsafe {
+        if df_ctrl.is_null() {
+            return emit_buffer(&[], out_len);
+        }
+        let entries = *(df_ctrl as *const *const u8);
+        let n_cols = (*(df_ctrl.add(8) as *const i64)).max(0) as usize;
 
-    let mut fields: Vec<Field> = Vec::with_capacity(n_cols);
-    let mut arrays: Vec<Arc<dyn Array>> = Vec::with_capacity(n_cols);
-    for i in 0..n_cols {
-        let e = entries.add(i * 40);
-        let name_data = *(e as *const *const u8);
-        let name_len = *(e.add(8) as *const i64);
-        let col_ctrl = *(e.add(16) as *const *const u8);
-        let elem_size = *(e.add(24) as *const i64);
-        let kind = *(e.add(32) as *const i64);
+        let mut fields: Vec<Field> = Vec::with_capacity(n_cols);
+        let mut arrays: Vec<Arc<dyn Array>> = Vec::with_capacity(n_cols);
+        for i in 0..n_cols {
+            let e = entries.add(i * 40);
+            let name_data = *(e as *const *const u8);
+            let name_len = *(e.add(8) as *const i64);
+            let col_ctrl = *(e.add(16) as *const *const u8);
+            let elem_size = *(e.add(24) as *const i64);
+            let kind = *(e.add(32) as *const i64);
 
-        let name = if name_data.is_null() || name_len <= 0 {
-            String::new()
-        } else {
-            String::from_utf8_lossy(std::slice::from_raw_parts(name_data, name_len as usize))
-                .into_owned()
-        };
-        let slots = read_column_slots(col_ctrl, elem_size, kind);
-        let (dt, arr) = slots_to_arrow(&slots, kind, elem_size);
-        fields.push(Field::new(name, dt, true));
-        arrays.push(arr);
-    }
+            let name = if name_data.is_null() || name_len <= 0 {
+                String::new()
+            } else {
+                String::from_utf8_lossy(std::slice::from_raw_parts(name_data, name_len as usize))
+                    .into_owned()
+            };
+            let slots = read_column_slots(col_ctrl, elem_size, kind);
+            let (dt, arr) = slots_to_arrow(&slots, kind, elem_size);
+            fields.push(Field::new(name, dt, true));
+            arrays.push(arr);
+        }
 
-    match write_ipc(fields, arrays) {
-        Some(bytes) => emit_buffer(&bytes, out_len),
-        None => emit_buffer(&[], out_len),
+        match write_ipc(fields, arrays) {
+            Some(bytes) => emit_buffer(&bytes, out_len),
+            None => emit_buffer(&[], out_len),
+        }
     }
 }
 
@@ -362,47 +374,50 @@ pub unsafe extern "C" fn karac_arrow_tensor_to_ipc(
     kind: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    if t_ptr.is_null() {
-        return emit_buffer(&[], out_len);
-    }
-    let rank = (*(t_ptr as *const i64)).max(0) as usize;
-    let mut dims: Vec<i64> = Vec::with_capacity(rank);
-    for i in 0..rank {
-        dims.push(*(t_ptr.add(8 * (1 + i)) as *const i64));
-    }
-    let numel: i64 = dims.iter().product::<i64>().max(0);
-    let data = t_ptr.add(8 * (1 + rank));
+    unsafe {
+        if t_ptr.is_null() {
+            return emit_buffer(&[], out_len);
+        }
+        let rank = (*(t_ptr as *const i64)).max(0) as usize;
+        let mut dims: Vec<i64> = Vec::with_capacity(rank);
+        for i in 0..rank {
+            dims.push(*(t_ptr.add(8 * (1 + i)) as *const i64));
+        }
+        let numel: i64 = dims.iter().product::<i64>().max(0);
+        let data = t_ptr.add(8 * (1 + rank));
 
-    let mut slots: Vec<Option<Slot>> = Vec::with_capacity(numel as usize);
-    for row in 0..numel as usize {
-        slots.push(read_slot(data, row, elem_size, kind));
-    }
-    let (item_dt, values) = slots_to_arrow(&slots, kind, elem_size);
+        let mut slots: Vec<Option<Slot>> = Vec::with_capacity(numel as usize);
+        for row in 0..numel as usize {
+            slots.push(read_slot(data, row, elem_size, kind));
+        }
+        let (item_dt, values) = slots_to_arrow(&slots, kind, elem_size);
 
-    let Ok(list_size) = i32::try_from(numel) else {
-        return emit_buffer(&[], out_len);
-    };
-    // Items are non-nullable — a tensor slot always holds a value.
-    let item_field = Arc::new(Field::new("item", item_dt, false));
-    let Ok(list) = FixedSizeListArray::try_new(Arc::clone(&item_field), list_size, values, None)
-    else {
-        return emit_buffer(&[], out_len);
-    };
+        let Ok(list_size) = i32::try_from(numel) else {
+            return emit_buffer(&[], out_len);
+        };
+        // Items are non-nullable — a tensor slot always holds a value.
+        let item_field = Arc::new(Field::new("item", item_dt, false));
+        let Ok(list) =
+            FixedSizeListArray::try_new(Arc::clone(&item_field), list_size, values, None)
+        else {
+            return emit_buffer(&[], out_len);
+        };
 
-    let metadata = std::collections::HashMap::from([
-        (EXT_NAME_KEY.to_string(), FIXED_SHAPE_TENSOR.to_string()),
-        (EXT_META_KEY.to_string(), shape_metadata(&dims)),
-    ]);
-    let field = Field::new(
-        "tensor",
-        DataType::FixedSizeList(item_field, list_size),
-        false,
-    )
-    .with_metadata(metadata);
+        let metadata = std::collections::HashMap::from([
+            (EXT_NAME_KEY.to_string(), FIXED_SHAPE_TENSOR.to_string()),
+            (EXT_META_KEY.to_string(), shape_metadata(&dims)),
+        ]);
+        let field = Field::new(
+            "tensor",
+            DataType::FixedSizeList(item_field, list_size),
+            false,
+        )
+        .with_metadata(metadata);
 
-    match write_ipc(vec![field], vec![Arc::new(list)]) {
-        Some(bytes) => emit_buffer(&bytes, out_len),
-        None => emit_buffer(&[], out_len),
+        match write_ipc(vec![field], vec![Arc::new(list)]) {
+            Some(bytes) => emit_buffer(&bytes, out_len),
+            None => emit_buffer(&[], out_len),
+        }
     }
 }
 
@@ -488,64 +503,66 @@ fn arrow_to_slots(col: &dyn Array) -> Option<Vec<Option<Slot>>> {
 ///
 /// `data` must point to at least `(row + 1) * elem_size` writable bytes.
 unsafe fn write_slot(data: *mut u8, row: usize, elem_size: i64, kind: i64, slot: &Slot) -> bool {
-    let p = data.add(row * elem_size as usize);
-    // Numeric source value, in both models — `None` for a non-numeric slot.
-    let as_int = match slot {
-        Slot::Int(v) => Some(*v),
-        Slot::Float(v) => Some(*v as i64),
-        _ => None,
-    };
-    let as_float = match slot {
-        Slot::Int(v) => Some(*v as f64),
-        Slot::Float(v) => Some(*v),
-        _ => None,
-    };
-    match (kind, elem_size) {
-        (kind::SIGNED | kind::UNSIGNED, 1) => match as_int {
-            Some(v) => *p = v as u8,
-            None => return false,
-        },
-        (kind::SIGNED | kind::UNSIGNED, 2) => match as_int {
-            Some(v) => *(p as *mut u16) = v as u16,
-            None => return false,
-        },
-        (kind::SIGNED | kind::UNSIGNED, 4) => match as_int {
-            Some(v) => *(p as *mut u32) = v as u32,
-            None => return false,
-        },
-        (kind::SIGNED | kind::UNSIGNED, 8) => match as_int {
-            Some(v) => *(p as *mut i64) = v,
-            None => return false,
-        },
-        (kind::FLOAT, 4) => match as_float {
-            Some(v) => *(p as *mut f32) = v as f32,
-            None => return false,
-        },
-        (kind::FLOAT, 8) => match as_float {
-            Some(v) => *(p as *mut f64) = v,
-            None => return false,
-        },
-        (kind::OTHER, 1) => match slot {
-            Slot::Bool(v) => *p = u8::from(*v),
+    unsafe {
+        let p = data.add(row * elem_size as usize);
+        // Numeric source value, in both models — `None` for a non-numeric slot.
+        let as_int = match slot {
+            Slot::Int(v) => Some(*v),
+            Slot::Float(v) => Some(*v as i64),
+            _ => None,
+        };
+        let as_float = match slot {
+            Slot::Int(v) => Some(*v as f64),
+            Slot::Float(v) => Some(*v),
+            _ => None,
+        };
+        match (kind, elem_size) {
+            (kind::SIGNED | kind::UNSIGNED, 1) => match as_int {
+                Some(v) => *p = v as u8,
+                None => return false,
+            },
+            (kind::SIGNED | kind::UNSIGNED, 2) => match as_int {
+                Some(v) => *(p as *mut u16) = v as u16,
+                None => return false,
+            },
+            (kind::SIGNED | kind::UNSIGNED, 4) => match as_int {
+                Some(v) => *(p as *mut u32) = v as u32,
+                None => return false,
+            },
+            (kind::SIGNED | kind::UNSIGNED, 8) => match as_int {
+                Some(v) => *(p as *mut i64) = v,
+                None => return false,
+            },
+            (kind::FLOAT, 4) => match as_float {
+                Some(v) => *(p as *mut f32) = v as f32,
+                None => return false,
+            },
+            (kind::FLOAT, 8) => match as_float {
+                Some(v) => *(p as *mut f64) = v,
+                None => return false,
+            },
+            (kind::OTHER, 1) => match slot {
+                Slot::Bool(v) => *p = u8::from(*v),
+                _ => return false,
+            },
+            (kind::STRING, _) => match slot {
+                Slot::Str(s) => {
+                    // The inline 24-byte `{ ptr, i64 len, i64 cap }`. `cap == len`
+                    // marks the heap as owned, which is what makes codegen's
+                    // cap-guarded per-cell free reclaim it.
+                    let bytes = s.as_bytes();
+                    *(p as *mut *mut u8) = control_alloc_bytes(bytes);
+                    *(p.add(8) as *mut i64) = bytes.len() as i64;
+                    *(p.add(16) as *mut i64) = bytes.len() as i64;
+                }
+                _ => return false,
+            },
+            // Unknown (kind, size) — the write-side `read_slot` table's peer, and
+            // it must be extended in lockstep with it.
             _ => return false,
-        },
-        (kind::STRING, _) => match slot {
-            Slot::Str(s) => {
-                // The inline 24-byte `{ ptr, i64 len, i64 cap }`. `cap == len`
-                // marks the heap as owned, which is what makes codegen's
-                // cap-guarded per-cell free reclaim it.
-                let bytes = s.as_bytes();
-                *(p as *mut *mut u8) = control_alloc_bytes(bytes);
-                *(p.add(8) as *mut i64) = bytes.len() as i64;
-                *(p.add(16) as *mut i64) = bytes.len() as i64;
-            }
-            _ => return false,
-        },
-        // Unknown (kind, size) — the write-side `read_slot` table's peer, and
-        // it must be extended in lockstep with it.
-        _ => return false,
+        }
+        true
     }
-    true
 }
 
 /// Build a compiled Column control block — `{ ptr data, ptr null_bitmap, i64
@@ -568,28 +585,30 @@ unsafe fn build_column_control(
     elem_size: i64,
     kind: i64,
 ) -> Option<*mut u8> {
-    if elem_size <= 0 {
-        return None;
-    }
-    let rows = slots.len();
-    let data = control_alloc_zeroed(rows * elem_size as usize);
-    let bitmap = control_alloc_zeroed(rows.div_ceil(8));
-    for (row, slot) in slots.iter().enumerate() {
-        let Some(slot) = slot else { continue };
-        if !write_slot(data, row, elem_size, kind, slot) {
-            // Free what was built before giving up — the caller gets null and
-            // has nothing to clean up, so this is the only chance.
-            free_partial_column(data, bitmap, row, elem_size, kind);
+    unsafe {
+        if elem_size <= 0 {
             return None;
         }
-        *bitmap.add(row / 8) |= 1 << (row % 8);
+        let rows = slots.len();
+        let data = control_alloc_zeroed(rows * elem_size as usize);
+        let bitmap = control_alloc_zeroed(rows.div_ceil(8));
+        for (row, slot) in slots.iter().enumerate() {
+            let Some(slot) = slot else { continue };
+            if !write_slot(data, row, elem_size, kind, slot) {
+                // Free what was built before giving up — the caller gets null and
+                // has nothing to clean up, so this is the only chance.
+                free_partial_column(data, bitmap, row, elem_size, kind);
+                return None;
+            }
+            *bitmap.add(row / 8) |= 1 << (row % 8);
+        }
+        let ctrl = control_alloc_zeroed(32);
+        *(ctrl as *mut *mut u8) = data;
+        *(ctrl.add(8) as *mut *mut u8) = bitmap;
+        *(ctrl.add(16) as *mut i64) = rows as i64;
+        *(ctrl.add(24) as *mut i64) = rows as i64;
+        Some(ctrl)
     }
-    let ctrl = control_alloc_zeroed(32);
-    *(ctrl as *mut *mut u8) = data;
-    *(ctrl.add(8) as *mut *mut u8) = bitmap;
-    *(ctrl.add(16) as *mut i64) = rows as i64;
-    *(ctrl.add(24) as *mut i64) = rows as i64;
-    Some(ctrl)
 }
 
 /// Release a column body abandoned mid-build: the first `written` slots'
@@ -607,20 +626,22 @@ unsafe fn free_partial_column(
     elem_size: i64,
     kind: i64,
 ) {
-    if kind == kind::STRING && !data.is_null() {
-        for row in 0..written {
-            let p = data.add(row * elem_size as usize);
-            let sptr = *(p as *mut *mut u8);
-            if !sptr.is_null() {
-                crate::alloc::karac_free_buf(sptr, *(p.add(16) as *const i64) as usize);
+    unsafe {
+        if kind == kind::STRING && !data.is_null() {
+            for row in 0..written {
+                let p = data.add(row * elem_size as usize);
+                let sptr = *(p as *mut *mut u8);
+                if !sptr.is_null() {
+                    crate::alloc::karac_free_buf(sptr, *(p.add(16) as *const i64) as usize);
+                }
             }
         }
-    }
-    if !data.is_null() {
-        crate::alloc::karac_free_buf(data, written * elem_size as usize);
-    }
-    if !bitmap.is_null() {
-        crate::alloc::karac_free_buf(bitmap, written.div_ceil(8));
+        if !data.is_null() {
+            crate::alloc::karac_free_buf(data, written * elem_size as usize);
+        }
+        if !bitmap.is_null() {
+            crate::alloc::karac_free_buf(bitmap, written.div_ceil(8));
+        }
     }
 }
 
@@ -642,27 +663,29 @@ pub unsafe extern "C" fn karac_arrow_column_from_ipc(
     elem_size: i64,
     kind: i64,
 ) -> *mut u8 {
-    let buf: &[u8] = if bytes.is_null() || len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(bytes, len as usize)
-    };
-    // An empty input is an empty column, not a failure — the stream a
-    // zero-length `Vec[u8]` describes has no schema to disagree with.
-    if buf.is_empty() {
-        return build_column_control(&[], elem_size, kind).unwrap_or(core::ptr::null_mut());
-    }
-    let slots = match read_first_batch(buf) {
-        Ok(Some(batch)) if batch.num_columns() > 0 => {
-            match arrow_to_slots(batch.column(0).as_ref()) {
-                Some(s) => s,
-                None => return core::ptr::null_mut(),
-            }
+    unsafe {
+        let buf: &[u8] = if bytes.is_null() || len <= 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(bytes, len as usize)
+        };
+        // An empty input is an empty column, not a failure — the stream a
+        // zero-length `Vec[u8]` describes has no schema to disagree with.
+        if buf.is_empty() {
+            return build_column_control(&[], elem_size, kind).unwrap_or(core::ptr::null_mut());
         }
-        Ok(_) => Vec::new(),
-        Err(()) => return core::ptr::null_mut(),
-    };
-    build_column_control(&slots, elem_size, kind).unwrap_or(core::ptr::null_mut())
+        let slots = match read_first_batch(buf) {
+            Ok(Some(batch)) if batch.num_columns() > 0 => {
+                match arrow_to_slots(batch.column(0).as_ref()) {
+                    Some(s) => s,
+                    None => return core::ptr::null_mut(),
+                }
+            }
+            Ok(_) => Vec::new(),
+            Err(()) => return core::ptr::null_mut(),
+        };
+        build_column_control(&slots, elem_size, kind).unwrap_or(core::ptr::null_mut())
+    }
 }
 
 /// The compiled `(elem_size, kind)` a `DataFrame` column takes for an Arrow
@@ -694,63 +717,66 @@ fn df_column_repr(dt: &DataType) -> Option<(i64, i64)> {
 /// `bytes` must describe `len` readable bytes (or be null with `len <= 0`).
 #[no_mangle]
 pub unsafe extern "C" fn karac_arrow_dataframe_from_ipc(bytes: *const u8, len: i64) -> *mut u8 {
-    let buf: &[u8] = if bytes.is_null() || len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(bytes, len as usize)
-    };
-    // Column name + built control block, held until every column has been
-    // built — a failure part-way through must free the ones already made
-    // rather than leak them behind a null return.
-    let mut built: Vec<(String, *mut u8, i64, i64)> = Vec::new();
-
-    if !buf.is_empty() {
-        let batch = match read_first_batch(buf) {
-            Ok(Some(b)) => Some(b),
-            Ok(None) => None,
-            Err(()) => return core::ptr::null_mut(),
+    unsafe {
+        let buf: &[u8] = if bytes.is_null() || len <= 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(bytes, len as usize)
         };
-        if let Some(batch) = batch {
-            let schema = batch.schema();
-            for i in 0..batch.num_columns() {
-                let arr = batch.column(i);
-                let built_col = df_column_repr(arr.data_type())
-                    .zip(arrow_to_slots(arr.as_ref()))
-                    .and_then(|((elem_size, kind), slots)| {
-                        build_column_control(&slots, elem_size, kind).map(|c| (c, elem_size, kind))
-                    });
-                match built_col {
-                    Some((ctrl, elem_size, kind)) => {
-                        built.push((schema.field(i).name().clone(), ctrl, elem_size, kind))
-                    }
-                    None => {
-                        free_built_columns(&built);
-                        return core::ptr::null_mut();
+        // Column name + built control block, held until every column has been
+        // built — a failure part-way through must free the ones already made
+        // rather than leak them behind a null return.
+        let mut built: Vec<(String, *mut u8, i64, i64)> = Vec::new();
+
+        if !buf.is_empty() {
+            let batch = match read_first_batch(buf) {
+                Ok(Some(b)) => Some(b),
+                Ok(None) => None,
+                Err(()) => return core::ptr::null_mut(),
+            };
+            if let Some(batch) = batch {
+                let schema = batch.schema();
+                for i in 0..batch.num_columns() {
+                    let arr = batch.column(i);
+                    let built_col = df_column_repr(arr.data_type())
+                        .zip(arrow_to_slots(arr.as_ref()))
+                        .and_then(|((elem_size, kind), slots)| {
+                            build_column_control(&slots, elem_size, kind)
+                                .map(|c| (c, elem_size, kind))
+                        });
+                    match built_col {
+                        Some((ctrl, elem_size, kind)) => {
+                            built.push((schema.field(i).name().clone(), ctrl, elem_size, kind))
+                        }
+                        None => {
+                            free_built_columns(&built);
+                            return core::ptr::null_mut();
+                        }
                     }
                 }
             }
         }
-    }
 
-    // Entries (stride 40: name*, name_len, col_ctrl*, elem_size, kind) and the
-    // frame control block `{ entries, len, capacity }` — `df_read_csv`'s
-    // layout exactly, so `FreeDataFrame` cleanup frees the whole graph.
-    let width = built.len();
-    let entries = control_alloc_zeroed(width * 40);
-    for (ci, (name, ctrl, elem_size, kind)) in built.iter().enumerate() {
-        let e = entries.add(ci * 40);
-        let nbytes = name.as_bytes();
-        *(e as *mut *mut u8) = control_alloc_bytes(nbytes);
-        *(e.add(8) as *mut i64) = nbytes.len() as i64;
-        *(e.add(16) as *mut *mut u8) = *ctrl;
-        *(e.add(24) as *mut i64) = *elem_size;
-        *(e.add(32) as *mut i64) = *kind;
+        // Entries (stride 40: name*, name_len, col_ctrl*, elem_size, kind) and the
+        // frame control block `{ entries, len, capacity }` — `df_read_csv`'s
+        // layout exactly, so `FreeDataFrame` cleanup frees the whole graph.
+        let width = built.len();
+        let entries = control_alloc_zeroed(width * 40);
+        for (ci, (name, ctrl, elem_size, kind)) in built.iter().enumerate() {
+            let e = entries.add(ci * 40);
+            let nbytes = name.as_bytes();
+            *(e as *mut *mut u8) = control_alloc_bytes(nbytes);
+            *(e.add(8) as *mut i64) = nbytes.len() as i64;
+            *(e.add(16) as *mut *mut u8) = *ctrl;
+            *(e.add(24) as *mut i64) = *elem_size;
+            *(e.add(32) as *mut i64) = *kind;
+        }
+        let control = control_alloc_zeroed(24);
+        *(control as *mut *mut u8) = entries;
+        *(control.add(8) as *mut i64) = width as i64;
+        *(control.add(16) as *mut i64) = width as i64;
+        control
     }
-    let control = control_alloc_zeroed(24);
-    *(control as *mut *mut u8) = entries;
-    *(control.add(8) as *mut i64) = width as i64;
-    *(control.add(16) as *mut i64) = width as i64;
-    control
 }
 
 /// Release columns built before a later one failed — nothing outside this
@@ -761,12 +787,14 @@ pub unsafe extern "C" fn karac_arrow_dataframe_from_ipc(bytes: *const u8, len: i
 /// Each entry must be a `build_column_control` result at the stated
 /// `(elem_size, kind)`.
 unsafe fn free_built_columns(built: &[(String, *mut u8, i64, i64)]) {
-    for (_, ctrl, elem_size, kind) in built {
-        let data = *(*ctrl as *mut *mut u8);
-        let bitmap = *((*ctrl).add(8) as *mut *mut u8);
-        let rows = *((*ctrl).add(16) as *const i64);
-        free_partial_column(data, bitmap, rows.max(0) as usize, *elem_size, *kind);
-        crate::alloc::karac_free_buf(*ctrl, 32);
+    unsafe {
+        for (_, ctrl, elem_size, kind) in built {
+            let data = *(*ctrl as *mut *mut u8);
+            let bitmap = *((*ctrl).add(8) as *mut *mut u8);
+            let rows = *((*ctrl).add(16) as *const i64);
+            free_partial_column(data, bitmap, rows.max(0) as usize, *elem_size, *kind);
+            crate::alloc::karac_free_buf(*ctrl, 32);
+        }
     }
 }
 
@@ -877,59 +905,64 @@ pub unsafe extern "C" fn karac_arrow_tensor_from_ipc(
     want_rank: i64,
     want_dims: *const i64,
 ) -> *mut u8 {
-    // A tensor element is always a scalar — no String tensors exist at this
-    // surface, which is what lets the failure path below free the block as the
-    // whole graph rather than walking per-cell heaps.
-    if elem_size <= 0 || want_rank < 0 || kind == kind::STRING {
-        return core::ptr::null_mut();
-    }
-    let buf: &[u8] = if bytes.is_null() || len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(bytes, len as usize)
-    };
-    let Some((dims, slots)) = tensor_shape_and_slots(buf) else {
-        return core::ptr::null_mut();
-    };
+    unsafe {
+        // A tensor element is always a scalar — no String tensors exist at this
+        // surface, which is what lets the failure path below free the block as the
+        // whole graph rather than walking per-cell heaps.
+        if elem_size <= 0 || want_rank < 0 || kind == kind::STRING {
+            return core::ptr::null_mut();
+        }
+        let buf: &[u8] = if bytes.is_null() || len <= 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(bytes, len as usize)
+        };
+        let Some((dims, slots)) = tensor_shape_and_slots(buf) else {
+            return core::ptr::null_mut();
+        };
 
-    // Shape reconciliation against the receiver's annotation.
-    let want_rank = want_rank as usize;
-    if dims.len() != want_rank {
-        return core::ptr::null_mut();
-    }
-    if !want_dims.is_null() {
+        // Shape reconciliation against the receiver's annotation.
+        let want_rank = want_rank as usize;
+        if dims.len() != want_rank {
+            return core::ptr::null_mut();
+        }
+        if !want_dims.is_null() {
+            for (i, d) in dims.iter().enumerate() {
+                let want = *want_dims.add(i);
+                if want >= 0 && want != *d {
+                    return core::ptr::null_mut();
+                }
+            }
+        }
+
+        let numel: i64 = dims.iter().product::<i64>().max(0);
+        if numel != slots.len() as i64 {
+            return core::ptr::null_mut();
+        }
+
+        let header_bytes = 8 * (1 + want_rank);
+        let block = control_alloc_zeroed(header_bytes + numel as usize * elem_size as usize);
+        if block.is_null() {
+            return core::ptr::null_mut();
+        }
+        *(block as *mut i64) = want_rank as i64;
         for (i, d) in dims.iter().enumerate() {
-            let want = *want_dims.add(i);
-            if want >= 0 && want != *d {
+            *(block.add(8 * (1 + i)) as *mut i64) = *d;
+        }
+        let data = block.add(header_bytes);
+        for (row, slot) in slots.iter().enumerate() {
+            // A null slot keeps the zeroed value — see the doc comment.
+            let Some(slot) = slot else { continue };
+            if !write_slot(data, row, elem_size, kind, slot) {
+                // A tensor element is never separately allocated (String tensors
+                // don't exist at this surface), so the block IS the whole graph.
+                crate::alloc::karac_free_buf(
+                    block,
+                    header_bytes + numel as usize * elem_size as usize,
+                );
                 return core::ptr::null_mut();
             }
         }
+        block
     }
-
-    let numel: i64 = dims.iter().product::<i64>().max(0);
-    if numel != slots.len() as i64 {
-        return core::ptr::null_mut();
-    }
-
-    let header_bytes = 8 * (1 + want_rank);
-    let block = control_alloc_zeroed(header_bytes + numel as usize * elem_size as usize);
-    if block.is_null() {
-        return core::ptr::null_mut();
-    }
-    *(block as *mut i64) = want_rank as i64;
-    for (i, d) in dims.iter().enumerate() {
-        *(block.add(8 * (1 + i)) as *mut i64) = *d;
-    }
-    let data = block.add(header_bytes);
-    for (row, slot) in slots.iter().enumerate() {
-        // A null slot keeps the zeroed value — see the doc comment.
-        let Some(slot) = slot else { continue };
-        if !write_slot(data, row, elem_size, kind, slot) {
-            // A tensor element is never separately allocated (String tensors
-            // don't exist at this surface), so the block IS the whole graph.
-            crate::alloc::karac_free_buf(block, header_bytes + numel as usize * elem_size as usize);
-            return core::ptr::null_mut();
-        }
-    }
-    block
 }

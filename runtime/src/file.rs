@@ -238,11 +238,13 @@ pub(crate) fn err(e: &std::io::Error) -> KaracIoResult {
 /// `String` for `std::fs::OpenOptions`. The borrow is read-only; the
 /// caller (codegen) retains ownership of the bytes.
 unsafe fn read_path(path_ptr: *const u8, path_len: i64) -> Option<String> {
-    if path_ptr.is_null() || path_len < 0 {
-        return None;
+    unsafe {
+        if path_ptr.is_null() || path_len < 0 {
+            return None;
+        }
+        let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
+        std::str::from_utf8(slice).ok().map(|s| s.to_string())
     }
-    let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
-    std::str::from_utf8(slice).ok().map(|s| s.to_string())
 }
 
 // ── extern "C" entry points ─────────────────────────────────────
@@ -278,22 +280,24 @@ pub unsafe extern "C" fn karac_runtime_file_open(
     path_ptr: *const u8,
     path_len: i64,
 ) {
-    let Some(path) = read_path(path_ptr, path_len) else {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "path is not valid UTF-8",
-        ));
-        return;
-    };
-    *out = match std::fs::OpenOptions::new().read(true).open(&path) {
-        Ok(f) => {
-            let handle = Box::into_raw(Box::new(KaracFile {
-                inner: Mutex::new(f),
-            }));
-            ok(handle as i64)
-        }
-        Err(e) => err(&e),
-    };
+    unsafe {
+        let Some(path) = read_path(path_ptr, path_len) else {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "path is not valid UTF-8",
+            ));
+            return;
+        };
+        *out = match std::fs::OpenOptions::new().read(true).open(&path) {
+            Ok(f) => {
+                let handle = Box::into_raw(Box::new(KaracFile {
+                    inner: Mutex::new(f),
+                }));
+                ok(handle as i64)
+            }
+            Err(e) => err(&e),
+        };
+    }
 }
 
 /// Open `path` in write+truncate mode (creating if absent). Codegen
@@ -308,27 +312,29 @@ pub unsafe extern "C" fn karac_runtime_file_create(
     path_ptr: *const u8,
     path_len: i64,
 ) {
-    let Some(path) = read_path(path_ptr, path_len) else {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "path is not valid UTF-8",
-        ));
-        return;
-    };
-    *out = match std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&path)
-    {
-        Ok(f) => {
-            let handle = Box::into_raw(Box::new(KaracFile {
-                inner: Mutex::new(f),
-            }));
-            ok(handle as i64)
-        }
-        Err(e) => err(&e),
-    };
+    unsafe {
+        let Some(path) = read_path(path_ptr, path_len) else {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "path is not valid UTF-8",
+            ));
+            return;
+        };
+        *out = match std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+        {
+            Ok(f) => {
+                let handle = Box::into_raw(Box::new(KaracFile {
+                    inner: Mutex::new(f),
+                }));
+                ok(handle as i64)
+            }
+            Err(e) => err(&e),
+        };
+    }
 }
 
 /// Open `path` in append mode (creating if absent, positioning writes
@@ -343,26 +349,28 @@ pub unsafe extern "C" fn karac_runtime_file_append(
     path_ptr: *const u8,
     path_len: i64,
 ) {
-    let Some(path) = read_path(path_ptr, path_len) else {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "path is not valid UTF-8",
-        ));
-        return;
-    };
-    *out = match std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(&path)
-    {
-        Ok(f) => {
-            let handle = Box::into_raw(Box::new(KaracFile {
-                inner: Mutex::new(f),
-            }));
-            ok(handle as i64)
-        }
-        Err(e) => err(&e),
-    };
+    unsafe {
+        let Some(path) = read_path(path_ptr, path_len) else {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "path is not valid UTF-8",
+            ));
+            return;
+        };
+        *out = match std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)
+        {
+            Ok(f) => {
+                let handle = Box::into_raw(Box::new(KaracFile {
+                    inner: Mutex::new(f),
+                }));
+                ok(handle as i64)
+            }
+            Err(e) => err(&e),
+        };
+    }
 }
 
 /// Read the entire contents of `path` into a UTF-8 `String`. Codegen
@@ -388,17 +396,19 @@ pub unsafe extern "C" fn karac_runtime_file_read_to_string(
     path_ptr: *const u8,
     path_len: i64,
 ) {
-    let Some(path) = read_path(path_ptr, path_len) else {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "path is not valid UTF-8",
-        ));
-        return;
-    };
-    *out = match std::fs::read_to_string(&path) {
-        Ok(s) => ok_string(&s),
-        Err(e) => err(&e),
-    };
+    unsafe {
+        let Some(path) = read_path(path_ptr, path_len) else {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "path is not valid UTF-8",
+            ));
+            return;
+        };
+        *out = match std::fs::read_to_string(&path) {
+            Ok(s) => ok_string(&s),
+            Err(e) => err(&e),
+        };
+    }
 }
 
 /// Read up to `buf_len` bytes from `handle` into `buf_ptr`. On success
@@ -417,30 +427,32 @@ pub unsafe extern "C" fn karac_runtime_file_read(
     buf_ptr: *mut u8,
     buf_len: i64,
 ) {
-    if handle.is_null() {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "null file handle",
-        ));
-        return;
+    unsafe {
+        if handle.is_null() {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "null file handle",
+            ));
+            return;
+        }
+        if buf_len < 0 {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "negative buffer length",
+            ));
+            return;
+        }
+        let file = &*handle;
+        let mut guard = match file.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let buf = std::slice::from_raw_parts_mut(buf_ptr, buf_len as usize);
+        *out = match guard.read(buf) {
+            Ok(n) => ok(n as i64),
+            Err(e) => err(&e),
+        };
     }
-    if buf_len < 0 {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "negative buffer length",
-        ));
-        return;
-    }
-    let file = &*handle;
-    let mut guard = match file.inner.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    let buf = std::slice::from_raw_parts_mut(buf_ptr, buf_len as usize);
-    *out = match guard.read(buf) {
-        Ok(n) => ok(n as i64),
-        Err(e) => err(&e),
-    };
 }
 
 /// Write up to `buf_len` bytes from `buf_ptr` to `handle`. On success
@@ -456,30 +468,32 @@ pub unsafe extern "C" fn karac_runtime_file_write(
     buf_ptr: *const u8,
     buf_len: i64,
 ) {
-    if handle.is_null() {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "null file handle",
-        ));
-        return;
+    unsafe {
+        if handle.is_null() {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "null file handle",
+            ));
+            return;
+        }
+        if buf_len < 0 {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "negative buffer length",
+            ));
+            return;
+        }
+        let file = &*handle;
+        let mut guard = match file.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
+        *out = match guard.write(buf) {
+            Ok(n) => ok(n as i64),
+            Err(e) => err(&e),
+        };
     }
-    if buf_len < 0 {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "negative buffer length",
-        ));
-        return;
-    }
-    let file = &*handle;
-    let mut guard = match file.inner.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
-    *out = match guard.write(buf) {
-        Ok(n) => ok(n as i64),
-        Err(e) => err(&e),
-    };
 }
 
 /// Flush the file's write buffer. On success `out.value == 0`.
@@ -491,22 +505,24 @@ pub unsafe extern "C" fn karac_runtime_file_write(
 /// call.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_file_flush(out: *mut KaracIoResult, handle: *mut KaracFile) {
-    if handle.is_null() {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "null file handle",
-        ));
-        return;
+    unsafe {
+        if handle.is_null() {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "null file handle",
+            ));
+            return;
+        }
+        let file = &*handle;
+        let mut guard = match file.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        *out = match guard.flush() {
+            Ok(()) => ok(0),
+            Err(e) => err(&e),
+        };
     }
-    let file = &*handle;
-    let mut guard = match file.inner.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    *out = match guard.flush() {
-        Ok(()) => ok(0),
-        Err(e) => err(&e),
-    };
 }
 
 /// Sync file contents **and metadata** to stable storage (`fsync`). On
@@ -531,22 +547,24 @@ pub unsafe extern "C" fn karac_runtime_file_sync_all(
     out: *mut KaracIoResult,
     handle: *mut KaracFile,
 ) {
-    if handle.is_null() {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "null file handle",
-        ));
-        return;
+    unsafe {
+        if handle.is_null() {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "null file handle",
+            ));
+            return;
+        }
+        let file = &*handle;
+        let guard = match file.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        *out = match guard.sync_all() {
+            Ok(()) => ok(0),
+            Err(e) => err(&e),
+        };
     }
-    let file = &*handle;
-    let guard = match file.inner.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    *out = match guard.sync_all() {
-        Ok(()) => ok(0),
-        Err(e) => err(&e),
-    };
 }
 
 /// Sync file **contents only**, skipping metadata where the platform
@@ -568,22 +586,24 @@ pub unsafe extern "C" fn karac_runtime_file_sync_data(
     out: *mut KaracIoResult,
     handle: *mut KaracFile,
 ) {
-    if handle.is_null() {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "null file handle",
-        ));
-        return;
+    unsafe {
+        if handle.is_null() {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "null file handle",
+            ));
+            return;
+        }
+        let file = &*handle;
+        let guard = match file.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        *out = match guard.sync_data() {
+            Ok(()) => ok(0),
+            Err(e) => err(&e),
+        };
     }
-    let file = &*handle;
-    let guard = match file.inner.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    *out = match guard.sync_data() {
-        Ok(()) => ok(0),
-        Err(e) => err(&e),
-    };
 }
 
 /// Close the file handle and free its memory. Called by codegen's
@@ -597,10 +617,12 @@ pub unsafe extern "C" fn karac_runtime_file_sync_data(
 /// null check.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_file_close(handle: *mut KaracFile) {
-    if handle.is_null() {
-        return;
+    unsafe {
+        if handle.is_null() {
+            return;
+        }
+        drop(Box::from_raw(handle));
     }
-    drop(Box::from_raw(handle));
 }
 
 /// Seek a file handle. v1 doesn't expose seek through the Kāra
@@ -622,34 +644,36 @@ pub unsafe extern "C" fn karac_runtime_file_seek(
     whence: u8,
     offset: i64,
 ) {
-    if handle.is_null() {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "null file handle",
-        ));
-        return;
-    }
-    let file = &*handle;
-    let mut guard = match file.inner.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    let pos = match whence {
-        0 => SeekFrom::Start(offset as u64),
-        1 => SeekFrom::Current(offset),
-        2 => SeekFrom::End(offset),
-        _ => {
+    unsafe {
+        if handle.is_null() {
             *out = err(&std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "invalid seek whence",
+                "null file handle",
             ));
             return;
         }
-    };
-    *out = match guard.seek(pos) {
-        Ok(p) => ok(p as i64),
-        Err(e) => err(&e),
-    };
+        let file = &*handle;
+        let mut guard = match file.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let pos = match whence {
+            0 => SeekFrom::Start(offset as u64),
+            1 => SeekFrom::Current(offset),
+            2 => SeekFrom::End(offset),
+            _ => {
+                *out = err(&std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid seek whence",
+                ));
+                return;
+            }
+        };
+        *out = match guard.seek(pos) {
+            Ok(p) => ok(p as i64),
+            Err(e) => err(&e),
+        };
+    }
 }
 
 /// `stdin.read_line() -> Result[String, IoError]` — read one line
@@ -668,14 +692,16 @@ pub unsafe extern "C" fn karac_runtime_file_seek(
 /// allocas on the caller's stack before the call.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_stdin_read_line(out: *mut KaracIoResult) {
-    if out.is_null() {
-        return;
+    unsafe {
+        if out.is_null() {
+            return;
+        }
+        let mut buf = String::new();
+        *out = match std::io::stdin().read_line(&mut buf) {
+            Ok(_) => ok_string(&buf),
+            Err(e) => err(&e),
+        };
     }
-    let mut buf = String::new();
-    *out = match std::io::stdin().read_line(&mut buf) {
-        Ok(_) => ok_string(&buf),
-        Err(e) => err(&e),
-    };
 }
 
 /// `stdin.lines()` per-line pull (phase-8 `Stdin.lines()` slice). Reads one
@@ -697,25 +723,27 @@ pub unsafe extern "C" fn karac_runtime_stdin_read_line(out: *mut KaracIoResult) 
 /// `out` must point to a writable `KaracIoResult` slot (codegen-allocated).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_stdin_next_line(out: *mut KaracIoResult) -> i32 {
-    if out.is_null() {
-        return 0;
-    }
-    let mut buf = String::new();
-    match std::io::stdin().read_line(&mut buf) {
-        Ok(0) => 0,
-        Ok(_) => {
-            if buf.ends_with('\n') {
-                buf.pop();
-                if buf.ends_with('\r') {
-                    buf.pop();
-                }
-            }
-            *out = ok_string(&buf);
-            1
+    unsafe {
+        if out.is_null() {
+            return 0;
         }
-        Err(e) => {
-            *out = err(&e);
-            2
+        let mut buf = String::new();
+        match std::io::stdin().read_line(&mut buf) {
+            Ok(0) => 0,
+            Ok(_) => {
+                if buf.ends_with('\n') {
+                    buf.pop();
+                    if buf.ends_with('\r') {
+                        buf.pop();
+                    }
+                }
+                *out = ok_string(&buf);
+                1
+            }
+            Err(e) => {
+                *out = err(&e);
+                2
+            }
         }
     }
 }
@@ -730,15 +758,17 @@ pub unsafe extern "C" fn karac_runtime_stdin_next_line(out: *mut KaracIoResult) 
 /// `out` must point to a writable `KaracIoResult` slot (codegen-allocated).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_stdin_read_to_string(out: *mut KaracIoResult) {
-    if out.is_null() {
-        return;
+    unsafe {
+        if out.is_null() {
+            return;
+        }
+        use std::io::Read;
+        let mut buf = String::new();
+        *out = match std::io::stdin().read_to_string(&mut buf) {
+            Ok(_) => ok_string(&buf),
+            Err(e) => err(&e),
+        };
     }
-    use std::io::Read;
-    let mut buf = String::new();
-    *out = match std::io::stdin().read_to_string(&mut buf) {
-        Ok(_) => ok_string(&buf),
-        Err(e) => err(&e),
-    };
 }
 
 /// `fs.read_lines(path) -> Result[Vec[String], IoError]` codegen backing
@@ -772,79 +802,81 @@ pub unsafe extern "C" fn karac_runtime_fs_read_lines(
     path_ptr: *const u8,
     path_len: i64,
 ) {
-    if out_io.is_null() || out_vec.is_null() {
-        return;
-    }
-    let empty_vec = crate::KaracVec {
-        data: ptr::null_mut(),
-        len: 0,
-        cap: 0,
-    };
-    let path = if path_ptr.is_null() || path_len <= 0 {
-        String::new()
-    } else {
-        let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
-        match std::str::from_utf8(slice) {
-            Ok(s) => s.to_string(),
-            Err(_) => {
-                *out_vec = empty_vec;
-                *out_io = err(&std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "read_lines: path is not valid UTF-8",
-                ));
-                return;
-            }
+    unsafe {
+        if out_io.is_null() || out_vec.is_null() {
+            return;
         }
-    };
-    match std::fs::read_to_string(&path) {
-        Err(e) => {
-            *out_vec = empty_vec;
-            *out_io = err(&e);
-        }
-        Ok(content) => {
-            let lines: Vec<&str> = content.lines().collect();
-            let count = lines.len();
-            if count == 0 {
-                *out_vec = empty_vec;
-            } else {
-                let elem_size = std::mem::size_of::<crate::RuntimeKaracString>();
-                let align = std::mem::align_of::<crate::RuntimeKaracString>();
-                let vec_layout = Layout::from_size_align(elem_size * count, align)
-                    .expect("read_lines Vec layout");
-                let buf = alloc(vec_layout) as *mut crate::RuntimeKaracString;
-                if buf.is_null() {
-                    std::alloc::handle_alloc_error(vec_layout);
+        let empty_vec = crate::KaracVec {
+            data: ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        let path = if path_ptr.is_null() || path_len <= 0 {
+            String::new()
+        } else {
+            let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
+            match std::str::from_utf8(slice) {
+                Ok(s) => s.to_string(),
+                Err(_) => {
+                    *out_vec = empty_vec;
+                    *out_io = err(&std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "read_lines: path is not valid UTF-8",
+                    ));
+                    return;
                 }
-                for (i, line) in lines.iter().enumerate() {
-                    let bytes = line.as_bytes();
-                    let s = if bytes.is_empty() {
-                        crate::RuntimeKaracString {
-                            data: ptr::null_mut(),
-                            len: 0,
-                            cap: 0,
-                        }
-                    } else {
-                        let str_layout = Layout::array::<u8>(bytes.len()).unwrap();
-                        let str_buf = alloc(str_layout);
-                        if str_buf.is_null() {
-                            std::alloc::handle_alloc_error(str_layout);
-                        }
-                        ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
-                        crate::RuntimeKaracString {
-                            data: str_buf,
-                            len: bytes.len() as i64,
-                            cap: bytes.len() as i64,
-                        }
+            }
+        };
+        match std::fs::read_to_string(&path) {
+            Err(e) => {
+                *out_vec = empty_vec;
+                *out_io = err(&e);
+            }
+            Ok(content) => {
+                let lines: Vec<&str> = content.lines().collect();
+                let count = lines.len();
+                if count == 0 {
+                    *out_vec = empty_vec;
+                } else {
+                    let elem_size = std::mem::size_of::<crate::RuntimeKaracString>();
+                    let align = std::mem::align_of::<crate::RuntimeKaracString>();
+                    let vec_layout = Layout::from_size_align(elem_size * count, align)
+                        .expect("read_lines Vec layout");
+                    let buf = alloc(vec_layout) as *mut crate::RuntimeKaracString;
+                    if buf.is_null() {
+                        std::alloc::handle_alloc_error(vec_layout);
+                    }
+                    for (i, line) in lines.iter().enumerate() {
+                        let bytes = line.as_bytes();
+                        let s = if bytes.is_empty() {
+                            crate::RuntimeKaracString {
+                                data: ptr::null_mut(),
+                                len: 0,
+                                cap: 0,
+                            }
+                        } else {
+                            let str_layout = Layout::array::<u8>(bytes.len()).unwrap();
+                            let str_buf = alloc(str_layout);
+                            if str_buf.is_null() {
+                                std::alloc::handle_alloc_error(str_layout);
+                            }
+                            ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
+                            crate::RuntimeKaracString {
+                                data: str_buf,
+                                len: bytes.len() as i64,
+                                cap: bytes.len() as i64,
+                            }
+                        };
+                        ptr::write(buf.add(i), s);
+                    }
+                    *out_vec = crate::KaracVec {
+                        data: buf as *mut u8,
+                        len: count as i64,
+                        cap: count as i64,
                     };
-                    ptr::write(buf.add(i), s);
                 }
-                *out_vec = crate::KaracVec {
-                    data: buf as *mut u8,
-                    len: count as i64,
-                    cap: count as i64,
-                };
+                *out_io = ok(0);
             }
-            *out_io = ok(0);
         }
     }
 }
@@ -870,24 +902,26 @@ pub unsafe extern "C" fn karac_runtime_fs_write(
     contents_ptr: *const u8,
     contents_len: i64,
 ) {
-    let Some(path) = read_path(path_ptr, path_len) else {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "path is not valid UTF-8",
-        ));
-        return;
-    };
-    // Contents are raw bytes — no UTF-8 round-trip needed (a Kāra String is
-    // already valid UTF-8, but `fs::write` takes `&[u8]` anyway).
-    let contents: &[u8] = if contents_ptr.is_null() || contents_len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(contents_ptr, contents_len as usize)
-    };
-    *out = match std::fs::write(&path, contents) {
-        Ok(()) => ok(0),
-        Err(e) => err(&e),
-    };
+    unsafe {
+        let Some(path) = read_path(path_ptr, path_len) else {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "path is not valid UTF-8",
+            ));
+            return;
+        };
+        // Contents are raw bytes — no UTF-8 round-trip needed (a Kāra String is
+        // already valid UTF-8, but `fs::write` takes `&[u8]` anyway).
+        let contents: &[u8] = if contents_ptr.is_null() || contents_len <= 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(contents_ptr, contents_len as usize)
+        };
+        *out = match std::fs::write(&path, contents) {
+            Ok(()) => ok(0),
+            Err(e) => err(&e),
+        };
+    }
 }
 
 // ── DataFrame CSV serialization (phase-11 CSV leg) ─────────────────
@@ -937,96 +971,98 @@ pub unsafe extern "C" fn karac_runtime_df_write_csv(
     path_ptr: *const u8,
     path_len: i64,
 ) {
-    let Some(path) = read_path(path_ptr, path_len) else {
-        *out = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "path is not valid UTF-8",
-        ));
-        return;
-    };
-    let entries = *(df_ctrl as *const *const u8);
-    let n_cols = *(df_ctrl.add(8) as *const i64);
-
-    struct Col {
-        name: String,
-        data: *const u8,
-        bitmap: *const u8,
-        len: i64,
-        elem_size: i64,
-        kind: i64,
-    }
-    let mut cols: Vec<Col> = Vec::with_capacity(n_cols.max(0) as usize);
-    for i in 0..n_cols.max(0) as usize {
-        let e = entries.add(i * 40);
-        let name_data = *(e as *const *const u8);
-        let name_len = *(e.add(8) as *const i64);
-        let col_ctrl = *(e.add(16) as *const *const u8);
-        let name = if name_data.is_null() || name_len <= 0 {
-            String::new()
-        } else {
-            String::from_utf8_lossy(std::slice::from_raw_parts(name_data, name_len as usize))
-                .into_owned()
+    unsafe {
+        let Some(path) = read_path(path_ptr, path_len) else {
+            *out = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "path is not valid UTF-8",
+            ));
+            return;
         };
-        cols.push(Col {
-            name,
-            data: *(col_ctrl as *const *const u8),
-            bitmap: *(col_ctrl.add(8) as *const *const u8),
-            len: *(col_ctrl.add(16) as *const i64),
-            elem_size: *(e.add(24) as *const i64),
-            kind: *(e.add(32) as *const i64),
-        });
-    }
+        let entries = *(df_ctrl as *const *const u8);
+        let n_cols = *(df_ctrl.add(8) as *const i64);
 
-    let mut text = String::new();
-    let header: Vec<String> = cols.iter().map(|c| csv_quote(&c.name)).collect();
-    text.push_str(&header.join(","));
-    text.push('\n');
-    let height = cols.first().map_or(0, |c| c.len).max(0);
-    for row in 0..height as usize {
-        let mut cells: Vec<String> = Vec::with_capacity(cols.len());
-        for c in cols.iter() {
-            let valid = !c.bitmap.is_null() && (*c.bitmap.add(row / 8) >> (row % 8)) & 1 == 1;
-            if !valid {
-                cells.push(String::new());
-                continue;
-            }
-            let p = c.data.add(row * c.elem_size as usize);
-            let cell = match (c.kind, c.elem_size) {
-                (1, 1) => format!("{}", *(p as *const i8)),
-                (1, 2) => format!("{}", *(p as *const i16)),
-                (1, 4) => format!("{}", *(p as *const i32)),
-                (1, 8) => format!("{}", *(p as *const i64)),
-                (2, 1) => format!("{}", *p),
-                (2, 2) => format!("{}", *(p as *const u16)),
-                (2, 4) => format!("{}", *(p as *const u32)),
-                (2, 8) => format!("{}", *(p as *const u64)),
-                (3, 4) => format!("{}", *(p as *const f32)),
-                (3, 8) => format!("{}", *(p as *const f64)),
-                (0, 1) => (if *p != 0 { "true" } else { "false" }).to_string(),
-                (4, _) => {
-                    let sptr = *(p as *const *const u8);
-                    let slen = *(p.add(8) as *const i64);
-                    if sptr.is_null() || slen <= 0 {
-                        String::new()
-                    } else {
-                        String::from_utf8_lossy(std::slice::from_raw_parts(sptr, slen as usize))
-                            .into_owned()
-                    }
-                }
-                // Unknown kind/size combination — an empty cell rather than
-                // UB; new element classes must extend this table.
-                _ => String::new(),
-            };
-            cells.push(csv_quote(&cell));
+        struct Col {
+            name: String,
+            data: *const u8,
+            bitmap: *const u8,
+            len: i64,
+            elem_size: i64,
+            kind: i64,
         }
-        text.push_str(&cells.join(","));
-        text.push('\n');
-    }
+        let mut cols: Vec<Col> = Vec::with_capacity(n_cols.max(0) as usize);
+        for i in 0..n_cols.max(0) as usize {
+            let e = entries.add(i * 40);
+            let name_data = *(e as *const *const u8);
+            let name_len = *(e.add(8) as *const i64);
+            let col_ctrl = *(e.add(16) as *const *const u8);
+            let name = if name_data.is_null() || name_len <= 0 {
+                String::new()
+            } else {
+                String::from_utf8_lossy(std::slice::from_raw_parts(name_data, name_len as usize))
+                    .into_owned()
+            };
+            cols.push(Col {
+                name,
+                data: *(col_ctrl as *const *const u8),
+                bitmap: *(col_ctrl.add(8) as *const *const u8),
+                len: *(col_ctrl.add(16) as *const i64),
+                elem_size: *(e.add(24) as *const i64),
+                kind: *(e.add(32) as *const i64),
+            });
+        }
 
-    *out = match std::fs::write(&path, text) {
-        Ok(()) => ok(0),
-        Err(e) => err(&e),
-    };
+        let mut text = String::new();
+        let header: Vec<String> = cols.iter().map(|c| csv_quote(&c.name)).collect();
+        text.push_str(&header.join(","));
+        text.push('\n');
+        let height = cols.first().map_or(0, |c| c.len).max(0);
+        for row in 0..height as usize {
+            let mut cells: Vec<String> = Vec::with_capacity(cols.len());
+            for c in cols.iter() {
+                let valid = !c.bitmap.is_null() && (*c.bitmap.add(row / 8) >> (row % 8)) & 1 == 1;
+                if !valid {
+                    cells.push(String::new());
+                    continue;
+                }
+                let p = c.data.add(row * c.elem_size as usize);
+                let cell = match (c.kind, c.elem_size) {
+                    (1, 1) => format!("{}", *(p as *const i8)),
+                    (1, 2) => format!("{}", *(p as *const i16)),
+                    (1, 4) => format!("{}", *(p as *const i32)),
+                    (1, 8) => format!("{}", *(p as *const i64)),
+                    (2, 1) => format!("{}", *p),
+                    (2, 2) => format!("{}", *(p as *const u16)),
+                    (2, 4) => format!("{}", *(p as *const u32)),
+                    (2, 8) => format!("{}", *(p as *const u64)),
+                    (3, 4) => format!("{}", *(p as *const f32)),
+                    (3, 8) => format!("{}", *(p as *const f64)),
+                    (0, 1) => (if *p != 0 { "true" } else { "false" }).to_string(),
+                    (4, _) => {
+                        let sptr = *(p as *const *const u8);
+                        let slen = *(p.add(8) as *const i64);
+                        if sptr.is_null() || slen <= 0 {
+                            String::new()
+                        } else {
+                            String::from_utf8_lossy(std::slice::from_raw_parts(sptr, slen as usize))
+                                .into_owned()
+                        }
+                    }
+                    // Unknown kind/size combination — an empty cell rather than
+                    // UB; new element classes must extend this table.
+                    _ => String::new(),
+                };
+                cells.push(csv_quote(&cell));
+            }
+            text.push_str(&cells.join(","));
+            text.push('\n');
+        }
+
+        *out = match std::fs::write(&path, text) {
+            Ok(()) => ok(0),
+            Err(e) => err(&e),
+        };
+    }
 }
 
 /// RFC-4180-lite CSV record/field splitter — the runtime twin of the
@@ -1105,30 +1141,34 @@ fn csv_split_records(text: &str) -> Result<Vec<Vec<Option<String>>>, String> {
 /// control-block graphs laid out exactly as codegen builds them itself, so
 /// they must allocate through the same pairing.
 pub(crate) unsafe fn control_alloc_zeroed(size: usize) -> *mut u8 {
-    if size == 0 {
-        return ptr::null_mut();
+    unsafe {
+        if size == 0 {
+            return ptr::null_mut();
+        }
+        let layout = Layout::from_size_align(size, 8).expect("df_read_csv layout");
+        let p = std::alloc::alloc_zeroed(layout);
+        if p.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        p
     }
-    let layout = Layout::from_size_align(size, 8).expect("df_read_csv layout");
-    let p = std::alloc::alloc_zeroed(layout);
-    if p.is_null() {
-        std::alloc::handle_alloc_error(layout);
-    }
-    p
 }
 
 /// Copy `bytes` into a fresh malloc-compatible buffer (null for empty).
 /// Shared with `arrow_ipc` — see `control_alloc_zeroed`.
 pub(crate) unsafe fn control_alloc_bytes(bytes: &[u8]) -> *mut u8 {
-    if bytes.is_empty() {
-        return ptr::null_mut();
+    unsafe {
+        if bytes.is_empty() {
+            return ptr::null_mut();
+        }
+        let layout = Layout::array::<u8>(bytes.len()).unwrap();
+        let p = alloc(layout);
+        if p.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+        p
     }
-    let layout = Layout::array::<u8>(bytes.len()).unwrap();
-    let p = alloc(layout);
-    if p.is_null() {
-        std::alloc::handle_alloc_error(layout);
-    }
-    ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
-    p
 }
 
 /// `DataFrame.read_csv(path) -> Result[DataFrame, IoError]` — parse a CSV
@@ -1159,112 +1199,114 @@ pub unsafe extern "C" fn karac_runtime_df_read_csv(
     path_ptr: *const u8,
     path_len: i64,
 ) {
-    *out_df = ptr::null_mut();
-    let Some(path) = read_path(path_ptr, path_len) else {
-        *out_io = err(&std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "path is not valid UTF-8",
-        ));
-        return;
-    };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) => {
-            *out_io = err(&e);
+    unsafe {
+        *out_df = ptr::null_mut();
+        let Some(path) = read_path(path_ptr, path_len) else {
+            *out_io = err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "path is not valid UTF-8",
+            ));
             return;
-        }
-    };
-    let records = match csv_split_records(&text) {
-        Ok(r) => r,
-        Err(msg) => {
-            *out_io = err(&std::io::Error::other(msg));
-            return;
-        }
-    };
-    let Some(header) = records.first() else {
-        *out_io = err(&std::io::Error::other(
-            "CSV parse error: empty file (no header row)",
-        ));
-        return;
-    };
-    let names: Vec<String> = header
-        .iter()
-        .enumerate()
-        .map(|(i, c)| c.clone().unwrap_or_else(|| format!("column_{i}")))
-        .collect();
-    let width = names.len();
-    for (i, rec) in records.iter().enumerate().skip(1) {
-        if rec.len() != width {
-            *out_io = err(&std::io::Error::other(format!(
-                "CSV parse error: row {} has {} cell(s) but the header has {}",
-                i,
-                rec.len(),
-                width
-            )));
-            return;
-        }
-    }
-    let rows = records.len() - 1;
-
-    // Build entries (stride 40: name*, name_len, col_ctrl*, elem_size, kind).
-    let entries = control_alloc_zeroed(width * 40);
-    for (ci, name) in names.iter().enumerate() {
-        let cells: Vec<&Option<String>> = records.iter().skip(1).map(|r| &r[ci]).collect();
-        let all_i64 = cells
-            .iter()
-            .all(|c| c.as_ref().is_none_or(|s| s.parse::<i64>().is_ok()));
-        let all_f64 = all_i64
-            || cells
-                .iter()
-                .all(|c| c.as_ref().is_none_or(|s| s.parse::<f64>().is_ok()));
-        let (kind, elem_size): (i64, usize) = if all_i64 {
-            (1, 8)
-        } else if all_f64 {
-            (3, 8)
-        } else {
-            (4, 24)
         };
-        // Data buffer + validity bitmap (bit i = valid). Zero-initialized,
-        // so NULL slots need no store and String NULLs are `{null,0,0}`.
-        let data = control_alloc_zeroed(rows * elem_size);
-        let bitmap = control_alloc_zeroed(rows.div_ceil(8));
-        for (ri, cell) in cells.iter().enumerate() {
-            let Some(s) = cell.as_ref() else { continue };
-            *bitmap.add(ri / 8) |= 1 << (ri % 8);
-            let p = data.add(ri * elem_size);
-            match kind {
-                1 => *(p as *mut i64) = s.parse::<i64>().unwrap(),
-                3 => *(p as *mut f64) = s.parse::<f64>().unwrap(),
-                _ => {
-                    let bytes = s.as_bytes();
-                    *(p as *mut *mut u8) = control_alloc_bytes(bytes);
-                    *(p.add(8) as *mut i64) = bytes.len() as i64;
-                    *(p.add(16) as *mut i64) = bytes.len() as i64; // cap == len → owned
-                }
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                *out_io = err(&e);
+                return;
+            }
+        };
+        let records = match csv_split_records(&text) {
+            Ok(r) => r,
+            Err(msg) => {
+                *out_io = err(&std::io::Error::other(msg));
+                return;
+            }
+        };
+        let Some(header) = records.first() else {
+            *out_io = err(&std::io::Error::other(
+                "CSV parse error: empty file (no header row)",
+            ));
+            return;
+        };
+        let names: Vec<String> = header
+            .iter()
+            .enumerate()
+            .map(|(i, c)| c.clone().unwrap_or_else(|| format!("column_{i}")))
+            .collect();
+        let width = names.len();
+        for (i, rec) in records.iter().enumerate().skip(1) {
+            if rec.len() != width {
+                *out_io = err(&std::io::Error::other(format!(
+                    "CSV parse error: row {} has {} cell(s) but the header has {}",
+                    i,
+                    rec.len(),
+                    width
+                )));
+                return;
             }
         }
-        // Column control {data, bitmap, len, cap}.
-        let ctrl = control_alloc_zeroed(32);
-        *(ctrl as *mut *mut u8) = data;
-        *(ctrl.add(8) as *mut *mut u8) = bitmap;
-        *(ctrl.add(16) as *mut i64) = rows as i64;
-        *(ctrl.add(24) as *mut i64) = rows as i64;
-        // Entry.
-        let e = entries.add(ci * 40);
-        let nbytes = name.as_bytes();
-        *(e as *mut *mut u8) = control_alloc_bytes(nbytes);
-        *(e.add(8) as *mut i64) = nbytes.len() as i64;
-        *(e.add(16) as *mut *mut u8) = ctrl;
-        *(e.add(24) as *mut i64) = elem_size as i64;
-        *(e.add(32) as *mut i64) = kind;
+        let rows = records.len() - 1;
+
+        // Build entries (stride 40: name*, name_len, col_ctrl*, elem_size, kind).
+        let entries = control_alloc_zeroed(width * 40);
+        for (ci, name) in names.iter().enumerate() {
+            let cells: Vec<&Option<String>> = records.iter().skip(1).map(|r| &r[ci]).collect();
+            let all_i64 = cells
+                .iter()
+                .all(|c| c.as_ref().is_none_or(|s| s.parse::<i64>().is_ok()));
+            let all_f64 = all_i64
+                || cells
+                    .iter()
+                    .all(|c| c.as_ref().is_none_or(|s| s.parse::<f64>().is_ok()));
+            let (kind, elem_size): (i64, usize) = if all_i64 {
+                (1, 8)
+            } else if all_f64 {
+                (3, 8)
+            } else {
+                (4, 24)
+            };
+            // Data buffer + validity bitmap (bit i = valid). Zero-initialized,
+            // so NULL slots need no store and String NULLs are `{null,0,0}`.
+            let data = control_alloc_zeroed(rows * elem_size);
+            let bitmap = control_alloc_zeroed(rows.div_ceil(8));
+            for (ri, cell) in cells.iter().enumerate() {
+                let Some(s) = cell.as_ref() else { continue };
+                *bitmap.add(ri / 8) |= 1 << (ri % 8);
+                let p = data.add(ri * elem_size);
+                match kind {
+                    1 => *(p as *mut i64) = s.parse::<i64>().unwrap(),
+                    3 => *(p as *mut f64) = s.parse::<f64>().unwrap(),
+                    _ => {
+                        let bytes = s.as_bytes();
+                        *(p as *mut *mut u8) = control_alloc_bytes(bytes);
+                        *(p.add(8) as *mut i64) = bytes.len() as i64;
+                        *(p.add(16) as *mut i64) = bytes.len() as i64; // cap == len → owned
+                    }
+                }
+            }
+            // Column control {data, bitmap, len, cap}.
+            let ctrl = control_alloc_zeroed(32);
+            *(ctrl as *mut *mut u8) = data;
+            *(ctrl.add(8) as *mut *mut u8) = bitmap;
+            *(ctrl.add(16) as *mut i64) = rows as i64;
+            *(ctrl.add(24) as *mut i64) = rows as i64;
+            // Entry.
+            let e = entries.add(ci * 40);
+            let nbytes = name.as_bytes();
+            *(e as *mut *mut u8) = control_alloc_bytes(nbytes);
+            *(e.add(8) as *mut i64) = nbytes.len() as i64;
+            *(e.add(16) as *mut *mut u8) = ctrl;
+            *(e.add(24) as *mut i64) = elem_size as i64;
+            *(e.add(32) as *mut i64) = kind;
+        }
+        // DataFrame control {entries, len, capacity}.
+        let control = control_alloc_zeroed(24);
+        *(control as *mut *mut u8) = entries;
+        *(control.add(8) as *mut i64) = width as i64;
+        *(control.add(16) as *mut i64) = width as i64;
+        *out_df = control;
+        *out_io = ok(0);
     }
-    // DataFrame control {entries, len, capacity}.
-    let control = control_alloc_zeroed(24);
-    *(control as *mut *mut u8) = entries;
-    *(control.add(8) as *mut i64) = width as i64;
-    *(control.add(16) as *mut i64) = width as i64;
-    *out_df = control;
-    *out_io = ok(0);
 }
 
 // ── Tests ───────────────────────────────────────────────────────

@@ -46,34 +46,38 @@ use format_spec::FormatSpec;
 /// the spec at compile time, so the fallback never fires in practice — it
 /// just keeps the runtime total rather than panicking across the FFI edge.
 unsafe fn parse_spec(spec_ptr: *const u8, spec_len: i64) -> FormatSpec {
-    let default = || FormatSpec {
-        fill: None,
-        align: None,
-        zero_pad: false,
-        width: None,
-        precision: None,
-        radix: format_spec::Radix::Dec,
-    };
-    if spec_ptr.is_null() || spec_len < 0 {
-        return default();
-    }
-    let raw = std::slice::from_raw_parts(spec_ptr, spec_len as usize);
-    match std::str::from_utf8(raw) {
-        Ok(s) => FormatSpec::parse(s).unwrap_or_else(|_| default()),
-        Err(_) => default(),
+    unsafe {
+        let default = || FormatSpec {
+            fill: None,
+            align: None,
+            zero_pad: false,
+            width: None,
+            precision: None,
+            radix: format_spec::Radix::Dec,
+        };
+        if spec_ptr.is_null() || spec_len < 0 {
+            return default();
+        }
+        let raw = std::slice::from_raw_parts(spec_ptr, spec_len as usize);
+        match std::str::from_utf8(raw) {
+            Ok(s) => FormatSpec::parse(s).unwrap_or_else(|_| default()),
+            Err(_) => default(),
+        }
     }
 }
 
 /// Copy `s`'s bytes into `out_buf` bounded by `out_cap`, returning the number
 /// of bytes written.
 unsafe fn write_out(s: &str, out_buf: *mut u8, out_cap: i64) -> i64 {
-    if out_buf.is_null() || out_cap <= 0 {
-        return 0;
+    unsafe {
+        if out_buf.is_null() || out_cap <= 0 {
+            return 0;
+        }
+        let bytes = s.as_bytes();
+        let n = std::cmp::min(bytes.len(), out_cap as usize);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, n);
+        n as i64
     }
-    let bytes = s.as_bytes();
-    let n = std::cmp::min(bytes.len(), out_cap as usize);
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, n);
-    n as i64
 }
 
 /// Render an integer hole. `is_unsigned != 0` selects `apply_uint` (never
@@ -91,13 +95,15 @@ pub unsafe extern "C" fn karac_runtime_fmt_int(
     out_buf: *mut u8,
     out_cap: i64,
 ) -> i64 {
-    let fs = parse_spec(spec_ptr, spec_len);
-    let rendered = if is_unsigned != 0 {
-        fs.apply_uint(value as u64)
-    } else {
-        fs.apply_int(value)
-    };
-    write_out(&rendered, out_buf, out_cap)
+    unsafe {
+        let fs = parse_spec(spec_ptr, spec_len);
+        let rendered = if is_unsigned != 0 {
+            fs.apply_uint(value as u64)
+        } else {
+            fs.apply_int(value)
+        };
+        write_out(&rendered, out_buf, out_cap)
+    }
 }
 
 /// Render a float hole (`apply_float`).
@@ -113,9 +119,11 @@ pub unsafe extern "C" fn karac_runtime_fmt_float(
     out_buf: *mut u8,
     out_cap: i64,
 ) -> i64 {
-    let fs = parse_spec(spec_ptr, spec_len);
-    let rendered = fs.apply_float(value);
-    write_out(&rendered, out_buf, out_cap)
+    unsafe {
+        let fs = parse_spec(spec_ptr, spec_len);
+        let rendered = fs.apply_float(value);
+        write_out(&rendered, out_buf, out_cap)
+    }
 }
 
 /// Render a string hole (`apply_str` — width padding + align + fill). The
@@ -135,15 +143,17 @@ pub unsafe extern "C" fn karac_runtime_fmt_str(
     out_buf: *mut u8,
     out_cap: i64,
 ) -> i64 {
-    let fs = parse_spec(spec_ptr, spec_len);
-    let s = if s_ptr.is_null() || s_len < 0 {
-        ""
-    } else {
-        let bytes = std::slice::from_raw_parts(s_ptr, s_len as usize);
-        std::str::from_utf8(bytes).unwrap_or("")
-    };
-    let rendered = fs.apply_str(s);
-    write_out(&rendered, out_buf, out_cap)
+    unsafe {
+        let fs = parse_spec(spec_ptr, spec_len);
+        let s = if s_ptr.is_null() || s_len < 0 {
+            ""
+        } else {
+            let bytes = std::slice::from_raw_parts(s_ptr, s_len as usize);
+            std::str::from_utf8(bytes).unwrap_or("")
+        };
+        let rendered = fs.apply_str(s);
+        write_out(&rendered, out_buf, out_cap)
+    }
 }
 
 #[cfg(test)]
@@ -151,39 +161,45 @@ mod tests {
     use super::*;
 
     unsafe fn call_int(spec: &str, v: i64, unsigned: bool) -> String {
-        let mut buf = [0u8; 128];
-        let n = karac_runtime_fmt_int(
-            spec.as_ptr(),
-            spec.len() as i64,
-            v,
-            unsigned as i32,
-            buf.as_mut_ptr(),
-            buf.len() as i64,
-        );
-        String::from_utf8(buf[..n as usize].to_vec()).unwrap()
+        unsafe {
+            let mut buf = [0u8; 128];
+            let n = karac_runtime_fmt_int(
+                spec.as_ptr(),
+                spec.len() as i64,
+                v,
+                unsigned as i32,
+                buf.as_mut_ptr(),
+                buf.len() as i64,
+            );
+            String::from_utf8(buf[..n as usize].to_vec()).unwrap()
+        }
     }
     unsafe fn call_float(spec: &str, v: f64) -> String {
-        let mut buf = [0u8; 128];
-        let n = karac_runtime_fmt_float(
-            spec.as_ptr(),
-            spec.len() as i64,
-            v,
-            buf.as_mut_ptr(),
-            buf.len() as i64,
-        );
-        String::from_utf8(buf[..n as usize].to_vec()).unwrap()
+        unsafe {
+            let mut buf = [0u8; 128];
+            let n = karac_runtime_fmt_float(
+                spec.as_ptr(),
+                spec.len() as i64,
+                v,
+                buf.as_mut_ptr(),
+                buf.len() as i64,
+            );
+            String::from_utf8(buf[..n as usize].to_vec()).unwrap()
+        }
     }
     unsafe fn call_str(spec: &str, s: &str) -> String {
-        let mut buf = [0u8; 128];
-        let n = karac_runtime_fmt_str(
-            spec.as_ptr(),
-            spec.len() as i64,
-            s.as_ptr(),
-            s.len() as i64,
-            buf.as_mut_ptr(),
-            buf.len() as i64,
-        );
-        String::from_utf8(buf[..n as usize].to_vec()).unwrap()
+        unsafe {
+            let mut buf = [0u8; 128];
+            let n = karac_runtime_fmt_str(
+                spec.as_ptr(),
+                spec.len() as i64,
+                s.as_ptr(),
+                s.len() as i64,
+                buf.as_mut_ptr(),
+                buf.len() as i64,
+            );
+            String::from_utf8(buf[..n as usize].to_vec()).unwrap()
+        }
     }
 
     #[test]

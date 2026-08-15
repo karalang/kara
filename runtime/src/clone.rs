@@ -53,36 +53,38 @@ struct KaracString {
 ///   the same `track_vec_var` path Strings already use.
 #[no_mangle]
 pub unsafe extern "C" fn karac_string_clone(src: *const c_void, dst: *mut c_void) {
-    let src = &*(src as *const KaracString);
-    let dst = &mut *(dst as *mut KaracString);
+    unsafe {
+        let src = &*(src as *const KaracString);
+        let dst = &mut *(dst as *mut KaracString);
 
-    if src.len == 0 {
-        dst.data = ptr::null_mut();
-        dst.len = 0;
-        dst.cap = 0;
-        return;
+        if src.len == 0 {
+            dst.data = ptr::null_mut();
+            dst.len = 0;
+            dst.cap = 0;
+            return;
+        }
+
+        // Allocate `len + 1` bytes and write a NUL at position `len` so the
+        // cloned String stays printf-compatible. `Vec.push_str` codegen at
+        // `src/codegen/assoc_call.rs:476` maintains the same invariant
+        // (alloc len+1, copy len, set [len]=0); String-creating paths in
+        // karac are expected to keep this contract because `println(str)` /
+        // `printf("%s", data)` reads until NUL. Pre-fix the clone allocated
+        // exactly `len` bytes, so a printf on the cloned String read one
+        // byte past the allocation (ASAN heap-buffer-overflow, surfaced by
+        // tests/memory_sanitizer.rs::asan_vec_extend_from_slice_string_*).
+        // The `cap` field still mirrors `len` (no headroom) — only the
+        // backing buffer is one byte larger.
+        let alloc_bytes = (src.len as usize) + 1;
+        let layout = Layout::array::<u8>(alloc_bytes).unwrap();
+        let new_data = alloc(layout);
+        ptr::copy_nonoverlapping(src.data, new_data, src.len as usize);
+        *new_data.add(src.len as usize) = 0;
+
+        dst.data = new_data;
+        dst.len = src.len;
+        dst.cap = src.len; // capacity matches len — fresh buffer, no headroom.
     }
-
-    // Allocate `len + 1` bytes and write a NUL at position `len` so the
-    // cloned String stays printf-compatible. `Vec.push_str` codegen at
-    // `src/codegen/assoc_call.rs:476` maintains the same invariant
-    // (alloc len+1, copy len, set [len]=0); String-creating paths in
-    // karac are expected to keep this contract because `println(str)` /
-    // `printf("%s", data)` reads until NUL. Pre-fix the clone allocated
-    // exactly `len` bytes, so a printf on the cloned String read one
-    // byte past the allocation (ASAN heap-buffer-overflow, surfaced by
-    // tests/memory_sanitizer.rs::asan_vec_extend_from_slice_string_*).
-    // The `cap` field still mirrors `len` (no headroom) — only the
-    // backing buffer is one byte larger.
-    let alloc_bytes = (src.len as usize) + 1;
-    let layout = Layout::array::<u8>(alloc_bytes).unwrap();
-    let new_data = alloc(layout);
-    ptr::copy_nonoverlapping(src.data, new_data, src.len as usize);
-    *new_data.add(src.len as usize) = 0;
-
-    dst.data = new_data;
-    dst.len = src.len;
-    dst.cap = src.len; // capacity matches len — fresh buffer, no headroom.
 }
 
 /// Slice a Kāra `String`: `s[start..end]` → a fresh heap `String` buffer
@@ -121,47 +123,49 @@ pub unsafe extern "C" fn karac_string_slice(
     start: i64,
     end: i64,
 ) -> *mut u8 {
-    if start < 0 || end < start || end > len {
-        // Lean fatal print (raw write(2), no std-IO) — see `fatal` /
-        // B-2026-06-11-8; this symbol is on every String-slice program's path.
-        crate::fatal::eprint_fmt(format_args!(
-            "runtime error: string slice bounds {}..{} out of range (len {})\n",
-            start, end, len
-        ));
-        std::process::exit(1);
-    }
-    let len_us = len as usize;
-    let start_us = start as usize;
-    let end_us = end as usize;
-    let bytes: &[u8] = if len_us == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(data, len_us)
-    };
-    // A byte index `i` is a UTF-8 char boundary iff it's the start/end of
-    // the buffer or `bytes[i]` is not a `0b10xxxxxx` continuation byte. The
-    // `i == len_us` short-circuit keeps `bytes[i]` from indexing past the end.
-    let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
-    if !is_boundary(start_us) || !is_boundary(end_us) {
-        crate::fatal::eprint_fmt(format_args!(
-            "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
+    unsafe {
+        if start < 0 || end < start || end > len {
+            // Lean fatal print (raw write(2), no std-IO) — see `fatal` /
+            // B-2026-06-11-8; this symbol is on every String-slice program's path.
+            crate::fatal::eprint_fmt(format_args!(
+                "runtime error: string slice bounds {}..{} out of range (len {})\n",
+                start, end, len
+            ));
+            std::process::exit(1);
+        }
+        let len_us = len as usize;
+        let start_us = start as usize;
+        let end_us = end as usize;
+        let bytes: &[u8] = if len_us == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(data, len_us)
+        };
+        // A byte index `i` is a UTF-8 char boundary iff it's the start/end of
+        // the buffer or `bytes[i]` is not a `0b10xxxxxx` continuation byte. The
+        // `i == len_us` short-circuit keeps `bytes[i]` from indexing past the end.
+        let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
+        if !is_boundary(start_us) || !is_boundary(end_us) {
+            crate::fatal::eprint_fmt(format_args!(
+                "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
              {}..{} does not fall on UTF-8 char boundaries\n",
-            start, end
-        ));
-        std::process::exit(1);
+                start, end
+            ));
+            std::process::exit(1);
+        }
+        let n = end_us - start_us;
+        if n == 0 {
+            return ptr::null_mut();
+        }
+        // Alloc `n + 1` and NUL-terminate so the result stays printf-compatible,
+        // matching `karac_string_clone`'s buffer contract (`cap == n`, buffer is
+        // `n + 1` bytes).
+        let layout = Layout::array::<u8>(n + 1).unwrap();
+        let new_data = alloc(layout);
+        ptr::copy_nonoverlapping(data.add(start_us), new_data, n);
+        *new_data.add(n) = 0;
+        new_data
     }
-    let n = end_us - start_us;
-    if n == 0 {
-        return ptr::null_mut();
-    }
-    // Alloc `n + 1` and NUL-terminate so the result stays printf-compatible,
-    // matching `karac_string_clone`'s buffer contract (`cap == n`, buffer is
-    // `n + 1` bytes).
-    let layout = Layout::array::<u8>(n + 1).unwrap();
-    let new_data = alloc(layout);
-    ptr::copy_nonoverlapping(data.add(start_us), new_data, n);
-    *new_data.add(n) = 0;
-    new_data
 }
 
 /// Allocate a fresh NUL-terminated heap buffer holding `bytes`, write its
@@ -173,16 +177,18 @@ pub unsafe extern "C" fn karac_string_slice(
 /// # Safety
 /// `out_len` must point to a writable `i64`.
 unsafe fn alloc_string_result(bytes: &[u8], out_len: *mut i64) -> *mut u8 {
-    let n = bytes.len();
-    *out_len = n as i64;
-    if n == 0 {
-        return ptr::null_mut();
+    unsafe {
+        let n = bytes.len();
+        *out_len = n as i64;
+        if n == 0 {
+            return ptr::null_mut();
+        }
+        let layout = Layout::array::<u8>(n + 1).unwrap();
+        let new_data = alloc(layout);
+        ptr::copy_nonoverlapping(bytes.as_ptr(), new_data, n);
+        *new_data.add(n) = 0;
+        new_data
     }
-    let layout = Layout::array::<u8>(n + 1).unwrap();
-    let new_data = alloc(layout);
-    ptr::copy_nonoverlapping(bytes.as_ptr(), new_data, n);
-    *new_data.add(n) = 0;
-    new_data
 }
 
 /// Borrow `(data, len)` as a `&str`. The Kāra String invariant guarantees valid
@@ -192,18 +198,20 @@ unsafe fn alloc_string_result(bytes: &[u8], out_len: *mut i64) -> *mut u8 {
 /// # Safety
 /// `data` must point to a readable buffer of at least `len` bytes when `len > 0`.
 unsafe fn str_from_raw<'a>(data: *const u8, len: i64) -> &'a str {
-    let bytes: &[u8] = if len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(data, len as usize)
-    };
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => {
-            crate::fatal::eprint_fmt(format_args!(
-                "runtime error: internal: String buffer was not valid UTF-8\n"
-            ));
-            std::process::exit(1);
+    unsafe {
+        let bytes: &[u8] = if len <= 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(data, len as usize)
+        };
+        match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                crate::fatal::eprint_fmt(format_args!(
+                    "runtime error: internal: String buffer was not valid UTF-8\n"
+                ));
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -221,8 +229,10 @@ pub unsafe extern "C" fn karac_string_to_lowercase(
     len: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    let lowered = str_from_raw(data, len).to_lowercase();
-    alloc_string_result(lowered.as_bytes(), out_len)
+    unsafe {
+        let lowered = str_from_raw(data, len).to_lowercase();
+        alloc_string_result(lowered.as_bytes(), out_len)
+    }
 }
 
 /// `String.to_uppercase()` — full Unicode uppercase (Rust `str::to_uppercase`;
@@ -236,8 +246,10 @@ pub unsafe extern "C" fn karac_string_to_uppercase(
     len: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    let upped = str_from_raw(data, len).to_uppercase();
-    alloc_string_result(upped.as_bytes(), out_len)
+    unsafe {
+        let upped = str_from_raw(data, len).to_uppercase();
+        alloc_string_result(upped.as_bytes(), out_len)
+    }
 }
 
 /// `String.sorted()` — return a fresh String whose characters (Unicode scalar
@@ -265,24 +277,26 @@ pub unsafe extern "C" fn karac_string_sorted(
     len: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    let n = if len < 0 { 0 } else { len as usize };
-    let bytes: &[u8] = if n == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(data, n)
-    };
-    if bytes.is_ascii() {
-        let out = alloc_string_result(bytes, out_len);
-        if !out.is_null() {
-            std::slice::from_raw_parts_mut(out, n).sort_unstable();
+    unsafe {
+        let n = if len < 0 { 0 } else { len as usize };
+        let bytes: &[u8] = if n == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(data, n)
+        };
+        if bytes.is_ascii() {
+            let out = alloc_string_result(bytes, out_len);
+            if !out.is_null() {
+                std::slice::from_raw_parts_mut(out, n).sort_unstable();
+            }
+            return out;
         }
-        return out;
+        // Multi-byte UTF-8: sort by Unicode scalar value, matching the interpreter.
+        let mut chars: Vec<char> = str_from_raw(data, len).chars().collect();
+        chars.sort_unstable();
+        let sorted: String = chars.into_iter().collect();
+        alloc_string_result(sorted.as_bytes(), out_len)
     }
-    // Multi-byte UTF-8: sort by Unicode scalar value, matching the interpreter.
-    let mut chars: Vec<char> = str_from_raw(data, len).chars().collect();
-    chars.sort_unstable();
-    let sorted: String = chars.into_iter().collect();
-    alloc_string_result(sorted.as_bytes(), out_len)
 }
 
 /// `String.trim()` — strip leading and trailing Unicode whitespace (Rust
@@ -297,8 +311,10 @@ pub unsafe extern "C" fn karac_string_trim(
     len: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    let trimmed = str_from_raw(data, len).trim();
-    alloc_string_result(trimmed.as_bytes(), out_len)
+    unsafe {
+        let trimmed = str_from_raw(data, len).trim();
+        alloc_string_result(trimmed.as_bytes(), out_len)
+    }
 }
 
 /// `String.trim_start()` — strip only LEADING Unicode whitespace (Rust
@@ -313,8 +329,10 @@ pub unsafe extern "C" fn karac_string_trim_start(
     len: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    let trimmed = str_from_raw(data, len).trim_start();
-    alloc_string_result(trimmed.as_bytes(), out_len)
+    unsafe {
+        let trimmed = str_from_raw(data, len).trim_start();
+        alloc_string_result(trimmed.as_bytes(), out_len)
+    }
 }
 
 /// `String.trim_end()` — strip only TRAILING Unicode whitespace (Rust
@@ -329,8 +347,10 @@ pub unsafe extern "C" fn karac_string_trim_end(
     len: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    let trimmed = str_from_raw(data, len).trim_end();
-    alloc_string_result(trimmed.as_bytes(), out_len)
+    unsafe {
+        let trimmed = str_from_raw(data, len).trim_end();
+        alloc_string_result(trimmed.as_bytes(), out_len)
+    }
 }
 
 /// `String.replace(from, to)` — replace every non-overlapping occurrence of
@@ -349,11 +369,13 @@ pub unsafe extern "C" fn karac_string_replace(
     to_len: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    let haystack = str_from_raw(data, len);
-    let from_s = str_from_raw(from, from_len);
-    let to_s = str_from_raw(to, to_len);
-    let replaced = haystack.replace(from_s, to_s);
-    alloc_string_result(replaced.as_bytes(), out_len)
+    unsafe {
+        let haystack = str_from_raw(data, len);
+        let from_s = str_from_raw(from, from_len);
+        let to_s = str_from_raw(to, to_len);
+        let replaced = haystack.replace(from_s, to_s);
+        alloc_string_result(replaced.as_bytes(), out_len)
+    }
 }
 
 /// `String.replacen(from, to, n)` — replace at most the first `n`
@@ -376,12 +398,14 @@ pub unsafe extern "C" fn karac_string_replacen(
     n: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    let haystack = str_from_raw(data, len);
-    let from_s = str_from_raw(from, from_len);
-    let to_s = str_from_raw(to, to_len);
-    let count = if n < 0 { 0 } else { n as usize };
-    let replaced = haystack.replacen(from_s, to_s, count);
-    alloc_string_result(replaced.as_bytes(), out_len)
+    unsafe {
+        let haystack = str_from_raw(data, len);
+        let from_s = str_from_raw(from, from_len);
+        let to_s = str_from_raw(to, to_len);
+        let count = if n < 0 { 0 } else { n as usize };
+        let replaced = haystack.replacen(from_s, to_s, count);
+        alloc_string_result(replaced.as_bytes(), out_len)
+    }
 }
 
 /// `Vec[String].join(sep)` / `.concat()` — concatenate the vector's string
@@ -405,16 +429,18 @@ pub unsafe extern "C" fn karac_string_join(
     sep_len: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
-    let sep_s = str_from_raw(sep, sep_len);
-    let mut out = String::new();
-    for i in 0..count {
-        let t = &*parts.offset(i as isize);
-        if i > 0 {
-            out.push_str(sep_s);
+    unsafe {
+        let sep_s = str_from_raw(sep, sep_len);
+        let mut out = String::new();
+        for i in 0..count {
+            let t = &*parts.offset(i as isize);
+            if i > 0 {
+                out.push_str(sep_s);
+            }
+            out.push_str(str_from_raw(t.ptr, t.len));
         }
-        out.push_str(str_from_raw(t.ptr, t.len));
+        alloc_string_result(out.as_bytes(), out_len)
     }
-    alloc_string_result(out.as_bytes(), out_len)
 }
 
 /// One `{ptr, len, cap}` Kāra String element as laid out inside a
@@ -448,17 +474,19 @@ pub unsafe extern "C" fn karac_string_strip_prefix(
     out_len: *mut i64,
     out_matched: *mut i32,
 ) -> *mut u8 {
-    let s = str_from_raw(data, len);
-    let p = str_from_raw(prefix, prefix_len);
-    match s.strip_prefix(p) {
-        Some(rest) => {
-            *out_matched = 1;
-            alloc_string_result(rest.as_bytes(), out_len)
-        }
-        None => {
-            *out_matched = 0;
-            *out_len = 0;
-            ptr::null_mut()
+    unsafe {
+        let s = str_from_raw(data, len);
+        let p = str_from_raw(prefix, prefix_len);
+        match s.strip_prefix(p) {
+            Some(rest) => {
+                *out_matched = 1;
+                alloc_string_result(rest.as_bytes(), out_len)
+            }
+            None => {
+                *out_matched = 0;
+                *out_len = 0;
+                ptr::null_mut()
+            }
         }
     }
 }
@@ -479,17 +507,19 @@ pub unsafe extern "C" fn karac_string_strip_suffix(
     out_len: *mut i64,
     out_matched: *mut i32,
 ) -> *mut u8 {
-    let s = str_from_raw(data, len);
-    let p = str_from_raw(suffix, suffix_len);
-    match s.strip_suffix(p) {
-        Some(rest) => {
-            *out_matched = 1;
-            alloc_string_result(rest.as_bytes(), out_len)
-        }
-        None => {
-            *out_matched = 0;
-            *out_len = 0;
-            ptr::null_mut()
+    unsafe {
+        let s = str_from_raw(data, len);
+        let p = str_from_raw(suffix, suffix_len);
+        match s.strip_suffix(p) {
+            Some(rest) => {
+                *out_matched = 1;
+                alloc_string_result(rest.as_bytes(), out_len)
+            }
+            None => {
+                *out_matched = 0;
+                *out_len = 0;
+                ptr::null_mut()
+            }
         }
     }
 }
@@ -521,36 +551,38 @@ pub unsafe extern "C" fn karac_string_slice_borrow(
     start: i64,
     end: i64,
 ) -> *const u8 {
-    if start < 0 || end < start || end > len {
-        // Lean fatal print (raw write(2), no std-IO) — see `fatal` /
-        // B-2026-06-11-8; this symbol is on every String-slice program's path.
-        crate::fatal::eprint_fmt(format_args!(
-            "runtime error: string slice bounds {}..{} out of range (len {})\n",
-            start, end, len
-        ));
-        std::process::exit(1);
-    }
-    let len_us = len as usize;
-    let start_us = start as usize;
-    let end_us = end as usize;
-    let bytes: &[u8] = if len_us == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(data, len_us)
-    };
-    let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
-    if !is_boundary(start_us) || !is_boundary(end_us) {
-        crate::fatal::eprint_fmt(format_args!(
-            "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
+    unsafe {
+        if start < 0 || end < start || end > len {
+            // Lean fatal print (raw write(2), no std-IO) — see `fatal` /
+            // B-2026-06-11-8; this symbol is on every String-slice program's path.
+            crate::fatal::eprint_fmt(format_args!(
+                "runtime error: string slice bounds {}..{} out of range (len {})\n",
+                start, end, len
+            ));
+            std::process::exit(1);
+        }
+        let len_us = len as usize;
+        let start_us = start as usize;
+        let end_us = end as usize;
+        let bytes: &[u8] = if len_us == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(data, len_us)
+        };
+        let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
+        if !is_boundary(start_us) || !is_boundary(end_us) {
+            crate::fatal::eprint_fmt(format_args!(
+                "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
              {}..{} does not fall on UTF-8 char boundaries\n",
-            start, end
-        ));
-        std::process::exit(1);
+                start, end
+            ));
+            std::process::exit(1);
+        }
+        if end_us == start_us {
+            return ptr::null();
+        }
+        data.add(start_us)
     }
-    if end_us == start_us {
-        return ptr::null();
-    }
-    data.add(start_us)
 }
 
 /// Decode the next UTF-8 character starting at `byte_offset` in the byte
@@ -583,101 +615,103 @@ pub unsafe extern "C" fn karac_string_decode_char(
     byte_offset: i64,
     out_codepoint: *mut u32,
 ) -> i64 {
-    // O(1)-per-call single-char UTF-8 decoder. Prior versions
-    // delegated to `std::str::from_utf8(slice)` over the *whole*
-    // remaining slice, then `chars().next()`. That made each call
-    // O(remaining_bytes) — for a 104K-char `for c in s.chars()`
-    // pass, total validation work grew quadratically (~5.4B bytes
-    // re-validated). Investigation (`wip-chars-inline.md`, 2026-05-15)
-    // measured this as the dominant per-char cost in karac vs Rust
-    // (karac 776 ns/char vs Rust 0.96 ns/char → 810× slower on
-    // pure-iter bench). The fix is mechanical: look at one to four
-    // bytes for the next character; never touch the rest of the
-    // slice.
-    //
-    // Output parity with the prior implementation on well-formed
-    // input is exact (same Unicode scalar value, same byte
-    // advancement). For malformed input the new version emits
-    // U+FFFD and advances 1 byte at the malformed position; the
-    // prior version tried a small valid-prefix recovery before
-    // emitting FFFD. Both shapes are forward-progressing and match
-    // `String::from_utf8_lossy`'s recovery family; the simpler
-    // single-byte advance is the standard "WHATWG UTF-8 decoder"
-    // recovery rule.
-    if byte_offset < 0 || byte_offset >= len {
-        *out_codepoint = 0;
-        return len;
-    }
-    let start = byte_offset as usize;
-    let total = len as usize;
-    let remaining = total - start;
-    let b0 = *data.add(start);
+    unsafe {
+        // O(1)-per-call single-char UTF-8 decoder. Prior versions
+        // delegated to `std::str::from_utf8(slice)` over the *whole*
+        // remaining slice, then `chars().next()`. That made each call
+        // O(remaining_bytes) — for a 104K-char `for c in s.chars()`
+        // pass, total validation work grew quadratically (~5.4B bytes
+        // re-validated). Investigation (`wip-chars-inline.md`, 2026-05-15)
+        // measured this as the dominant per-char cost in karac vs Rust
+        // (karac 776 ns/char vs Rust 0.96 ns/char → 810× slower on
+        // pure-iter bench). The fix is mechanical: look at one to four
+        // bytes for the next character; never touch the rest of the
+        // slice.
+        //
+        // Output parity with the prior implementation on well-formed
+        // input is exact (same Unicode scalar value, same byte
+        // advancement). For malformed input the new version emits
+        // U+FFFD and advances 1 byte at the malformed position; the
+        // prior version tried a small valid-prefix recovery before
+        // emitting FFFD. Both shapes are forward-progressing and match
+        // `String::from_utf8_lossy`'s recovery family; the simpler
+        // single-byte advance is the standard "WHATWG UTF-8 decoder"
+        // recovery rule.
+        if byte_offset < 0 || byte_offset >= len {
+            *out_codepoint = 0;
+            return len;
+        }
+        let start = byte_offset as usize;
+        let total = len as usize;
+        let remaining = total - start;
+        let b0 = *data.add(start);
 
-    // ── ASCII fast path (the hot path for English / source code) ─
-    if b0 < 0x80 {
-        *out_codepoint = b0 as u32;
-        return (start + 1) as i64;
-    }
+        // ── ASCII fast path (the hot path for English / source code) ─
+        if b0 < 0x80 {
+            *out_codepoint = b0 as u32;
+            return (start + 1) as i64;
+        }
 
-    // ── Determine continuation width from lead byte ──────────────
-    let width: usize = if b0 < 0xC2 {
-        // 0x80..0xC0: stray continuation byte at start (malformed).
-        // 0xC0..0xC2: 2-byte overlong of a 1-byte ASCII codepoint —
-        // disallowed by the UTF-8 spec since RFC 3629. Reject both.
-        *out_codepoint = 0xFFFD;
-        return (start + 1) as i64;
-    } else if b0 < 0xE0 {
-        2
-    } else if b0 < 0xF0 {
-        3
-    } else if b0 < 0xF5 {
-        // 0xF5..0xF8 would technically be 4-byte leads but they
-        // start above the U+10FFFF Unicode cap — disallowed.
-        4
-    } else {
-        *out_codepoint = 0xFFFD;
-        return (start + 1) as i64;
-    };
+        // ── Determine continuation width from lead byte ──────────────
+        let width: usize = if b0 < 0xC2 {
+            // 0x80..0xC0: stray continuation byte at start (malformed).
+            // 0xC0..0xC2: 2-byte overlong of a 1-byte ASCII codepoint —
+            // disallowed by the UTF-8 spec since RFC 3629. Reject both.
+            *out_codepoint = 0xFFFD;
+            return (start + 1) as i64;
+        } else if b0 < 0xE0 {
+            2
+        } else if b0 < 0xF0 {
+            3
+        } else if b0 < 0xF5 {
+            // 0xF5..0xF8 would technically be 4-byte leads but they
+            // start above the U+10FFFF Unicode cap — disallowed.
+            4
+        } else {
+            *out_codepoint = 0xFFFD;
+            return (start + 1) as i64;
+        };
 
-    if remaining < width {
-        // Truncated sequence at end of string.
-        *out_codepoint = 0xFFFD;
-        return (start + 1) as i64;
-    }
-
-    // ── Combine continuation bytes, validating each ──────────────
-    let mut cp: u32 = match width {
-        2 => (b0 & 0x1F) as u32,
-        3 => (b0 & 0x0F) as u32,
-        4 => (b0 & 0x07) as u32,
-        _ => unreachable!(),
-    };
-    for i in 1..width {
-        let b = *data.add(start + i);
-        if b & 0xC0 != 0x80 {
-            // Expected a `10xxxxxx` continuation byte; got something
-            // else. Bail out with FFFD; advance 1 byte (don't
-            // consume the malformed lead+partial run).
+        if remaining < width {
+            // Truncated sequence at end of string.
             *out_codepoint = 0xFFFD;
             return (start + 1) as i64;
         }
-        cp = (cp << 6) | ((b & 0x3F) as u32);
-    }
 
-    // ── Reject surrogates, overlongs, out-of-range codepoints ────
-    let valid = match width {
-        2 => cp >= 0x80,
-        3 => cp >= 0x800 && !(0xD800..=0xDFFF).contains(&cp),
-        4 => (0x10000..=0x10FFFF).contains(&cp),
-        _ => unreachable!(),
-    };
-    if !valid {
-        *out_codepoint = 0xFFFD;
-        return (start + 1) as i64;
-    }
+        // ── Combine continuation bytes, validating each ──────────────
+        let mut cp: u32 = match width {
+            2 => (b0 & 0x1F) as u32,
+            3 => (b0 & 0x0F) as u32,
+            4 => (b0 & 0x07) as u32,
+            _ => unreachable!(),
+        };
+        for i in 1..width {
+            let b = *data.add(start + i);
+            if b & 0xC0 != 0x80 {
+                // Expected a `10xxxxxx` continuation byte; got something
+                // else. Bail out with FFFD; advance 1 byte (don't
+                // consume the malformed lead+partial run).
+                *out_codepoint = 0xFFFD;
+                return (start + 1) as i64;
+            }
+            cp = (cp << 6) | ((b & 0x3F) as u32);
+        }
 
-    *out_codepoint = cp;
-    (start + width) as i64
+        // ── Reject surrogates, overlongs, out-of-range codepoints ────
+        let valid = match width {
+            2 => cp >= 0x80,
+            3 => cp >= 0x800 && !(0xD800..=0xDFFF).contains(&cp),
+            4 => (0x10000..=0x10FFFF).contains(&cp),
+            _ => unreachable!(),
+        };
+        if !valid {
+            *out_codepoint = 0xFFFD;
+            return (start + 1) as i64;
+        }
+
+        *out_codepoint = cp;
+        (start + width) as i64
+    }
 }
 
 /// Encode a Unicode scalar value as 1–4 UTF-8 bytes written through `out`.
@@ -695,42 +729,44 @@ pub unsafe extern "C" fn karac_string_decode_char(
 ///   every generated call site.
 #[no_mangle]
 pub unsafe extern "C" fn karac_string_encode_char(cp: u32, out: *mut u8) -> i64 {
-    if cp < 0x80 {
-        *out = cp as u8;
-        1
-    } else if cp < 0x800 {
-        *out = 0xC0 | ((cp >> 6) as u8);
-        *out.add(1) = 0x80 | ((cp & 0x3F) as u8);
-        2
-    } else if cp < 0x10000 {
-        // Surrogates (0xD800..=0xDFFF) aren't valid scalar values; emit
-        // U+FFFD instead of round-tripping the surrogate as 3 bytes (which
-        // would produce malformed UTF-8 the next reader would reject).
-        // Well-formed Kāra `char` values can't hold a surrogate — the
-        // decoder normalizes them on the way in — but a downstream
-        // arithmetic op could land here on a synthetic codepoint.
-        if (0xD800..=0xDFFF).contains(&cp) {
+    unsafe {
+        if cp < 0x80 {
+            *out = cp as u8;
+            1
+        } else if cp < 0x800 {
+            *out = 0xC0 | ((cp >> 6) as u8);
+            *out.add(1) = 0x80 | ((cp & 0x3F) as u8);
+            2
+        } else if cp < 0x10000 {
+            // Surrogates (0xD800..=0xDFFF) aren't valid scalar values; emit
+            // U+FFFD instead of round-tripping the surrogate as 3 bytes (which
+            // would produce malformed UTF-8 the next reader would reject).
+            // Well-formed Kāra `char` values can't hold a surrogate — the
+            // decoder normalizes them on the way in — but a downstream
+            // arithmetic op could land here on a synthetic codepoint.
+            if (0xD800..=0xDFFF).contains(&cp) {
+                *out = 0xEF;
+                *out.add(1) = 0xBF;
+                *out.add(2) = 0xBD;
+                return 3;
+            }
+            *out = 0xE0 | ((cp >> 12) as u8);
+            *out.add(1) = 0x80 | (((cp >> 6) & 0x3F) as u8);
+            *out.add(2) = 0x80 | ((cp & 0x3F) as u8);
+            3
+        } else if cp < 0x110000 {
+            *out = 0xF0 | ((cp >> 18) as u8);
+            *out.add(1) = 0x80 | (((cp >> 12) & 0x3F) as u8);
+            *out.add(2) = 0x80 | (((cp >> 6) & 0x3F) as u8);
+            *out.add(3) = 0x80 | ((cp & 0x3F) as u8);
+            4
+        } else {
+            // Out-of-range codepoint → U+FFFD (3 bytes).
             *out = 0xEF;
             *out.add(1) = 0xBF;
             *out.add(2) = 0xBD;
-            return 3;
+            3
         }
-        *out = 0xE0 | ((cp >> 12) as u8);
-        *out.add(1) = 0x80 | (((cp >> 6) & 0x3F) as u8);
-        *out.add(2) = 0x80 | ((cp & 0x3F) as u8);
-        3
-    } else if cp < 0x110000 {
-        *out = 0xF0 | ((cp >> 18) as u8);
-        *out.add(1) = 0x80 | (((cp >> 12) & 0x3F) as u8);
-        *out.add(2) = 0x80 | (((cp >> 6) & 0x3F) as u8);
-        *out.add(3) = 0x80 | ((cp & 0x3F) as u8);
-        4
-    } else {
-        // Out-of-range codepoint → U+FFFD (3 bytes).
-        *out = 0xEF;
-        *out.add(1) = 0xBF;
-        *out.add(2) = 0xBD;
-        3
     }
 }
 
@@ -741,13 +777,15 @@ mod tests {
     /// Read back the heap buffer `karac_string_slice` returns as a `&str`.
     /// `n` is the expected content length (`end - start`).
     unsafe fn slice_str(s: &str, start: i64, end: i64, n: usize) -> String {
-        let ptr = karac_string_slice(s.as_ptr(), s.len() as i64, start, end);
-        assert!(!ptr.is_null(), "non-empty slice must return a buffer");
-        let bytes = std::slice::from_raw_parts(ptr, n);
-        let out = String::from_utf8(bytes.to_vec()).unwrap();
-        // NUL terminator at [n] keeps the buffer printf-compatible.
-        assert_eq!(*ptr.add(n), 0, "buffer must be NUL-terminated");
-        out
+        unsafe {
+            let ptr = karac_string_slice(s.as_ptr(), s.len() as i64, start, end);
+            assert!(!ptr.is_null(), "non-empty slice must return a buffer");
+            let bytes = std::slice::from_raw_parts(ptr, n);
+            let out = String::from_utf8(bytes.to_vec()).unwrap();
+            // NUL terminator at [n] keeps the buffer printf-compatible.
+            assert_eq!(*ptr.add(n), 0, "buffer must be NUL-terminated");
+            out
+        }
     }
 
     #[test]
@@ -784,21 +822,23 @@ mod tests {
 
     /// Read back the heap buffer `karac_string_sorted` returns as a `String`.
     unsafe fn sorted_str(s: &str) -> String {
-        let mut out_len: i64 = -1;
-        let ptr = karac_string_sorted(s.as_ptr(), s.len() as i64, &mut out_len);
-        if s.is_empty() {
-            assert!(ptr.is_null(), "empty input sorts to null");
-            assert_eq!(out_len, 0);
-            return String::new();
+        unsafe {
+            let mut out_len: i64 = -1;
+            let ptr = karac_string_sorted(s.as_ptr(), s.len() as i64, &mut out_len);
+            if s.is_empty() {
+                assert!(ptr.is_null(), "empty input sorts to null");
+                assert_eq!(out_len, 0);
+                return String::new();
+            }
+            let bytes = std::slice::from_raw_parts(ptr, out_len as usize);
+            let out = String::from_utf8(bytes.to_vec()).unwrap();
+            assert_eq!(
+                *ptr.add(out_len as usize),
+                0,
+                "buffer must be NUL-terminated"
+            );
+            out
         }
-        let bytes = std::slice::from_raw_parts(ptr, out_len as usize);
-        let out = String::from_utf8(bytes.to_vec()).unwrap();
-        assert_eq!(
-            *ptr.add(out_len as usize),
-            0,
-            "buffer must be NUL-terminated"
-        );
-        out
     }
 
     /// The reference sort: what the interpreter (and the pre-fast-path codegen

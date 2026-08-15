@@ -32,47 +32,53 @@
 //! 4. **Crash-report `parallel_context` field** — co-developed with these
 //!    globals, lands with `std.panic` (separate Phase 8 entry).
 
+// Modules carrying `pub unsafe` fns are `pub mod` ON PURPOSE (2026-08-14):
+// clippy's `missing_safety_doc` only checks PUBLICLY REACHABLE functions, so a
+// private module's extern surface — most of this crate — was invisible to the
+// deny in Cargo.toml. The crate is publish=false and the symbols are already
+// exported at link level via #[no_mangle]; Rust-level visibility here exists
+// solely so the safety-doc ratchet actually covers the unsafe surface.
 mod alloc;
-mod bounded_channel;
-mod channel;
+pub mod bounded_channel;
+pub mod channel;
 // Application-layer backpressure primitives (phase-8): counting semaphore
 // and per-key token-bucket rate limiter. Target-independent handle types,
 // same single-owner shape as `bounded_channel`.
-mod clone;
+pub mod clone;
 mod cpu;
-mod emutls;
+pub mod emutls;
 #[cfg(feature = "net")]
 pub mod event_loop;
 mod fatal;
-mod file;
-mod pool;
-mod rate_limiter;
-mod semaphore;
+pub mod file;
+pub mod pool;
+pub mod rate_limiter;
+pub mod semaphore;
 // f-string format-spec runtime formatter (`karac_runtime_fmt_*`) — the
 // shared-renderer path for binary / center-align / custom-fill specs that
 // `snprintf` can't express. Shares `src/format_spec.rs` via `#[path]`.
-mod fmt;
+pub mod fmt;
 mod lifecycle;
 // `std.process` Command/Child spawning (phase-8 P1, codegen leg).
 // Target-independent like `file`: on wasm the std::process stubs
 // return `unsupported` at runtime, which surfaces as `IoError.Other`.
-mod process;
+pub mod process;
 // GPU compute spine — phase-10 GPU codegen spike slice-0a. Opt-in only.
-mod arena;
+pub mod arena;
 #[cfg(feature = "gpu")]
-mod gpu;
-mod interner;
-mod lazy;
-mod map;
-mod mutex;
-mod once;
+pub mod gpu;
+pub mod interner;
+pub mod lazy;
+pub mod map;
+pub mod mutex;
+pub mod once;
 // Arrow IPC FFI (`karac_arrow_*`) — opt-in `arrow` feature →
 // `libkarac_runtime_arrow.a`.
 #[cfg(feature = "arrow")]
-mod arrow_ipc;
+pub mod arrow_ipc;
 // Regex FFI (`karac_regex_*`) — opt-in `regex` feature → `libkarac_runtime_regex.a`.
 #[cfg(feature = "regex")]
-mod regex;
+pub mod regex;
 #[cfg(feature = "net")]
 pub mod scheduler;
 // Small-String Optimization encoding — the executable contract shared with
@@ -911,9 +917,11 @@ pub unsafe extern "C" fn karac_runtime_env_set(
     val_ptr: *const u8,
     val_len: usize,
 ) {
-    let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
-    let val = std::str::from_utf8_unchecked(std::slice::from_raw_parts(val_ptr, val_len));
-    std::env::set_var(name, val);
+    unsafe {
+        let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
+        let val = std::str::from_utf8_unchecked(std::slice::from_raw_parts(val_ptr, val_len));
+        std::env::set_var(name, val);
+    }
 }
 
 /// `clock.now()` — current Unix time in whole seconds. Codegen
@@ -981,67 +989,69 @@ pub extern "C" fn karac_runtime_rand_next_u64() -> i64 {
 /// always allocas on the caller's stack before invoking.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_env_args_into(out: *mut KaracVec) {
-    if out.is_null() {
-        return;
-    }
-    // Prefer the PROGRAM's argv when the host told us what it is. Under
-    // `karac run`'s JIT the hosting process is `karac_jit_runner`, so process
-    // argv is the runner's path plus a temp `.ll` file — nothing the user
-    // wrote (B-2026-07-29-18). An AOT binary never has this set and keeps the
-    // process-argv path, which is correct there because the process IS the
-    // program. Unit-separator encoded; see the writer in `cli.rs`.
-    let args: Vec<String> = match std::env::var("KARAC_PROGRAM_ARGS") {
-        Ok(packed) => packed.split('\u{1F}').map(|s| s.to_string()).collect(),
-        Err(_) => std::env::args().collect(),
-    };
-    let count = args.len();
-    if count == 0 {
-        (*out) = KaracVec {
-            data: std::ptr::null_mut(),
-            len: 0,
-            cap: 0,
+    unsafe {
+        if out.is_null() {
+            return;
+        }
+        // Prefer the PROGRAM's argv when the host told us what it is. Under
+        // `karac run`'s JIT the hosting process is `karac_jit_runner`, so process
+        // argv is the runner's path plus a temp `.ll` file — nothing the user
+        // wrote (B-2026-07-29-18). An AOT binary never has this set and keeps the
+        // process-argv path, which is correct there because the process IS the
+        // program. Unit-separator encoded; see the writer in `cli.rs`.
+        let args: Vec<String> = match std::env::var("KARAC_PROGRAM_ARGS") {
+            Ok(packed) => packed.split('\u{1F}').map(|s| s.to_string()).collect(),
+            Err(_) => std::env::args().collect(),
         };
-        return;
-    }
-
-    let elem_size = std::mem::size_of::<RuntimeKaracString>();
-    let align = std::mem::align_of::<RuntimeKaracString>();
-    let layout =
-        std::alloc::Layout::from_size_align(elem_size * count, align).expect("env.args Vec layout");
-    let buf = std::alloc::alloc(layout) as *mut RuntimeKaracString;
-    if buf.is_null() {
-        std::alloc::handle_alloc_error(layout);
-    }
-
-    for (i, arg) in args.iter().enumerate() {
-        let bytes = arg.as_bytes();
-        let s = if bytes.is_empty() {
-            RuntimeKaracString {
+        let count = args.len();
+        if count == 0 {
+            (*out) = KaracVec {
                 data: std::ptr::null_mut(),
                 len: 0,
                 cap: 0,
-            }
-        } else {
-            let str_layout = std::alloc::Layout::array::<u8>(bytes.len()).unwrap();
-            let str_buf = std::alloc::alloc(str_layout);
-            if str_buf.is_null() {
-                std::alloc::handle_alloc_error(str_layout);
-            }
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
-            RuntimeKaracString {
-                data: str_buf,
-                len: bytes.len() as i64,
-                cap: bytes.len() as i64,
-            }
-        };
-        std::ptr::write(buf.add(i), s);
-    }
+            };
+            return;
+        }
 
-    (*out) = KaracVec {
-        data: buf as *mut u8,
-        len: count as i64,
-        cap: count as i64,
-    };
+        let elem_size = std::mem::size_of::<RuntimeKaracString>();
+        let align = std::mem::align_of::<RuntimeKaracString>();
+        let layout = std::alloc::Layout::from_size_align(elem_size * count, align)
+            .expect("env.args Vec layout");
+        let buf = std::alloc::alloc(layout) as *mut RuntimeKaracString;
+        if buf.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+
+        for (i, arg) in args.iter().enumerate() {
+            let bytes = arg.as_bytes();
+            let s = if bytes.is_empty() {
+                RuntimeKaracString {
+                    data: std::ptr::null_mut(),
+                    len: 0,
+                    cap: 0,
+                }
+            } else {
+                let str_layout = std::alloc::Layout::array::<u8>(bytes.len()).unwrap();
+                let str_buf = std::alloc::alloc(str_layout);
+                if str_buf.is_null() {
+                    std::alloc::handle_alloc_error(str_layout);
+                }
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
+                RuntimeKaracString {
+                    data: str_buf,
+                    len: bytes.len() as i64,
+                    cap: bytes.len() as i64,
+                }
+            };
+            std::ptr::write(buf.add(i), s);
+        }
+
+        (*out) = KaracVec {
+            data: buf as *mut u8,
+            len: count as i64,
+            cap: count as i64,
+        };
+    }
 }
 
 /// `env.var(name) -> Result[String, VarError]` — read an environment
@@ -1071,39 +1081,41 @@ pub unsafe extern "C" fn karac_runtime_env_var(
     name_len: usize,
     out_str: *mut RuntimeKaracString,
 ) -> bool {
-    let empty = RuntimeKaracString {
-        data: std::ptr::null_mut(),
-        len: 0,
-        cap: 0,
-    };
-    if out_str.is_null() {
-        return false;
-    }
-    let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
-    match std::env::var(name) {
-        Ok(v) => {
-            let bytes = v.as_bytes();
-            if bytes.is_empty() {
-                // Present but empty — a valid empty Kāra String, still `Ok`.
-                (*out_str) = empty;
-                return true;
-            }
-            let str_layout = std::alloc::Layout::array::<u8>(bytes.len()).unwrap();
-            let str_buf = std::alloc::alloc(str_layout);
-            if str_buf.is_null() {
-                std::alloc::handle_alloc_error(str_layout);
-            }
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
-            (*out_str) = RuntimeKaracString {
-                data: str_buf,
-                len: bytes.len() as i64,
-                cap: bytes.len() as i64,
-            };
-            true
+    unsafe {
+        let empty = RuntimeKaracString {
+            data: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        if out_str.is_null() {
+            return false;
         }
-        Err(_) => {
-            (*out_str) = empty;
-            false
+        let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
+        match std::env::var(name) {
+            Ok(v) => {
+                let bytes = v.as_bytes();
+                if bytes.is_empty() {
+                    // Present but empty — a valid empty Kāra String, still `Ok`.
+                    (*out_str) = empty;
+                    return true;
+                }
+                let str_layout = std::alloc::Layout::array::<u8>(bytes.len()).unwrap();
+                let str_buf = std::alloc::alloc(str_layout);
+                if str_buf.is_null() {
+                    std::alloc::handle_alloc_error(str_layout);
+                }
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
+                (*out_str) = RuntimeKaracString {
+                    data: str_buf,
+                    len: bytes.len() as i64,
+                    cap: bytes.len() as i64,
+                };
+                true
+            }
+            Err(_) => {
+                (*out_str) = empty;
+                false
+            }
         }
     }
 }
@@ -1295,44 +1307,48 @@ impl OutputCapture {
     /// `abort` on OOM). Length arithmetic is unchecked — release builds wrap
     /// rather than panic, and realistic console output never nears `usize::MAX`.
     unsafe fn push_bytes(&mut self, src: *const u8, n: usize) {
-        if self.data_len + n > self.data_cap {
-            let mut newcap = if self.data_cap == 0 {
-                64
-            } else {
-                self.data_cap * 2
-            };
-            while newcap < self.data_len + n {
-                newcap *= 2;
+        unsafe {
+            if self.data_len + n > self.data_cap {
+                let mut newcap = if self.data_cap == 0 {
+                    64
+                } else {
+                    self.data_cap * 2
+                };
+                while newcap < self.data_len + n {
+                    newcap *= 2;
+                }
+                let p = realloc(self.data, newcap);
+                if p.is_null() {
+                    abort();
+                }
+                self.data = p;
+                self.data_cap = newcap;
             }
-            let p = realloc(self.data, newcap);
-            if p.is_null() {
-                abort();
-            }
-            self.data = p;
-            self.data_cap = newcap;
+            ptr::copy_nonoverlapping(src, self.data.add(self.data_len), n);
+            self.data_len += n;
         }
-        ptr::copy_nonoverlapping(src, self.data.add(self.data_len), n);
-        self.data_len += n;
     }
 
     /// Record one `(len, stream)` segment (panic-free growth; `abort` on OOM).
     unsafe fn push_seg(&mut self, len: usize, stream: *mut c_void) {
-        if self.segs_len == self.segs_cap {
-            let newcap = if self.segs_cap == 0 {
-                8
-            } else {
-                self.segs_cap * 2
-            };
-            let bytes = newcap * core::mem::size_of::<Seg>();
-            let p = realloc(self.segs as *mut u8, bytes) as *mut Seg;
-            if p.is_null() {
-                abort();
+        unsafe {
+            if self.segs_len == self.segs_cap {
+                let newcap = if self.segs_cap == 0 {
+                    8
+                } else {
+                    self.segs_cap * 2
+                };
+                let bytes = newcap * core::mem::size_of::<Seg>();
+                let p = realloc(self.segs as *mut u8, bytes) as *mut Seg;
+                if p.is_null() {
+                    abort();
+                }
+                self.segs = p;
+                self.segs_cap = newcap;
             }
-            self.segs = p;
-            self.segs_cap = newcap;
+            *self.segs.add(self.segs_len) = Seg { len, stream };
+            self.segs_len += 1;
         }
-        *self.segs.add(self.segs_len) = Seg { len, stream };
-        self.segs_len += 1;
     }
 
     /// Replay every segment through the console chokepoint, in capture order.
@@ -1346,11 +1362,13 @@ impl OutputCapture {
     /// Each segment's `stream` must still be a live `FILE*` (it is — codegen's
     /// `stdout`/`stderr` globals outlive any `par` region).
     unsafe fn replay(&self) {
-        let mut off = 0usize;
-        for i in 0..self.segs_len {
-            let seg = *self.segs.add(i);
-            karac_runtime_write_console(self.data.add(off), seg.len, seg.stream);
-            off += seg.len;
+        unsafe {
+            let mut off = 0usize;
+            for i in 0..self.segs_len {
+                let seg = *self.segs.add(i);
+                karac_runtime_write_console(self.data.add(off), seg.len, seg.stream);
+                off += seg.len;
+            }
         }
     }
 }
@@ -1416,30 +1434,37 @@ pub unsafe extern "C" fn karac_runtime_write_console(
     len: usize,
     stream: *mut c_void,
 ) {
-    // `try_with`, not `with`: `LocalKey::with` statically references its
-    // `.expect("cannot access a TLS value during destruction")` panic, which
-    // would anchor the panic/backtrace symbolizer into every `println`-using
-    // binary (the lean-floor regression, B-2026-06-14-20). `try_with` is
-    // panic-free — a TLS-destruction access yields `Err`, treated as "no
-    // capture installed" (write straight to the fd).
-    let redir = OUTPUT_REDIRECT
-        .try_with(|c| c.get())
-        .unwrap_or(ptr::null_mut());
-    if redir.is_null() {
-        // Declared locally (not via the `libc` crate) to keep the runtime's
-        // dependency surface unchanged; `size_t`-width args match codegen's
-        // `fwrite` decl exactly (i32 on wasm32, i64 native).
-        extern "C" {
-            fn fwrite(ptr: *const c_void, size: usize, nmemb: usize, stream: *mut c_void) -> usize;
+    unsafe {
+        // `try_with`, not `with`: `LocalKey::with` statically references its
+        // `.expect("cannot access a TLS value during destruction")` panic, which
+        // would anchor the panic/backtrace symbolizer into every `println`-using
+        // binary (the lean-floor regression, B-2026-06-14-20). `try_with` is
+        // panic-free — a TLS-destruction access yields `Err`, treated as "no
+        // capture installed" (write straight to the fd).
+        let redir = OUTPUT_REDIRECT
+            .try_with(|c| c.get())
+            .unwrap_or(ptr::null_mut());
+        if redir.is_null() {
+            // Declared locally (not via the `libc` crate) to keep the runtime's
+            // dependency surface unchanged; `size_t`-width args match codegen's
+            // `fwrite` decl exactly (i32 on wasm32, i64 native).
+            extern "C" {
+                fn fwrite(
+                    ptr: *const c_void,
+                    size: usize,
+                    nmemb: usize,
+                    stream: *mut c_void,
+                ) -> usize;
+            }
+            fwrite(data as *const c_void, 1, len, stream);
+        } else {
+            // Panic-free buffer append (see `OutputCapture` allocator note) — using
+            // `Vec` here would re-anchor the symbolizer via its capacity-overflow
+            // panic path.
+            let cap = &mut *redir;
+            cap.push_bytes(data, len);
+            cap.push_seg(len, stream);
         }
-        fwrite(data as *const c_void, 1, len, stream);
-    } else {
-        // Panic-free buffer append (see `OutputCapture` allocator note) — using
-        // `Vec` here would re-anchor the symbolizer via its capacity-overflow
-        // panic path.
-        let cap = &mut *redir;
-        cap.push_bytes(data, len);
-        cap.push_seg(len, stream);
     }
 }
 
@@ -1726,26 +1751,28 @@ pub unsafe extern "C" fn karac_par_run(
     spawn_site_id: u32,
     parent_cancel: *const AtomicBool,
 ) {
-    let count = count as usize;
-    if count == 0 {
-        return;
-    }
+    unsafe {
+        let count = count as usize;
+        if count == 0 {
+            return;
+        }
 
-    // phase-10 "WASM concurrency lowering — sequential default": the
-    // default wasm target is single-threaded, so there is no pool to
-    // dispatch to — run the branches in source order on the calling
-    // thread. Cancel / cascade / frame-tracking semantics live in
-    // `seq_par_run`. Under `--features wasm-threads` (the phase-10
-    // threaded opt-in) the pool exists on wasm too, and the pooled arm
-    // below takes over.
-    #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
-    {
-        seq_par_run(branches, count, spawn_site_id, parent_cancel);
-    }
+        // phase-10 "WASM concurrency lowering — sequential default": the
+        // default wasm target is single-threaded, so there is no pool to
+        // dispatch to — run the branches in source order on the calling
+        // thread. Cancel / cascade / frame-tracking semantics live in
+        // `seq_par_run`. Under `--features wasm-threads` (the phase-10
+        // threaded opt-in) the pool exists on wasm too, and the pooled arm
+        // below takes over.
+        #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
+        {
+            seq_par_run(branches, count, spawn_site_id, parent_cancel);
+        }
 
-    #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
-    {
-        karac_par_run_pooled(branches, count, spawn_site_id, parent_cancel);
+        #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+        {
+            karac_par_run_pooled(branches, count, spawn_site_id, parent_cancel);
+        }
     }
 }
 
@@ -1763,69 +1790,71 @@ unsafe fn karac_par_run_pooled(
     spawn_site_id: u32,
     parent_cancel: *const AtomicBool,
 ) {
-    let track_frames = runtime_debug_metadata_enabled();
-    let parent_addr: usize = if track_frames {
-        CURRENT_FRAME.with(|c| c.get()) as usize
-    } else {
-        0
-    };
+    unsafe {
+        let track_frames = runtime_debug_metadata_enabled();
+        let parent_addr: usize = if track_frames {
+            CURRENT_FRAME.with(|c| c.get()) as usize
+        } else {
+            0
+        };
 
-    let call = Arc::new(ParCall {
-        cancel: AtomicBool::new(false),
-        remaining: Mutex::new(count as u32),
-        notify: Condvar::new(),
-        spawn_site_id,
-        parent_addr,
-        track_frames,
-    });
+        let call = Arc::new(ParCall {
+            cancel: AtomicBool::new(false),
+            remaining: Mutex::new(count as u32),
+            notify: Condvar::new(),
+            spawn_site_id,
+            parent_addr,
+            track_frames,
+        });
 
-    // One deferred-output capture per branch (auto-par ordered-output). Built
-    // up front so its element addresses are stable for the lifetime of the
-    // tasks; never pushed-to after, so no realloc moves a live capture. Each
-    // task writes only its own element (through `OUTPUT_REDIRECT`); the parent
-    // reads them only after the join barrier, which establishes happens-before.
-    let mut captures: Vec<OutputCapture> = (0..count).map(|_| OutputCapture::new()).collect();
+        // One deferred-output capture per branch (auto-par ordered-output). Built
+        // up front so its element addresses are stable for the lifetime of the
+        // tasks; never pushed-to after, so no realloc moves a live capture. Each
+        // task writes only its own element (through `OUTPUT_REDIRECT`); the parent
+        // reads them only after the join barrier, which establishes happens-before.
+        let mut captures: Vec<OutputCapture> = (0..count).map(|_| OutputCapture::new()).collect();
 
-    let p = pool();
-    {
-        let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
-        for (i, cap) in captures.iter_mut().enumerate() {
-            let b = &*branches.add(i);
-            // Round-trip the pointers through `usize` so the closure is
-            // `Send` without an unsafe impl on the raw FFI types. Slice
-            // 3b.7 (2026-05-20) refactored `Task` to carry a boxed
-            // closure instead of a fixed (func, ctx_addr) pair — same
-            // ABI, more flexible payload (par_reduce uses the same Task
-            // shape with a 5-arg closure).
-            let func = b.func;
-            let ctx_addr = b.ctx as usize;
-            let cap_addr = (cap as *mut OutputCapture) as usize;
-            q.push_back(Task {
-                call: Arc::clone(&call),
-                branch_idx: i as u32,
-                run: Box::new(move |cancel: &AtomicBool| unsafe {
-                    // Redirect this branch's console output into its capture
-                    // for the branch's whole extent (transitive prints from
-                    // called fns included). RAII-restored on return OR unwind,
-                    // and to the PREVIOUS value so a nested `par` branch nests.
-                    let _redir = OutputRedirectGuard::new(cap_addr as *mut OutputCapture);
-                    func(ctx_addr as *mut c_void, cancel as *const AtomicBool);
-                }),
-            });
+        let p = pool();
+        {
+            let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
+            for (i, cap) in captures.iter_mut().enumerate() {
+                let b = &*branches.add(i);
+                // Round-trip the pointers through `usize` so the closure is
+                // `Send` without an unsafe impl on the raw FFI types. Slice
+                // 3b.7 (2026-05-20) refactored `Task` to carry a boxed
+                // closure instead of a fixed (func, ctx_addr) pair — same
+                // ABI, more flexible payload (par_reduce uses the same Task
+                // shape with a 5-arg closure).
+                let func = b.func;
+                let ctx_addr = b.ctx as usize;
+                let cap_addr = (cap as *mut OutputCapture) as usize;
+                q.push_back(Task {
+                    call: Arc::clone(&call),
+                    branch_idx: i as u32,
+                    run: Box::new(move |cancel: &AtomicBool| {
+                        // Redirect this branch's console output into its capture
+                        // for the branch's whole extent (transitive prints from
+                        // called fns included). RAII-restored on return OR unwind,
+                        // and to the PREVIOUS value so a nested `par` branch nests.
+                        let _redir = OutputRedirectGuard::new(cap_addr as *mut OutputCapture);
+                        func(ctx_addr as *mut c_void, cancel as *const AtomicBool);
+                    }),
+                });
+            }
         }
-    }
-    p.cv.notify_all();
+        p.cv.notify_all();
 
-    // Wait for all tasks to complete, work-helping while we wait and
-    // propagating an enclosing cancellation inward (see `par_join_wait`).
-    par_join_wait(&call, p, parent_cancel);
+        // Wait for all tasks to complete, work-helping while we wait and
+        // propagating an enclosing cancellation inward (see `par_join_wait`).
+        par_join_wait(&call, p, parent_cancel);
 
-    // Join passed → every branch's capture writes happen-before here. Replay
-    // in branch (= source) order through the console chokepoint: at the top
-    // level this reaches the fd in deterministic order; nested inside an outer
-    // branch it folds into that branch's still-installed capture.
-    for cap in &captures {
-        cap.replay();
+        // Join passed → every branch's capture writes happen-before here. Replay
+        // in branch (= source) order through the console chokepoint: at the top
+        // level this reaches the fd in deterministic order; nested inside an outer
+        // branch it folds into that branch's still-installed capture.
+        for cap in &captures {
+            cap.replay();
+        }
     }
 }
 
@@ -1870,45 +1899,47 @@ pub(crate) unsafe fn seq_par_run(
     spawn_site_id: u32,
     parent_cancel: *const AtomicBool,
 ) {
-    let track_frames = runtime_debug_metadata_enabled();
-    let parent_addr: usize = if track_frames {
-        CURRENT_FRAME.with(|c| c.get()) as usize
-    } else {
-        0
-    };
-
-    let cancel = AtomicBool::new(false);
-    // One deferred-output capture per branch (auto-par ordered-output); see the
-    // pooled path. Stable addresses (no push after build), one writer per
-    // element, read only after the (here implicit, source-order) join.
-    let mut captures: Vec<OutputCapture> = (0..count).map(|_| OutputCapture::new()).collect();
-    for (i, cap) in captures.iter_mut().enumerate() {
-        // Cascade an enclosing cancellation inward before each branch.
-        if !parent_cancel.is_null() && (*parent_cancel).load(Ordering::Relaxed) {
-            cancel.store(true, Ordering::Relaxed);
-        }
-        let b = &*branches.add(i);
-        // Redirect this branch's console output into its capture (RAII-restored
-        // to the enclosing context at iteration end, so a nested `par` nests).
-        let _redir = OutputRedirectGuard::new(cap as *mut OutputCapture);
-        if track_frames {
-            let frame = KaracFrame {
-                parent: parent_addr as *const KaracFrame,
-                spawn_site_id,
-                worker_index: i as u32,
-                wait_target: KaracWaitTarget::None,
-            };
-            let _guard = FrameGuard::new(&frame);
-            (b.func)(b.ctx, &cancel as *const AtomicBool);
+    unsafe {
+        let track_frames = runtime_debug_metadata_enabled();
+        let parent_addr: usize = if track_frames {
+            CURRENT_FRAME.with(|c| c.get()) as usize
         } else {
-            (b.func)(b.ctx, &cancel as *const AtomicBool);
+            0
+        };
+
+        let cancel = AtomicBool::new(false);
+        // One deferred-output capture per branch (auto-par ordered-output); see the
+        // pooled path. Stable addresses (no push after build), one writer per
+        // element, read only after the (here implicit, source-order) join.
+        let mut captures: Vec<OutputCapture> = (0..count).map(|_| OutputCapture::new()).collect();
+        for (i, cap) in captures.iter_mut().enumerate() {
+            // Cascade an enclosing cancellation inward before each branch.
+            if !parent_cancel.is_null() && (*parent_cancel).load(Ordering::Relaxed) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            let b = &*branches.add(i);
+            // Redirect this branch's console output into its capture (RAII-restored
+            // to the enclosing context at iteration end, so a nested `par` nests).
+            let _redir = OutputRedirectGuard::new(cap as *mut OutputCapture);
+            if track_frames {
+                let frame = KaracFrame {
+                    parent: parent_addr as *const KaracFrame,
+                    spawn_site_id,
+                    worker_index: i as u32,
+                    wait_target: KaracWaitTarget::None,
+                };
+                let _guard = FrameGuard::new(&frame);
+                (b.func)(b.ctx, &cancel as *const AtomicBool);
+            } else {
+                (b.func)(b.ctx, &cancel as *const AtomicBool);
+            }
         }
-    }
-    // Implicit join passed (the loop ran every branch on this thread). Replay
-    // in source order through the chokepoint; redirect is now the enclosing
-    // context (null at top level, or an outer branch's capture when nested).
-    for cap in &captures {
-        cap.replay();
+        // Implicit join passed (the loop ran every branch on this thread). Replay
+        // in source order through the chokepoint; redirect is now the enclosing
+        // context (null at top level, or an outer branch's capture when nested).
+        for cap in &captures {
+            cap.replay();
+        }
     }
 }
 
@@ -1935,43 +1966,45 @@ pub(crate) unsafe fn seq_par_run(
 /// summed along the nesting path, matching the spec's stated bound.
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 unsafe fn par_join_wait(call: &Arc<ParCall>, p: &Arc<Pool>, parent_cancel: *const AtomicBool) {
-    loop {
-        // Done?
-        {
+    unsafe {
+        loop {
+            // Done?
+            {
+                let r = call.remaining.lock().unwrap_or_else(|e| e.into_inner());
+                if *r == 0 {
+                    return;
+                }
+            }
+            // Cascade: an enclosing cancellation becomes this region's
+            // cancellation, observed by nested branches at their next check.
+            if !parent_cancel.is_null() && (*parent_cancel).load(Ordering::Relaxed) {
+                call.cancel.store(true, Ordering::Relaxed);
+            }
+            // Try to help.
+            let next_task = {
+                let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
+                q.pop_front()
+            };
+            if let Some(task) = next_task {
+                execute_task(task);
+                continue;
+            }
+            // Nothing to help with — block until a task we dispatched signals
+            // completion. When nested (parent_cancel set), bound the block with
+            // a short timeout so we re-poll the parent flag even if no nested
+            // task signals in the meantime.
             let r = call.remaining.lock().unwrap_or_else(|e| e.into_inner());
             if *r == 0 {
                 return;
             }
-        }
-        // Cascade: an enclosing cancellation becomes this region's
-        // cancellation, observed by nested branches at their next check.
-        if !parent_cancel.is_null() && (*parent_cancel).load(Ordering::Relaxed) {
-            call.cancel.store(true, Ordering::Relaxed);
-        }
-        // Try to help.
-        let next_task = {
-            let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
-            q.pop_front()
-        };
-        if let Some(task) = next_task {
-            execute_task(task);
-            continue;
-        }
-        // Nothing to help with — block until a task we dispatched signals
-        // completion. When nested (parent_cancel set), bound the block with
-        // a short timeout so we re-poll the parent flag even if no nested
-        // task signals in the meantime.
-        let r = call.remaining.lock().unwrap_or_else(|e| e.into_inner());
-        if *r == 0 {
-            return;
-        }
-        if parent_cancel.is_null() {
-            let _r = call.notify.wait(r).unwrap_or_else(|e| e.into_inner());
-        } else {
-            let _r = call
-                .notify
-                .wait_timeout(r, std::time::Duration::from_millis(1))
-                .unwrap_or_else(|e| e.into_inner());
+            if parent_cancel.is_null() {
+                let _r = call.notify.wait(r).unwrap_or_else(|e| e.into_inner());
+            } else {
+                let _r = call
+                    .notify
+                    .wait_timeout(r, std::time::Duration::from_millis(1))
+                    .unwrap_or_else(|e| e.into_inner());
+            }
         }
     }
 }
@@ -2260,49 +2293,51 @@ pub unsafe extern "C" fn karac_par_reduce(
     out_slot: *mut u8,
     _spawn_site_id: u32,
 ) {
-    let desc = &*descriptor;
+    unsafe {
+        let desc = &*descriptor;
 
-    // Seed the output slot at identity so 0-iter calls return identity
-    // and the final combine pass can fold every worker slot uniformly.
-    (desc.init_slot)(out_slot);
+        // Seed the output slot at identity so 0-iter calls return identity
+        // and the final combine pass can fold every worker slot uniformly.
+        (desc.init_slot)(out_slot);
 
-    if desc.iter_total == 0 {
-        return;
-    }
-
-    // phase-10 "WASM concurrency lowering — sequential default": the
-    // single-threaded default wasm target takes the single-worker shape
-    // the native fast path below already defines — one `worker_fn` call
-    // over the full range, directly into `out_slot`, no slot buffer, no
-    // combine (and no pool, which doesn't exist on that target). Codegen
-    // additionally skips emitting reduction fan-outs on sequential wasm
-    // entirely (auto-par is pure overhead with no parallelism), so this
-    // arm is the semantic backstop, not the expected hot path. Under
-    // `--features wasm-threads` the pool exists and the pooled arm runs
-    // — auto-par reductions are re-enabled there.
-    #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
-    {
-        let dummy = AtomicBool::new(false);
-        (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
-    }
-
-    #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
-    {
-        // Fork-depth cap (B-2026-07-03-14 follow-on). Checked FIRST, before the
-        // pooled path's pool query / cost math, so a nested reduction — this
-        // thread is already running a reduction worker at or above the cap —
-        // takes the cheapest possible path: one `worker_fn` call over the full
-        // range, no fan-out. A recursive reduction (backtracking counter) enters
-        // here at every recursion node; keeping the capped path this thin is
-        // what makes lowering it viable rather than a per-node overhead storm.
-        // Depth is 0 on any thread not currently inside a reduction worker, so
-        // the outermost call always falls through to the pooled fan-out.
-        if PAR_REDUCE_DEPTH.with(|d| d.get()) >= resolve_max_fork_depth() {
-            let dummy = AtomicBool::new(false);
-            (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
+        if desc.iter_total == 0 {
             return;
         }
-        karac_par_reduce_pooled(desc, out_slot, _spawn_site_id);
+
+        // phase-10 "WASM concurrency lowering — sequential default": the
+        // single-threaded default wasm target takes the single-worker shape
+        // the native fast path below already defines — one `worker_fn` call
+        // over the full range, directly into `out_slot`, no slot buffer, no
+        // combine (and no pool, which doesn't exist on that target). Codegen
+        // additionally skips emitting reduction fan-outs on sequential wasm
+        // entirely (auto-par is pure overhead with no parallelism), so this
+        // arm is the semantic backstop, not the expected hot path. Under
+        // `--features wasm-threads` the pool exists and the pooled arm runs
+        // — auto-par reductions are re-enabled there.
+        #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
+        {
+            let dummy = AtomicBool::new(false);
+            (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
+        }
+
+        #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+        {
+            // Fork-depth cap (B-2026-07-03-14 follow-on). Checked FIRST, before the
+            // pooled path's pool query / cost math, so a nested reduction — this
+            // thread is already running a reduction worker at or above the cap —
+            // takes the cheapest possible path: one `worker_fn` call over the full
+            // range, no fan-out. A recursive reduction (backtracking counter) enters
+            // here at every recursion node; keeping the capped path this thin is
+            // what makes lowering it viable rather than a per-node overhead storm.
+            // Depth is 0 on any thread not currently inside a reduction worker, so
+            // the outermost call always falls through to the pooled fan-out.
+            if PAR_REDUCE_DEPTH.with(|d| d.get()) >= resolve_max_fork_depth() {
+                let dummy = AtomicBool::new(false);
+                (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
+                return;
+            }
+            karac_par_reduce_pooled(desc, out_slot, _spawn_site_id);
+        }
     }
 }
 
@@ -2319,149 +2354,181 @@ unsafe fn karac_par_reduce_pooled(
     out_slot: *mut u8,
     _spawn_site_id: u32,
 ) {
-    // Worker count: cap at `iter_total` so each worker gets at least one
-    // iteration, and at least 1 so the single-thread fast path below
-    // doesn't divide by zero. `resolve_pool_workers` honors
-    // `KARAC_PAR_WORKERS` when set so the dispatch math matches the
-    // actual `pool()` worker count — without this, an env override
-    // would cap `pool_workers` here at the auto-detect value while
-    // `pool()` spawned a different count, and the per-worker slot
-    // allocation below would mis-size.
-    // Worker count fits `usize` everywhere: it's `min`-capped by
-    // `pool_workers` (a small host count), so the `u64 → usize` cast
-    // after the min is lossless even on wasm32.
-    let pool_workers = resolve_pool_workers();
-    let n_workers = (pool_workers as u64).min(desc.iter_total).max(1) as usize;
+    unsafe {
+        // Worker count: cap at `iter_total` so each worker gets at least one
+        // iteration, and at least 1 so the single-thread fast path below
+        // doesn't divide by zero. `resolve_pool_workers` honors
+        // `KARAC_PAR_WORKERS` when set so the dispatch math matches the
+        // actual `pool()` worker count — without this, an env override
+        // would cap `pool_workers` here at the auto-detect value while
+        // `pool()` spawned a different count, and the per-worker slot
+        // allocation below would mis-size.
+        // Worker count fits `usize` everywhere: it's `min`-capped by
+        // `pool_workers` (a small host count), so the `u64 → usize` cast
+        // after the min is lossless even on wasm32.
+        let pool_workers = resolve_pool_workers();
+        let n_workers = (pool_workers as u64).min(desc.iter_total).max(1) as usize;
 
-    // Decode the order-free flag out of the cost field (see the field
-    // doc — bit 63, no descriptor-layout change).
-    let order_free = desc.per_iter_cost_units & KARAC_PAR_ORDER_FREE_FLAG != 0;
-    let per_iter_cost = desc.per_iter_cost_units & !KARAC_PAR_ORDER_FREE_FLAG;
+        // Decode the order-free flag out of the cost field (see the field
+        // doc — bit 63, no descriptor-layout change).
+        let order_free = desc.per_iter_cost_units & KARAC_PAR_ORDER_FREE_FLAG != 0;
+        let per_iter_cost = desc.per_iter_cost_units & !KARAC_PAR_ORDER_FREE_FLAG;
 
-    // Slice 3b.8 (2026-05-20): runtime-side cost gate. Even when the
-    // codegen-time gate let the call through (e.g. variable-K loops
-    // bypass `const_eval_iter_count`), the actual K may be too small to
-    // beat the per-call dispatch overhead. Compute the estimated total
-    // work and run the worker once in the caller's thread when it falls
-    // below `pool_workers * DISPATCH_OVERHEAD_PER_CALL_UNITS_RT`. The
-    // `per_iter_cost_units == 0` sentinel (caller didn't estimate)
-    // bypasses the gate so behaviour stays at "always dispatch."
-    let total_cost = desc.iter_total.saturating_mul(per_iter_cost);
-    let cost_threshold = (pool_workers as u64).saturating_mul(DISPATCH_OVERHEAD_PER_CALL_UNITS_RT);
-    let gate_skip = per_iter_cost != 0 && total_cost < cost_threshold;
+        // Slice 3b.8 (2026-05-20): runtime-side cost gate. Even when the
+        // codegen-time gate let the call through (e.g. variable-K loops
+        // bypass `const_eval_iter_count`), the actual K may be too small to
+        // beat the per-call dispatch overhead. Compute the estimated total
+        // work and run the worker once in the caller's thread when it falls
+        // below `pool_workers * DISPATCH_OVERHEAD_PER_CALL_UNITS_RT`. The
+        // `per_iter_cost_units == 0` sentinel (caller didn't estimate)
+        // bypasses the gate so behaviour stays at "always dispatch."
+        let total_cost = desc.iter_total.saturating_mul(per_iter_cost);
+        let cost_threshold =
+            (pool_workers as u64).saturating_mul(DISPATCH_OVERHEAD_PER_CALL_UNITS_RT);
+        let gate_skip = per_iter_cost != 0 && total_cost < cost_threshold;
 
-    // Single-worker fast path: bypass the slot buffer + spawn machinery
-    // and run the worker directly into `out_slot`. The serial combine
-    // would be a no-op anyway (one slot folded into itself) so skipping
-    // it preserves observable behavior. Also taken when the runtime
-    // cost gate fires (slice 3b.8) — same shape (init_slot is already
-    // seeded above; one worker_fn call covers the full range). The
-    // fork-depth cap is handled earlier in `karac_par_reduce` (nested
-    // reductions never reach this pooled path).
-    //
-    // Still raise the depth for this inline body: it IS a reduction worker,
-    // so a nested reduction it reaches must see depth ≥ 1 and take the cheap
-    // early-cap inline path rather than re-querying the pool. Without this, a
-    // 1-worker pool (or a top loop with a single iteration) would leave depth
-    // at 0 and route every recursion node back through the pooled entry.
-    if n_workers == 1 || gate_skip {
-        let _depth = ParReduceDepthGuard::enter();
-        let dummy = AtomicBool::new(false);
-        (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
-        return;
-    }
+        // Single-worker fast path: bypass the slot buffer + spawn machinery
+        // and run the worker directly into `out_slot`. The serial combine
+        // would be a no-op anyway (one slot folded into itself) so skipping
+        // it preserves observable behavior. Also taken when the runtime
+        // cost gate fires (slice 3b.8) — same shape (init_slot is already
+        // seeded above; one worker_fn call covers the full range). The
+        // fork-depth cap is handled earlier in `karac_par_reduce` (nested
+        // reductions never reach this pooled path).
+        //
+        // Still raise the depth for this inline body: it IS a reduction worker,
+        // so a nested reduction it reaches must see depth ≥ 1 and take the cheap
+        // early-cap inline path rather than re-querying the pool. Without this, a
+        // 1-worker pool (or a top loop with a single iteration) would leave depth
+        // at 0 and route every recursion node back through the pooled entry.
+        if n_workers == 1 || gate_skip {
+            let _depth = ParReduceDepthGuard::enter();
+            let dummy = AtomicBool::new(false);
+            (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
+            return;
+        }
 
-    // Allocate the per-worker slot buffer in one chunk so the worker
-    // slots share locality and the dealloc on return is a single call.
-    // Slot size/align are descriptor-level `u64` (see the field-width
-    // note on `iter_total`) but describe an in-memory accumulator, so
-    // they always fit `usize` — codegen stamps them from a Kara
-    // primitive's size/alignment.
-    let slot_size = desc.slot_size as usize;
-    let slot_align = desc.slot_align as usize;
-    let stride = align_up(slot_size, slot_align);
-    let layout = std::alloc::Layout::from_size_align(stride * n_workers, slot_align)
-        .expect("karac_par_reduce: slot_size * n_workers overflows or alignment is invalid");
-    let slots: *mut u8 = std::alloc::alloc(layout);
-    if slots.is_null() {
-        std::alloc::handle_alloc_error(layout);
-    }
+        // Allocate the per-worker slot buffer in one chunk so the worker
+        // slots share locality and the dealloc on return is a single call.
+        // Slot size/align are descriptor-level `u64` (see the field-width
+        // note on `iter_total`) but describe an in-memory accumulator, so
+        // they always fit `usize` — codegen stamps them from a Kara
+        // primitive's size/alignment.
+        let slot_size = desc.slot_size as usize;
+        let slot_align = desc.slot_align as usize;
+        let stride = align_up(slot_size, slot_align);
+        let layout = std::alloc::Layout::from_size_align(stride * n_workers, slot_align)
+            .expect("karac_par_reduce: slot_size * n_workers overflows or alignment is invalid");
+        let slots: *mut u8 = std::alloc::alloc(layout);
+        if slots.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
 
-    // Seed every worker's slot at identity. The worker_fn folds into the
-    // slot from there; reading an uninitialized slot would surface as
-    // miscompile-grade UB.
-    for w in 0..n_workers {
-        (desc.init_slot)(slots.add(w * stride));
-    }
+        // Seed every worker's slot at identity. The worker_fn folds into the
+        // slot from there; reading an uninitialized slot would surface as
+        // miscompile-grade UB.
+        for w in 0..n_workers {
+            (desc.init_slot)(slots.add(w * stride));
+        }
 
-    // Slice 3b.7 (2026-05-20): build per-call coordination state
-    // (cancel, remaining, notify Condvar) — mirrors `karac_par_run`'s
-    // ParCall shape so the shared `dispatch_and_wait` helper handles
-    // both call kinds uniformly. `parent_addr` + `track_frames` stay at
-    // their disabled defaults: reductions don't surface in the slice-5
-    // frame-tracking API today (the worker fn is a synthesized helper,
-    // not a source-level par-branch); they fold in alongside whenever
-    // the debugger contract grows a reduction-frame variant.
-    // Range math stays in `u64` end-to-end — the per-worker `start`/`end`
-    // feed `worker_fn`'s i64-width index parameters directly, no
-    // narrowing on wasm32.
-    let ctx_addr = desc.ctx as usize;
-    let slot_base = slots as usize;
-    let worker_fn = desc.worker_fn;
-    let stride_local = stride;
-    let iter_total = desc.iter_total;
+        // Slice 3b.7 (2026-05-20): build per-call coordination state
+        // (cancel, remaining, notify Condvar) — mirrors `karac_par_run`'s
+        // ParCall shape so the shared `dispatch_and_wait` helper handles
+        // both call kinds uniformly. `parent_addr` + `track_frames` stay at
+        // their disabled defaults: reductions don't surface in the slice-5
+        // frame-tracking API today (the worker fn is a synthesized helper,
+        // not a source-level par-branch); they fold in alongside whenever
+        // the debugger contract grows a reduction-frame variant.
+        // Range math stays in `u64` end-to-end — the per-worker `start`/`end`
+        // feed `worker_fn`'s i64-width index parameters directly, no
+        // narrowing on wasm32.
+        let ctx_addr = desc.ctx as usize;
+        let slot_base = slots as usize;
+        let worker_fn = desc.worker_fn;
+        let stride_local = stride;
+        let iter_total = desc.iter_total;
 
-    let call = Arc::new(ParCall {
-        cancel: AtomicBool::new(false),
-        remaining: Mutex::new(n_workers as u32),
-        notify: Condvar::new(),
-        spawn_site_id: _spawn_site_id,
-        parent_addr: 0,
-        track_frames: false,
-    });
+        let call = Arc::new(ParCall {
+            cancel: AtomicBool::new(false),
+            remaining: Mutex::new(n_workers as u32),
+            notify: Condvar::new(),
+            spawn_site_id: _spawn_site_id,
+            parent_addr: 0,
+            track_frames: false,
+        });
 
-    let tasks: Vec<Task> = if order_free {
-        // ── Heterogeneity-aware dynamic chunking (order-free dispatches
-        // only — today the tabulate lowering, whose output is
-        // index-addressed so chunk completion order is irrelevant and
-        // the per-task slot stays at identity). Equal static chunks on
-        // an asymmetric-core host (6P+12E Apple Silicon) make the join
-        // wait for the slowest E-core chunk; over-decomposing into
-        // `n_workers × KARAC_PAR_CHUNK_FACTOR` (default 8) chunks that
-        // workers PULL from an atomic counter lets fast cores absorb
-        // the surplus — the cheap version of work-stealing, with no
-        // deques and no per-chunk task churn (n_workers tasks total).
-        // A floor of MIN_DYNAMIC_CHUNK iterations per chunk keeps the
-        // pull-loop overhead invisible on small ranges; factor 1 (env)
-        // degenerates to the static split.
-        let factor = std::env::var("KARAC_PAR_CHUNK_FACTOR")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .filter(|&f| f >= 1)
-            .unwrap_or(8);
-        const MIN_DYNAMIC_CHUNK: u64 = 1024;
-        let target_chunks = (n_workers as u64).saturating_mul(factor);
-        let chunk = iter_total
-            .div_ceil(target_chunks)
-            .max(MIN_DYNAMIC_CHUNK.min(iter_total));
-        let n_chunks = iter_total.div_ceil(chunk);
-        let next_chunk = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        (0..n_workers)
-            .map(|w| {
-                let slot_addr = slot_base + w * stride_local;
-                let next_chunk = Arc::clone(&next_chunk);
-                Task {
-                    call: Arc::clone(&call),
-                    branch_idx: w as u32,
-                    run: Box::new(move |cancel: &AtomicBool| unsafe {
-                        let _depth = ParReduceDepthGuard::enter();
-                        loop {
-                            let idx = next_chunk.fetch_add(1, Ordering::Relaxed);
-                            if idx >= n_chunks {
-                                break;
+        let tasks: Vec<Task> = if order_free {
+            // ── Heterogeneity-aware dynamic chunking (order-free dispatches
+            // only — today the tabulate lowering, whose output is
+            // index-addressed so chunk completion order is irrelevant and
+            // the per-task slot stays at identity). Equal static chunks on
+            // an asymmetric-core host (6P+12E Apple Silicon) make the join
+            // wait for the slowest E-core chunk; over-decomposing into
+            // `n_workers × KARAC_PAR_CHUNK_FACTOR` (default 8) chunks that
+            // workers PULL from an atomic counter lets fast cores absorb
+            // the surplus — the cheap version of work-stealing, with no
+            // deques and no per-chunk task churn (n_workers tasks total).
+            // A floor of MIN_DYNAMIC_CHUNK iterations per chunk keeps the
+            // pull-loop overhead invisible on small ranges; factor 1 (env)
+            // degenerates to the static split.
+            let factor = std::env::var("KARAC_PAR_CHUNK_FACTOR")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .filter(|&f| f >= 1)
+                .unwrap_or(8);
+            const MIN_DYNAMIC_CHUNK: u64 = 1024;
+            let target_chunks = (n_workers as u64).saturating_mul(factor);
+            let chunk = iter_total
+                .div_ceil(target_chunks)
+                .max(MIN_DYNAMIC_CHUNK.min(iter_total));
+            let n_chunks = iter_total.div_ceil(chunk);
+            let next_chunk = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            (0..n_workers)
+                .map(|w| {
+                    let slot_addr = slot_base + w * stride_local;
+                    let next_chunk = Arc::clone(&next_chunk);
+                    Task {
+                        call: Arc::clone(&call),
+                        branch_idx: w as u32,
+                        run: Box::new(move |cancel: &AtomicBool| {
+                            let _depth = ParReduceDepthGuard::enter();
+                            loop {
+                                let idx = next_chunk.fetch_add(1, Ordering::Relaxed);
+                                if idx >= n_chunks {
+                                    break;
+                                }
+                                let start = idx * chunk;
+                                let end = (start + chunk).min(iter_total);
+                                worker_fn(
+                                    slot_addr as *mut u8,
+                                    start,
+                                    end,
+                                    ctx_addr as *mut c_void,
+                                    cancel as *const AtomicBool,
+                                );
                             }
-                            let start = idx * chunk;
-                            let end = (start + chunk).min(iter_total);
+                        }),
+                    }
+                })
+                .collect()
+        } else {
+            let chunk = desc.iter_total.div_ceil(n_workers as u64);
+            (0..n_workers)
+                .map(|w| {
+                    let start = (w as u64) * chunk;
+                    let end = ((w as u64) + 1).saturating_mul(chunk).min(iter_total);
+                    let slot_addr = slot_base + w * stride_local;
+                    Task {
+                        call: Arc::clone(&call),
+                        branch_idx: w as u32,
+                        run: Box::new(move |cancel: &AtomicBool| {
+                            // Raise the reduction depth for the duration of this
+                            // worker's body: any nested `karac_par_reduce` reached from
+                            // `worker_fn` (a recursive delta) sees the higher depth and,
+                            // once the cap is hit, runs inline instead of fanning out
+                            // again. Runs on whichever thread executes the task — a pool
+                            // worker, or the caller when it work-helps.
+                            let _depth = ParReduceDepthGuard::enter();
                             worker_fn(
                                 slot_addr as *mut u8,
                                 start,
@@ -2469,52 +2536,23 @@ unsafe fn karac_par_reduce_pooled(
                                 ctx_addr as *mut c_void,
                                 cancel as *const AtomicBool,
                             );
-                        }
-                    }),
-                }
-            })
-            .collect()
-    } else {
-        let chunk = desc.iter_total.div_ceil(n_workers as u64);
-        (0..n_workers)
-            .map(|w| {
-                let start = (w as u64) * chunk;
-                let end = ((w as u64) + 1).saturating_mul(chunk).min(iter_total);
-                let slot_addr = slot_base + w * stride_local;
-                Task {
-                    call: Arc::clone(&call),
-                    branch_idx: w as u32,
-                    run: Box::new(move |cancel: &AtomicBool| unsafe {
-                        // Raise the reduction depth for the duration of this
-                        // worker's body: any nested `karac_par_reduce` reached from
-                        // `worker_fn` (a recursive delta) sees the higher depth and,
-                        // once the cap is hit, runs inline instead of fanning out
-                        // again. Runs on whichever thread executes the task — a pool
-                        // worker, or the caller when it work-helps.
-                        let _depth = ParReduceDepthGuard::enter();
-                        worker_fn(
-                            slot_addr as *mut u8,
-                            start,
-                            end,
-                            ctx_addr as *mut c_void,
-                            cancel as *const AtomicBool,
-                        );
-                    }),
-                }
-            })
-            .collect()
-    };
+                        }),
+                    }
+                })
+                .collect()
+        };
 
-    dispatch_and_wait(&call, tasks);
+        dispatch_and_wait(&call, tasks);
 
-    // Serial combine: fold each worker's slot into `out_slot` in worker
-    // order. The op is associative + commutative (recognizer's allow-list
-    // requirement) so this order is one of many equally-valid orderings.
-    for w in 0..n_workers {
-        (desc.combine_fn)(out_slot, slots.add(w * stride));
+        // Serial combine: fold each worker's slot into `out_slot` in worker
+        // order. The op is associative + commutative (recognizer's allow-list
+        // requirement) so this order is one of many equally-valid orderings.
+        for w in 0..n_workers {
+            (desc.combine_fn)(out_slot, slots.add(w * stride));
+        }
+
+        std::alloc::dealloc(slots, layout);
     }
-
-    std::alloc::dealloc(slots, layout);
 }
 
 /// Round `n` up to the nearest multiple of `align`. `align` must be a
@@ -2574,9 +2612,11 @@ pub unsafe extern "C" fn karac_runtime_for_each_active_frame(
     callback: unsafe extern "C" fn(*const KaracFrame, *mut c_void),
     userdata: *mut c_void,
 ) {
-    let guard = ACTIVE_FRAMES.lock().unwrap_or_else(|p| p.into_inner());
-    for &frame in guard.iter() {
-        callback(frame.0, userdata);
+    unsafe {
+        let guard = ACTIVE_FRAMES.lock().unwrap_or_else(|p| p.into_inner());
+        for &frame in guard.iter() {
+            callback(frame.0, userdata);
+        }
     }
 }
 
@@ -2880,145 +2920,147 @@ pub extern "C" fn karac_runtime_has_debug_metadata() -> bool {
 /// `free`s the buffer it sees a complete Kāra-shape allocation.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_list_par_blocks_into(out: *mut KaracVec) {
-    if out.is_null() {
-        return;
-    }
-    // Empty fast path: gate off, or no active frames. Either way write
-    // the canonical empty `{null, 0, 0}` Vec.
-    if !runtime_debug_metadata_enabled() {
-        (*out) = KaracVec {
-            data: std::ptr::null_mut(),
-            len: 0,
-            cap: 0,
+    unsafe {
+        if out.is_null() {
+            return;
+        }
+        // Empty fast path: gate off, or no active frames. Either way write
+        // the canonical empty `{null, 0, 0}` Vec.
+        if !runtime_debug_metadata_enabled() {
+            (*out) = KaracVec {
+                data: std::ptr::null_mut(),
+                len: 0,
+                cap: 0,
+            };
+            return;
+        }
+
+        // Snapshot active frames under the lock; copy out the (id, parent,
+        // worker_index) triples so we can release the lock before doing
+        // String allocations.
+        struct FrameSnapshot {
+            spawn_site_id: u32,
+        }
+        let frames: Vec<FrameSnapshot> = {
+            let guard = ACTIVE_FRAMES.lock().unwrap_or_else(|p| p.into_inner());
+            guard
+                .iter()
+                .map(|fp| FrameSnapshot {
+                    // SAFETY: pointers in ACTIVE_FRAMES are valid while the
+                    // lock is held — `FrameGuard::drop` deregisters before
+                    // the stack frame deallocates, and we read the field
+                    // through the lock.
+                    spawn_site_id: (*fp.0).spawn_site_id,
+                })
+                .collect()
         };
-        return;
-    }
 
-    // Snapshot active frames under the lock; copy out the (id, parent,
-    // worker_index) triples so we can release the lock before doing
-    // String allocations.
-    struct FrameSnapshot {
-        spawn_site_id: u32,
-    }
-    let frames: Vec<FrameSnapshot> = {
-        let guard = ACTIVE_FRAMES.lock().unwrap_or_else(|p| p.into_inner());
-        guard
-            .iter()
-            .map(|fp| FrameSnapshot {
-                // SAFETY: pointers in ACTIVE_FRAMES are valid while the
-                // lock is held — `FrameGuard::drop` deregisters before
-                // the stack frame deallocates, and we read the field
-                // through the lock.
-                spawn_site_id: (*fp.0).spawn_site_id,
-            })
-            .collect()
-    };
+        let count = frames.len();
+        if count == 0 {
+            (*out) = KaracVec {
+                data: std::ptr::null_mut(),
+                len: 0,
+                cap: 0,
+            };
+            return;
+        }
 
-    let count = frames.len();
-    if count == 0 {
-        (*out) = KaracVec {
-            data: std::ptr::null_mut(),
-            len: 0,
-            cap: 0,
-        };
-        return;
-    }
-
-    // Slice 3's KARAC_SPAWN_SITES table — bounds-check each spawn_site_id
-    // against KARAC_SPAWN_SITES_LEN before indexing. Address cast goes
-    // through a `*const ()` intermediate so the test-mode stand-in type
-    // (`SpawnSiteEntryStandIn`, a `#[repr(transparent)]` wrapper around
-    // `KaracSpawnSiteEntry`) and the production extern type both lower
-    // to a raw byte address.
-    //
-    // W3.5: prefer the JIT-published override addresses when set;
-    // otherwise fall through to the extern (AOT path).
-    let (sites_len, sites_base): (usize, *const KaracSpawnSiteEntry) =
-        if let Some(over) = SPAWN_SITES_OVERRIDE.get() {
-            if !over.len.is_null() && !over.base.is_null() {
-                // SAFETY: pointers are live for the calling process's
-                // lifetime per the JIT helper's contract.
-                (unsafe { *over.len } as usize, over.base)
+        // Slice 3's KARAC_SPAWN_SITES table — bounds-check each spawn_site_id
+        // against KARAC_SPAWN_SITES_LEN before indexing. Address cast goes
+        // through a `*const ()` intermediate so the test-mode stand-in type
+        // (`SpawnSiteEntryStandIn`, a `#[repr(transparent)]` wrapper around
+        // `KaracSpawnSiteEntry`) and the production extern type both lower
+        // to a raw byte address.
+        //
+        // W3.5: prefer the JIT-published override addresses when set;
+        // otherwise fall through to the extern (AOT path).
+        let (sites_len, sites_base): (usize, *const KaracSpawnSiteEntry) =
+            if let Some(over) = SPAWN_SITES_OVERRIDE.get() {
+                if !over.len.is_null() && !over.base.is_null() {
+                    // SAFETY: pointers are live for the calling process's
+                    // lifetime per the JIT helper's contract.
+                    (*over.len as usize, over.base)
+                } else {
+                    (
+                        KARAC_SPAWN_SITES_LEN as usize,
+                        &KARAC_SPAWN_SITES as *const _ as *const () as *const KaracSpawnSiteEntry,
+                    )
+                }
             } else {
                 (
                     KARAC_SPAWN_SITES_LEN as usize,
                     &KARAC_SPAWN_SITES as *const _ as *const () as *const KaracSpawnSiteEntry,
                 )
-            }
-        } else {
-            (
-                KARAC_SPAWN_SITES_LEN as usize,
-                &KARAC_SPAWN_SITES as *const _ as *const () as *const KaracSpawnSiteEntry,
-            )
-        };
+            };
 
-    let elem_size = std::mem::size_of::<KaracParBlockInfo>();
-    let layout = std::alloc::Layout::from_size_align(elem_size * count, 8)
-        .expect("ParBlockInfo array layout");
-    let buf = std::alloc::alloc(layout) as *mut KaracParBlockInfo;
-    if buf.is_null() {
-        std::alloc::handle_alloc_error(layout);
-    }
+        let elem_size = std::mem::size_of::<KaracParBlockInfo>();
+        let layout = std::alloc::Layout::from_size_align(elem_size * count, 8)
+            .expect("ParBlockInfo array layout");
+        let buf = std::alloc::alloc(layout) as *mut KaracParBlockInfo;
+        if buf.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
 
-    let mut filled: usize = 0;
-    for snap in &frames {
-        let id = snap.spawn_site_id as usize;
-        let (file_str, line, col, worker_count) = if id < sites_len {
-            let entry = &*sites_base.add(id);
-            let file = if entry.file_cstr.is_null() {
-                RuntimeKaracString {
-                    data: std::ptr::null_mut(),
-                    len: 0,
-                    cap: 0,
-                }
-            } else {
-                let cstr = std::ffi::CStr::from_ptr(entry.file_cstr);
-                let bytes = cstr.to_bytes();
-                if bytes.is_empty() {
+        let mut filled: usize = 0;
+        for snap in &frames {
+            let id = snap.spawn_site_id as usize;
+            let (file_str, line, col, worker_count) = if id < sites_len {
+                let entry = &*sites_base.add(id);
+                let file = if entry.file_cstr.is_null() {
                     RuntimeKaracString {
                         data: std::ptr::null_mut(),
                         len: 0,
                         cap: 0,
                     }
                 } else {
-                    let str_layout = std::alloc::Layout::array::<u8>(bytes.len()).unwrap();
-                    let str_buf = std::alloc::alloc(str_layout);
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
-                    RuntimeKaracString {
-                        data: str_buf,
-                        len: bytes.len() as i64,
-                        cap: bytes.len() as i64,
+                    let cstr = std::ffi::CStr::from_ptr(entry.file_cstr);
+                    let bytes = cstr.to_bytes();
+                    if bytes.is_empty() {
+                        RuntimeKaracString {
+                            data: std::ptr::null_mut(),
+                            len: 0,
+                            cap: 0,
+                        }
+                    } else {
+                        let str_layout = std::alloc::Layout::array::<u8>(bytes.len()).unwrap();
+                        let str_buf = std::alloc::alloc(str_layout);
+                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
+                        RuntimeKaracString {
+                            data: str_buf,
+                            len: bytes.len() as i64,
+                            cap: bytes.len() as i64,
+                        }
                     }
-                }
+                };
+                (file, entry.line, entry.col, entry.worker_count)
+            } else {
+                // Spawn-site ID out of range — metadata mismatch (e.g. table
+                // emitted with gate off). Skip rather than crash.
+                continue;
             };
-            (file, entry.line, entry.col, entry.worker_count)
-        } else {
-            // Spawn-site ID out of range — metadata mismatch (e.g. table
-            // emitted with gate off). Skip rather than crash.
-            continue;
+
+            let entry_ptr = buf.add(filled);
+            std::ptr::write(
+                entry_ptr,
+                KaracParBlockInfo {
+                    spawn_site_id: snap.spawn_site_id,
+                    _pad0: 0,
+                    file: file_str,
+                    line,
+                    col,
+                    worker_count,
+                    _pad1: 0,
+                },
+            );
+            filled += 1;
+        }
+
+        (*out) = KaracVec {
+            data: buf as *mut u8,
+            len: filled as i64,
+            cap: count as i64,
         };
-
-        let entry_ptr = buf.add(filled);
-        std::ptr::write(
-            entry_ptr,
-            KaracParBlockInfo {
-                spawn_site_id: snap.spawn_site_id,
-                _pad0: 0,
-                file: file_str,
-                line,
-                col,
-                worker_count,
-                _pad1: 0,
-            },
-        );
-        filled += 1;
     }
-
-    (*out) = KaracVec {
-        data: buf as *mut u8,
-        len: filled as i64,
-        cap: count as i64,
-    };
 }
 
 // ── Provider stack (`with_provider[R]` trait-method dispatch) ──────────────
@@ -3122,14 +3164,16 @@ pub unsafe extern "C" fn karac_provider_push(
     provider_data: *const u8,
     vtable: *const VTable,
 ) {
-    let prev = PROVIDER_STACK_HEAD.with(|c| c.get());
-    *frame = ProviderFrame {
-        prev,
-        resource_id,
-        provider_data_ptr: provider_data,
-        vtable_ptr: vtable,
-    };
-    PROVIDER_STACK_HEAD.with(|c| c.set(frame));
+    unsafe {
+        let prev = PROVIDER_STACK_HEAD.with(|c| c.get());
+        *frame = ProviderFrame {
+            prev,
+            resource_id,
+            provider_data_ptr: provider_data,
+            vtable_ptr: vtable,
+        };
+        PROVIDER_STACK_HEAD.with(|c| c.set(frame));
+    }
 }
 
 /// Pop the current head frame from the per-task provider stack, reverting
@@ -3304,19 +3348,21 @@ pub unsafe extern "C" fn karac_error_trace_push(
     line: u32,
     col: u32,
 ) {
-    register_trace_atexit_once();
-    let file = if file_ptr.is_null() || file_len == 0 {
-        String::new()
-    } else {
-        let bytes = std::slice::from_raw_parts(file_ptr, file_len);
-        String::from_utf8_lossy(bytes).into_owned()
-    };
-    if let Ok(mut state) = ERROR_TRACE.lock() {
-        if state.frames.len() >= ERROR_TRACE_MAX_DEPTH {
-            state.frames.remove(0);
-            state.truncated = true;
+    unsafe {
+        register_trace_atexit_once();
+        let file = if file_ptr.is_null() || file_len == 0 {
+            String::new()
+        } else {
+            let bytes = std::slice::from_raw_parts(file_ptr, file_len);
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        if let Ok(mut state) = ERROR_TRACE.lock() {
+            if state.frames.len() >= ERROR_TRACE_MAX_DEPTH {
+                state.frames.remove(0);
+                state.truncated = true;
+            }
+            state.frames.push(ErrorTraceFrame { file, line, col });
         }
-        state.frames.push(ErrorTraceFrame { file, line, col });
     }
 }
 
@@ -3866,55 +3912,57 @@ fn json_value_to_karac(value: &serde_json::Value) -> *mut KaracJsonValue {
 /// `node` must point at a valid `KaracJsonValue` whose payload pointers
 /// describe initialized memory consistent with the tag byte.
 unsafe fn karac_to_json_value(node: *const KaracJsonValue) -> serde_json::Value {
-    if node.is_null() {
-        return serde_json::Value::Null;
-    }
-    let n = &*node;
-    match n.tag {
-        x if x == KaracJsonTag::Null as u8 => serde_json::Value::Null,
-        x if x == KaracJsonTag::Bool as u8 => serde_json::Value::Bool(n.bool_val),
-        x if x == KaracJsonTag::Number as u8 => serde_json::Number::from_f64(n.num_val)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        // B-2026-07-30-15 — `Int` renders through `Number::from(i64)`, which
-        // serde stringifies with no fractional part and no f64 rounding, so
-        // `9007199254740993` survives exactly.
-        x if x == KaracJsonTag::Int as u8 => {
-            serde_json::Value::Number(serde_json::Number::from(n.int_val))
+    unsafe {
+        if node.is_null() {
+            return serde_json::Value::Null;
         }
-        x if x == KaracJsonTag::String as u8 => {
-            if n.str_ptr.is_null() || n.str_len == 0 {
-                serde_json::Value::String(String::new())
-            } else {
-                let slice = std::slice::from_raw_parts(n.str_ptr, n.str_len);
-                serde_json::Value::String(String::from_utf8_lossy(slice).into_owned())
+        let n = &*node;
+        match n.tag {
+            x if x == KaracJsonTag::Null as u8 => serde_json::Value::Null,
+            x if x == KaracJsonTag::Bool as u8 => serde_json::Value::Bool(n.bool_val),
+            x if x == KaracJsonTag::Number as u8 => serde_json::Number::from_f64(n.num_val)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
+            // B-2026-07-30-15 — `Int` renders through `Number::from(i64)`, which
+            // serde stringifies with no fractional part and no f64 rounding, so
+            // `9007199254740993` survives exactly.
+            x if x == KaracJsonTag::Int as u8 => {
+                serde_json::Value::Number(serde_json::Number::from(n.int_val))
             }
-        }
-        x if x == KaracJsonTag::Array as u8 => {
-            let mut out = Vec::with_capacity(n.arr_len);
-            for i in 0..n.arr_len {
-                let item = *n.arr_items.add(i);
-                out.push(karac_to_json_value(item));
-            }
-            serde_json::Value::Array(out)
-        }
-        x if x == KaracJsonTag::Object as u8 => {
-            let mut map = serde_json::Map::with_capacity(n.obj_len);
-            for i in 0..n.obj_len {
-                let key_ptr = *n.obj_keys.add(i);
-                let val_ptr = *n.obj_vals.add(i);
-                let key = if key_ptr.is_null() {
-                    String::new()
+            x if x == KaracJsonTag::String as u8 => {
+                if n.str_ptr.is_null() || n.str_len == 0 {
+                    serde_json::Value::String(String::new())
                 } else {
-                    std::ffi::CStr::from_ptr(key_ptr)
-                        .to_string_lossy()
-                        .into_owned()
-                };
-                map.insert(key, karac_to_json_value(val_ptr));
+                    let slice = std::slice::from_raw_parts(n.str_ptr, n.str_len);
+                    serde_json::Value::String(String::from_utf8_lossy(slice).into_owned())
+                }
             }
-            serde_json::Value::Object(map)
+            x if x == KaracJsonTag::Array as u8 => {
+                let mut out = Vec::with_capacity(n.arr_len);
+                for i in 0..n.arr_len {
+                    let item = *n.arr_items.add(i);
+                    out.push(karac_to_json_value(item));
+                }
+                serde_json::Value::Array(out)
+            }
+            x if x == KaracJsonTag::Object as u8 => {
+                let mut map = serde_json::Map::with_capacity(n.obj_len);
+                for i in 0..n.obj_len {
+                    let key_ptr = *n.obj_keys.add(i);
+                    let val_ptr = *n.obj_vals.add(i);
+                    let key = if key_ptr.is_null() {
+                        String::new()
+                    } else {
+                        std::ffi::CStr::from_ptr(key_ptr)
+                            .to_string_lossy()
+                            .into_owned()
+                    };
+                    map.insert(key, karac_to_json_value(val_ptr));
+                }
+                serde_json::Value::Object(map)
+            }
+            _ => serde_json::Value::Null,
         }
-        _ => serde_json::Value::Null,
     }
 }
 
@@ -3932,24 +3980,10 @@ pub unsafe extern "C" fn karac_runtime_json_parse(
     input: *const std::os::raw::c_char,
     error_out: *mut KaracJsonError,
 ) -> *mut KaracJsonValue {
-    if input.is_null() {
-        if !error_out.is_null() {
-            let msg = std::ffi::CString::new("input pointer was null").unwrap();
-            (*error_out) = KaracJsonError {
-                line: 0,
-                column: 0,
-                message: msg.into_raw(),
-            };
-        }
-        return std::ptr::null_mut();
-    }
-    let cstr = std::ffi::CStr::from_ptr(input);
-    let s = match cstr.to_str() {
-        Ok(s) => s,
-        Err(e) => {
+    unsafe {
+        if input.is_null() {
             if !error_out.is_null() {
-                let msg = std::ffi::CString::new(format!("invalid UTF-8 in input: {}", e))
-                    .unwrap_or_else(|_| std::ffi::CString::new("invalid UTF-8").unwrap());
+                let msg = std::ffi::CString::new("input pointer was null").unwrap();
                 (*error_out) = KaracJsonError {
                     line: 0,
                     column: 0,
@@ -3958,20 +3992,36 @@ pub unsafe extern "C" fn karac_runtime_json_parse(
             }
             return std::ptr::null_mut();
         }
-    };
-    match serde_json::from_str::<serde_json::Value>(s) {
-        Ok(value) => json_value_to_karac(&value),
-        Err(e) => {
-            if !error_out.is_null() {
-                let msg = std::ffi::CString::new(e.to_string())
-                    .unwrap_or_else(|_| std::ffi::CString::new("parse error").unwrap());
-                (*error_out) = KaracJsonError {
-                    line: e.line() as u32,
-                    column: e.column() as u32,
-                    message: msg.into_raw(),
-                };
+        let cstr = std::ffi::CStr::from_ptr(input);
+        let s = match cstr.to_str() {
+            Ok(s) => s,
+            Err(e) => {
+                if !error_out.is_null() {
+                    let msg = std::ffi::CString::new(format!("invalid UTF-8 in input: {}", e))
+                        .unwrap_or_else(|_| std::ffi::CString::new("invalid UTF-8").unwrap());
+                    (*error_out) = KaracJsonError {
+                        line: 0,
+                        column: 0,
+                        message: msg.into_raw(),
+                    };
+                }
+                return std::ptr::null_mut();
             }
-            std::ptr::null_mut()
+        };
+        match serde_json::from_str::<serde_json::Value>(s) {
+            Ok(value) => json_value_to_karac(&value),
+            Err(e) => {
+                if !error_out.is_null() {
+                    let msg = std::ffi::CString::new(e.to_string())
+                        .unwrap_or_else(|_| std::ffi::CString::new("parse error").unwrap());
+                    (*error_out) = KaracJsonError {
+                        line: e.line() as u32,
+                        column: e.column() as u32,
+                        message: msg.into_raw(),
+                    };
+                }
+                std::ptr::null_mut()
+            }
         }
     }
 }
@@ -3989,11 +4039,13 @@ pub unsafe extern "C" fn karac_runtime_json_parse(
 pub unsafe extern "C" fn karac_runtime_json_stringify(
     value: *const KaracJsonValue,
 ) -> *mut std::os::raw::c_char {
-    let v = karac_to_json_value(value);
-    let s = serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string());
-    std::ffi::CString::new(s)
-        .map(|c| c.into_raw())
-        .unwrap_or(std::ptr::null_mut())
+    unsafe {
+        let v = karac_to_json_value(value);
+        let s = serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string());
+        std::ffi::CString::new(s)
+            .map(|c| c.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    }
 }
 
 /// Recursively free a `KaracJsonValue` tree allocated by
@@ -4008,40 +4060,45 @@ pub unsafe extern "C" fn karac_runtime_json_stringify(
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_json_free_value(value: *mut KaracJsonValue) {
-    if value.is_null() {
-        return;
-    }
-    let node = Box::from_raw(value);
-    match node.tag {
-        x if x == KaracJsonTag::String as u8 && !node.str_ptr.is_null() && node.str_len > 0 => {
-            let slice = std::slice::from_raw_parts_mut(node.str_ptr, node.str_len);
-            drop(Box::from_raw(slice as *mut [u8]));
+    unsafe {
+        if value.is_null() {
+            return;
         }
-        x if x == KaracJsonTag::Array as u8 && !node.arr_items.is_null() && node.arr_len > 0 => {
-            let items = Vec::from_raw_parts(node.arr_items, node.arr_len, node.arr_len);
-            for child in items {
-                karac_runtime_json_free_value(child);
+        let node = Box::from_raw(value);
+        match node.tag {
+            x if x == KaracJsonTag::String as u8 && !node.str_ptr.is_null() && node.str_len > 0 => {
+                let slice = std::slice::from_raw_parts_mut(node.str_ptr, node.str_len);
+                drop(Box::from_raw(slice as *mut [u8]));
             }
-        }
-        x if x == KaracJsonTag::Object as u8 && node.obj_len > 0 => {
-            if !node.obj_keys.is_null() {
-                let keys: Vec<*mut std::os::raw::c_char> =
-                    Vec::from_raw_parts(node.obj_keys, node.obj_len, node.obj_len);
-                for k in keys {
-                    if !k.is_null() {
-                        drop(std::ffi::CString::from_raw(k));
+            x if x == KaracJsonTag::Array as u8
+                && !node.arr_items.is_null()
+                && node.arr_len > 0 =>
+            {
+                let items = Vec::from_raw_parts(node.arr_items, node.arr_len, node.arr_len);
+                for child in items {
+                    karac_runtime_json_free_value(child);
+                }
+            }
+            x if x == KaracJsonTag::Object as u8 && node.obj_len > 0 => {
+                if !node.obj_keys.is_null() {
+                    let keys: Vec<*mut std::os::raw::c_char> =
+                        Vec::from_raw_parts(node.obj_keys, node.obj_len, node.obj_len);
+                    for k in keys {
+                        if !k.is_null() {
+                            drop(std::ffi::CString::from_raw(k));
+                        }
+                    }
+                }
+                if !node.obj_vals.is_null() {
+                    let vals: Vec<*mut KaracJsonValue> =
+                        Vec::from_raw_parts(node.obj_vals, node.obj_len, node.obj_len);
+                    for v in vals {
+                        karac_runtime_json_free_value(v);
                     }
                 }
             }
-            if !node.obj_vals.is_null() {
-                let vals: Vec<*mut KaracJsonValue> =
-                    Vec::from_raw_parts(node.obj_vals, node.obj_len, node.obj_len);
-                for v in vals {
-                    karac_runtime_json_free_value(v);
-                }
-            }
+            _ => {}
         }
-        _ => {}
     }
 }
 
@@ -4054,10 +4111,12 @@ pub unsafe extern "C" fn karac_runtime_json_free_value(value: *mut KaracJsonValu
 /// runtime (`CString::into_raw`).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_json_free_string(s: *mut std::os::raw::c_char) {
-    if s.is_null() {
-        return;
+    unsafe {
+        if s.is_null() {
+            return;
+        }
+        drop(std::ffi::CString::from_raw(s));
     }
-    drop(std::ffi::CString::from_raw(s));
 }
 
 // ── std.json codegen-side wiring: per-variant FFI constructors ───────────
@@ -4168,27 +4227,29 @@ pub unsafe extern "C" fn karac_runtime_json_make_string(
     ptr: *const u8,
     len: usize,
 ) -> *mut KaracJsonValue {
-    let (out_ptr, out_len) = if ptr.is_null() || len == 0 {
-        (std::ptr::null_mut(), 0usize)
-    } else {
-        let slice = std::slice::from_raw_parts(ptr, len);
-        let buf = slice.to_vec().into_boxed_slice();
-        let n = buf.len();
-        (Box::into_raw(buf) as *mut u8, n)
-    };
-    Box::into_raw(Box::new(KaracJsonValue {
-        tag: KaracJsonTag::String as u8,
-        bool_val: false,
-        num_val: 0.0,
-        str_ptr: out_ptr,
-        str_len: out_len,
-        arr_items: std::ptr::null_mut(),
-        arr_len: 0,
-        obj_keys: std::ptr::null_mut(),
-        obj_vals: std::ptr::null_mut(),
-        obj_len: 0,
-        int_val: 0,
-    }))
+    unsafe {
+        let (out_ptr, out_len) = if ptr.is_null() || len == 0 {
+            (std::ptr::null_mut(), 0usize)
+        } else {
+            let slice = std::slice::from_raw_parts(ptr, len);
+            let buf = slice.to_vec().into_boxed_slice();
+            let n = buf.len();
+            (Box::into_raw(buf) as *mut u8, n)
+        };
+        Box::into_raw(Box::new(KaracJsonValue {
+            tag: KaracJsonTag::String as u8,
+            bool_val: false,
+            num_val: 0.0,
+            str_ptr: out_ptr,
+            str_len: out_len,
+            arr_items: std::ptr::null_mut(),
+            arr_len: 0,
+            obj_keys: std::ptr::null_mut(),
+            obj_vals: std::ptr::null_mut(),
+            obj_len: 0,
+            int_val: 0,
+        }))
+    }
 }
 
 /// Allocate a length-`len` items buffer for use with
@@ -4241,15 +4302,17 @@ pub unsafe extern "C" fn karac_runtime_json_alloc_key(
     ptr: *const u8,
     len: usize,
 ) -> *mut std::os::raw::c_char {
-    let bytes: &[u8] = if ptr.is_null() || len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(ptr, len)
-    };
-    let s = String::from_utf8_lossy(bytes);
-    std::ffi::CString::new(s.as_ref())
-        .unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
-        .into_raw()
+    unsafe {
+        let bytes: &[u8] = if ptr.is_null() || len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(ptr, len)
+        };
+        let s = String::from_utf8_lossy(bytes);
+        std::ffi::CString::new(s.as_ref())
+            .unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
+            .into_raw()
+    }
 }
 
 /// Construct a `KaracJsonValue::Array(items[0..len])`. Takes ownership of
@@ -4405,28 +4468,30 @@ pub unsafe extern "C" fn karac_runtime_http_response_set_body(
     bytes: *const u8,
     len: usize,
 ) {
-    if response.is_null() {
-        return;
+    unsafe {
+        if response.is_null() {
+            return;
+        }
+        let resp = &mut *response;
+        // Free any previously set body before overwriting.
+        if !resp.body_ptr.is_null() && resp.body_cap > 0 {
+            let slice = std::slice::from_raw_parts_mut(resp.body_ptr, resp.body_cap);
+            drop(Box::from_raw(slice as *mut [u8]));
+        }
+        if bytes.is_null() || len == 0 {
+            resp.body_ptr = std::ptr::null_mut();
+            resp.body_len = 0;
+            resp.body_cap = 0;
+            return;
+        }
+        let src = std::slice::from_raw_parts(bytes, len);
+        let buf: Box<[u8]> = src.to_vec().into_boxed_slice();
+        let cap = buf.len();
+        let raw = Box::into_raw(buf) as *mut u8;
+        resp.body_ptr = raw;
+        resp.body_len = len;
+        resp.body_cap = cap;
     }
-    let resp = &mut *response;
-    // Free any previously set body before overwriting.
-    if !resp.body_ptr.is_null() && resp.body_cap > 0 {
-        let slice = std::slice::from_raw_parts_mut(resp.body_ptr, resp.body_cap);
-        drop(Box::from_raw(slice as *mut [u8]));
-    }
-    if bytes.is_null() || len == 0 {
-        resp.body_ptr = std::ptr::null_mut();
-        resp.body_len = 0;
-        resp.body_cap = 0;
-        return;
-    }
-    let src = std::slice::from_raw_parts(bytes, len);
-    let buf: Box<[u8]> = src.to_vec().into_boxed_slice();
-    let cap = buf.len();
-    let raw = Box::into_raw(buf) as *mut u8;
-    resp.body_ptr = raw;
-    resp.body_len = len;
-    resp.body_cap = cap;
 }
 
 /// Phase-8 line 14 — accumulate a `(key, value)` header pair into a
@@ -4456,30 +4521,32 @@ pub unsafe extern "C" fn karac_runtime_http_response_set_header(
     val_ptr: *const u8,
     val_len: usize,
 ) {
-    let key_bytes: &[u8] = if key_ptr.is_null() || key_len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(key_ptr, key_len)
-    };
-    let val_bytes: &[u8] = if val_ptr.is_null() || val_len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(val_ptr, val_len)
-    };
-    // `CString::new` rejects interior NULs; on rejection swallow the
-    // header rather than abort the handler (matches the lenient posture
-    // the request-side header lookup takes for malformed cstrings).
-    let key_cstr = match std::ffi::CString::new(key_bytes) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let val_cstr = match std::ffi::CString::new(val_bytes) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    PENDING_RESPONSE_HEADERS.with(|cell| {
-        cell.borrow_mut().push((key_cstr, val_cstr));
-    });
+    unsafe {
+        let key_bytes: &[u8] = if key_ptr.is_null() || key_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(key_ptr, key_len)
+        };
+        let val_bytes: &[u8] = if val_ptr.is_null() || val_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(val_ptr, val_len)
+        };
+        // `CString::new` rejects interior NULs; on rejection swallow the
+        // header rather than abort the handler (matches the lenient posture
+        // the request-side header lookup takes for malformed cstrings).
+        let key_cstr = match std::ffi::CString::new(key_bytes) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let val_cstr = match std::ffi::CString::new(val_bytes) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        PENDING_RESPONSE_HEADERS.with(|cell| {
+            cell.borrow_mut().push((key_cstr, val_cstr));
+        });
+    }
 }
 
 thread_local! {
@@ -4503,10 +4570,12 @@ pub unsafe extern "C" fn karac_runtime_http_response_set_status(
     response: *mut KaracHttpResponse,
     status: u16,
 ) {
-    if response.is_null() {
-        return;
+    unsafe {
+        if response.is_null() {
+            return;
+        }
+        (*response).status = status;
     }
-    (*response).status = status;
 }
 
 /// Read the request path as a null-terminated UTF-8 string. Returned
@@ -4521,10 +4590,12 @@ pub unsafe extern "C" fn karac_runtime_http_response_set_status(
 pub unsafe extern "C" fn karac_runtime_http_request_path(
     request: *const KaracHttpRequest,
 ) -> *const std::os::raw::c_char {
-    if request.is_null() {
-        return std::ptr::null();
+    unsafe {
+        if request.is_null() {
+            return std::ptr::null();
+        }
+        (*request).path
     }
-    (*request).path
 }
 
 /// Read the request method as a null-terminated UTF-8 string. Returned
@@ -4538,10 +4609,12 @@ pub unsafe extern "C" fn karac_runtime_http_request_path(
 pub unsafe extern "C" fn karac_runtime_http_request_method(
     request: *const KaracHttpRequest,
 ) -> *const std::os::raw::c_char {
-    if request.is_null() {
-        return std::ptr::null();
+    unsafe {
+        if request.is_null() {
+            return std::ptr::null();
+        }
+        (*request).method
     }
-    (*request).method
 }
 
 /// Read the request body's raw byte pointer. The body is not
@@ -4557,10 +4630,12 @@ pub unsafe extern "C" fn karac_runtime_http_request_method(
 pub unsafe extern "C" fn karac_runtime_http_request_body_ptr(
     request: *const KaracHttpRequest,
 ) -> *const u8 {
-    if request.is_null() {
-        return std::ptr::null();
+    unsafe {
+        if request.is_null() {
+            return std::ptr::null();
+        }
+        (*request).body_ptr
     }
-    (*request).body_ptr
 }
 
 /// Read the request body length in bytes. Returns `0` for the empty
@@ -4574,10 +4649,12 @@ pub unsafe extern "C" fn karac_runtime_http_request_body_ptr(
 pub unsafe extern "C" fn karac_runtime_http_request_body_len(
     request: *const KaracHttpRequest,
 ) -> usize {
-    if request.is_null() {
-        return 0;
+    unsafe {
+        if request.is_null() {
+            return 0;
+        }
+        (*request).body_len
     }
-    (*request).body_len
 }
 
 /// Look up a header value by name (case-insensitive per RFC 7230 §
@@ -4611,38 +4688,40 @@ pub unsafe extern "C" fn karac_runtime_http_request_header(
     name_ptr: *const u8,
     name_len: usize,
 ) -> *const std::os::raw::c_char {
-    if request.is_null() {
-        return std::ptr::null();
-    }
-    let req = &*request;
-    if req.headers_keys.is_null() || req.headers_vals.is_null() || req.headers_len == 0 {
-        return std::ptr::null();
-    }
-    let name_bytes: &[u8] = if name_ptr.is_null() || name_len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(name_ptr, name_len)
-    };
-    let name_str = match std::str::from_utf8(name_bytes) {
-        Ok(s) => s,
-        Err(_) => return std::ptr::null(),
-    };
-
-    let keys = std::slice::from_raw_parts(req.headers_keys, req.headers_len);
-    let vals = std::slice::from_raw_parts(req.headers_vals, req.headers_len);
-    for (idx, key_ptr) in keys.iter().enumerate() {
-        if key_ptr.is_null() {
-            continue;
+    unsafe {
+        if request.is_null() {
+            return std::ptr::null();
         }
-        let key_cstr = std::ffi::CStr::from_ptr(*key_ptr);
-        let Ok(key_str) = key_cstr.to_str() else {
-            continue;
+        let req = &*request;
+        if req.headers_keys.is_null() || req.headers_vals.is_null() || req.headers_len == 0 {
+            return std::ptr::null();
+        }
+        let name_bytes: &[u8] = if name_ptr.is_null() || name_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(name_ptr, name_len)
         };
-        if key_str.eq_ignore_ascii_case(name_str) {
-            return vals[idx];
+        let name_str = match std::str::from_utf8(name_bytes) {
+            Ok(s) => s,
+            Err(_) => return std::ptr::null(),
+        };
+
+        let keys = std::slice::from_raw_parts(req.headers_keys, req.headers_len);
+        let vals = std::slice::from_raw_parts(req.headers_vals, req.headers_len);
+        for (idx, key_ptr) in keys.iter().enumerate() {
+            if key_ptr.is_null() {
+                continue;
+            }
+            let key_cstr = std::ffi::CStr::from_ptr(*key_ptr);
+            let Ok(key_str) = key_cstr.to_str() else {
+                continue;
+            };
+            if key_str.eq_ignore_ascii_case(name_str) {
+                return vals[idx];
+            }
         }
+        std::ptr::null()
     }
-    std::ptr::null()
 }
 
 /// Number of request headers — the bound for the index passed to
@@ -4660,10 +4739,12 @@ pub unsafe extern "C" fn karac_runtime_http_request_header(
 pub unsafe extern "C" fn karac_runtime_http_request_headers_count(
     request: *const KaracHttpRequest,
 ) -> usize {
-    if request.is_null() {
-        return 0;
+    unsafe {
+        if request.is_null() {
+            return 0;
+        }
+        (*request).headers_len
     }
-    (*request).headers_len
 }
 
 /// Header name at `idx` (`0 <= idx < headers_count`) as a borrowed
@@ -4679,14 +4760,16 @@ pub unsafe extern "C" fn karac_runtime_http_request_header_key_at(
     request: *const KaracHttpRequest,
     idx: usize,
 ) -> *const std::os::raw::c_char {
-    if request.is_null() {
-        return std::ptr::null();
+    unsafe {
+        if request.is_null() {
+            return std::ptr::null();
+        }
+        let req = &*request;
+        if req.headers_keys.is_null() || idx >= req.headers_len {
+            return std::ptr::null();
+        }
+        *req.headers_keys.add(idx)
     }
-    let req = &*request;
-    if req.headers_keys.is_null() || idx >= req.headers_len {
-        return std::ptr::null();
-    }
-    *req.headers_keys.add(idx)
 }
 
 /// Header value at `idx` (`0 <= idx < headers_count`) as a borrowed
@@ -4702,14 +4785,16 @@ pub unsafe extern "C" fn karac_runtime_http_request_header_val_at(
     request: *const KaracHttpRequest,
     idx: usize,
 ) -> *const std::os::raw::c_char {
-    if request.is_null() {
-        return std::ptr::null();
+    unsafe {
+        if request.is_null() {
+            return std::ptr::null();
+        }
+        let req = &*request;
+        if req.headers_vals.is_null() || idx >= req.headers_len {
+            return std::ptr::null();
+        }
+        *req.headers_vals.add(idx)
     }
-    let req = &*request;
-    if req.headers_vals.is_null() || idx >= req.headers_len {
-        return std::ptr::null();
-    }
-    *req.headers_vals.add(idx)
 }
 
 /// Number of parsed query parameters — the bound for the index passed
@@ -4726,10 +4811,12 @@ pub unsafe extern "C" fn karac_runtime_http_request_header_val_at(
 pub unsafe extern "C" fn karac_runtime_http_request_query_count(
     request: *const KaracHttpRequest,
 ) -> usize {
-    if request.is_null() {
-        return 0;
+    unsafe {
+        if request.is_null() {
+            return 0;
+        }
+        (*request).query_len
     }
-    (*request).query_len
 }
 
 /// Query-parameter key at `idx` (`0 <= idx < query_count`) as a
@@ -4745,14 +4832,16 @@ pub unsafe extern "C" fn karac_runtime_http_request_query_key_at(
     request: *const KaracHttpRequest,
     idx: usize,
 ) -> *const std::os::raw::c_char {
-    if request.is_null() {
-        return std::ptr::null();
+    unsafe {
+        if request.is_null() {
+            return std::ptr::null();
+        }
+        let req = &*request;
+        if req.query_keys.is_null() || idx >= req.query_len {
+            return std::ptr::null();
+        }
+        *req.query_keys.add(idx)
     }
-    let req = &*request;
-    if req.query_keys.is_null() || idx >= req.query_len {
-        return std::ptr::null();
-    }
-    *req.query_keys.add(idx)
 }
 
 /// Query-parameter value at `idx` (`0 <= idx < query_count`) as a
@@ -4769,14 +4858,16 @@ pub unsafe extern "C" fn karac_runtime_http_request_query_val_at(
     request: *const KaracHttpRequest,
     idx: usize,
 ) -> *const std::os::raw::c_char {
-    if request.is_null() {
-        return std::ptr::null();
+    unsafe {
+        if request.is_null() {
+            return std::ptr::null();
+        }
+        let req = &*request;
+        if req.query_vals.is_null() || idx >= req.query_len {
+            return std::ptr::null();
+        }
+        *req.query_vals.add(idx)
     }
-    let req = &*request;
-    if req.query_vals.is_null() || idx >= req.query_len {
-        return std::ptr::null();
-    }
-    *req.query_vals.add(idx)
 }
 
 /// Parse a UTF-8 byte slice as a base-10 signed 64-bit integer.
@@ -4791,20 +4882,22 @@ pub unsafe extern "C" fn karac_runtime_http_request_query_val_at(
 /// with `len == 0`). `out` must be a valid `*mut i64`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_parse_i64(data: *const u8, len: usize, out: *mut i64) -> u8 {
-    if data.is_null() || len == 0 || out.is_null() {
-        return 0;
-    }
-    let slice = std::slice::from_raw_parts(data, len);
-    let s = match std::str::from_utf8(slice) {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-    match s.trim().parse::<i64>() {
-        Ok(n) => {
-            *out = n;
-            1
+    unsafe {
+        if data.is_null() || len == 0 || out.is_null() {
+            return 0;
         }
-        Err(_) => 0,
+        let slice = std::slice::from_raw_parts(data, len);
+        let s = match std::str::from_utf8(slice) {
+            Ok(s) => s,
+            Err(_) => return 0,
+        };
+        match s.trim().parse::<i64>() {
+            Ok(n) => {
+                *out = n;
+                1
+            }
+            Err(_) => 0,
+        }
     }
 }
 
@@ -4910,13 +5003,15 @@ pub extern "C" fn karac_runtime_char_to_uppercase(cp: u32) -> u32 {
 /// `ptr` must point to `len` readable bytes (or be null with `len <= 0`).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_string_char_count(ptr: *const u8, len: i64) -> i64 {
-    if ptr.is_null() || len <= 0 {
-        return 0;
-    }
-    let bytes = std::slice::from_raw_parts(ptr, len as usize);
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.chars().count() as i64,
-        Err(_) => 0,
+    unsafe {
+        if ptr.is_null() || len <= 0 {
+            return 0;
+        }
+        let bytes = std::slice::from_raw_parts(ptr, len as usize);
+        match std::str::from_utf8(bytes) {
+            Ok(s) => s.chars().count() as i64,
+            Err(_) => 0,
+        }
     }
 }
 
@@ -4937,17 +5032,19 @@ pub unsafe extern "C" fn karac_runtime_string_char_at(
     idx: i64,
     out_cp: *mut u32,
 ) -> u8 {
-    if ptr.is_null() || len <= 0 || idx < 0 {
-        return 0;
-    }
-    let bytes = std::slice::from_raw_parts(ptr, len as usize);
-    if let Ok(s) = std::str::from_utf8(bytes) {
-        if let Some(c) = s.chars().nth(idx as usize) {
-            *out_cp = c as u32;
-            return 1;
+    unsafe {
+        if ptr.is_null() || len <= 0 || idx < 0 {
+            return 0;
         }
+        let bytes = std::slice::from_raw_parts(ptr, len as usize);
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            if let Some(c) = s.chars().nth(idx as usize) {
+                *out_cp = c as u32;
+                return 1;
+            }
+        }
+        0
     }
-    0
 }
 
 /// Parse a UTF-8 byte slice as a signed 64-bit integer in the given
@@ -4967,20 +5064,22 @@ pub unsafe extern "C" fn karac_runtime_parse_i64_radix(
     radix: u32,
     out: *mut i64,
 ) -> u8 {
-    if data.is_null() || len == 0 || out.is_null() || !(2..=36).contains(&radix) {
-        return 0;
-    }
-    let slice = std::slice::from_raw_parts(data, len);
-    let s = match std::str::from_utf8(slice) {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-    match i64::from_str_radix(s.trim(), radix) {
-        Ok(n) => {
-            *out = n;
-            1
+    unsafe {
+        if data.is_null() || len == 0 || out.is_null() || !(2..=36).contains(&radix) {
+            return 0;
         }
-        Err(_) => 0,
+        let slice = std::slice::from_raw_parts(data, len);
+        let s = match std::str::from_utf8(slice) {
+            Ok(s) => s,
+            Err(_) => return 0,
+        };
+        match i64::from_str_radix(s.trim(), radix) {
+            Ok(n) => {
+                *out = n;
+                1
+            }
+            Err(_) => 0,
+        }
     }
 }
 
@@ -4996,20 +5095,22 @@ pub unsafe extern "C" fn karac_runtime_parse_i64_radix(
 /// `len == 0`). `out` must be a valid `*mut f64`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_parse_f64(data: *const u8, len: usize, out: *mut f64) -> u8 {
-    if data.is_null() || len == 0 || out.is_null() {
-        return 0;
-    }
-    let slice = std::slice::from_raw_parts(data, len);
-    let s = match std::str::from_utf8(slice) {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-    match s.trim().parse::<f64>() {
-        Ok(v) => {
-            *out = v;
-            1
+    unsafe {
+        if data.is_null() || len == 0 || out.is_null() {
+            return 0;
         }
-        Err(_) => 0,
+        let slice = std::slice::from_raw_parts(data, len);
+        let s = match std::str::from_utf8(slice) {
+            Ok(s) => s,
+            Err(_) => return 0,
+        };
+        match s.trim().parse::<f64>() {
+            Ok(v) => {
+                *out = v;
+                1
+            }
+            Err(_) => 0,
+        }
     }
 }
 
@@ -5038,47 +5139,49 @@ pub unsafe extern "C" fn karac_runtime_cstr_to_string(
     out_str: *mut RuntimeKaracString,
     out_err: *mut u8,
 ) -> bool {
-    if out_str.is_null() || out_err.is_null() {
-        return false;
-    }
-    let empty = RuntimeKaracString {
-        data: std::ptr::null_mut(),
-        len: 0,
-        cap: 0,
-    };
-    let bytes: &[u8] = if data.is_null() || len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(data, len)
-    };
-    match std::str::from_utf8(bytes) {
-        Ok(s) => {
-            let sb = s.as_bytes();
-            if sb.is_empty() {
-                // Valid, empty string — still `Ok`.
-                (*out_str) = empty;
-                return true;
-            }
-            let str_layout = std::alloc::Layout::array::<u8>(sb.len()).unwrap();
-            let str_buf = std::alloc::alloc(str_layout);
-            if str_buf.is_null() {
-                std::alloc::handle_alloc_error(str_layout);
-            }
-            std::ptr::copy_nonoverlapping(sb.as_ptr(), str_buf, sb.len());
-            (*out_str) = RuntimeKaracString {
-                data: str_buf,
-                len: sb.len() as i64,
-                cap: sb.len() as i64,
-            };
-            true
+    unsafe {
+        if out_str.is_null() || out_err.is_null() {
+            return false;
         }
-        Err(e) => {
-            *out_err = match e.error_len() {
-                None => 1,    // IncompleteSequence
-                Some(_) => 0, // InvalidByte
-            };
-            (*out_str) = empty;
-            false
+        let empty = RuntimeKaracString {
+            data: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        let bytes: &[u8] = if data.is_null() || len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(data, len)
+        };
+        match std::str::from_utf8(bytes) {
+            Ok(s) => {
+                let sb = s.as_bytes();
+                if sb.is_empty() {
+                    // Valid, empty string — still `Ok`.
+                    (*out_str) = empty;
+                    return true;
+                }
+                let str_layout = std::alloc::Layout::array::<u8>(sb.len()).unwrap();
+                let str_buf = std::alloc::alloc(str_layout);
+                if str_buf.is_null() {
+                    std::alloc::handle_alloc_error(str_layout);
+                }
+                std::ptr::copy_nonoverlapping(sb.as_ptr(), str_buf, sb.len());
+                (*out_str) = RuntimeKaracString {
+                    data: str_buf,
+                    len: sb.len() as i64,
+                    cap: sb.len() as i64,
+                };
+                true
+            }
+            Err(e) => {
+                *out_err = match e.error_len() {
+                    None => 1,    // IncompleteSequence
+                    Some(_) => 0, // InvalidByte
+                };
+                (*out_str) = empty;
+                false
+            }
         }
     }
 }
@@ -5101,22 +5204,24 @@ pub unsafe extern "C" fn karac_runtime_utf8_validate(
     len: usize,
     out_err: *mut u8,
 ) -> bool {
-    if out_err.is_null() {
-        return false;
-    }
-    let bytes: &[u8] = if data.is_null() || len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(data, len)
-    };
-    match std::str::from_utf8(bytes) {
-        Ok(_) => true,
-        Err(e) => {
-            *out_err = match e.error_len() {
-                None => 1,    // IncompleteSequence
-                Some(_) => 0, // InvalidByte
-            };
-            false
+    unsafe {
+        if out_err.is_null() {
+            return false;
+        }
+        let bytes: &[u8] = if data.is_null() || len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(data, len)
+        };
+        match std::str::from_utf8(bytes) {
+            Ok(_) => true,
+            Err(e) => {
+                *out_err = match e.error_len() {
+                    None => 1,    // IncompleteSequence
+                    Some(_) => 0, // InvalidByte
+                };
+                false
+            }
         }
     }
 }
@@ -5147,36 +5252,38 @@ pub unsafe extern "C" fn karac_runtime_string_to_cstring(
     len: usize,
     out_cstr: *mut RuntimeKaracString,
 ) -> bool {
-    if out_cstr.is_null() {
-        return false;
+    unsafe {
+        if out_cstr.is_null() {
+            return false;
+        }
+        let bytes: &[u8] = if data.is_null() || len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(data, len)
+        };
+        // Interior NUL → reject (the C side would truncate at it).
+        if bytes.contains(&0) {
+            return false;
+        }
+        // Allocate len + 1 for the trailing NUL (always ≥ 1, so never a zero-size
+        // Layout). Copy the source bytes, terminate.
+        let buf_len = bytes.len() + 1;
+        let layout = std::alloc::Layout::array::<u8>(buf_len).unwrap();
+        let buf = std::alloc::alloc(layout);
+        if buf.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        if !bytes.is_empty() {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+        }
+        *buf.add(bytes.len()) = 0;
+        (*out_cstr) = RuntimeKaracString {
+            data: buf,
+            len: bytes.len() as i64,
+            cap: buf_len as i64,
+        };
+        true
     }
-    let bytes: &[u8] = if data.is_null() || len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(data, len)
-    };
-    // Interior NUL → reject (the C side would truncate at it).
-    if bytes.contains(&0) {
-        return false;
-    }
-    // Allocate len + 1 for the trailing NUL (always ≥ 1, so never a zero-size
-    // Layout). Copy the source bytes, terminate.
-    let buf_len = bytes.len() + 1;
-    let layout = std::alloc::Layout::array::<u8>(buf_len).unwrap();
-    let buf = std::alloc::alloc(layout);
-    if buf.is_null() {
-        std::alloc::handle_alloc_error(layout);
-    }
-    if !bytes.is_empty() {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
-    }
-    *buf.add(bytes.len()) = 0;
-    (*out_cstr) = RuntimeKaracString {
-        data: buf,
-        len: bytes.len() as i64,
-        cap: buf_len as i64,
-    };
-    true
 }
 
 #[cfg(test)]
@@ -5186,27 +5293,33 @@ mod cstr_to_string_tests {
     /// Drive the extern; return (ok, copied-bytes-on-Ok, err-tag). Frees the
     /// runtime-allocated buffer so the test itself is leak-clean.
     unsafe fn run(input: &[u8]) -> (bool, Option<Vec<u8>>, u8) {
-        let mut out_str = RuntimeKaracString {
-            data: std::ptr::null_mut(),
-            len: 0,
-            cap: 0,
-        };
-        let mut out_err: u8 = 255;
-        let ok =
-            karac_runtime_cstr_to_string(input.as_ptr(), input.len(), &mut out_str, &mut out_err);
-        let bytes = if ok {
-            if out_str.data.is_null() {
-                Some(Vec::new())
+        unsafe {
+            let mut out_str = RuntimeKaracString {
+                data: std::ptr::null_mut(),
+                len: 0,
+                cap: 0,
+            };
+            let mut out_err: u8 = 255;
+            let ok = karac_runtime_cstr_to_string(
+                input.as_ptr(),
+                input.len(),
+                &mut out_str,
+                &mut out_err,
+            );
+            let bytes = if ok {
+                if out_str.data.is_null() {
+                    Some(Vec::new())
+                } else {
+                    let v = std::slice::from_raw_parts(out_str.data, out_str.len as usize).to_vec();
+                    let layout = std::alloc::Layout::array::<u8>(out_str.len as usize).unwrap();
+                    std::alloc::dealloc(out_str.data, layout);
+                    Some(v)
+                }
             } else {
-                let v = std::slice::from_raw_parts(out_str.data, out_str.len as usize).to_vec();
-                let layout = std::alloc::Layout::array::<u8>(out_str.len as usize).unwrap();
-                std::alloc::dealloc(out_str.data, layout);
-                Some(v)
-            }
-        } else {
-            None
-        };
-        (ok, bytes, out_err)
+                None
+            };
+            (ok, bytes, out_err)
+        }
     }
 
     #[test]
@@ -5256,24 +5369,26 @@ mod string_to_cstring_tests {
     /// NUL on Ok, reported len, reported cap). Frees the runtime-allocated
     /// buffer so the test itself is leak-clean.
     unsafe fn run(input: &[u8]) -> (bool, Option<Vec<u8>>, i64, i64) {
-        let mut out = RuntimeKaracString {
-            data: std::ptr::null_mut(),
-            len: 0,
-            cap: 0,
-        };
-        let ok = karac_runtime_string_to_cstring(input.as_ptr(), input.len(), &mut out);
-        if !ok {
-            return (false, None, 0, 0);
+        unsafe {
+            let mut out = RuntimeKaracString {
+                data: std::ptr::null_mut(),
+                len: 0,
+                cap: 0,
+            };
+            let ok = karac_runtime_string_to_cstring(input.as_ptr(), input.len(), &mut out);
+            if !ok {
+                return (false, None, 0, 0);
+            }
+            assert!(
+                !out.data.is_null(),
+                "Ok must allocate a NUL-terminated buffer"
+            );
+            // Read the whole `cap` bytes so we can assert the trailing NUL.
+            let full = std::slice::from_raw_parts(out.data, out.cap as usize).to_vec();
+            let layout = std::alloc::Layout::array::<u8>(out.cap as usize).unwrap();
+            std::alloc::dealloc(out.data, layout);
+            (true, Some(full), out.len, out.cap)
         }
-        assert!(
-            !out.data.is_null(),
-            "Ok must allocate a NUL-terminated buffer"
-        );
-        // Read the whole `cap` bytes so we can assert the trailing NUL.
-        let full = std::slice::from_raw_parts(out.data, out.cap as usize).to_vec();
-        let layout = std::alloc::Layout::array::<u8>(out.cap as usize).unwrap();
-        std::alloc::dealloc(out.data, layout);
-        (true, Some(full), out.len, out.cap)
     }
 
     #[test]
@@ -5329,9 +5444,11 @@ mod utf8_validate_tests {
     /// `karac_runtime_cstr_to_string` there is nothing to free — the whole
     /// point is that no owning copy is made (the caller builds a borrowed view).
     unsafe fn run(input: &[u8]) -> (bool, u8) {
-        let mut out_err: u8 = 255;
-        let ok = karac_runtime_utf8_validate(input.as_ptr(), input.len(), &mut out_err);
-        (ok, out_err)
+        unsafe {
+            let mut out_err: u8 = 255;
+            let ok = karac_runtime_utf8_validate(input.as_ptr(), input.len(), &mut out_err);
+            (ok, out_err)
+        }
     }
 
     #[test]
@@ -5447,73 +5564,75 @@ mod string_split_ffi {
         out_len: *mut i64,
         out_cap: *mut i64,
     ) {
-        let s_len = usize::try_from(s_len).unwrap_or(usize::MAX);
-        let sep_len = usize::try_from(sep_len).unwrap_or(usize::MAX);
-        let hay: &[u8] = if s.is_null() || s_len == 0 {
-            &[]
-        } else {
-            std::slice::from_raw_parts(s, s_len)
-        };
-        let needle: &[u8] = if sep.is_null() || sep_len == 0 {
-            &[]
-        } else {
-            std::slice::from_raw_parts(sep, sep_len)
-        };
-
-        // Collect piece byte-ranges. Empty separator → the whole string as one
-        // piece (interpreter parity); otherwise a non-overlapping scan that
-        // keeps leading/trailing empties.
-        let pieces: Vec<&[u8]> = if needle.is_empty() {
-            vec![hay]
-        } else {
-            let mut v: Vec<&[u8]> = Vec::new();
-            let mut start = 0usize;
-            let mut i = 0usize;
-            while i + needle.len() <= hay.len() {
-                if &hay[i..i + needle.len()] == needle {
-                    v.push(&hay[start..i]);
-                    i += needle.len();
-                    start = i;
-                } else {
-                    i += 1;
-                }
-            }
-            v.push(&hay[start..]);
-            v
-        };
-
-        let n = pieces.len();
-        let elem_size = std::mem::size_of::<KHeader>();
-        let arr = malloc(n * elem_size) as *mut KHeader;
-        if arr.is_null() {
-            *out_data = std::ptr::null_mut();
-            *out_len = 0;
-            *out_cap = 0;
-            return;
-        }
-        for (k, p) in pieces.iter().enumerate() {
-            let header = if p.is_empty() {
-                // Empty piece → non-owning `{null, 0, 0}`; the element drop's
-                // `cap > 0` guard skips freeing it.
-                KHeader {
-                    data: std::ptr::null_mut(),
-                    len: 0,
-                    cap: 0,
-                }
+        unsafe {
+            let s_len = usize::try_from(s_len).unwrap_or(usize::MAX);
+            let sep_len = usize::try_from(sep_len).unwrap_or(usize::MAX);
+            let hay: &[u8] = if s.is_null() || s_len == 0 {
+                &[]
             } else {
-                let buf = malloc(p.len());
-                std::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len());
-                KHeader {
-                    data: buf,
-                    len: p.len() as i64,
-                    cap: p.len() as i64,
-                }
+                std::slice::from_raw_parts(s, s_len)
             };
-            arr.add(k).write(header);
+            let needle: &[u8] = if sep.is_null() || sep_len == 0 {
+                &[]
+            } else {
+                std::slice::from_raw_parts(sep, sep_len)
+            };
+
+            // Collect piece byte-ranges. Empty separator → the whole string as one
+            // piece (interpreter parity); otherwise a non-overlapping scan that
+            // keeps leading/trailing empties.
+            let pieces: Vec<&[u8]> = if needle.is_empty() {
+                vec![hay]
+            } else {
+                let mut v: Vec<&[u8]> = Vec::new();
+                let mut start = 0usize;
+                let mut i = 0usize;
+                while i + needle.len() <= hay.len() {
+                    if &hay[i..i + needle.len()] == needle {
+                        v.push(&hay[start..i]);
+                        i += needle.len();
+                        start = i;
+                    } else {
+                        i += 1;
+                    }
+                }
+                v.push(&hay[start..]);
+                v
+            };
+
+            let n = pieces.len();
+            let elem_size = std::mem::size_of::<KHeader>();
+            let arr = malloc(n * elem_size) as *mut KHeader;
+            if arr.is_null() {
+                *out_data = std::ptr::null_mut();
+                *out_len = 0;
+                *out_cap = 0;
+                return;
+            }
+            for (k, p) in pieces.iter().enumerate() {
+                let header = if p.is_empty() {
+                    // Empty piece → non-owning `{null, 0, 0}`; the element drop's
+                    // `cap > 0` guard skips freeing it.
+                    KHeader {
+                        data: std::ptr::null_mut(),
+                        len: 0,
+                        cap: 0,
+                    }
+                } else {
+                    let buf = malloc(p.len());
+                    std::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len());
+                    KHeader {
+                        data: buf,
+                        len: p.len() as i64,
+                        cap: p.len() as i64,
+                    }
+                };
+                arr.add(k).write(header);
+            }
+            *out_data = arr as *mut u8;
+            *out_len = n as i64;
+            *out_cap = n as i64;
         }
-        *out_data = arr as *mut u8;
-        *out_len = n as i64;
-        *out_cap = n as i64;
     }
 
     /// `String.lines() -> Vec[String]`. Split the receiver into lines using
@@ -5535,57 +5654,59 @@ mod string_split_ffi {
         out_len: *mut i64,
         out_cap: *mut i64,
     ) {
-        let s_len = usize::try_from(s_len).unwrap_or(usize::MAX);
-        let hay: &[u8] = if s.is_null() || s_len == 0 {
-            &[]
-        } else {
-            std::slice::from_raw_parts(s, s_len)
-        };
-        // Kāra strings are UTF-8; `\n` / `\r` are ASCII so they never appear as
-        // continuation bytes. Decode to `&str` to reuse Rust's exact `lines`
-        // semantics (guaranteeing interpreter parity); an invalid-UTF-8 input
-        // (shouldn't occur) degrades to no lines.
-        let text = std::str::from_utf8(hay).unwrap_or("");
-        let pieces: Vec<&[u8]> = text.lines().map(str::as_bytes).collect();
-
-        let n = pieces.len();
-        let elem_size = std::mem::size_of::<KHeader>();
-        // A zero-line input still needs a distinguishable empty Vec; malloc(0)
-        // is implementation-defined, so hand back `{null, 0, 0}`.
-        if n == 0 {
-            *out_data = std::ptr::null_mut();
-            *out_len = 0;
-            *out_cap = 0;
-            return;
-        }
-        let arr = malloc(n * elem_size) as *mut KHeader;
-        if arr.is_null() {
-            *out_data = std::ptr::null_mut();
-            *out_len = 0;
-            *out_cap = 0;
-            return;
-        }
-        for (k, p) in pieces.iter().enumerate() {
-            let header = if p.is_empty() {
-                KHeader {
-                    data: std::ptr::null_mut(),
-                    len: 0,
-                    cap: 0,
-                }
+        unsafe {
+            let s_len = usize::try_from(s_len).unwrap_or(usize::MAX);
+            let hay: &[u8] = if s.is_null() || s_len == 0 {
+                &[]
             } else {
-                let buf = malloc(p.len());
-                std::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len());
-                KHeader {
-                    data: buf,
-                    len: p.len() as i64,
-                    cap: p.len() as i64,
-                }
+                std::slice::from_raw_parts(s, s_len)
             };
-            arr.add(k).write(header);
+            // Kāra strings are UTF-8; `\n` / `\r` are ASCII so they never appear as
+            // continuation bytes. Decode to `&str` to reuse Rust's exact `lines`
+            // semantics (guaranteeing interpreter parity); an invalid-UTF-8 input
+            // (shouldn't occur) degrades to no lines.
+            let text = std::str::from_utf8(hay).unwrap_or("");
+            let pieces: Vec<&[u8]> = text.lines().map(str::as_bytes).collect();
+
+            let n = pieces.len();
+            let elem_size = std::mem::size_of::<KHeader>();
+            // A zero-line input still needs a distinguishable empty Vec; malloc(0)
+            // is implementation-defined, so hand back `{null, 0, 0}`.
+            if n == 0 {
+                *out_data = std::ptr::null_mut();
+                *out_len = 0;
+                *out_cap = 0;
+                return;
+            }
+            let arr = malloc(n * elem_size) as *mut KHeader;
+            if arr.is_null() {
+                *out_data = std::ptr::null_mut();
+                *out_len = 0;
+                *out_cap = 0;
+                return;
+            }
+            for (k, p) in pieces.iter().enumerate() {
+                let header = if p.is_empty() {
+                    KHeader {
+                        data: std::ptr::null_mut(),
+                        len: 0,
+                        cap: 0,
+                    }
+                } else {
+                    let buf = malloc(p.len());
+                    std::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len());
+                    KHeader {
+                        data: buf,
+                        len: p.len() as i64,
+                        cap: p.len() as i64,
+                    }
+                };
+                arr.add(k).write(header);
+            }
+            *out_data = arr as *mut u8;
+            *out_len = n as i64;
+            *out_cap = n as i64;
         }
-        *out_data = arr as *mut u8;
-        *out_len = n as i64;
-        *out_cap = n as i64;
     }
 
     /// `String.split_whitespace() -> Vec[String]`. Split on runs of Unicode
@@ -5607,44 +5728,46 @@ mod string_split_ffi {
         out_len: *mut i64,
         out_cap: *mut i64,
     ) {
-        let s_len = usize::try_from(s_len).unwrap_or(usize::MAX);
-        let hay: &[u8] = if s.is_null() || s_len == 0 {
-            &[]
-        } else {
-            std::slice::from_raw_parts(s, s_len)
-        };
-        let text = std::str::from_utf8(hay).unwrap_or("");
-        let pieces: Vec<&[u8]> = text.split_whitespace().map(str::as_bytes).collect();
+        unsafe {
+            let s_len = usize::try_from(s_len).unwrap_or(usize::MAX);
+            let hay: &[u8] = if s.is_null() || s_len == 0 {
+                &[]
+            } else {
+                std::slice::from_raw_parts(s, s_len)
+            };
+            let text = std::str::from_utf8(hay).unwrap_or("");
+            let pieces: Vec<&[u8]> = text.split_whitespace().map(str::as_bytes).collect();
 
-        let n = pieces.len();
-        if n == 0 {
-            *out_data = std::ptr::null_mut();
-            *out_len = 0;
-            *out_cap = 0;
-            return;
+            let n = pieces.len();
+            if n == 0 {
+                *out_data = std::ptr::null_mut();
+                *out_len = 0;
+                *out_cap = 0;
+                return;
+            }
+            let elem_size = std::mem::size_of::<KHeader>();
+            let arr = malloc(n * elem_size) as *mut KHeader;
+            if arr.is_null() {
+                *out_data = std::ptr::null_mut();
+                *out_len = 0;
+                *out_cap = 0;
+                return;
+            }
+            for (k, p) in pieces.iter().enumerate() {
+                // `split_whitespace` never yields an empty piece, so every element
+                // owns a fresh buffer.
+                let buf = malloc(p.len());
+                std::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len());
+                arr.add(k).write(KHeader {
+                    data: buf,
+                    len: p.len() as i64,
+                    cap: p.len() as i64,
+                });
+            }
+            *out_data = arr as *mut u8;
+            *out_len = n as i64;
+            *out_cap = n as i64;
         }
-        let elem_size = std::mem::size_of::<KHeader>();
-        let arr = malloc(n * elem_size) as *mut KHeader;
-        if arr.is_null() {
-            *out_data = std::ptr::null_mut();
-            *out_len = 0;
-            *out_cap = 0;
-            return;
-        }
-        for (k, p) in pieces.iter().enumerate() {
-            // `split_whitespace` never yields an empty piece, so every element
-            // owns a fresh buffer.
-            let buf = malloc(p.len());
-            std::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len());
-            arr.add(k).write(KHeader {
-                data: buf,
-                len: p.len() as i64,
-                cap: p.len() as i64,
-            });
-        }
-        *out_data = arr as *mut u8;
-        *out_len = n as i64;
-        *out_cap = n as i64;
     }
 }
 
@@ -5687,20 +5810,22 @@ unsafe fn write_owned_bytes_into_out_params(
     out_ptr: *mut *mut u8,
     out_len: *mut i64,
 ) {
-    if bytes.is_empty() {
-        *out_ptr = std::ptr::null_mut();
-        *out_len = 0;
-        return;
+    unsafe {
+        if bytes.is_empty() {
+            *out_ptr = std::ptr::null_mut();
+            *out_len = 0;
+            return;
+        }
+        let buf = malloc(bytes.len());
+        if buf.is_null() {
+            *out_ptr = std::ptr::null_mut();
+            *out_len = 0;
+            return;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+        *out_ptr = buf;
+        *out_len = bytes.len() as i64;
     }
-    let buf = malloc(bytes.len());
-    if buf.is_null() {
-        *out_ptr = std::ptr::null_mut();
-        *out_len = 0;
-        return;
-    }
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
-    *out_ptr = buf;
-    *out_len = bytes.len() as i64;
 }
 
 // ── hyper-based HTTP client — h2 via ALPN, HTTP/1.1 fallback ─────────
@@ -6150,27 +6275,29 @@ pub unsafe extern "C" fn karac_runtime_http_response_header(
     name_ptr: *const u8,
     name_len: usize,
 ) -> *const std::os::raw::c_char {
-    let name_bytes: &[u8] = if name_ptr.is_null() || name_len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(name_ptr, name_len)
-    };
-    let name_str = match std::str::from_utf8(name_bytes) {
-        Ok(s) => s,
-        Err(_) => return std::ptr::null(),
-    };
-    let Ok(map) = HTTP_RESPONSE_HEADERS.lock() else {
-        return std::ptr::null();
-    };
-    let Some(pairs) = map.get(&handle) else {
-        return std::ptr::null();
-    };
-    for (k, v) in pairs {
-        if k.to_bytes().eq_ignore_ascii_case(name_str.as_bytes()) {
-            return v.as_ptr();
+    unsafe {
+        let name_bytes: &[u8] = if name_ptr.is_null() || name_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(name_ptr, name_len)
+        };
+        let name_str = match std::str::from_utf8(name_bytes) {
+            Ok(s) => s,
+            Err(_) => return std::ptr::null(),
+        };
+        let Ok(map) = HTTP_RESPONSE_HEADERS.lock() else {
+            return std::ptr::null();
+        };
+        let Some(pairs) = map.get(&handle) else {
+            return std::ptr::null();
+        };
+        for (k, v) in pairs {
+            if k.to_bytes().eq_ignore_ascii_case(name_str.as_bytes()) {
+                return v.as_ptr();
+            }
         }
+        std::ptr::null()
     }
-    std::ptr::null()
 }
 
 /// Number of headers captured for `handle` — the loop bound for
@@ -6274,34 +6401,40 @@ pub unsafe extern "C" fn karac_runtime_http_client_get(
     out_err_len: *mut i64,
     out_headers_handle: *mut i64,
 ) {
-    *out_status = 0;
-    *out_body_ptr = std::ptr::null_mut();
-    *out_body_len = 0;
-    *out_err_ptr = std::ptr::null_mut();
-    *out_err_len = 0;
-    *out_headers_handle = 0;
+    unsafe {
+        *out_status = 0;
+        *out_body_ptr = std::ptr::null_mut();
+        *out_body_len = 0;
+        *out_err_ptr = std::ptr::null_mut();
+        *out_err_len = 0;
+        *out_headers_handle = 0;
 
-    let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(url_ptr, url_len)
-    };
-    let url = match std::str::from_utf8(url_bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
-            return;
-        }
-    };
+        let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(url_ptr, url_len)
+        };
+        let url = match std::str::from_utf8(url_bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                write_owned_bytes_into_out_params(
+                    e.to_string().as_bytes(),
+                    out_err_ptr,
+                    out_err_len,
+                );
+                return;
+            }
+        };
 
-    match http_fetch_blocking("GET", url, &[], &[], 0) {
-        Ok(fetched) => {
-            *out_status = fetched.status as i64;
-            *out_headers_handle = capture_response_headers(&fetched.headers);
-            write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
-        }
-        Err(msg) => {
-            write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+        match http_fetch_blocking("GET", url, &[], &[], 0) {
+            Ok(fetched) => {
+                *out_status = fetched.status as i64;
+                *out_headers_handle = capture_response_headers(&fetched.headers);
+                write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
+            }
+            Err(msg) => {
+                write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+            }
         }
     }
 }
@@ -6332,39 +6465,45 @@ pub unsafe extern "C" fn karac_runtime_http_client_post(
     out_err_len: *mut i64,
     out_headers_handle: *mut i64,
 ) {
-    *out_status = 0;
-    *out_body_ptr = std::ptr::null_mut();
-    *out_body_len = 0;
-    *out_err_ptr = std::ptr::null_mut();
-    *out_err_len = 0;
-    *out_headers_handle = 0;
+    unsafe {
+        *out_status = 0;
+        *out_body_ptr = std::ptr::null_mut();
+        *out_body_len = 0;
+        *out_err_ptr = std::ptr::null_mut();
+        *out_err_len = 0;
+        *out_headers_handle = 0;
 
-    let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(url_ptr, url_len)
-    };
-    let url = match std::str::from_utf8(url_bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
-            return;
-        }
-    };
-    let body_bytes: &[u8] = if body_ptr.is_null() || body_len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(body_ptr, body_len)
-    };
+        let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(url_ptr, url_len)
+        };
+        let url = match std::str::from_utf8(url_bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                write_owned_bytes_into_out_params(
+                    e.to_string().as_bytes(),
+                    out_err_ptr,
+                    out_err_len,
+                );
+                return;
+            }
+        };
+        let body_bytes: &[u8] = if body_ptr.is_null() || body_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(body_ptr, body_len)
+        };
 
-    match http_fetch_blocking("POST", url, body_bytes, &[], 0) {
-        Ok(fetched) => {
-            *out_status = fetched.status as i64;
-            *out_headers_handle = capture_response_headers(&fetched.headers);
-            write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
-        }
-        Err(msg) => {
-            write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+        match http_fetch_blocking("POST", url, body_bytes, &[], 0) {
+            Ok(fetched) => {
+                *out_status = fetched.status as i64;
+                *out_headers_handle = capture_response_headers(&fetched.headers);
+                write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
+            }
+            Err(msg) => {
+                write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+            }
         }
     }
 }
@@ -6396,11 +6535,13 @@ pub struct KaracHttpHeaderPair {
 
 #[cfg(feature = "tls")]
 unsafe fn kara_str_to_str(s: &KaracStr) -> Option<&str> {
-    if s.data.is_null() || s.len <= 0 {
-        return Some("");
+    unsafe {
+        if s.data.is_null() || s.len <= 0 {
+            return Some("");
+        }
+        let bytes = std::slice::from_raw_parts(s.data, s.len as usize);
+        std::str::from_utf8(bytes).ok()
     }
-    let bytes = std::slice::from_raw_parts(s.data, s.len as usize);
-    std::str::from_utf8(bytes).ok()
 }
 
 /// Synchronously send an HTTP request via the chained-builder surface
@@ -6446,65 +6587,75 @@ pub unsafe extern "C" fn karac_runtime_http_client_send(
     out_err_len: *mut i64,
     out_headers_handle: *mut i64,
 ) {
-    *out_status = 0;
-    *out_body_ptr = std::ptr::null_mut();
-    *out_body_len = 0;
-    *out_err_ptr = std::ptr::null_mut();
-    *out_err_len = 0;
-    *out_headers_handle = 0;
+    unsafe {
+        *out_status = 0;
+        *out_body_ptr = std::ptr::null_mut();
+        *out_body_len = 0;
+        *out_err_ptr = std::ptr::null_mut();
+        *out_err_len = 0;
+        *out_headers_handle = 0;
 
-    let method_bytes: &[u8] = if method_ptr.is_null() || method_len == 0 {
-        b"GET"
-    } else {
-        std::slice::from_raw_parts(method_ptr, method_len)
-    };
-    let method = match std::str::from_utf8(method_bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
-            return;
-        }
-    };
-    let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(url_ptr, url_len)
-    };
-    let url = match std::str::from_utf8(url_bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
-            return;
-        }
-    };
+        let method_bytes: &[u8] = if method_ptr.is_null() || method_len == 0 {
+            b"GET"
+        } else {
+            std::slice::from_raw_parts(method_ptr, method_len)
+        };
+        let method = match std::str::from_utf8(method_bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                write_owned_bytes_into_out_params(
+                    e.to_string().as_bytes(),
+                    out_err_ptr,
+                    out_err_len,
+                );
+                return;
+            }
+        };
+        let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(url_ptr, url_len)
+        };
+        let url = match std::str::from_utf8(url_bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                write_owned_bytes_into_out_params(
+                    e.to_string().as_bytes(),
+                    out_err_ptr,
+                    out_err_len,
+                );
+                return;
+            }
+        };
 
-    let mut header_pairs: Vec<(String, String)> = Vec::new();
-    if headers_count > 0 && !headers_ptr.is_null() {
-        let pairs = std::slice::from_raw_parts(headers_ptr, headers_count);
-        for pair in pairs {
-            let key = match kara_str_to_str(&pair.key) {
-                Some(k) if !k.is_empty() => k,
-                _ => continue,
-            };
-            let val = kara_str_to_str(&pair.val).unwrap_or("");
-            header_pairs.push((key.to_string(), val.to_string()));
+        let mut header_pairs: Vec<(String, String)> = Vec::new();
+        if headers_count > 0 && !headers_ptr.is_null() {
+            let pairs = std::slice::from_raw_parts(headers_ptr, headers_count);
+            for pair in pairs {
+                let key = match kara_str_to_str(&pair.key) {
+                    Some(k) if !k.is_empty() => k,
+                    _ => continue,
+                };
+                let val = kara_str_to_str(&pair.val).unwrap_or("");
+                header_pairs.push((key.to_string(), val.to_string()));
+            }
         }
-    }
 
-    let body_bytes: &[u8] = if body_ptr.is_null() || body_len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(body_ptr, body_len)
-    };
+        let body_bytes: &[u8] = if body_ptr.is_null() || body_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(body_ptr, body_len)
+        };
 
-    match http_fetch_blocking(method, url, body_bytes, &header_pairs, timeout_ms) {
-        Ok(fetched) => {
-            *out_status = fetched.status as i64;
-            *out_headers_handle = capture_response_headers(&fetched.headers);
-            write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
-        }
-        Err(msg) => {
-            write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+        match http_fetch_blocking(method, url, body_bytes, &header_pairs, timeout_ms) {
+            Ok(fetched) => {
+                *out_status = fetched.status as i64;
+                *out_headers_handle = capture_response_headers(&fetched.headers);
+                write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
+            }
+            Err(msg) => {
+                write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+            }
         }
     }
 }
@@ -6538,19 +6689,23 @@ static HTTP_BUILDER_NEXT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::A
 
 #[cfg(feature = "tls")]
 unsafe fn slice_to_owned_string(ptr: *const u8, len: usize) -> String {
-    if ptr.is_null() || len == 0 {
-        return String::new();
+    unsafe {
+        if ptr.is_null() || len == 0 {
+            return String::new();
+        }
+        let bytes = std::slice::from_raw_parts(ptr, len);
+        String::from_utf8_lossy(bytes).into_owned()
     }
-    let bytes = std::slice::from_raw_parts(ptr, len);
-    String::from_utf8_lossy(bytes).into_owned()
 }
 
 #[cfg(feature = "tls")]
 unsafe fn slice_to_owned_bytes(ptr: *const u8, len: usize) -> Vec<u8> {
-    if ptr.is_null() || len == 0 {
-        return Vec::new();
+    unsafe {
+        if ptr.is_null() || len == 0 {
+            return Vec::new();
+        }
+        std::slice::from_raw_parts(ptr, len).to_vec()
     }
-    std::slice::from_raw_parts(ptr, len).to_vec()
 }
 
 /// Allocate a new builder entry pre-populated with `method` + `url`,
@@ -6571,25 +6726,27 @@ pub unsafe extern "C" fn karac_runtime_http_builder_new(
     url_ptr: *const u8,
     url_len: usize,
 ) -> i64 {
-    let method = slice_to_owned_string(method_ptr, method_len);
-    let url = slice_to_owned_string(url_ptr, url_len);
-    let state = HttpBuilderState {
-        method: if method.is_empty() {
-            "GET".to_string()
+    unsafe {
+        let method = slice_to_owned_string(method_ptr, method_len);
+        let url = slice_to_owned_string(url_ptr, url_len);
+        let state = HttpBuilderState {
+            method: if method.is_empty() {
+                "GET".to_string()
+            } else {
+                method
+            },
+            url,
+            body: Vec::new(),
+            headers: Vec::new(),
+            timeout_ms: 0,
+        };
+        let handle = HTTP_BUILDER_NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut map) = HTTP_BUILDERS.lock() {
+            map.insert(handle, state);
+            handle
         } else {
-            method
-        },
-        url,
-        body: Vec::new(),
-        headers: Vec::new(),
-        timeout_ms: 0,
-    };
-    let handle = HTTP_BUILDER_NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    if let Ok(mut map) = HTTP_BUILDERS.lock() {
-        map.insert(handle, state);
-        handle
-    } else {
-        0
+            0
+        }
     }
 }
 
@@ -6613,14 +6770,16 @@ pub unsafe extern "C" fn karac_runtime_http_builder_add_header(
     val_ptr: *const u8,
     val_len: usize,
 ) {
-    let key = slice_to_owned_string(key_ptr, key_len);
-    if key.is_empty() {
-        return;
-    }
-    let val = slice_to_owned_string(val_ptr, val_len);
-    if let Ok(mut map) = HTTP_BUILDERS.lock() {
-        if let Some(state) = map.get_mut(&handle) {
-            state.headers.push((key, val));
+    unsafe {
+        let key = slice_to_owned_string(key_ptr, key_len);
+        if key.is_empty() {
+            return;
+        }
+        let val = slice_to_owned_string(val_ptr, val_len);
+        if let Ok(mut map) = HTTP_BUILDERS.lock() {
+            if let Some(state) = map.get_mut(&handle) {
+                state.headers.push((key, val));
+            }
         }
     }
 }
@@ -6639,10 +6798,12 @@ pub unsafe extern "C" fn karac_runtime_http_builder_set_body(
     body_ptr: *const u8,
     body_len: usize,
 ) {
-    let body = slice_to_owned_bytes(body_ptr, body_len);
-    if let Ok(mut map) = HTTP_BUILDERS.lock() {
-        if let Some(state) = map.get_mut(&handle) {
-            state.body = body;
+    unsafe {
+        let body = slice_to_owned_bytes(body_ptr, body_len);
+        if let Ok(mut map) = HTTP_BUILDERS.lock() {
+            if let Some(state) = map.get_mut(&handle) {
+                state.body = body;
+            }
         }
     }
 }
@@ -6708,41 +6869,43 @@ pub unsafe extern "C" fn karac_runtime_http_builder_send(
     out_err_len: *mut i64,
     out_headers_handle: *mut i64,
 ) {
-    *out_status = 0;
-    *out_body_ptr = std::ptr::null_mut();
-    *out_body_len = 0;
-    *out_err_ptr = std::ptr::null_mut();
-    *out_err_len = 0;
-    *out_headers_handle = 0;
+    unsafe {
+        *out_status = 0;
+        *out_body_ptr = std::ptr::null_mut();
+        *out_body_len = 0;
+        *out_err_ptr = std::ptr::null_mut();
+        *out_err_len = 0;
+        *out_headers_handle = 0;
 
-    let state = if let Ok(mut map) = HTTP_BUILDERS.lock() {
-        map.remove(&handle)
-    } else {
-        None
-    };
-    let state = match state {
-        Some(s) => s,
-        None => {
-            let msg = "unknown request-builder handle";
-            write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
-            return;
-        }
-    };
+        let state = if let Ok(mut map) = HTTP_BUILDERS.lock() {
+            map.remove(&handle)
+        } else {
+            None
+        };
+        let state = match state {
+            Some(s) => s,
+            None => {
+                let msg = "unknown request-builder handle";
+                write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+                return;
+            }
+        };
 
-    match http_fetch_blocking(
-        &state.method,
-        &state.url,
-        &state.body,
-        &state.headers,
-        state.timeout_ms,
-    ) {
-        Ok(fetched) => {
-            *out_status = fetched.status as i64;
-            *out_headers_handle = capture_response_headers(&fetched.headers);
-            write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
-        }
-        Err(msg) => {
-            write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+        match http_fetch_blocking(
+            &state.method,
+            &state.url,
+            &state.body,
+            &state.headers,
+            state.timeout_ms,
+        ) {
+            Ok(fetched) => {
+                *out_status = fetched.status as i64;
+                *out_headers_handle = capture_response_headers(&fetched.headers);
+                write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
+            }
+            Err(msg) => {
+                write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+            }
         }
     }
 }
@@ -7071,81 +7234,83 @@ pub unsafe extern "C" fn karac_runtime_serve_http(
     handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),
     bound_port_out: *mut u16,
 ) -> i32 {
-    if addr_cstr.is_null() {
-        return 1;
-    }
-    let cstr = std::ffi::CStr::from_ptr(addr_cstr);
-    let addr_str = match cstr.to_str() {
-        Ok(s) => s,
-        Err(_) => return 2,
-    };
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return 3,
-    };
-
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(_) => return 4,
-    };
-
-    runtime.block_on(async move {
-        let listener = match tokio::net::TcpListener::bind(socket_addr).await {
-            Ok(l) => l,
-            Err(_) => return 5,
+    unsafe {
+        if addr_cstr.is_null() {
+            return 1;
+        }
+        let cstr = std::ffi::CStr::from_ptr(addr_cstr);
+        let addr_str = match cstr.to_str() {
+            Ok(s) => s,
+            Err(_) => return 2,
         };
-        if let Ok(local) = listener.local_addr() {
-            if !bound_port_out.is_null() {
-                *bound_port_out = local.port();
-            }
-            // Smoke-test convention (B5): print the bound port on a
-            // dedicated `BOUND_PORT=<n>\n` stdout line so the test
-            // harness can read it back when binding to `127.0.0.1:0`
-            // (the OS picks an ephemeral port). Real-world apps
-            // typically bind to a fixed port; this line is a
-            // debug-friendly side-channel rather than a contract surface.
-            // Flushed explicitly so the parent process can sync against
-            // it without waiting on stdout's stdio buffer.
-            use std::io::Write;
-            let mut stdout = std::io::stdout().lock();
-            let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
-            let _ = stdout.flush();
-        }
-        let limits = ServeLimits::from_env();
-        loop {
-            // Reserve a connection slot before accepting so reaching the
-            // optional cap applies backpressure at the OS accept backlog
-            // rather than spawning unbounded tasks (phase-8 line 124).
-            let permit = limits.acquire_permit().await;
-            let (stream, _peer) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(_) => continue,
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return 3,
+        };
+
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(_) => return 4,
+        };
+
+        runtime.block_on(async move {
+            let listener = match tokio::net::TcpListener::bind(socket_addr).await {
+                Ok(l) => l,
+                Err(_) => return 5,
             };
-            let io = hyper_util::rt::TokioIo::new(stream);
-            let header_timeout = limits.header_timeout;
-            tokio::spawn(async move {
-                let _permit = permit;
-                let svc = hyper::service::service_fn(
-                    move |req: hyper::Request<hyper::body::Incoming>| async move {
-                        serve_request(req, handler).await
-                    },
-                );
-                // phase-8 line 145: `auto::Builder` negotiates the protocol
-                // per-connection — an h2 preface (h2c prior-knowledge over
-                // this plain TCP socket) drives HTTP/2; anything else is
-                // served as HTTP/1.1. The Kāra handler bridge is identical
-                // for both (see `serve_request`).
-                let mut builder = hyper_util::server::conn::auto::Builder::new(
-                    hyper_util::rt::TokioExecutor::new(),
-                );
-                apply_serve_tuning(&mut builder, header_timeout);
-                let _ = builder.serve_connection(io, svc).await;
-            });
-        }
-    })
+            if let Ok(local) = listener.local_addr() {
+                if !bound_port_out.is_null() {
+                    *bound_port_out = local.port();
+                }
+                // Smoke-test convention (B5): print the bound port on a
+                // dedicated `BOUND_PORT=<n>\n` stdout line so the test
+                // harness can read it back when binding to `127.0.0.1:0`
+                // (the OS picks an ephemeral port). Real-world apps
+                // typically bind to a fixed port; this line is a
+                // debug-friendly side-channel rather than a contract surface.
+                // Flushed explicitly so the parent process can sync against
+                // it without waiting on stdout's stdio buffer.
+                use std::io::Write;
+                let mut stdout = std::io::stdout().lock();
+                let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
+                let _ = stdout.flush();
+            }
+            let limits = ServeLimits::from_env();
+            loop {
+                // Reserve a connection slot before accepting so reaching the
+                // optional cap applies backpressure at the OS accept backlog
+                // rather than spawning unbounded tasks (phase-8 line 124).
+                let permit = limits.acquire_permit().await;
+                let (stream, _peer) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => continue,
+                };
+                let io = hyper_util::rt::TokioIo::new(stream);
+                let header_timeout = limits.header_timeout;
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    let svc = hyper::service::service_fn(
+                        move |req: hyper::Request<hyper::body::Incoming>| async move {
+                            serve_request(req, handler).await
+                        },
+                    );
+                    // phase-8 line 145: `auto::Builder` negotiates the protocol
+                    // per-connection — an h2 preface (h2c prior-knowledge over
+                    // this plain TCP socket) drives HTTP/2; anything else is
+                    // served as HTTP/1.1. The Kāra handler bridge is identical
+                    // for both (see `serve_request`).
+                    let mut builder = hyper_util::server::conn::auto::Builder::new(
+                        hyper_util::rt::TokioExecutor::new(),
+                    );
+                    apply_serve_tuning(&mut builder, header_timeout);
+                    let _ = builder.serve_connection(io, svc).await;
+                });
+            }
+        })
+    }
 }
 
 /// `Server.serve_ws` — the plain-HTTP accept loop with an in-place RFC 6455
@@ -7187,76 +7352,78 @@ pub unsafe extern "C" fn karac_runtime_serve_ws(
     ws_handler: extern "C" fn(i64),
     bound_port_out: *mut u16,
 ) -> i32 {
-    if addr_cstr.is_null() {
-        return 1;
-    }
-    let cstr = std::ffi::CStr::from_ptr(addr_cstr);
-    let addr_str = match cstr.to_str() {
-        Ok(s) => s,
-        Err(_) => return 2,
-    };
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return 3,
-    };
-
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(_) => return 4,
-    };
-
-    runtime.block_on(async move {
-        let listener = match tokio::net::TcpListener::bind(socket_addr).await {
-            Ok(l) => l,
-            Err(_) => return 5,
+    unsafe {
+        if addr_cstr.is_null() {
+            return 1;
+        }
+        let cstr = std::ffi::CStr::from_ptr(addr_cstr);
+        let addr_str = match cstr.to_str() {
+            Ok(s) => s,
+            Err(_) => return 2,
         };
-        if let Ok(local) = listener.local_addr() {
-            if !bound_port_out.is_null() {
-                *bound_port_out = local.port();
-            }
-            use std::io::Write;
-            let mut stdout = std::io::stdout().lock();
-            let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
-            let _ = stdout.flush();
-        }
-        let limits = ServeLimits::from_env();
-        loop {
-            let permit = limits.acquire_permit().await;
-            let (stream, _peer) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(_) => continue,
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return 3,
+        };
+
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(_) => return 4,
+        };
+
+        runtime.block_on(async move {
+            let listener = match tokio::net::TcpListener::bind(socket_addr).await {
+                Ok(l) => l,
+                Err(_) => return 5,
             };
-            let io = hyper_util::rt::TokioIo::new(stream);
-            let header_timeout = limits.header_timeout;
-            tokio::spawn(async move {
-                let _permit = permit;
-                let svc = hyper::service::service_fn(
-                    move |req: hyper::Request<hyper::body::Incoming>| async move {
-                        serve_request_ws(req, handler, ws_handler).await
-                    },
-                );
-                // HTTP/1.1 builder directly — NOT the auto (h1+h2) builder the
-                // plain `serve` loop uses. Two reasons: (1) a WebSocket upgrade
-                // is an HTTP/1.1 mechanism (h2 WS = RFC 8441 CONNECT, out of
-                // scope for v1), and (2) the auto builder wraps the connection
-                // IO in its private version-sniffing `Rewind` type, which makes
-                // `Upgraded::downcast` to the concrete `TokioIo<TcpStream>`
-                // impossible from here. `.with_upgrades()` keeps the connection
-                // alive past a 101 so `hyper::upgrade::on` can hand us the raw
-                // socket. h2c prior-knowledge clients are not served on a
-                // `serve_ws` listener in v1 (use `serve` for h2 workloads).
-                let mut builder = hyper::server::conn::http1::Builder::new();
-                if let Some(t) = header_timeout {
-                    builder.timer(hyper_util::rt::TokioTimer::new());
-                    builder.header_read_timeout(t);
+            if let Ok(local) = listener.local_addr() {
+                if !bound_port_out.is_null() {
+                    *bound_port_out = local.port();
                 }
-                let _ = builder.serve_connection(io, svc).with_upgrades().await;
-            });
-        }
-    })
+                use std::io::Write;
+                let mut stdout = std::io::stdout().lock();
+                let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
+                let _ = stdout.flush();
+            }
+            let limits = ServeLimits::from_env();
+            loop {
+                let permit = limits.acquire_permit().await;
+                let (stream, _peer) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => continue,
+                };
+                let io = hyper_util::rt::TokioIo::new(stream);
+                let header_timeout = limits.header_timeout;
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    let svc = hyper::service::service_fn(
+                        move |req: hyper::Request<hyper::body::Incoming>| async move {
+                            serve_request_ws(req, handler, ws_handler).await
+                        },
+                    );
+                    // HTTP/1.1 builder directly — NOT the auto (h1+h2) builder the
+                    // plain `serve` loop uses. Two reasons: (1) a WebSocket upgrade
+                    // is an HTTP/1.1 mechanism (h2 WS = RFC 8441 CONNECT, out of
+                    // scope for v1), and (2) the auto builder wraps the connection
+                    // IO in its private version-sniffing `Rewind` type, which makes
+                    // `Upgraded::downcast` to the concrete `TokioIo<TcpStream>`
+                    // impossible from here. `.with_upgrades()` keeps the connection
+                    // alive past a 101 so `hyper::upgrade::on` can hand us the raw
+                    // socket. h2c prior-knowledge clients are not served on a
+                    // `serve_ws` listener in v1 (use `serve` for h2 workloads).
+                    let mut builder = hyper::server::conn::http1::Builder::new();
+                    if let Some(t) = header_timeout {
+                        builder.timer(hyper_util::rt::TokioTimer::new());
+                        builder.header_read_timeout(t);
+                    }
+                    let _ = builder.serve_connection(io, svc).with_upgrades().await;
+                });
+            }
+        })
+    }
 }
 
 /// True when `req` carries an RFC 6455 §4.2.1 opening handshake — the same
@@ -7442,90 +7609,92 @@ pub unsafe extern "C" fn karac_runtime_serve_ws_tls(
     ws_handler: extern "C" fn(i64),
     bound_port_out: *mut u16,
 ) -> i32 {
-    if addr_cstr.is_null() {
-        return 1;
-    }
-    let cstr = std::ffi::CStr::from_ptr(addr_cstr);
-    let addr_str = match cstr.to_str() {
-        Ok(s) => s,
-        Err(_) => return 2,
-    };
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return 3,
-    };
-    let cert_bytes: &[u8] = if cert_pem.is_null() || cert_len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(cert_pem, cert_len as usize)
-    };
-    let key_bytes: &[u8] = if key_pem.is_null() || key_len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(key_pem, key_len as usize)
-    };
-    let mut server_config = match crate::tls::build_server_config(cert_bytes, key_bytes) {
-        Ok(c) => c,
-        Err(_) => return 6,
-    };
-    // h1-only ALPN — see the entry doc.
-    server_config.alpn_protocols = vec![b"http/1.1".to_vec()];
-    let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
-
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(_) => return 4,
-    };
-
-    runtime.block_on(async move {
-        let listener = match tokio::net::TcpListener::bind(socket_addr).await {
-            Ok(l) => l,
-            Err(_) => return 5,
+    unsafe {
+        if addr_cstr.is_null() {
+            return 1;
+        }
+        let cstr = std::ffi::CStr::from_ptr(addr_cstr);
+        let addr_str = match cstr.to_str() {
+            Ok(s) => s,
+            Err(_) => return 2,
         };
-        if let Ok(local) = listener.local_addr() {
-            if !bound_port_out.is_null() {
-                *bound_port_out = local.port();
-            }
-            use std::io::Write;
-            let mut stdout = std::io::stdout().lock();
-            let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
-            let _ = stdout.flush();
-        }
-        let limits = ServeLimits::from_env();
-        loop {
-            let permit = limits.acquire_permit().await;
-            let (tcp_stream, _peer) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(_) => continue,
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return 3,
+        };
+        let cert_bytes: &[u8] = if cert_pem.is_null() || cert_len <= 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(cert_pem, cert_len as usize)
+        };
+        let key_bytes: &[u8] = if key_pem.is_null() || key_len <= 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(key_pem, key_len as usize)
+        };
+        let mut server_config = match crate::tls::build_server_config(cert_bytes, key_bytes) {
+            Ok(c) => c,
+            Err(_) => return 6,
+        };
+        // h1-only ALPN — see the entry doc.
+        server_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(_) => return 4,
+        };
+
+        runtime.block_on(async move {
+            let listener = match tokio::net::TcpListener::bind(socket_addr).await {
+                Ok(l) => l,
+                Err(_) => return 5,
             };
-            let acceptor = acceptor.clone();
-            let header_timeout = limits.header_timeout;
-            tokio::spawn(async move {
-                let _permit = permit;
-                let tls_stream = match acceptor.accept(tcp_stream).await {
-                    Ok(s) => s,
-                    // Per-connection handshake failures are swallowed —
-                    // a single bad client must not break the accept loop.
-                    Err(_) => return,
-                };
-                let io = hyper_util::rt::TokioIo::new(tls_stream);
-                let svc = hyper::service::service_fn(
-                    move |req: hyper::Request<hyper::body::Incoming>| async move {
-                        serve_request_ws_tls(req, handler, ws_handler).await
-                    },
-                );
-                let mut builder = hyper::server::conn::http1::Builder::new();
-                if let Some(t) = header_timeout {
-                    builder.timer(hyper_util::rt::TokioTimer::new());
-                    builder.header_read_timeout(t);
+            if let Ok(local) = listener.local_addr() {
+                if !bound_port_out.is_null() {
+                    *bound_port_out = local.port();
                 }
-                let _ = builder.serve_connection(io, svc).with_upgrades().await;
-            });
-        }
-    })
+                use std::io::Write;
+                let mut stdout = std::io::stdout().lock();
+                let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
+                let _ = stdout.flush();
+            }
+            let limits = ServeLimits::from_env();
+            loop {
+                let permit = limits.acquire_permit().await;
+                let (tcp_stream, _peer) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => continue,
+                };
+                let acceptor = acceptor.clone();
+                let header_timeout = limits.header_timeout;
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    let tls_stream = match acceptor.accept(tcp_stream).await {
+                        Ok(s) => s,
+                        // Per-connection handshake failures are swallowed —
+                        // a single bad client must not break the accept loop.
+                        Err(_) => return,
+                    };
+                    let io = hyper_util::rt::TokioIo::new(tls_stream);
+                    let svc = hyper::service::service_fn(
+                        move |req: hyper::Request<hyper::body::Incoming>| async move {
+                            serve_request_ws_tls(req, handler, ws_handler).await
+                        },
+                    );
+                    let mut builder = hyper::server::conn::http1::Builder::new();
+                    if let Some(t) = header_timeout {
+                        builder.timer(hyper_util::rt::TokioTimer::new());
+                        builder.header_read_timeout(t);
+                    }
+                    let _ = builder.serve_connection(io, svc).with_upgrades().await;
+                });
+            }
+        })
+    }
 }
 
 /// Per-request body for [`karac_runtime_serve_ws_tls`] — the TLS twin of
@@ -7665,120 +7834,123 @@ pub unsafe extern "C" fn karac_runtime_serve_https(
     handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),
     bound_port_out: *mut u16,
 ) -> i32 {
-    if addr_cstr.is_null() {
-        return 1;
-    }
-    let cstr = std::ffi::CStr::from_ptr(addr_cstr);
-    let addr_str = match cstr.to_str() {
-        Ok(s) => s,
-        Err(_) => return 2,
-    };
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return 3,
-    };
-
-    // Build the rustls `ServerConfig` from the supplied PEM bytes via
-    // the shared `tls::build_server_config` helper (same path used by
-    // `karac_runtime_tls_config_new`). Any malformed cert / key
-    // collapses into return code 6 — callers see "TLS config failed"
-    // without leaking rustls's internal error enum across the FFI.
-    let cert_bytes: &[u8] = if cert_pem.is_null() || cert_len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(cert_pem, cert_len as usize)
-    };
-    let key_bytes: &[u8] = if key_pem.is_null() || key_len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(key_pem, key_len as usize)
-    };
-    let mut server_config = match crate::tls::build_server_config(cert_bytes, key_bytes) {
-        Ok(c) => c,
-        Err(_) => return 6,
-    };
-    // phase-8 line 145: advertise HTTP/2 (then HTTP/1.1) via ALPN so a
-    // capable client negotiates `h2` during the TLS handshake; the
-    // `auto::Builder` below then drives the matching protocol. ALPN is
-    // set *here*, at the HTTPS serve site, rather than in the shared
-    // `tls::build_server_config` — that helper also backs the raw
-    // `std.tls` listener (`karac_runtime_tls_config_new`), a generic
-    // TLS socket that is not an HTTP server, so it must stay ALPN-free.
-    // Order is preference order: `h2` first, `http/1.1` as fallback.
-    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
-
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(_) => return 4,
-    };
-
-    runtime.block_on(async move {
-        let listener = match tokio::net::TcpListener::bind(socket_addr).await {
-            Ok(l) => l,
-            Err(_) => return 5,
+    unsafe {
+        if addr_cstr.is_null() {
+            return 1;
+        }
+        let cstr = std::ffi::CStr::from_ptr(addr_cstr);
+        let addr_str = match cstr.to_str() {
+            Ok(s) => s,
+            Err(_) => return 2,
         };
-        if let Ok(local) = listener.local_addr() {
-            if !bound_port_out.is_null() {
-                *bound_port_out = local.port();
-            }
-            // Same `BOUND_PORT=<n>\n` stdout convention as
-            // `karac_runtime_serve_http` so the smoke-test harness can
-            // discover the ephemeral port when binding to
-            // `"127.0.0.1:0"`.
-            use std::io::Write;
-            let mut stdout = std::io::stdout().lock();
-            let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
-            let _ = stdout.flush();
-        }
-        let limits = ServeLimits::from_env();
-        loop {
-            // Backpressure before accept (phase-8 line 124) — see the
-            // plain-HTTP loop for the rationale.
-            let permit = limits.acquire_permit().await;
-            let (tcp_stream, _peer) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(_) => continue,
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return 3,
+        };
+
+        // Build the rustls `ServerConfig` from the supplied PEM bytes via
+        // the shared `tls::build_server_config` helper (same path used by
+        // `karac_runtime_tls_config_new`). Any malformed cert / key
+        // collapses into return code 6 — callers see "TLS config failed"
+        // without leaking rustls's internal error enum across the FFI.
+        let cert_bytes: &[u8] = if cert_pem.is_null() || cert_len <= 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(cert_pem, cert_len as usize)
+        };
+        let key_bytes: &[u8] = if key_pem.is_null() || key_len <= 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(key_pem, key_len as usize)
+        };
+        let mut server_config = match crate::tls::build_server_config(cert_bytes, key_bytes) {
+            Ok(c) => c,
+            Err(_) => return 6,
+        };
+        // phase-8 line 145: advertise HTTP/2 (then HTTP/1.1) via ALPN so a
+        // capable client negotiates `h2` during the TLS handshake; the
+        // `auto::Builder` below then drives the matching protocol. ALPN is
+        // set *here*, at the HTTPS serve site, rather than in the shared
+        // `tls::build_server_config` — that helper also backs the raw
+        // `std.tls` listener (`karac_runtime_tls_config_new`), a generic
+        // TLS socket that is not an HTTP server, so it must stay ALPN-free.
+        // Order is preference order: `h2` first, `http/1.1` as fallback.
+        server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(_) => return 4,
+        };
+
+        runtime.block_on(async move {
+            let listener = match tokio::net::TcpListener::bind(socket_addr).await {
+                Ok(l) => l,
+                Err(_) => return 5,
             };
-            let acceptor = acceptor.clone();
-            let header_timeout = limits.header_timeout;
-            tokio::spawn(async move {
-                let _permit = permit;
-                // Bound the TLS handshake: a peer that completes the TCP
-                // connect but never finishes (or stalls) the ClientHello
-                // must not park this task indefinitely (phase-8 line 124,
-                // the primary HTTPS slowloris vector). On timeout or
-                // handshake error the connection is dropped.
-                let tls_stream = match header_timeout {
-                    Some(t) => match tokio::time::timeout(t, acceptor.accept(tcp_stream)).await {
-                        Ok(Ok(s)) => s,
-                        _ => return,
-                    },
-                    None => match acceptor.accept(tcp_stream).await {
-                        Ok(s) => s,
-                        Err(_) => return,
-                    },
+            if let Ok(local) = listener.local_addr() {
+                if !bound_port_out.is_null() {
+                    *bound_port_out = local.port();
+                }
+                // Same `BOUND_PORT=<n>\n` stdout convention as
+                // `karac_runtime_serve_http` so the smoke-test harness can
+                // discover the ephemeral port when binding to
+                // `"127.0.0.1:0"`.
+                use std::io::Write;
+                let mut stdout = std::io::stdout().lock();
+                let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
+                let _ = stdout.flush();
+            }
+            let limits = ServeLimits::from_env();
+            loop {
+                // Backpressure before accept (phase-8 line 124) — see the
+                // plain-HTTP loop for the rationale.
+                let permit = limits.acquire_permit().await;
+                let (tcp_stream, _peer) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => continue,
                 };
-                let io = hyper_util::rt::TokioIo::new(tls_stream);
-                let svc = hyper::service::service_fn(
-                    move |req: hyper::Request<hyper::body::Incoming>| async move {
-                        serve_request(req, handler).await
-                    },
-                );
-                // phase-8 line 145: `auto::Builder` serves HTTP/2 when the
-                // TLS handshake negotiated `h2` via ALPN (advertised on the
-                // `ServerConfig` below), falling back to HTTP/1.1 otherwise.
-                let mut builder = hyper_util::server::conn::auto::Builder::new(
-                    hyper_util::rt::TokioExecutor::new(),
-                );
-                apply_serve_tuning(&mut builder, header_timeout);
-                let _ = builder.serve_connection(io, svc).await;
-            });
-        }
-    })
+                let acceptor = acceptor.clone();
+                let header_timeout = limits.header_timeout;
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    // Bound the TLS handshake: a peer that completes the TCP
+                    // connect but never finishes (or stalls) the ClientHello
+                    // must not park this task indefinitely (phase-8 line 124,
+                    // the primary HTTPS slowloris vector). On timeout or
+                    // handshake error the connection is dropped.
+                    let tls_stream = match header_timeout {
+                        Some(t) => match tokio::time::timeout(t, acceptor.accept(tcp_stream)).await
+                        {
+                            Ok(Ok(s)) => s,
+                            _ => return,
+                        },
+                        None => match acceptor.accept(tcp_stream).await {
+                            Ok(s) => s,
+                            Err(_) => return,
+                        },
+                    };
+                    let io = hyper_util::rt::TokioIo::new(tls_stream);
+                    let svc = hyper::service::service_fn(
+                        move |req: hyper::Request<hyper::body::Incoming>| async move {
+                            serve_request(req, handler).await
+                        },
+                    );
+                    // phase-8 line 145: `auto::Builder` serves HTTP/2 when the
+                    // TLS handshake negotiated `h2` via ALPN (advertised on the
+                    // `ServerConfig` below), falling back to HTTP/1.1 otherwise.
+                    let mut builder = hyper_util::server::conn::auto::Builder::new(
+                        hyper_util::rt::TokioExecutor::new(),
+                    );
+                    apply_serve_tuning(&mut builder, header_timeout);
+                    let _ = builder.serve_connection(io, svc).await;
+                });
+            }
+        })
+    }
 }
 
 /// Serve a single hardcoded JSON body for every incoming GET request on
@@ -7811,85 +7983,87 @@ pub unsafe extern "C" fn karac_runtime_serve_http_static(
     body_ptr: *const u8,
     body_len: usize,
 ) -> i32 {
-    if addr_cstr.is_null() {
-        return 1;
-    }
-    let cstr = std::ffi::CStr::from_ptr(addr_cstr);
-    let addr_str = match cstr.to_str() {
-        Ok(s) => s,
-        Err(_) => return 2,
-    };
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return 3,
-    };
-    let body_owned: bytes::Bytes = if body_ptr.is_null() || body_len == 0 {
-        bytes::Bytes::new()
-    } else {
-        let slice = std::slice::from_raw_parts(body_ptr, body_len);
-        bytes::Bytes::copy_from_slice(slice)
-    };
-
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(_) => return 4,
-    };
-
-    runtime.block_on(async move {
-        let listener = match tokio::net::TcpListener::bind(socket_addr).await {
-            Ok(l) => l,
-            Err(_) => return 5,
+    unsafe {
+        if addr_cstr.is_null() {
+            return 1;
+        }
+        let cstr = std::ffi::CStr::from_ptr(addr_cstr);
+        let addr_str = match cstr.to_str() {
+            Ok(s) => s,
+            Err(_) => return 2,
         };
-        if let Ok(local) = listener.local_addr() {
-            // Smoke-test convention: emit `BOUND_PORT=<n>\n` so the
-            // test harness can sync the GET against the actual bound
-            // port.
-            use std::io::Write;
-            let mut stdout = std::io::stdout().lock();
-            let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
-            let _ = stdout.flush();
-        }
-        let limits = ServeLimits::from_env();
-        loop {
-            // Backpressure before accept (phase-8 line 124) — see the
-            // plain-HTTP loop for the rationale.
-            let permit = limits.acquire_permit().await;
-            let (stream, _peer) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(_) => continue,
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return 3,
+        };
+        let body_owned: bytes::Bytes = if body_ptr.is_null() || body_len == 0 {
+            bytes::Bytes::new()
+        } else {
+            let slice = std::slice::from_raw_parts(body_ptr, body_len);
+            bytes::Bytes::copy_from_slice(slice)
+        };
+
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(_) => return 4,
+        };
+
+        runtime.block_on(async move {
+            let listener = match tokio::net::TcpListener::bind(socket_addr).await {
+                Ok(l) => l,
+                Err(_) => return 5,
             };
-            let body_clone = body_owned.clone();
-            let io = hyper_util::rt::TokioIo::new(stream);
-            let header_timeout = limits.header_timeout;
-            tokio::spawn(async move {
-                let _permit = permit;
-                let svc = hyper::service::service_fn(
-                    move |_req: hyper::Request<hyper::body::Incoming>| {
-                        let body = body_clone.clone();
-                        async move {
-                            let resp = hyper::Response::builder()
-                                .status(200)
-                                .header("content-type", "application/json")
-                                .body(http_body_util::Full::new(body))
-                                .unwrap();
-                            Ok::<_, std::convert::Infallible>(resp)
-                        }
-                    },
-                );
-                // phase-8 line 145: same protocol-negotiating `auto::Builder`
-                // as the handler path — the static smoke surface serves h2c
-                // (plain HTTP/2 prior-knowledge) as well as HTTP/1.1.
-                let mut builder = hyper_util::server::conn::auto::Builder::new(
-                    hyper_util::rt::TokioExecutor::new(),
-                );
-                apply_serve_tuning(&mut builder, header_timeout);
-                let _ = builder.serve_connection(io, svc).await;
-            });
-        }
-    })
+            if let Ok(local) = listener.local_addr() {
+                // Smoke-test convention: emit `BOUND_PORT=<n>\n` so the
+                // test harness can sync the GET against the actual bound
+                // port.
+                use std::io::Write;
+                let mut stdout = std::io::stdout().lock();
+                let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
+                let _ = stdout.flush();
+            }
+            let limits = ServeLimits::from_env();
+            loop {
+                // Backpressure before accept (phase-8 line 124) — see the
+                // plain-HTTP loop for the rationale.
+                let permit = limits.acquire_permit().await;
+                let (stream, _peer) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => continue,
+                };
+                let body_clone = body_owned.clone();
+                let io = hyper_util::rt::TokioIo::new(stream);
+                let header_timeout = limits.header_timeout;
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    let svc = hyper::service::service_fn(
+                        move |_req: hyper::Request<hyper::body::Incoming>| {
+                            let body = body_clone.clone();
+                            async move {
+                                let resp = hyper::Response::builder()
+                                    .status(200)
+                                    .header("content-type", "application/json")
+                                    .body(http_body_util::Full::new(body))
+                                    .unwrap();
+                                Ok::<_, std::convert::Infallible>(resp)
+                            }
+                        },
+                    );
+                    // phase-8 line 145: same protocol-negotiating `auto::Builder`
+                    // as the handler path — the static smoke surface serves h2c
+                    // (plain HTTP/2 prior-knowledge) as well as HTTP/1.1.
+                    let mut builder = hyper_util::server::conn::auto::Builder::new(
+                        hyper_util::rt::TokioExecutor::new(),
+                    );
+                    apply_serve_tuning(&mut builder, header_timeout);
+                    let _ = builder.serve_connection(io, svc).await;
+                });
+            }
+        })
+    }
 }
 
 /// Decode a single `application/x-www-form-urlencoded` component:
@@ -8235,80 +8409,82 @@ unsafe fn sort_fixed_width<const W: usize>(
     cmp: extern "C" fn(*mut u8, *const u8, *const u8) -> i64,
     ctx: *mut u8,
 ) {
-    const RUN: usize = 32; // insertion-sort base run length
-    let layout = match std::alloc::Layout::from_size_align(total_bytes, 8) {
-        Ok(l) => l,
-        Err(_) => return,
-    };
-    let scratch = std::alloc::alloc(layout) as *mut [u8; W];
-    if scratch.is_null() {
-        return;
-    }
-    let base = data as *mut [u8; W];
-
-    // Phase 1 — insertion-sort each RUN-sized run in place.
-    let mut start = 0usize;
-    while start < n {
-        let end = (start + RUN).min(n);
-        let mut i = start + 1;
-        while i < end {
-            let hold: [u8; W] = *base.add(i);
-            let mut j = i;
-            while j > start && cmp(ctx, base.add(j - 1) as *const u8, hold.as_ptr()) > 0 {
-                *base.add(j) = *base.add(j - 1);
-                j -= 1;
-            }
-            *base.add(j) = hold;
-            i += 1;
+    unsafe {
+        const RUN: usize = 32; // insertion-sort base run length
+        let layout = match std::alloc::Layout::from_size_align(total_bytes, 8) {
+            Ok(l) => l,
+            Err(_) => return,
+        };
+        let scratch = std::alloc::alloc(layout) as *mut [u8; W];
+        if scratch.is_null() {
+            return;
         }
-        start = end;
-    }
+        let base = data as *mut [u8; W];
 
-    // Phase 2 — bottom-up merge of adjacent runs, ping-ponging base <-> scratch.
-    let mut src = base;
-    let mut dst = scratch;
-    let mut width = RUN;
-    while width < n {
-        let mut lo = 0usize;
-        while lo < n {
-            let mid = (lo + width).min(n);
-            let hi = (lo + 2 * width).min(n);
-            let mut a = lo;
-            let mut b = mid;
-            let mut k = lo;
-            while a < mid && b < hi {
-                // `<= 0` keeps the left (earlier) run first on a tie.
-                if cmp(ctx, src.add(a) as *const u8, src.add(b) as *const u8) <= 0 {
+        // Phase 1 — insertion-sort each RUN-sized run in place.
+        let mut start = 0usize;
+        while start < n {
+            let end = (start + RUN).min(n);
+            let mut i = start + 1;
+            while i < end {
+                let hold: [u8; W] = *base.add(i);
+                let mut j = i;
+                while j > start && cmp(ctx, base.add(j - 1) as *const u8, hold.as_ptr()) > 0 {
+                    *base.add(j) = *base.add(j - 1);
+                    j -= 1;
+                }
+                *base.add(j) = hold;
+                i += 1;
+            }
+            start = end;
+        }
+
+        // Phase 2 — bottom-up merge of adjacent runs, ping-ponging base <-> scratch.
+        let mut src = base;
+        let mut dst = scratch;
+        let mut width = RUN;
+        while width < n {
+            let mut lo = 0usize;
+            while lo < n {
+                let mid = (lo + width).min(n);
+                let hi = (lo + 2 * width).min(n);
+                let mut a = lo;
+                let mut b = mid;
+                let mut k = lo;
+                while a < mid && b < hi {
+                    // `<= 0` keeps the left (earlier) run first on a tie.
+                    if cmp(ctx, src.add(a) as *const u8, src.add(b) as *const u8) <= 0 {
+                        *dst.add(k) = *src.add(a);
+                        a += 1;
+                    } else {
+                        *dst.add(k) = *src.add(b);
+                        b += 1;
+                    }
+                    k += 1;
+                }
+                while a < mid {
                     *dst.add(k) = *src.add(a);
                     a += 1;
-                } else {
+                    k += 1;
+                }
+                while b < hi {
                     *dst.add(k) = *src.add(b);
                     b += 1;
+                    k += 1;
                 }
-                k += 1;
+                lo += 2 * width;
             }
-            while a < mid {
-                *dst.add(k) = *src.add(a);
-                a += 1;
-                k += 1;
-            }
-            while b < hi {
-                *dst.add(k) = *src.add(b);
-                b += 1;
-                k += 1;
-            }
-            lo += 2 * width;
+            std::mem::swap(&mut src, &mut dst);
+            width *= 2;
         }
-        std::mem::swap(&mut src, &mut dst);
-        width *= 2;
-    }
 
-    // If an odd number of merge passes left the live buffer in `scratch`,
-    // copy it back into `data`.
-    if src != base {
-        ptr::copy_nonoverlapping(src as *const u8, data, total_bytes);
+        // If an odd number of merge passes left the live buffer in `scratch`,
+        // copy it back into `data`.
+        if src != base {
+            ptr::copy_nonoverlapping(src as *const u8, data, total_bytes);
+        }
+        std::alloc::dealloc(scratch as *mut u8, layout);
     }
-    std::alloc::dealloc(scratch as *mut u8, layout);
 }
 
 /// In-place sort of a raw byte buffer (`len` elements of `elem_size` bytes).
@@ -8349,152 +8525,154 @@ pub unsafe extern "C" fn karac_vec_sort_by(
     cmp: extern "C" fn(*mut u8, *const u8, *const u8) -> i64,
     ctx: *mut u8,
 ) {
-    if data.is_null() || len < 2 || elem_size <= 0 {
-        return;
-    }
-    let n = len as usize;
-    let sz = elem_size as usize;
-
-    // `karac_vec_sort_by` has two panic-free strategies — both keep the
-    // ~262 KiB DWARF backtrace-symbolizer dead-strippable (rationale on the
-    // generic path below): a direct-element fast path for small element
-    // widths, and a `usize`-index-permutation generic path for large ones.
-
-    // Total element-buffer size, guarded against usize overflow.
-    let total_bytes = match n.checked_mul(sz) {
-        Some(v) => v,
-        None => return,
-    };
-
-    // ── Fast path: direct-element stable merge sort for the hot small widths.
-    // 8-byte (`i64`) and 16-byte (`(i64, i64)` / two-field structs) elements are
-    // the overwhelming majority of real sorts. `sort_fixed_width::<W>` merges the
-    // elements directly with `W` monomorphized, so every move is an inlined
-    // register copy (no `memcpy` call, no index indirection) and an insertion-sort
-    // base case cuts the small-run comparisons — recovering the speed the old
-    // typed-slice `slice::sort_by` path had, but panic-free so the ~262 KiB
-    // symbolizer still dead-strips. Other widths fall through to the
-    // index-permutation generic path below (cheap index moves for big elements).
-    match sz {
-        8 => {
-            sort_fixed_width::<8>(data, n, total_bytes, cmp, ctx);
+    unsafe {
+        if data.is_null() || len < 2 || elem_size <= 0 {
             return;
         }
-        16 => {
-            sort_fixed_width::<16>(data, n, total_bytes, cmp, ctx);
+        let n = len as usize;
+        let sz = elem_size as usize;
+
+        // `karac_vec_sort_by` has two panic-free strategies — both keep the
+        // ~262 KiB DWARF backtrace-symbolizer dead-strippable (rationale on the
+        // generic path below): a direct-element fast path for small element
+        // widths, and a `usize`-index-permutation generic path for large ones.
+
+        // Total element-buffer size, guarded against usize overflow.
+        let total_bytes = match n.checked_mul(sz) {
+            Some(v) => v,
+            None => return,
+        };
+
+        // ── Fast path: direct-element stable merge sort for the hot small widths.
+        // 8-byte (`i64`) and 16-byte (`(i64, i64)` / two-field structs) elements are
+        // the overwhelming majority of real sorts. `sort_fixed_width::<W>` merges the
+        // elements directly with `W` monomorphized, so every move is an inlined
+        // register copy (no `memcpy` call, no index indirection) and an insertion-sort
+        // base case cuts the small-run comparisons — recovering the speed the old
+        // typed-slice `slice::sort_by` path had, but panic-free so the ~262 KiB
+        // symbolizer still dead-strips. Other widths fall through to the
+        // index-permutation generic path below (cheap index moves for big elements).
+        match sz {
+            8 => {
+                sort_fixed_width::<8>(data, n, total_bytes, cmp, ctx);
+                return;
+            }
+            16 => {
+                sort_fixed_width::<16>(data, n, total_bytes, cmp, ctx);
+                return;
+            }
+            _ => {}
+        }
+
+        // ── Generic path: stable bottom-up merge sort over a `usize` index ──────
+        // permutation, built from raw `std::alloc` and pointer arithmetic. The
+        // element representation is opaque bytes, so we sort `usize` indices
+        // (comparing the elements they point at via `cmp`) and permute the buffer
+        // once at the end — cheap index moves, one element pass, stable on equal
+        // keys (the merge takes the left run on a tie). For large elements moving
+        // small indices each pass beats copying elements every merge pass.
+        //
+        // Why hand-rolled rather than `slice::sort_by` / `Vec`: the whole point
+        // of this entry is to keep a lean seq binary that *sorts* from paying
+        // the ~262 KiB DWARF backtrace-symbolizer floor. That floor survives
+        // `-dead_strip` whenever the default panic hook stays reachable, and
+        // `slice::sort_by` (total-order violation `panic!`) and `Vec` /
+        // `(0..n).collect()` (capacity-overflow `panic!`) each keep it
+        // reachable. This body has *no reachable panic*: every allocation is a
+        // null-checked raw `alloc` (no-op return on failure), indexing is
+        // unchecked pointer arithmetic, and there is no `unwrap`/`assert`. So
+        // the symbolizer dead-strips and the binary returns to its no-sort
+        // floor. See docs/implementation_checklist/phase-7-codegen.md
+        // "Lean large-N sort entry". Stability is required by design.md
+        // ("In-place stable sort"), which also rules out heapsort/introsort.
+        let idx_layout = match std::alloc::Layout::array::<usize>(n) {
+            Ok(l) => l,
+            Err(_) => return,
+        };
+        let tmp_layout = match std::alloc::Layout::from_size_align(total_bytes, 1) {
+            Ok(l) => l,
+            Err(_) => return,
+        };
+        let idx = std::alloc::alloc(idx_layout) as *mut usize;
+        if idx.is_null() {
             return;
         }
-        _ => {}
-    }
+        let buf = std::alloc::alloc(idx_layout) as *mut usize;
+        if buf.is_null() {
+            std::alloc::dealloc(idx as *mut u8, idx_layout);
+            return;
+        }
+        let tmp = std::alloc::alloc(tmp_layout);
+        if tmp.is_null() {
+            std::alloc::dealloc(idx as *mut u8, idx_layout);
+            std::alloc::dealloc(buf as *mut u8, idx_layout);
+            return;
+        }
 
-    // ── Generic path: stable bottom-up merge sort over a `usize` index ──────
-    // permutation, built from raw `std::alloc` and pointer arithmetic. The
-    // element representation is opaque bytes, so we sort `usize` indices
-    // (comparing the elements they point at via `cmp`) and permute the buffer
-    // once at the end — cheap index moves, one element pass, stable on equal
-    // keys (the merge takes the left run on a tie). For large elements moving
-    // small indices each pass beats copying elements every merge pass.
-    //
-    // Why hand-rolled rather than `slice::sort_by` / `Vec`: the whole point
-    // of this entry is to keep a lean seq binary that *sorts* from paying
-    // the ~262 KiB DWARF backtrace-symbolizer floor. That floor survives
-    // `-dead_strip` whenever the default panic hook stays reachable, and
-    // `slice::sort_by` (total-order violation `panic!`) and `Vec` /
-    // `(0..n).collect()` (capacity-overflow `panic!`) each keep it
-    // reachable. This body has *no reachable panic*: every allocation is a
-    // null-checked raw `alloc` (no-op return on failure), indexing is
-    // unchecked pointer arithmetic, and there is no `unwrap`/`assert`. So
-    // the symbolizer dead-strips and the binary returns to its no-sort
-    // floor. See docs/implementation_checklist/phase-7-codegen.md
-    // "Lean large-N sort entry". Stability is required by design.md
-    // ("In-place stable sort"), which also rules out heapsort/introsort.
-    let idx_layout = match std::alloc::Layout::array::<usize>(n) {
-        Ok(l) => l,
-        Err(_) => return,
-    };
-    let tmp_layout = match std::alloc::Layout::from_size_align(total_bytes, 1) {
-        Ok(l) => l,
-        Err(_) => return,
-    };
-    let idx = std::alloc::alloc(idx_layout) as *mut usize;
-    if idx.is_null() {
-        return;
-    }
-    let buf = std::alloc::alloc(idx_layout) as *mut usize;
-    if buf.is_null() {
-        std::alloc::dealloc(idx as *mut u8, idx_layout);
-        return;
-    }
-    let tmp = std::alloc::alloc(tmp_layout);
-    if tmp.is_null() {
+        // Identity permutation.
+        let mut i = 0usize;
+        while i < n {
+            *idx.add(i) = i;
+            i += 1;
+        }
+
+        // Bottom-up merge: double the run width each pass, merging adjacent runs
+        // from `src` into `dst` and ping-ponging the two index buffers. `src`
+        // always points at the buffer holding the live permutation.
+        let mut src = idx;
+        let mut dst = buf;
+        let mut width = 1usize;
+        while width < n {
+            let mut lo = 0usize;
+            while lo < n {
+                let mid = (lo + width).min(n);
+                let hi = (lo + 2 * width).min(n);
+                let mut a = lo;
+                let mut b = mid;
+                let mut k = lo;
+                while a < mid && b < hi {
+                    let ia = *src.add(a);
+                    let ib = *src.add(b);
+                    // `<= 0` keeps the left (earlier) element first on a tie —
+                    // the stability guarantee.
+                    if cmp(ctx, data.add(ia * sz), data.add(ib * sz)) <= 0 {
+                        *dst.add(k) = ia;
+                        a += 1;
+                    } else {
+                        *dst.add(k) = ib;
+                        b += 1;
+                    }
+                    k += 1;
+                }
+                while a < mid {
+                    *dst.add(k) = *src.add(a);
+                    a += 1;
+                    k += 1;
+                }
+                while b < hi {
+                    *dst.add(k) = *src.add(b);
+                    b += 1;
+                    k += 1;
+                }
+                lo += 2 * width;
+            }
+            std::mem::swap(&mut src, &mut dst);
+            width *= 2;
+        }
+
+        // Permute the elements into sorted order via `tmp`, then copy back.
+        let mut k = 0usize;
+        while k < n {
+            let old_i = *src.add(k);
+            ptr::copy_nonoverlapping(data.add(old_i * sz), tmp.add(k * sz), sz);
+            k += 1;
+        }
+        ptr::copy_nonoverlapping(tmp, data, total_bytes);
+
         std::alloc::dealloc(idx as *mut u8, idx_layout);
         std::alloc::dealloc(buf as *mut u8, idx_layout);
-        return;
+        std::alloc::dealloc(tmp, tmp_layout);
     }
-
-    // Identity permutation.
-    let mut i = 0usize;
-    while i < n {
-        *idx.add(i) = i;
-        i += 1;
-    }
-
-    // Bottom-up merge: double the run width each pass, merging adjacent runs
-    // from `src` into `dst` and ping-ponging the two index buffers. `src`
-    // always points at the buffer holding the live permutation.
-    let mut src = idx;
-    let mut dst = buf;
-    let mut width = 1usize;
-    while width < n {
-        let mut lo = 0usize;
-        while lo < n {
-            let mid = (lo + width).min(n);
-            let hi = (lo + 2 * width).min(n);
-            let mut a = lo;
-            let mut b = mid;
-            let mut k = lo;
-            while a < mid && b < hi {
-                let ia = *src.add(a);
-                let ib = *src.add(b);
-                // `<= 0` keeps the left (earlier) element first on a tie —
-                // the stability guarantee.
-                if cmp(ctx, data.add(ia * sz), data.add(ib * sz)) <= 0 {
-                    *dst.add(k) = ia;
-                    a += 1;
-                } else {
-                    *dst.add(k) = ib;
-                    b += 1;
-                }
-                k += 1;
-            }
-            while a < mid {
-                *dst.add(k) = *src.add(a);
-                a += 1;
-                k += 1;
-            }
-            while b < hi {
-                *dst.add(k) = *src.add(b);
-                b += 1;
-                k += 1;
-            }
-            lo += 2 * width;
-        }
-        std::mem::swap(&mut src, &mut dst);
-        width *= 2;
-    }
-
-    // Permute the elements into sorted order via `tmp`, then copy back.
-    let mut k = 0usize;
-    while k < n {
-        let old_i = *src.add(k);
-        ptr::copy_nonoverlapping(data.add(old_i * sz), tmp.add(k * sz), sz);
-        k += 1;
-    }
-    ptr::copy_nonoverlapping(tmp, data, total_bytes);
-
-    std::alloc::dealloc(idx as *mut u8, idx_layout);
-    std::alloc::dealloc(buf as *mut u8, idx_layout);
-    std::alloc::dealloc(tmp, tmp_layout);
 }
 
 /// Type-specialized ascending sort for a `Vec` of 8-byte integer elements.
@@ -8511,14 +8689,16 @@ pub unsafe extern "C" fn karac_vec_sort_by(
 /// `data` must point to `len` contiguous 8-byte integers, or be null.
 #[no_mangle]
 pub unsafe extern "C" fn karac_vec_sort_i64_8(data: *mut u8, len: i64, is_signed: i64) {
-    if data.is_null() || len < 2 {
-        return;
-    }
-    let n = len as usize;
-    if is_signed != 0 {
-        std::slice::from_raw_parts_mut(data as *mut i64, n).sort_unstable();
-    } else {
-        std::slice::from_raw_parts_mut(data as *mut u64, n).sort_unstable();
+    unsafe {
+        if data.is_null() || len < 2 {
+            return;
+        }
+        let n = len as usize;
+        if is_signed != 0 {
+            std::slice::from_raw_parts_mut(data as *mut i64, n).sort_unstable();
+        } else {
+            std::slice::from_raw_parts_mut(data as *mut u64, n).sort_unstable();
+        }
     }
 }
 
@@ -8533,22 +8713,24 @@ pub unsafe extern "C" fn karac_vec_sort_i64_8(data: *mut u8, len: i64, is_signed
 /// `elem_size <= 0` are accepted and produce a no-op.
 #[no_mangle]
 pub unsafe extern "C" fn karac_vec_reverse(data: *mut u8, len: i64, elem_size: i64) {
-    if data.is_null() || len < 2 || elem_size <= 0 {
-        return;
-    }
-    let n = len as usize;
-    let sz = elem_size as usize;
-    let mut tmp: Vec<u8> = vec![0u8; sz];
-    let mut lo = 0usize;
-    let mut hi = n - 1;
-    while lo < hi {
-        let lp = data.add(lo * sz);
-        let hp = data.add(hi * sz);
-        ptr::copy_nonoverlapping(lp, tmp.as_mut_ptr(), sz);
-        ptr::copy_nonoverlapping(hp, lp, sz);
-        ptr::copy_nonoverlapping(tmp.as_ptr(), hp, sz);
-        lo += 1;
-        hi -= 1;
+    unsafe {
+        if data.is_null() || len < 2 || elem_size <= 0 {
+            return;
+        }
+        let n = len as usize;
+        let sz = elem_size as usize;
+        let mut tmp: Vec<u8> = vec![0u8; sz];
+        let mut lo = 0usize;
+        let mut hi = n - 1;
+        while lo < hi {
+            let lp = data.add(lo * sz);
+            let hp = data.add(hi * sz);
+            ptr::copy_nonoverlapping(lp, tmp.as_mut_ptr(), sz);
+            ptr::copy_nonoverlapping(hp, lp, sz);
+            ptr::copy_nonoverlapping(tmp.as_ptr(), hp, sz);
+            lo += 1;
+            hi -= 1;
+        }
     }
 }
 
@@ -8573,23 +8755,25 @@ pub unsafe extern "C" fn karac_string_cmp(
     b_ptr: *const u8,
     b_len: i64,
 ) -> i64 {
-    let an = if a_len < 0 { 0 } else { a_len as usize };
-    let bn = if b_len < 0 { 0 } else { b_len as usize };
-    let prefix = an.min(bn);
-    if prefix > 0 {
-        let a_slice = std::slice::from_raw_parts(a_ptr, prefix);
-        let b_slice = std::slice::from_raw_parts(b_ptr, prefix);
-        match a_slice.cmp(b_slice) {
-            std::cmp::Ordering::Less => return -1,
-            std::cmp::Ordering::Greater => return 1,
-            std::cmp::Ordering::Equal => {}
+    unsafe {
+        let an = if a_len < 0 { 0 } else { a_len as usize };
+        let bn = if b_len < 0 { 0 } else { b_len as usize };
+        let prefix = an.min(bn);
+        if prefix > 0 {
+            let a_slice = std::slice::from_raw_parts(a_ptr, prefix);
+            let b_slice = std::slice::from_raw_parts(b_ptr, prefix);
+            match a_slice.cmp(b_slice) {
+                std::cmp::Ordering::Less => return -1,
+                std::cmp::Ordering::Greater => return 1,
+                std::cmp::Ordering::Equal => {}
+            }
         }
-    }
-    // Prefix equal — shorter string sorts first.
-    match an.cmp(&bn) {
-        std::cmp::Ordering::Less => -1,
-        std::cmp::Ordering::Equal => 0,
-        std::cmp::Ordering::Greater => 1,
+        // Prefix equal — shorter string sorts first.
+        match an.cmp(&bn) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }
     }
 }
 
@@ -8624,23 +8808,25 @@ pub unsafe extern "C" fn karac_secret_ct_eq(
     b_ptr: *const u8,
     b_len: i64,
 ) -> i64 {
-    let an = if a_len < 0 { 0 } else { a_len as usize };
-    let bn = if b_len < 0 { 0 } else { b_len as usize };
-    if an != bn {
-        return 0;
-    }
-    let mut acc: u8 = 0;
-    if an > 0 {
-        let a = std::slice::from_raw_parts(a_ptr, an);
-        let b = std::slice::from_raw_parts(b_ptr, an);
-        // `an == bn`, so the zip covers every byte — no data-dependent branch.
-        for (x, y) in a.iter().zip(b.iter()) {
-            acc |= x ^ y;
+    unsafe {
+        let an = if a_len < 0 { 0 } else { a_len as usize };
+        let bn = if b_len < 0 { 0 } else { b_len as usize };
+        if an != bn {
+            return 0;
         }
+        let mut acc: u8 = 0;
+        if an > 0 {
+            let a = std::slice::from_raw_parts(a_ptr, an);
+            let b = std::slice::from_raw_parts(b_ptr, an);
+            // `an == bn`, so the zip covers every byte — no data-dependent branch.
+            for (x, y) in a.iter().zip(b.iter()) {
+                acc |= x ^ y;
+            }
+        }
+        // `black_box` before the branch so the optimizer can't reason that a
+        // nonzero `acc` lets it exit the loop (or the comparison) early.
+        i64::from(std::hint::black_box(acc) == 0)
     }
-    // `black_box` before the branch so the optimizer can't reason that a
-    // nonzero `acc` lets it exit the loop (or the comparison) early.
-    i64::from(std::hint::black_box(acc) == 0)
 }
 
 /// Total-order compare on two `f64` values, returning `-1` / `0` / `+1`.
@@ -8704,17 +8890,19 @@ pub extern "C" fn karac_float_cmp(a: f64, b: f64) -> i64 {
 /// length (the `%.*s` / append-raw convention).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_f64_to_str(val: f64, buf: *mut u8, buf_len: i64) -> i64 {
-    let s = format!("{val}");
-    let bytes = s.as_bytes();
-    let n = (bytes.len() as i64).min(buf_len.max(0));
-    if !buf.is_null() && n > 0 {
-        // SAFETY: caller guarantees `buf_len` writable bytes; `n <= buf_len`
-        // and `n <= bytes.len()`, and the regions don't overlap (distinct
-        // allocations — a fresh `String` vs the caller's buffer). `unsafe fn`
-        // body is itself an unsafe context (edition 2021).
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n as usize);
+    unsafe {
+        let s = format!("{val}");
+        let bytes = s.as_bytes();
+        let n = (bytes.len() as i64).min(buf_len.max(0));
+        if !buf.is_null() && n > 0 {
+            // SAFETY: caller guarantees `buf_len` writable bytes; `n <= buf_len`
+            // and `n <= bytes.len()`, and the regions don't overlap (distinct
+            // allocations — a fresh `String` vs the caller's buffer). `unsafe fn`
+            // body is itself an unsafe context (edition 2021).
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n as usize);
+        }
+        n
     }
-    n
 }
 
 // ── Slice 5 test stand-ins for slice 3 globals ─────────────────────────────
@@ -9099,21 +9287,27 @@ mod tests {
     /// Branch fn: appends its id to a shared order log.
     /// ctx points at `(id: i64, log: *mut Vec<i64>)`.
     unsafe extern "C" fn seq_branch_log(ctx: *mut c_void, _cancel: *const AtomicBool) {
-        let (id, log) = *(ctx as *const (i64, *mut Vec<i64>));
-        (*log).push(id);
+        unsafe {
+            let (id, log) = *(ctx as *const (i64, *mut Vec<i64>));
+            (*log).push(id);
+        }
     }
 
     /// Branch fn: records whether the per-call cancel flag was set when
     /// it ran. ctx points at `*mut bool`.
     unsafe extern "C" fn seq_branch_observe_cancel(ctx: *mut c_void, cancel: *const AtomicBool) {
-        let slot = *(ctx as *const *mut bool);
-        *slot = (*cancel).load(Ordering::Relaxed);
+        unsafe {
+            let slot = *(ctx as *const *mut bool);
+            *slot = (*cancel).load(Ordering::Relaxed);
+        }
     }
 
     /// Branch fn: stores `true` through the per-call cancel flag —
     /// stands in for codegen's fail-fast store on a branch Err.
     unsafe extern "C" fn seq_branch_set_cancel(_ctx: *mut c_void, cancel: *const AtomicBool) {
-        (*cancel).store(true, Ordering::Relaxed);
+        unsafe {
+            (*cancel).store(true, Ordering::Relaxed);
+        }
     }
 
     #[test]
@@ -9473,11 +9667,13 @@ mod tests {
             ran_to_end: AtomicBool,
         }
         unsafe extern "C" fn branch(ctx: *mut c_void, cancel: *const AtomicBool) {
-            let c = &*(ctx as *const Ctx);
-            // Fire the region's cancel mid-run (as a sibling's fail-fast
-            // would). A running task must NOT be torn down by this.
-            (*cancel).store(true, Ordering::Relaxed);
-            c.ran_to_end.store(true, Ordering::Release);
+            unsafe {
+                let c = &*(ctx as *const Ctx);
+                // Fire the region's cancel mid-run (as a sibling's fail-fast
+                // would). A running task must NOT be torn down by this.
+                (*cancel).store(true, Ordering::Relaxed);
+                c.ran_to_end.store(true, Ordering::Release);
+            }
         }
         let ctx = Ctx {
             ran_to_end: AtomicBool::new(false),
@@ -10182,22 +10378,30 @@ mod tests {
     /// Identity-element init: write 0 into an i64 slot. Mirrors what
     /// codegen will emit for the `+` reduction on i64.
     unsafe extern "C" fn init_i64_zero(slot: *mut u8) {
-        *(slot as *mut i64) = 0;
+        unsafe {
+            *(slot as *mut i64) = 0;
+        }
     }
 
     /// Identity-element init: write 1 into an i64 slot. For `*` reductions.
     unsafe extern "C" fn init_i64_one(slot: *mut u8) {
-        *(slot as *mut i64) = 1;
+        unsafe {
+            *(slot as *mut i64) = 1;
+        }
     }
 
     /// Combine two i64 slots: `*dst += *src`. Mirrors the `+` op's combine.
     unsafe extern "C" fn combine_i64_add(dst: *mut u8, src: *const u8) {
-        *(dst as *mut i64) += *(src as *const i64);
+        unsafe {
+            *(dst as *mut i64) += *(src as *const i64);
+        }
     }
 
     /// Combine two i64 slots: `*dst *= *src`. Mirrors the `*` op's combine.
     unsafe extern "C" fn combine_i64_mul(dst: *mut u8, src: *const u8) {
-        *(dst as *mut i64) *= *(src as *const i64);
+        unsafe {
+            *(dst as *mut i64) *= *(src as *const i64);
+        }
     }
 
     /// Worker function for the canonical "sum k for k in [start, end)"
@@ -10210,11 +10414,13 @@ mod tests {
         _ctx: *mut c_void,
         _cancel: *const AtomicBool,
     ) {
-        let mut acc: i64 = *(slot as *const i64);
-        for k in start..end {
-            acc += k as i64;
+        unsafe {
+            let mut acc: i64 = *(slot as *const i64);
+            for k in start..end {
+                acc += k as i64;
+            }
+            *(slot as *mut i64) = acc;
         }
-        *(slot as *mut i64) = acc;
     }
 
     /// Worker function for "product (k+1) for k in [start, end)" — the
@@ -10227,11 +10433,13 @@ mod tests {
         _ctx: *mut c_void,
         _cancel: *const AtomicBool,
     ) {
-        let mut acc: i64 = *(slot as *const i64);
-        for k in start..end {
-            acc *= (k as i64) + 1;
+        unsafe {
+            let mut acc: i64 = *(slot as *const i64);
+            for k in start..end {
+                acc *= (k as i64) + 1;
+            }
+            *(slot as *mut i64) = acc;
         }
-        *(slot as *mut i64) = acc;
     }
 
     fn run_reduce(
@@ -10298,9 +10506,11 @@ mod tests {
         ctx: *mut c_void,
         _cancel: *const AtomicBool,
     ) {
-        let base = ctx as *const std::sync::atomic::AtomicI64;
-        for k in start..end {
-            (*base.add(k as usize)).fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            let base = ctx as *const std::sync::atomic::AtomicI64;
+            for k in start..end {
+                (*base.add(k as usize)).fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -10530,33 +10740,35 @@ mod tests {
         ctx: *mut c_void,
         _cancel: *const AtomicBool,
     ) {
-        let rc = &*(ctx as *const RecCtx);
-        let depth = super::PAR_REDUCE_DEPTH.with(|d| d.get()) as usize;
-        (*rc.max_depth).fetch_max(depth, std::sync::atomic::Ordering::SeqCst);
-        let mut acc: i64 = *(slot as *const i64);
-        for _ in start..end {
-            acc += 1;
+        unsafe {
+            let rc = &*(ctx as *const RecCtx);
+            let depth = super::PAR_REDUCE_DEPTH.with(|d| d.get()) as usize;
+            (*rc.max_depth).fetch_max(depth, std::sync::atomic::Ordering::SeqCst);
+            let mut acc: i64 = *(slot as *const i64);
+            for _ in start..end {
+                acc += 1;
+            }
+            if rc.levels > 0 {
+                let nested = RecCtx {
+                    max_depth: rc.max_depth,
+                    levels: rc.levels - 1,
+                };
+                let desc = KaracReduceDescriptor {
+                    iter_total: 8,
+                    slot_size: std::mem::size_of::<i64>() as u64,
+                    slot_align: std::mem::align_of::<i64>() as u64,
+                    init_slot: init_i64_zero,
+                    worker_fn: worker_recursive_reduce,
+                    combine_fn: combine_i64_add,
+                    ctx: &nested as *const RecCtx as *mut c_void,
+                    per_iter_cost_units: 0,
+                };
+                let mut nested_out: i64 = 0;
+                karac_par_reduce(&desc, &mut nested_out as *mut i64 as *mut u8, 0);
+                acc += nested_out;
+            }
+            *(slot as *mut i64) = acc;
         }
-        if rc.levels > 0 {
-            let nested = RecCtx {
-                max_depth: rc.max_depth,
-                levels: rc.levels - 1,
-            };
-            let desc = KaracReduceDescriptor {
-                iter_total: 8,
-                slot_size: std::mem::size_of::<i64>() as u64,
-                slot_align: std::mem::align_of::<i64>() as u64,
-                init_slot: init_i64_zero,
-                worker_fn: worker_recursive_reduce,
-                combine_fn: combine_i64_add,
-                ctx: &nested as *const RecCtx as *mut c_void,
-                per_iter_cost_units: 0,
-            };
-            let mut nested_out: i64 = 0;
-            karac_par_reduce(&desc, &mut nested_out as *mut i64 as *mut u8, 0);
-            acc += nested_out;
-        }
-        *(slot as *mut i64) = acc;
     }
 
     /// The depth cap bounds recursive-reduction nesting: no worker runs
@@ -10621,13 +10833,15 @@ mod tests {
         ctx: *mut c_void,
         _cancel: *const AtomicBool,
     ) {
-        let counter = &*(ctx as *const AtomicUsize);
-        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let mut acc: i64 = *(slot as *const i64);
-        for k in start..end {
-            acc += k as i64;
+        unsafe {
+            let counter = &*(ctx as *const AtomicUsize);
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut acc: i64 = *(slot as *const i64);
+            for k in start..end {
+                acc += k as i64;
+            }
+            *(slot as *mut i64) = acc;
         }
-        *(slot as *mut i64) = acc;
     }
 
     /// Build a descriptor with an explicit per_iter cost. Mirrors
@@ -10875,13 +11089,15 @@ mod tests {
     /// production caller-side ownership contract.
     #[cfg(feature = "tls")]
     unsafe fn take_owned_buffer(ptr: *mut u8, len: i64) -> Vec<u8> {
-        if ptr.is_null() || len <= 0 {
-            return Vec::new();
+        unsafe {
+            if ptr.is_null() || len <= 0 {
+                return Vec::new();
+            }
+            let slice = std::slice::from_raw_parts(ptr, len as usize);
+            let v = slice.to_vec();
+            free(ptr as *mut std::os::raw::c_void);
+            v
         }
-        let slice = std::slice::from_raw_parts(ptr, len as usize);
-        let v = slice.to_vec();
-        free(ptr as *mut std::os::raw::c_void);
-        v
     }
 
     /// Phase-8 line 48 — real HTTPS round-trip against a public

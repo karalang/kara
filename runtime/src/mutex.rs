@@ -28,8 +28,6 @@
 //! lock — so an unlock that lands between a waiter's flag-check and its sleep
 //! cannot be missed (the notify blocks until the waiter is actually parked).
 
-#![allow(clippy::missing_safety_doc)]
-
 // ── Threads-capable targets: native (any feature set) + wasm32 with threads ──
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 mod parking {
@@ -64,23 +62,25 @@ mod parking {
     /// (`2`) and parks on the bucketed condvar, re-marking contended on each
     /// retry so an unlock always observes `2` and wakes us.
     pub unsafe fn lock(flag: *mut i64) {
-        let a = AtomicI64::from_ptr(flag);
-        // Mark contended and read the prior state. If it was already free
-        // (`0`), we just took the lock; otherwise park-retry until it is.
-        let mut c = a.swap(2, SeqCst);
-        while c != 0 {
-            let b = bucket_for(flag as usize);
-            let guard = b.mtx.lock().unwrap_or_else(|p| p.into_inner());
-            // Only sleep if the lock is still held-contended. The check is
-            // under the bucket lock, and `unlock_wake` notifies under the same
-            // lock, so a release racing this check cannot be lost: either we
-            // observe `!= 2` here and retry the swap immediately, or we sleep
-            // and the release's notify (which must take the bucket lock) wakes
-            // us once we are parked.
-            if a.load(SeqCst) == 2 {
-                let _unused = b.cv.wait(guard).unwrap_or_else(|p| p.into_inner());
+        unsafe {
+            let a = AtomicI64::from_ptr(flag);
+            // Mark contended and read the prior state. If it was already free
+            // (`0`), we just took the lock; otherwise park-retry until it is.
+            let mut c = a.swap(2, SeqCst);
+            while c != 0 {
+                let b = bucket_for(flag as usize);
+                let guard = b.mtx.lock().unwrap_or_else(|p| p.into_inner());
+                // Only sleep if the lock is still held-contended. The check is
+                // under the bucket lock, and `unlock_wake` notifies under the same
+                // lock, so a release racing this check cannot be lost: either we
+                // observe `!= 2` here and retry the swap immediately, or we sleep
+                // and the release's notify (which must take the bucket lock) wakes
+                // us once we are parked.
+                if a.load(SeqCst) == 2 {
+                    let _unused = b.cv.wait(guard).unwrap_or_else(|p| p.into_inner());
+                }
+                c = a.swap(2, SeqCst);
             }
-            c = a.swap(2, SeqCst);
         }
     }
 
@@ -106,12 +106,14 @@ mod parking {
 #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
 mod parking {
     pub unsafe fn lock(flag: *mut i64) {
-        loop {
-            if core::ptr::read_volatile(flag) == 0 {
-                core::ptr::write_volatile(flag, 2);
-                return;
+        unsafe {
+            loop {
+                if core::ptr::read_volatile(flag) == 0 {
+                    core::ptr::write_volatile(flag, 2);
+                    return;
+                }
+                core::hint::spin_loop();
             }
-            core::hint::spin_loop();
         }
     }
 
@@ -119,13 +121,30 @@ mod parking {
 }
 
 /// Slow-path lock acquire. See module docs / `parking::lock`.
+///
+/// # Safety
+/// `flag` must point to a live, ≥8-byte-aligned i64 mutex word emitted by
+/// codegen (states 0/1/2 per the module docs), reachable by every thread that
+/// locks it, for as long as any of them can. Call only after the inline
+/// `cmpxchg(0 → 1)` fast path failed; a mismatched or dangling flag corrupts
+/// an unrelated lock word.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_mutex_lock(flag: *mut i64) {
-    parking::lock(flag);
+    unsafe {
+        parking::lock(flag);
+    }
 }
 
 /// Slow-path unlock wake. See module docs / `parking::unlock_wake`.
+///
+/// # Safety
+/// Same `flag` contract as `karac_runtime_mutex_lock`. Call only from the
+/// holder's release path after its `xchg(→ 0)` observed contended state `2`;
+/// waking on a word that was never locked through this pair is sound but
+/// signals a codegen bug.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_mutex_unlock_wake(flag: *mut i64) {
-    parking::unlock_wake(flag);
+    unsafe {
+        parking::unlock_wake(flag);
+    }
 }

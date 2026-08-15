@@ -84,23 +84,25 @@ pub unsafe extern "C" fn karac_runtime_interner_intern(
     ptr: *const u8,
     len: i64,
 ) -> i64 {
-    if handle.is_null() || len < 0 || (ptr.is_null() && len > 0) {
-        return -1;
+    unsafe {
+        if handle.is_null() || len < 0 || (ptr.is_null() && len > 0) {
+            return -1;
+        }
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(ptr, len as usize)
+        };
+        let mut inner = (*handle).inner.lock().unwrap();
+        if let Some(existing) = inner.index.get(bytes) {
+            return *existing;
+        }
+        let fresh = inner.strings.len() as i64;
+        let stored: Box<[u8]> = bytes.into();
+        inner.strings.push(stored.clone());
+        inner.index.insert(stored, fresh);
+        fresh
     }
-    let bytes: &[u8] = if len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(ptr, len as usize)
-    };
-    let mut inner = (*handle).inner.lock().unwrap();
-    if let Some(existing) = inner.index.get(bytes) {
-        return *existing;
-    }
-    let fresh = inner.strings.len() as i64;
-    let stored: Box<[u8]> = bytes.into();
-    inner.strings.push(stored.clone());
-    inner.index.insert(stored, fresh);
-    fresh
 }
 
 /// `interner.resolve(sym)` — stable borrow pointer to the interned bytes at
@@ -118,22 +120,24 @@ pub unsafe extern "C" fn karac_runtime_interner_resolve(
     id: i64,
     out_len: *mut i64,
 ) -> *const u8 {
-    if !out_len.is_null() {
-        *out_len = 0;
-    }
-    if handle.is_null() || out_len.is_null() {
-        return ptr::NonNull::<u8>::dangling().as_ptr();
-    }
-    let inner = (*handle).inner.lock().unwrap();
-    match usize::try_from(id).ok().and_then(|i| inner.strings.get(i)) {
-        Some(bytes) => {
-            *out_len = bytes.len() as i64;
-            // Stable: the Box<[u8]> buffer never moves (the Vec growing
-            // relocates the box headers, not the bytes) and entries live
-            // until `interner_free`.
-            bytes.as_ptr()
+    unsafe {
+        if !out_len.is_null() {
+            *out_len = 0;
         }
-        None => ptr::NonNull::<u8>::dangling().as_ptr(),
+        if handle.is_null() || out_len.is_null() {
+            return ptr::NonNull::<u8>::dangling().as_ptr();
+        }
+        let inner = (*handle).inner.lock().unwrap();
+        match usize::try_from(id).ok().and_then(|i| inner.strings.get(i)) {
+            Some(bytes) => {
+                *out_len = bytes.len() as i64;
+                // Stable: the Box<[u8]> buffer never moves (the Vec growing
+                // relocates the box headers, not the bytes) and entries live
+                // until `interner_free`.
+                bytes.as_ptr()
+            }
+            None => ptr::NonNull::<u8>::dangling().as_ptr(),
+        }
     }
 }
 
@@ -145,11 +149,13 @@ pub unsafe extern "C" fn karac_runtime_interner_resolve(
 /// `karac_runtime_interner_new`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_interner_len(handle: *mut KaracInterner) -> i64 {
-    if handle.is_null() {
-        return 0;
+    unsafe {
+        if handle.is_null() {
+            return 0;
+        }
+        let inner = (*handle).inner.lock().unwrap();
+        inner.strings.len() as i64
     }
-    let inner = (*handle).inner.lock().unwrap();
-    inner.strings.len() as i64
 }
 
 /// Free an interner and every stored byte string. Called by codegen's
@@ -163,10 +169,12 @@ pub unsafe extern "C" fn karac_runtime_interner_len(handle: *mut KaracInterner) 
 /// `karac_runtime_interner_new`; consumes it (must not be used afterward).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_interner_free(handle: *mut KaracInterner) {
-    if handle.is_null() {
-        return;
+    unsafe {
+        if handle.is_null() {
+            return;
+        }
+        drop(Box::from_raw(handle));
     }
-    drop(Box::from_raw(handle));
 }
 
 #[cfg(test)]

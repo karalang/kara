@@ -97,33 +97,35 @@ pub unsafe extern "C" fn karac_runtime_once_set(
     src: *const u8,
     value_size: i64,
 ) -> u8 {
-    if handle.is_null() || src.is_null() || value_size < 0 {
-        return 0;
-    }
-    let cell = &*handle;
-    let mut inner = cell.inner.lock().unwrap();
-    if inner.value.is_some() {
-        return 0; // already set — reject, leave the stored value untouched.
-    }
-    let size = value_size as usize;
-    let buf = if size == 0 {
-        // Zero-sized `T` (e.g. `Unit`): no allocation, but still "set". Use a
-        // dangling-but-nonnull marker so `get` returns non-null.
-        ptr::NonNull::<u8>::dangling().as_ptr()
-    } else {
-        let layout = Layout::from_size_align(size, 8).expect("once value layout");
-        let p = alloc(layout);
-        if p.is_null() {
-            std::alloc::handle_alloc_error(layout);
+    unsafe {
+        if handle.is_null() || src.is_null() || value_size < 0 {
+            return 0;
         }
-        ptr::copy_nonoverlapping(src, p, size);
-        p
-    };
-    inner.value = Some((buf, size));
-    // Release: a reader that observes state==1 (Acquire) sees the installed
-    // buffer bytes too.
-    cell.state.store(1, Ordering::Release);
-    1
+        let cell = &*handle;
+        let mut inner = cell.inner.lock().unwrap();
+        if inner.value.is_some() {
+            return 0; // already set — reject, leave the stored value untouched.
+        }
+        let size = value_size as usize;
+        let buf = if size == 0 {
+            // Zero-sized `T` (e.g. `Unit`): no allocation, but still "set". Use a
+            // dangling-but-nonnull marker so `get` returns non-null.
+            ptr::NonNull::<u8>::dangling().as_ptr()
+        } else {
+            let layout = Layout::from_size_align(size, 8).expect("once value layout");
+            let p = alloc(layout);
+            if p.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            ptr::copy_nonoverlapping(src, p, size);
+            p
+        };
+        inner.value = Some((buf, size));
+        // Release: a reader that observes state==1 (Acquire) sees the installed
+        // buffer bytes too.
+        cell.state.store(1, Ordering::Release);
+        1
+    }
 }
 
 /// `cell.get()` — return a stable borrow pointer into the sealed value, or
@@ -135,17 +137,19 @@ pub unsafe extern "C" fn karac_runtime_once_set(
 /// `handle` must be a live `*mut KaracOnce` from `karac_runtime_once_new`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_once_get(handle: *mut KaracOnce) -> *mut u8 {
-    if handle.is_null() {
-        return ptr::null_mut();
-    }
-    let cell = &*handle;
-    if cell.state.load(Ordering::Acquire) == 0 {
-        return ptr::null_mut();
-    }
-    let inner = cell.inner.lock().unwrap();
-    match inner.value {
-        Some((p, _)) => p,
-        None => ptr::null_mut(),
+    unsafe {
+        if handle.is_null() {
+            return ptr::null_mut();
+        }
+        let cell = &*handle;
+        if cell.state.load(Ordering::Acquire) == 0 {
+            return ptr::null_mut();
+        }
+        let inner = cell.inner.lock().unwrap();
+        match inner.value {
+            Some((p, _)) => p,
+            None => ptr::null_mut(),
+        }
     }
 }
 
@@ -155,10 +159,12 @@ pub unsafe extern "C" fn karac_runtime_once_get(handle: *mut KaracOnce) -> *mut 
 /// `handle` must be a live `*mut KaracOnce` from `karac_runtime_once_new`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_once_is_set(handle: *mut KaracOnce) -> u8 {
-    if handle.is_null() {
-        return 0;
+    unsafe {
+        if handle.is_null() {
+            return 0;
+        }
+        (*handle).state.load(Ordering::Acquire)
     }
-    (*handle).state.load(Ordering::Acquire)
 }
 
 /// Free a write-once cell and its sealed value buffer. Called by codegen's
@@ -174,15 +180,17 @@ pub unsafe extern "C" fn karac_runtime_once_is_set(handle: *mut KaracOnce) -> u8
 /// `karac_runtime_once_new`; consumes it (must not be used afterward).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_once_free(handle: *mut KaracOnce) {
-    if handle.is_null() {
-        return;
-    }
-    let cell = Box::from_raw(handle);
-    let inner = cell.inner.into_inner().unwrap();
-    if let Some((p, size)) = inner.value {
-        if size != 0 {
-            let layout = Layout::from_size_align(size, 8).expect("once value layout");
-            dealloc(p, layout);
+    unsafe {
+        if handle.is_null() {
+            return;
+        }
+        let cell = Box::from_raw(handle);
+        let inner = cell.inner.into_inner().unwrap();
+        if let Some((p, size)) = inner.value {
+            if size != 0 {
+                let layout = Layout::from_size_align(size, 8).expect("once value layout");
+                dealloc(p, layout);
+            }
         }
     }
 }

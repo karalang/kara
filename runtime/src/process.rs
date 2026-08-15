@@ -101,10 +101,12 @@ fn stdio_from_tag(tag: i64) -> Option<std::process::Stdio> {
 /// interpreter's lenient field readers — the typechecker guarantees
 /// UTF-8 Strings, so the fallback is belt-and-braces).
 unsafe fn str_view<'a>(s: *const RuntimeKaracString) -> &'a str {
-    if s.is_null() {
-        return "";
+    unsafe {
+        if s.is_null() {
+            return "";
+        }
+        std::str::from_utf8((*s).as_bytes()).unwrap_or("")
     }
-    std::str::from_utf8((*s).as_bytes()).unwrap_or("")
 }
 
 /// Pack an `ExitStatus` into the `wait` value word.
@@ -135,45 +137,47 @@ pub unsafe extern "C" fn karac_runtime_process_spawn(
     stdout_tag: i64,
     stderr_tag: i64,
 ) {
-    let mut cmd = std::process::Command::new(str_view(prog));
-    if !args_ptr.is_null() {
-        for i in 0..args_len.max(0) as usize {
-            cmd.arg(str_view(args_ptr.add(i)));
-        }
-    }
-    if !env_ptr.is_null() {
-        for i in 0..env_len.max(0) as usize {
-            let ev = &*env_ptr.add(i);
-            let key = std::str::from_utf8(ev.key.as_bytes()).unwrap_or("");
-            if key.is_empty() {
-                continue;
-            }
-            cmd.env(key, std::str::from_utf8(ev.value.as_bytes()).unwrap_or(""));
-        }
-    }
-    if let Some(cfg) = stdio_from_tag(stdin_tag) {
-        cmd.stdin(cfg);
-    }
-    if let Some(cfg) = stdio_from_tag(stdout_tag) {
-        cmd.stdout(cfg);
-    }
-    if let Some(cfg) = stdio_from_tag(stderr_tag) {
-        cmd.stderr(cfg);
-    }
-    let result = match cmd.spawn() {
-        Ok(child) => {
-            let pid = child.id() as i64;
-            if let Ok(mut table) = CHILD_TABLE.lock() {
-                table.insert(pid, child);
-                ok(pid)
-            } else {
-                not_found()
+    unsafe {
+        let mut cmd = std::process::Command::new(str_view(prog));
+        if !args_ptr.is_null() {
+            for i in 0..args_len.max(0) as usize {
+                cmd.arg(str_view(args_ptr.add(i)));
             }
         }
-        Err(e) => err(&e),
-    };
-    if !out.is_null() {
-        *out = result;
+        if !env_ptr.is_null() {
+            for i in 0..env_len.max(0) as usize {
+                let ev = &*env_ptr.add(i);
+                let key = std::str::from_utf8(ev.key.as_bytes()).unwrap_or("");
+                if key.is_empty() {
+                    continue;
+                }
+                cmd.env(key, std::str::from_utf8(ev.value.as_bytes()).unwrap_or(""));
+            }
+        }
+        if let Some(cfg) = stdio_from_tag(stdin_tag) {
+            cmd.stdin(cfg);
+        }
+        if let Some(cfg) = stdio_from_tag(stdout_tag) {
+            cmd.stdout(cfg);
+        }
+        if let Some(cfg) = stdio_from_tag(stderr_tag) {
+            cmd.stderr(cfg);
+        }
+        let result = match cmd.spawn() {
+            Ok(child) => {
+                let pid = child.id() as i64;
+                if let Ok(mut table) = CHILD_TABLE.lock() {
+                    table.insert(pid, child);
+                    ok(pid)
+                } else {
+                    not_found()
+                }
+            }
+            Err(e) => err(&e),
+        };
+        if !out.is_null() {
+            *out = result;
+        }
     }
 }
 
@@ -186,16 +190,18 @@ pub unsafe extern "C" fn karac_runtime_process_spawn(
 /// `out` must point at writable `KaracIoResult` storage.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_process_wait(out: *mut KaracIoResult, pid: i64) {
-    let child = CHILD_TABLE.lock().ok().and_then(|mut t| t.remove(&pid));
-    let result = match child {
-        Some(mut child) => match child.wait() {
-            Ok(status) => ok(pack_exit_status(status)),
-            Err(e) => err(&e),
-        },
-        None => not_found(),
-    };
-    if !out.is_null() {
-        *out = result;
+    unsafe {
+        let child = CHILD_TABLE.lock().ok().and_then(|mut t| t.remove(&pid));
+        let result = match child {
+            Some(mut child) => match child.wait() {
+                Ok(status) => ok(pack_exit_status(status)),
+                Err(e) => err(&e),
+            },
+            None => not_found(),
+        };
+        if !out.is_null() {
+            *out = result;
+        }
     }
 }
 
@@ -209,24 +215,26 @@ pub unsafe extern "C" fn karac_runtime_process_wait(out: *mut KaracIoResult, pid
 /// `out` must point at writable `KaracIoResult` storage.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_process_try_wait(out: *mut KaracIoResult, pid: i64) {
-    let result = match CHILD_TABLE.lock() {
-        Ok(mut table) => match table.get_mut(&pid) {
-            Some(child) => match child.try_wait() {
-                Ok(Some(status)) => {
-                    table.remove(&pid);
-                    let code = status.code().unwrap_or(-1) as i64;
-                    let success = status.success() as i64;
-                    ok((code << 2) | (success << 1) | 1)
-                }
-                Ok(None) => ok(0),
-                Err(e) => err(&e),
+    unsafe {
+        let result = match CHILD_TABLE.lock() {
+            Ok(mut table) => match table.get_mut(&pid) {
+                Some(child) => match child.try_wait() {
+                    Ok(Some(status)) => {
+                        table.remove(&pid);
+                        let code = status.code().unwrap_or(-1) as i64;
+                        let success = status.success() as i64;
+                        ok((code << 2) | (success << 1) | 1)
+                    }
+                    Ok(None) => ok(0),
+                    Err(e) => err(&e),
+                },
+                None => not_found(),
             },
-            None => not_found(),
-        },
-        Err(_) => not_found(),
-    };
-    if !out.is_null() {
-        *out = result;
+            Err(_) => not_found(),
+        };
+        if !out.is_null() {
+            *out = result;
+        }
     }
 }
 
@@ -239,18 +247,20 @@ pub unsafe extern "C" fn karac_runtime_process_try_wait(out: *mut KaracIoResult,
 /// `out` must point at writable `KaracIoResult` storage.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_process_kill(out: *mut KaracIoResult, pid: i64) {
-    let result = match CHILD_TABLE.lock() {
-        Ok(mut table) => match table.get_mut(&pid) {
-            Some(child) => match child.kill() {
-                Ok(()) => ok(0),
-                Err(e) => err(&e),
+    unsafe {
+        let result = match CHILD_TABLE.lock() {
+            Ok(mut table) => match table.get_mut(&pid) {
+                Some(child) => match child.kill() {
+                    Ok(()) => ok(0),
+                    Err(e) => err(&e),
+                },
+                None => not_found(),
             },
-            None => not_found(),
-        },
-        Err(_) => not_found(),
-    };
-    if !out.is_null() {
-        *out = result;
+            Err(_) => not_found(),
+        };
+        if !out.is_null() {
+            *out = result;
+        }
     }
 }
 
@@ -304,32 +314,34 @@ pub unsafe extern "C" fn karac_runtime_process_read_to_string(
     pid: i64,
     which: i64,
 ) {
-    let read: Option<std::io::Result<String>> = match which {
-        0 => STDOUT_TABLE
-            .lock()
-            .ok()
-            .and_then(|mut t| t.remove(&pid))
-            .map(|mut h| {
-                let mut buf = String::new();
-                h.read_to_string(&mut buf).map(|_| buf)
-            }),
-        1 => STDERR_TABLE
-            .lock()
-            .ok()
-            .and_then(|mut t| t.remove(&pid))
-            .map(|mut h| {
-                let mut buf = String::new();
-                h.read_to_string(&mut buf).map(|_| buf)
-            }),
-        _ => None,
-    };
-    let result = match read {
-        Some(Ok(s)) => ok_string(&s),
-        Some(Err(e)) => err(&e),
-        None => not_found(),
-    };
-    if !out.is_null() {
-        *out = result;
+    unsafe {
+        let read: Option<std::io::Result<String>> = match which {
+            0 => STDOUT_TABLE
+                .lock()
+                .ok()
+                .and_then(|mut t| t.remove(&pid))
+                .map(|mut h| {
+                    let mut buf = String::new();
+                    h.read_to_string(&mut buf).map(|_| buf)
+                }),
+            1 => STDERR_TABLE
+                .lock()
+                .ok()
+                .and_then(|mut t| t.remove(&pid))
+                .map(|mut h| {
+                    let mut buf = String::new();
+                    h.read_to_string(&mut buf).map(|_| buf)
+                }),
+            _ => None,
+        };
+        let result = match read {
+            Some(Ok(s)) => ok_string(&s),
+            Some(Err(e)) => err(&e),
+            None => not_found(),
+        };
+        if !out.is_null() {
+            *out = result;
+        }
     }
 }
 
@@ -347,23 +359,25 @@ pub unsafe extern "C" fn karac_runtime_process_stdin_write(
     pid: i64,
     data: *const RuntimeKaracString,
 ) {
-    let bytes: &[u8] = if data.is_null() {
-        &[]
-    } else {
-        (*data).as_bytes()
-    };
-    let result = match STDIN_TABLE.lock() {
-        Ok(mut table) => match table.get_mut(&pid) {
-            Some(h) => match h.write_all(bytes) {
-                Ok(()) => ok(0),
-                Err(e) => err(&e),
+    unsafe {
+        let bytes: &[u8] = if data.is_null() {
+            &[]
+        } else {
+            (*data).as_bytes()
+        };
+        let result = match STDIN_TABLE.lock() {
+            Ok(mut table) => match table.get_mut(&pid) {
+                Some(h) => match h.write_all(bytes) {
+                    Ok(()) => ok(0),
+                    Err(e) => err(&e),
+                },
+                None => not_found(),
             },
-            None => not_found(),
-        },
-        Err(_) => not_found(),
-    };
-    if !out.is_null() {
-        *out = result;
+            Err(_) => not_found(),
+        };
+        if !out.is_null() {
+            *out = result;
+        }
     }
 }
 

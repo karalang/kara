@@ -2050,62 +2050,64 @@ pub(crate) fn net_construct_error_code(e: &std::io::Error) -> i32 {
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i64 {
-    use socket2::{Domain, Socket, Type};
-    use std::os::unix::io::IntoRawFd;
-    if addr_ptr.is_null() || addr_len <= 0 {
-        return -1;
-    }
-    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
-    let addr_str = match std::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    // Parse the addr as a literal SocketAddr (host:port with host an IP
-    // literal). The kara stdlib never passes hostnames to this FFI — the
-    // demos use `127.0.0.1:0` / `0.0.0.0:<port>` shape — so a strict
-    // parse here is fine and avoids dragging DNS resolution into the
-    // listen-bind path.
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return -1,
-    };
-    let domain = if socket_addr.is_ipv4() {
-        Domain::IPV4
-    } else {
-        Domain::IPV6
-    };
-    let socket = match Socket::new(domain, Type::STREAM, None) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    // SO_REUSEADDR mirrors what std::net::TcpListener::bind sets
-    // implicitly on Unix; preserve that for parity with prior behavior.
-    let _ = socket.set_reuse_address(true);
-    // `bind`/`listen` failures carry a meaningful cause (EADDRINUSE when
-    // the port is taken, EACCES for a privileged port) — surface it via
-    // the stable code so callers can branch (phase-8 line 74).
-    if let Err(e) = socket.bind(&socket_addr.into()) {
-        return net_construct_error_code(&e) as i64;
-    }
-    if let Err(e) = socket.listen(KARAC_RUNTIME_TCP_LISTEN_BACKLOG) {
-        return net_construct_error_code(&e) as i64;
-    }
-    let listener: std::net::TcpListener = socket.into();
-    // Only print BOUND_PORT for ephemeral-port binds; a fixed-port
-    // bind doesn't need the readback since the caller already knows
-    // the port. Treat `addr_str` ending in `:0` (or `:00...`) as the
-    // ephemeral marker — the cheapest correct check is to look at
-    // the bound port relative to the requested port.
-    if addr_str.rsplit(':').next() == Some("0") {
-        if let Ok(local) = listener.local_addr() {
-            println!("BOUND_PORT={}", local.port());
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
+    unsafe {
+        use socket2::{Domain, Socket, Type};
+        use std::os::unix::io::IntoRawFd;
+        if addr_ptr.is_null() || addr_len <= 0 {
+            return -1;
         }
+        let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+        let addr_str = match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        // Parse the addr as a literal SocketAddr (host:port with host an IP
+        // literal). The kara stdlib never passes hostnames to this FFI — the
+        // demos use `127.0.0.1:0` / `0.0.0.0:<port>` shape — so a strict
+        // parse here is fine and avoids dragging DNS resolution into the
+        // listen-bind path.
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return -1,
+        };
+        let domain = if socket_addr.is_ipv4() {
+            Domain::IPV4
+        } else {
+            Domain::IPV6
+        };
+        let socket = match Socket::new(domain, Type::STREAM, None) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        // SO_REUSEADDR mirrors what std::net::TcpListener::bind sets
+        // implicitly on Unix; preserve that for parity with prior behavior.
+        let _ = socket.set_reuse_address(true);
+        // `bind`/`listen` failures carry a meaningful cause (EADDRINUSE when
+        // the port is taken, EACCES for a privileged port) — surface it via
+        // the stable code so callers can branch (phase-8 line 74).
+        if let Err(e) = socket.bind(&socket_addr.into()) {
+            return net_construct_error_code(&e) as i64;
+        }
+        if let Err(e) = socket.listen(KARAC_RUNTIME_TCP_LISTEN_BACKLOG) {
+            return net_construct_error_code(&e) as i64;
+        }
+        let listener: std::net::TcpListener = socket.into();
+        // Only print BOUND_PORT for ephemeral-port binds; a fixed-port
+        // bind doesn't need the readback since the caller already knows
+        // the port. Treat `addr_str` ending in `:0` (or `:00...`) as the
+        // ephemeral marker — the cheapest correct check is to look at
+        // the bound port relative to the requested port.
+        if addr_str.rsplit(':').next() == Some("0") {
+            if let Ok(local) = listener.local_addr() {
+                println!("BOUND_PORT={}", local.port());
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
+        }
+        // i64 fd ABI: Unix `RawFd` (i32) sign-extends losslessly. See
+        // `karac_runtime_test_bind_and_print_port` for the rationale.
+        listener.into_raw_fd() as i64
     }
-    // i64 fd ABI: Unix `RawFd` (i32) sign-extends losslessly. See
-    // `karac_runtime_test_bind_and_print_port` for the rationale.
-    listener.into_raw_fd() as i64
 }
 
 /// Raw `accept(2)` on a listener fd. Does NOT park — the caller is
@@ -2173,27 +2175,29 @@ pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i64) -> i64 {
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len: i64) -> i64 {
-    use std::os::unix::io::IntoRawFd;
-    if addr_ptr.is_null() || addr_len <= 0 {
-        return -1;
-    }
-    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
-    let addr_str = match std::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    // Strict literal `SocketAddr` parse — same posture as
-    // `karac_runtime_tcp_bind` / `_tls_client_connect`: the stdlib
-    // never hands a hostname to this FFI, so no DNS resolution path.
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return -1,
-    };
-    match std::net::TcpStream::connect(socket_addr) {
-        Ok(sock) => sock.into_raw_fd() as i64,
-        // ECONNREFUSED (server not up) vs a fatal cause is exactly the
-        // distinction a reconnect loop needs — surface it (line 74).
-        Err(e) => net_construct_error_code(&e) as i64,
+    unsafe {
+        use std::os::unix::io::IntoRawFd;
+        if addr_ptr.is_null() || addr_len <= 0 {
+            return -1;
+        }
+        let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+        let addr_str = match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        // Strict literal `SocketAddr` parse — same posture as
+        // `karac_runtime_tcp_bind` / `_tls_client_connect`: the stdlib
+        // never hands a hostname to this FFI, so no DNS resolution path.
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return -1,
+        };
+        match std::net::TcpStream::connect(socket_addr) {
+            Ok(sock) => sock.into_raw_fd() as i64,
+            // ECONNREFUSED (server not up) vs a fatal cause is exactly the
+            // distinction a reconnect loop needs — surface it (line 74).
+            Err(e) => net_construct_error_code(&e) as i64,
+        }
     }
 }
 
@@ -2223,29 +2227,31 @@ pub unsafe extern "C" fn karac_runtime_tcp_connect_start(
     addr_ptr: *const u8,
     addr_len: i64,
 ) -> i64 {
-    use socket2::{Domain, SockAddr, Socket, Type};
-    use std::os::unix::io::IntoRawFd;
-    if addr_ptr.is_null() || addr_len <= 0 {
-        return -1;
+    unsafe {
+        use socket2::{Domain, SockAddr, Socket, Type};
+        use std::os::unix::io::IntoRawFd;
+        if addr_ptr.is_null() || addr_len <= 0 {
+            return -1;
+        }
+        let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+        let addr_str = match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return -1,
+        };
+        let sock = match Socket::new(Domain::for_address(socket_addr), Type::STREAM, None) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        if sock.set_nonblocking(true).is_err() {
+            return -1;
+        }
+        let _ = sock.connect(&SockAddr::from(socket_addr));
+        sock.into_raw_fd() as i64
     }
-    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
-    let addr_str = match std::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return -1,
-    };
-    let sock = match Socket::new(Domain::for_address(socket_addr), Type::STREAM, None) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    if sock.set_nonblocking(true).is_err() {
-        return -1;
-    }
-    let _ = sock.connect(&SockAddr::from(socket_addr));
-    sock.into_raw_fd() as i64
 }
 
 /// Complete a parked non-blocking connect: read `SO_ERROR` on the now
@@ -2262,25 +2268,27 @@ pub unsafe extern "C" fn karac_runtime_tcp_connect_start(
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_connect_finish(fd: i64) -> i64 {
-    use socket2::Socket;
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
-    let sock = Socket::from_raw_fd(fd as i32);
-    match sock.take_error() {
-        // Connected — keep the fd open (no close).
-        Ok(None) => sock.into_raw_fd() as i64,
-        // Connect failed — classify the SO_ERROR the same way the blocking
-        // `karac_runtime_tcp_connect` did (`-3` ConnectionRefused / `-1` other)
-        // so the `ConnectionRefused` retry signal survives; `sock` drop closes
-        // the fd (no leak).
-        Ok(Some(e)) => {
-            let code = net_construct_error_code(&e) as i64;
-            drop(sock);
-            code
-        }
-        Err(e) => {
-            let code = net_construct_error_code(&e) as i64;
-            drop(sock);
-            code
+    unsafe {
+        use socket2::Socket;
+        use std::os::unix::io::{FromRawFd, IntoRawFd};
+        let sock = Socket::from_raw_fd(fd as i32);
+        match sock.take_error() {
+            // Connected — keep the fd open (no close).
+            Ok(None) => sock.into_raw_fd() as i64,
+            // Connect failed — classify the SO_ERROR the same way the blocking
+            // `karac_runtime_tcp_connect` did (`-3` ConnectionRefused / `-1` other)
+            // so the `ConnectionRefused` retry signal survives; `sock` drop closes
+            // the fd (no leak).
+            Ok(Some(e)) => {
+                let code = net_construct_error_code(&e) as i64;
+                drop(sock);
+                code
+            }
+            Err(e) => {
+                let code = net_construct_error_code(&e) as i64;
+                drop(sock);
+                code
+            }
         }
     }
 }
@@ -2486,34 +2494,36 @@ pub unsafe extern "C" fn karac_runtime_tcp_read(
     buf_ptr: *mut u8,
     buf_len: i64,
 ) -> i64 {
-    use std::io::Read;
-    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
-    if stream_fd < 0 {
-        return -1;
-    }
-    if buf_ptr.is_null() || buf_len <= 0 {
-        return 0;
-    }
-    let buf = std::slice::from_raw_parts_mut(buf_ptr, buf_len as usize);
-    // i64 fd ABI → narrow to `RawFd` (i32) for the Unix `std::net` wrapper.
-    // SAFETY: the stream_fd must come from a successful
-    // `karac_runtime_tcp_accept` call (or equivalent). Borrowed
-    // TcpStream wrapper avoids destructor while reading.
-    let mut stream = std::net::TcpStream::from_raw_fd(stream_fd as RawFd);
-    let result = match stream.read(buf) {
-        Ok(n) => n as i64,
-        Err(e) => {
-            let errno = e.raw_os_error().unwrap_or(1);
-            if errno > 0 {
-                -(errno as i64)
-            } else {
-                -1
-            }
+    unsafe {
+        use std::io::Read;
+        use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+        if stream_fd < 0 {
+            return -1;
         }
-    };
-    // Release ownership of the stream fd back to the caller.
-    let _ = stream.into_raw_fd();
-    result
+        if buf_ptr.is_null() || buf_len <= 0 {
+            return 0;
+        }
+        let buf = std::slice::from_raw_parts_mut(buf_ptr, buf_len as usize);
+        // i64 fd ABI → narrow to `RawFd` (i32) for the Unix `std::net` wrapper.
+        // SAFETY: the stream_fd must come from a successful
+        // `karac_runtime_tcp_accept` call (or equivalent). Borrowed
+        // TcpStream wrapper avoids destructor while reading.
+        let mut stream = std::net::TcpStream::from_raw_fd(stream_fd as RawFd);
+        let result = match stream.read(buf) {
+            Ok(n) => n as i64,
+            Err(e) => {
+                let errno = e.raw_os_error().unwrap_or(1);
+                if errno > 0 {
+                    -(errno as i64)
+                } else {
+                    -1
+                }
+            }
+        };
+        // Release ownership of the stream fd back to the caller.
+        let _ = stream.into_raw_fd();
+        result
+    }
 }
 
 /// Raw `write(2)` on a connection fd from the caller-provided
@@ -2546,34 +2556,36 @@ pub unsafe extern "C" fn karac_runtime_tcp_write(
     buf_ptr: *const u8,
     buf_len: i64,
 ) -> i64 {
-    use std::io::Write;
-    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
-    if stream_fd < 0 {
-        return -1;
-    }
-    if buf_ptr.is_null() || buf_len <= 0 {
-        return 0;
-    }
-    let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
-    // i64 fd ABI → narrow to `RawFd` (i32) for the Unix `std::net` wrapper.
-    // SAFETY: the stream_fd must come from a successful
-    // `karac_runtime_tcp_accept` call (or equivalent). Borrowed
-    // TcpStream wrapper avoids destructor while writing.
-    let mut stream = std::net::TcpStream::from_raw_fd(stream_fd as RawFd);
-    let result = match stream.write(buf) {
-        Ok(n) => n as i64,
-        Err(e) => {
-            let errno = e.raw_os_error().unwrap_or(1);
-            if errno > 0 {
-                -(errno as i64)
-            } else {
-                -1
-            }
+    unsafe {
+        use std::io::Write;
+        use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+        if stream_fd < 0 {
+            return -1;
         }
-    };
-    // Release ownership of the stream fd back to the caller.
-    let _ = stream.into_raw_fd();
-    result
+        if buf_ptr.is_null() || buf_len <= 0 {
+            return 0;
+        }
+        let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
+        // i64 fd ABI → narrow to `RawFd` (i32) for the Unix `std::net` wrapper.
+        // SAFETY: the stream_fd must come from a successful
+        // `karac_runtime_tcp_accept` call (or equivalent). Borrowed
+        // TcpStream wrapper avoids destructor while writing.
+        let mut stream = std::net::TcpStream::from_raw_fd(stream_fd as RawFd);
+        let result = match stream.write(buf) {
+            Ok(n) => n as i64,
+            Err(e) => {
+                let errno = e.raw_os_error().unwrap_or(1);
+                if errno > 0 {
+                    -(errno as i64)
+                } else {
+                    -1
+                }
+            }
+        };
+        // Release ownership of the stream fd back to the caller.
+        let _ = stream.into_raw_fd();
+        result
+    }
 }
 
 // ── TCP close FFI (stdlib `TcpStream` / `TcpListener` Drop dispatch) ─────
@@ -2999,7 +3011,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_text(
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
-    ws_send_data_frame(fd, msg_ptr, msg_len, 0x1)
+    unsafe { ws_send_data_frame(fd, msg_ptr, msg_len, 0x1) }
 }
 
 /// BINARY counterpart to `karac_runtime_ws_send_text` — same shape
@@ -3017,7 +3029,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_binary(
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
-    ws_send_data_frame(fd, msg_ptr, msg_len, 0x2)
+    unsafe { ws_send_data_frame(fd, msg_ptr, msg_len, 0x2) }
 }
 
 /// Slice 9e.4 — client-side masked send. RFC 6455 §5.1 requires
@@ -3046,7 +3058,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_text_masked(
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
-    ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x1)
+    unsafe { ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x1) }
 }
 
 /// BINARY counterpart to `karac_runtime_ws_send_text_masked`.
@@ -3061,7 +3073,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_binary_masked(
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
-    ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x2)
+    unsafe { ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x2) }
 }
 
 /// Read 4 bytes of randomness for the client-side mask key. `/dev/urandom` is
@@ -3148,28 +3160,30 @@ fn ws_write_masked_frame<W: std::io::Write>(stream: &mut W, opcode: u8, payload:
 /// Shared body for masked text + binary send.
 #[cfg(unix)]
 unsafe fn ws_send_masked_data_frame(fd: i64, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
-    if fd < 0 || msg_len < 0 {
-        return -1;
+    unsafe {
+        use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+        if fd < 0 || msg_len < 0 {
+            return -1;
+        }
+        // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `register_fd_impl`.
+        let fd = fd as RawFd;
+        if msg_ptr.is_null() && msg_len > 0 {
+            return -1;
+        }
+        let mut stream = std::net::TcpStream::from_raw_fd(fd);
+        let payload: &[u8] = if msg_len > 0 {
+            std::slice::from_raw_parts(msg_ptr, msg_len as usize)
+        } else {
+            &[]
+        };
+        let result = if ws_write_masked_frame(&mut stream, opcode, payload) {
+            msg_len
+        } else {
+            -1
+        };
+        let _ = stream.into_raw_fd();
+        result
     }
-    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `register_fd_impl`.
-    let fd = fd as RawFd;
-    if msg_ptr.is_null() && msg_len > 0 {
-        return -1;
-    }
-    let mut stream = std::net::TcpStream::from_raw_fd(fd);
-    let payload: &[u8] = if msg_len > 0 {
-        std::slice::from_raw_parts(msg_ptr, msg_len as usize)
-    } else {
-        &[]
-    };
-    let result = if ws_write_masked_frame(&mut stream, opcode, payload) {
-        msg_len
-    } else {
-        -1
-    };
-    let _ = stream.into_raw_fd();
-    result
 }
 
 /// Shared body for text + binary send. `opcode` is `0x1` (text) or
@@ -3177,54 +3191,56 @@ unsafe fn ws_send_masked_data_frame(fd: i64, msg_ptr: *const u8, msg_len: i64, o
 /// (FIN=1) payload write.
 #[cfg(unix)]
 unsafe fn ws_send_data_frame(fd: i64, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
-    if fd < 0 || msg_len < 0 {
-        return -1;
-    }
-    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `register_fd_impl`.
-    // The TLS session map is keyed by this narrowed fd (register + lookup
-    // both narrow identically), so the key stays consistent on Unix.
-    let fd = fd as RawFd;
-    if msg_ptr.is_null() && msg_len > 0 {
-        return -1;
-    }
-    let payload: &[u8] = if msg_len > 0 {
-        std::slice::from_raw_parts(msg_ptr, msg_len as usize)
-    } else {
-        &[]
-    };
-
-    // Phase 6 line 236 slice 3 — TLS-aware dispatch. If the fd was
-    // registered via `karac_runtime_ws_accept_tls` (or any other
-    // path that called `tls::register_session_for_fd`), the WS
-    // framing must encrypt through rustls. Otherwise plain TCP.
-    // Gated behind the `tls` feature: the lean archive has no TLS
-    // sessions, so this path can never fire there and is compiled out.
-    #[cfg(feature = "tls")]
-    if let Some(session) = crate::tls::lookup_session(fd) {
-        let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
-        let mut sock = std::net::TcpStream::from_raw_fd(fd);
-        let mut transport = TlsConnIo {
-            conn: &mut sess.conn,
-            sock: &mut sock,
+    unsafe {
+        use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+        if fd < 0 || msg_len < 0 {
+            return -1;
+        }
+        // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `register_fd_impl`.
+        // The TLS session map is keyed by this narrowed fd (register + lookup
+        // both narrow identically), so the key stays consistent on Unix.
+        let fd = fd as RawFd;
+        if msg_ptr.is_null() && msg_len > 0 {
+            return -1;
+        }
+        let payload: &[u8] = if msg_len > 0 {
+            std::slice::from_raw_parts(msg_ptr, msg_len as usize)
+        } else {
+            &[]
         };
-        let result = if ws_write_unmasked_frame(&mut transport, opcode, payload) {
+
+        // Phase 6 line 236 slice 3 — TLS-aware dispatch. If the fd was
+        // registered via `karac_runtime_ws_accept_tls` (or any other
+        // path that called `tls::register_session_for_fd`), the WS
+        // framing must encrypt through rustls. Otherwise plain TCP.
+        // Gated behind the `tls` feature: the lean archive has no TLS
+        // sessions, so this path can never fire there and is compiled out.
+        #[cfg(feature = "tls")]
+        if let Some(session) = crate::tls::lookup_session(fd) {
+            let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
+            let mut sock = std::net::TcpStream::from_raw_fd(fd);
+            let mut transport = TlsConnIo {
+                conn: &mut sess.conn,
+                sock: &mut sock,
+            };
+            let result = if ws_write_unmasked_frame(&mut transport, opcode, payload) {
+                msg_len
+            } else {
+                -1
+            };
+            let _ = sock.into_raw_fd();
+            return result;
+        }
+
+        let mut stream = std::net::TcpStream::from_raw_fd(fd);
+        let result = if ws_write_unmasked_frame(&mut stream, opcode, payload) {
             msg_len
         } else {
             -1
         };
-        let _ = sock.into_raw_fd();
-        return result;
+        let _ = stream.into_raw_fd();
+        result
     }
-
-    let mut stream = std::net::TcpStream::from_raw_fd(fd);
-    let result = if ws_write_unmasked_frame(&mut stream, opcode, payload) {
-        msg_len
-    } else {
-        -1
-    };
-    let _ = stream.into_raw_fd();
-    result
 }
 
 /// Read one DATA frame (TEXT or BINARY, depending on
@@ -3270,39 +3286,42 @@ unsafe fn ws_recv_data_frame(
     out_max_len: i64,
     accept_opcode: u8,
 ) -> i64 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
-    if fd < 0 || out_max_len < 0 {
-        return -1;
-    }
-    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `ws_send_data_frame`
-    // for the TLS-session-key consistency note.
-    let fd = fd as RawFd;
-    if out_ptr.is_null() && out_max_len > 0 {
-        return -1;
-    }
+    unsafe {
+        use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+        if fd < 0 || out_max_len < 0 {
+            return -1;
+        }
+        // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `ws_send_data_frame`
+        // for the TLS-session-key consistency note.
+        let fd = fd as RawFd;
+        if out_ptr.is_null() && out_max_len > 0 {
+            return -1;
+        }
 
-    // Phase 6 line 236 slice 3 — TLS-aware dispatch. Same shape as
-    // `ws_send_data_frame`: route through rustls when the fd has a
-    // session in the TLS registry. The frame-parser closure is
-    // generic over Read+Write so the same body services both
-    // transports. Gated behind the `tls` feature (see `ws_send_data_frame`).
-    #[cfg(feature = "tls")]
-    if let Some(session) = crate::tls::lookup_session(fd) {
-        let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
-        let mut sock = std::net::TcpStream::from_raw_fd(fd);
-        let mut transport = TlsConnIo {
-            conn: &mut sess.conn,
-            sock: &mut sock,
-        };
-        let result = ws_recv_data_frame_inner(&mut transport, out_ptr, out_max_len, accept_opcode);
-        let _ = sock.into_raw_fd();
-        return result;
-    }
+        // Phase 6 line 236 slice 3 — TLS-aware dispatch. Same shape as
+        // `ws_send_data_frame`: route through rustls when the fd has a
+        // session in the TLS registry. The frame-parser closure is
+        // generic over Read+Write so the same body services both
+        // transports. Gated behind the `tls` feature (see `ws_send_data_frame`).
+        #[cfg(feature = "tls")]
+        if let Some(session) = crate::tls::lookup_session(fd) {
+            let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
+            let mut sock = std::net::TcpStream::from_raw_fd(fd);
+            let mut transport = TlsConnIo {
+                conn: &mut sess.conn,
+                sock: &mut sock,
+            };
+            let result =
+                ws_recv_data_frame_inner(&mut transport, out_ptr, out_max_len, accept_opcode);
+            let _ = sock.into_raw_fd();
+            return result;
+        }
 
-    let mut stream = std::net::TcpStream::from_raw_fd(fd);
-    let result = ws_recv_data_frame_inner(&mut stream, out_ptr, out_max_len, accept_opcode);
-    let _ = stream.into_raw_fd();
-    result
+        let mut stream = std::net::TcpStream::from_raw_fd(fd);
+        let result = ws_recv_data_frame_inner(&mut stream, out_ptr, out_max_len, accept_opcode);
+        let _ = stream.into_raw_fd();
+        result
+    }
 }
 
 /// Frame-parser body extracted from `ws_recv_data_frame` so the same
@@ -3322,193 +3341,201 @@ unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
     out_max_len: i64,
     accept_opcode: u8,
 ) -> i64 {
-    // Reassembly state. `accumulated` is the running byte count
-    // written into `out_ptr`. `in_fragment` flips to true once we've
-    // consumed a FIN=0 data frame; while set, we expect continuation
-    // frames (opcode 0x0) until a FIN=1 continuation closes the
-    // message. Before `in_fragment` is set, a FIN=1 data frame with
-    // `opcode == accept_opcode` returns immediately (single-frame
-    // message — the slice 9e.3 fast path).
-    {
-        let mut accumulated: u64 = 0;
-        let mut in_fragment = false;
-        loop {
-            let mut header2 = [0u8; 2];
-            match ws_read_exact_or_eof(&mut *stream, &mut header2) {
-                Ok(true) => {}
-                Ok(false) => return 0,
-                Err(_) => return -1,
-            }
-            let fin = (header2[0] & 0x80) != 0;
-            let rsv = header2[0] & 0x70;
-            let opcode = header2[0] & 0x0F;
-            let masked = (header2[1] & 0x80) != 0;
-            let len7 = (header2[1] & 0x7F) as u64;
-
-            if rsv != 0 || !masked {
-                // §5.2 (reserved bits set, no extension negotiated) and
-                // §5.1 (client→server frames MUST be masked) are protocol
-                // violations — reply Close 1002 rather than TCP-dropping.
-                return ws_fail_close(&mut *stream, 1002);
-            }
-
-            let payload_len: u64 = match len7 {
-                0..=125 => len7,
-                126 => {
-                    let mut buf = [0u8; 2];
-                    match ws_read_exact_or_eof(&mut *stream, &mut buf) {
-                        Ok(true) => u16::from_be_bytes(buf) as u64,
-                        _ => return -1,
-                    }
+    unsafe {
+        // Reassembly state. `accumulated` is the running byte count
+        // written into `out_ptr`. `in_fragment` flips to true once we've
+        // consumed a FIN=0 data frame; while set, we expect continuation
+        // frames (opcode 0x0) until a FIN=1 continuation closes the
+        // message. Before `in_fragment` is set, a FIN=1 data frame with
+        // `opcode == accept_opcode` returns immediately (single-frame
+        // message — the slice 9e.3 fast path).
+        {
+            let mut accumulated: u64 = 0;
+            let mut in_fragment = false;
+            loop {
+                let mut header2 = [0u8; 2];
+                match ws_read_exact_or_eof(&mut *stream, &mut header2) {
+                    Ok(true) => {}
+                    Ok(false) => return 0,
+                    Err(_) => return -1,
                 }
-                127 => {
-                    let mut buf = [0u8; 8];
-                    match ws_read_exact_or_eof(&mut *stream, &mut buf) {
-                        // RFC 6455 §5.2: for the 64-bit extended length the
-                        // most-significant bit MUST be 0. (The `out_max_len`
-                        // bounds check below would already reject any such
-                        // oversize length, but the MSB-set case is a literal
-                        // §5.2 violation regardless of the buffer size.)
-                        Ok(true) if buf[0] & 0x80 != 0 => {
-                            return ws_fail_close(&mut *stream, 1002);
-                        }
-                        Ok(true) => u64::from_be_bytes(buf),
-                        _ => return -1,
-                    }
-                }
-                _ => return -1,
-            };
+                let fin = (header2[0] & 0x80) != 0;
+                let rsv = header2[0] & 0x70;
+                let opcode = header2[0] & 0x0F;
+                let masked = (header2[1] & 0x80) != 0;
+                let len7 = (header2[1] & 0x7F) as u64;
 
-            let mut mask_key = [0u8; 4];
-            if !ws_read_exact_or_eof(&mut *stream, &mut mask_key).unwrap_or(false) {
-                return -1;
-            }
-
-            let is_control = opcode >= 0x8;
-            if is_control {
-                // RFC 6455 §5.5: control frames MUST be FIN=1 with
-                // length ≤ 125. They may be interleaved with data
-                // fragments per §5.4, so we handle them without
-                // touching the reassembly state.
-                if !fin || payload_len > 125 {
+                if rsv != 0 || !masked {
+                    // §5.2 (reserved bits set, no extension negotiated) and
+                    // §5.1 (client→server frames MUST be masked) are protocol
+                    // violations — reply Close 1002 rather than TCP-dropping.
                     return ws_fail_close(&mut *stream, 1002);
                 }
-                let mut ctrl_payload = [0u8; 125];
-                let slice = &mut ctrl_payload[..payload_len as usize];
-                if payload_len > 0 && !ws_read_exact_or_eof(&mut *stream, slice).unwrap_or(false) {
-                    return -1;
-                }
-                for (i, byte) in slice.iter_mut().enumerate() {
-                    *byte ^= mask_key[i % 4];
-                }
-                match opcode {
-                    0x8 => {
-                        // RFC 6455 §5.5.1 close-frame conformance. Echo the
-                        // peer's status code (SHOULD), validate the inbound
-                        // close body, and reply Close 1002 on a malformed one.
-                        match payload_len {
-                            0 => {
-                                // No status code — reply with a bare Close.
-                                let _ = ws_write_unmasked_frame(&mut *stream, 0x8, &[]);
-                                return 0;
-                            }
-                            1 => {
-                                // A 1-byte close body is malformed: a status
-                                // code is either absent or a full 2 bytes.
+
+                let payload_len: u64 = match len7 {
+                    0..=125 => len7,
+                    126 => {
+                        let mut buf = [0u8; 2];
+                        match ws_read_exact_or_eof(&mut *stream, &mut buf) {
+                            Ok(true) => u16::from_be_bytes(buf) as u64,
+                            _ => return -1,
+                        }
+                    }
+                    127 => {
+                        let mut buf = [0u8; 8];
+                        match ws_read_exact_or_eof(&mut *stream, &mut buf) {
+                            // RFC 6455 §5.2: for the 64-bit extended length the
+                            // most-significant bit MUST be 0. (The `out_max_len`
+                            // bounds check below would already reject any such
+                            // oversize length, but the MSB-set case is a literal
+                            // §5.2 violation regardless of the buffer size.)
+                            Ok(true) if buf[0] & 0x80 != 0 => {
                                 return ws_fail_close(&mut *stream, 1002);
                             }
-                            _ => {
-                                let code = u16::from_be_bytes([slice[0], slice[1]]);
-                                // The reason (bytes after the 2-byte code) MUST
-                                // be valid UTF-8 (§5.5.1); a reserved/invalid
-                                // code (1004/1005/1006/1015, out-of-range) is a
-                                // protocol error.
-                                let reason_ok = std::str::from_utf8(&slice[2..]).is_ok();
-                                if !ws_close_code_valid(code) || !reason_ok {
-                                    return ws_fail_close(&mut *stream, 1002);
-                                }
-                                // Echo the peer's status code back (§5.5.1 SHOULD).
-                                let _ =
-                                    ws_write_unmasked_frame(&mut *stream, 0x8, &code.to_be_bytes());
-                                return 0;
-                            }
+                            Ok(true) => u64::from_be_bytes(buf),
+                            _ => return -1,
                         }
                     }
-                    0x9 => {
-                        if !ws_write_unmasked_frame(&mut *stream, 0xA, slice) {
-                            return -1;
-                        }
-                        continue;
-                    }
-                    0xA => {
-                        continue;
-                    }
-                    // Reserved control opcodes (0xB..=0xF) — protocol violation.
-                    _ => return ws_fail_close(&mut *stream, 1002),
-                }
-            }
+                    _ => return -1,
+                };
 
-            // Data frame. RFC 6455 §5.4 fragmentation:
-            //   - First frame of a message: opcode = data
-            //     opcode (text=0x1, binary=0x2); FIN may be 0
-            //     or 1.
-            //   - Continuation frames: opcode = 0x0; FIN may
-            //     be 0 (more to come) or 1 (final fragment).
-            //   - Mixing: if we've started a fragmented data
-            //     message, the next data frame MUST be a
-            //     continuation; conversely a continuation
-            //     frame is only legal mid-fragment.
-            if in_fragment {
-                if opcode != 0x0 {
-                    // §5.4: mid-fragment, the next data frame MUST be a
-                    // continuation (opcode 0x0) — protocol violation.
-                    return ws_fail_close(&mut *stream, 1002);
-                }
-            } else if opcode != accept_opcode {
-                return -1;
-            }
-
-            // Bounds check: accumulated + payload_len must fit
-            // in the caller's buffer. Overflow-safe via saturating
-            // u64 add (out_max_len is i64 but ≥ 0).
-            let new_total = accumulated.saturating_add(payload_len);
-            if new_total > out_max_len as u64 {
-                // Reassembled message exceeds the caller's buffer —
-                // RFC 6455 §7.4.1 code 1009 "message too big".
-                return ws_fail_close(&mut *stream, 1009);
-            }
-
-            if payload_len > 0 {
-                let off = accumulated as usize;
-                let payload_usize = payload_len as usize;
-                let frag_slice = std::slice::from_raw_parts_mut(out_ptr.add(off), payload_usize);
-                if !ws_read_exact_or_eof(&mut *stream, frag_slice).unwrap_or(false) {
+                let mut mask_key = [0u8; 4];
+                if !ws_read_exact_or_eof(&mut *stream, &mut mask_key).unwrap_or(false) {
                     return -1;
                 }
-                for (i, byte) in frag_slice.iter_mut().enumerate() {
-                    *byte ^= mask_key[i % 4];
-                }
-            }
-            accumulated = new_total;
 
-            if fin {
-                // RFC 6455 §8.1: a text message's payload MUST be valid
-                // UTF-8; §8.2 mandates failing the connection with close
-                // code 1007 on a violation. Validate the fully-reassembled
-                // message — a fragment boundary may split a multi-byte
-                // codepoint, so per-frame validation would be wrong.
-                // `recv_binary` (accept_opcode 0x2) is exempt: binary is an
-                // opaque byte channel. An empty message is trivially valid
-                // (and lets us skip a null-`out_ptr` slice construction).
-                if accept_opcode == 0x1 && accumulated > 0 {
-                    let msg = std::slice::from_raw_parts(out_ptr, accumulated as usize);
-                    if std::str::from_utf8(msg).is_err() {
-                        return ws_fail_close(&mut *stream, 1007);
+                let is_control = opcode >= 0x8;
+                if is_control {
+                    // RFC 6455 §5.5: control frames MUST be FIN=1 with
+                    // length ≤ 125. They may be interleaved with data
+                    // fragments per §5.4, so we handle them without
+                    // touching the reassembly state.
+                    if !fin || payload_len > 125 {
+                        return ws_fail_close(&mut *stream, 1002);
+                    }
+                    let mut ctrl_payload = [0u8; 125];
+                    let slice = &mut ctrl_payload[..payload_len as usize];
+                    if payload_len > 0
+                        && !ws_read_exact_or_eof(&mut *stream, slice).unwrap_or(false)
+                    {
+                        return -1;
+                    }
+                    for (i, byte) in slice.iter_mut().enumerate() {
+                        *byte ^= mask_key[i % 4];
+                    }
+                    match opcode {
+                        0x8 => {
+                            // RFC 6455 §5.5.1 close-frame conformance. Echo the
+                            // peer's status code (SHOULD), validate the inbound
+                            // close body, and reply Close 1002 on a malformed one.
+                            match payload_len {
+                                0 => {
+                                    // No status code — reply with a bare Close.
+                                    let _ = ws_write_unmasked_frame(&mut *stream, 0x8, &[]);
+                                    return 0;
+                                }
+                                1 => {
+                                    // A 1-byte close body is malformed: a status
+                                    // code is either absent or a full 2 bytes.
+                                    return ws_fail_close(&mut *stream, 1002);
+                                }
+                                _ => {
+                                    let code = u16::from_be_bytes([slice[0], slice[1]]);
+                                    // The reason (bytes after the 2-byte code) MUST
+                                    // be valid UTF-8 (§5.5.1); a reserved/invalid
+                                    // code (1004/1005/1006/1015, out-of-range) is a
+                                    // protocol error.
+                                    let reason_ok = std::str::from_utf8(&slice[2..]).is_ok();
+                                    if !ws_close_code_valid(code) || !reason_ok {
+                                        return ws_fail_close(&mut *stream, 1002);
+                                    }
+                                    // Echo the peer's status code back (§5.5.1 SHOULD).
+                                    let _ = ws_write_unmasked_frame(
+                                        &mut *stream,
+                                        0x8,
+                                        &code.to_be_bytes(),
+                                    );
+                                    return 0;
+                                }
+                            }
+                        }
+                        0x9 => {
+                            if !ws_write_unmasked_frame(&mut *stream, 0xA, slice) {
+                                return -1;
+                            }
+                            continue;
+                        }
+                        0xA => {
+                            continue;
+                        }
+                        // Reserved control opcodes (0xB..=0xF) — protocol violation.
+                        _ => return ws_fail_close(&mut *stream, 1002),
                     }
                 }
-                return accumulated as i64;
+
+                // Data frame. RFC 6455 §5.4 fragmentation:
+                //   - First frame of a message: opcode = data
+                //     opcode (text=0x1, binary=0x2); FIN may be 0
+                //     or 1.
+                //   - Continuation frames: opcode = 0x0; FIN may
+                //     be 0 (more to come) or 1 (final fragment).
+                //   - Mixing: if we've started a fragmented data
+                //     message, the next data frame MUST be a
+                //     continuation; conversely a continuation
+                //     frame is only legal mid-fragment.
+                if in_fragment {
+                    if opcode != 0x0 {
+                        // §5.4: mid-fragment, the next data frame MUST be a
+                        // continuation (opcode 0x0) — protocol violation.
+                        return ws_fail_close(&mut *stream, 1002);
+                    }
+                } else if opcode != accept_opcode {
+                    return -1;
+                }
+
+                // Bounds check: accumulated + payload_len must fit
+                // in the caller's buffer. Overflow-safe via saturating
+                // u64 add (out_max_len is i64 but ≥ 0).
+                let new_total = accumulated.saturating_add(payload_len);
+                if new_total > out_max_len as u64 {
+                    // Reassembled message exceeds the caller's buffer —
+                    // RFC 6455 §7.4.1 code 1009 "message too big".
+                    return ws_fail_close(&mut *stream, 1009);
+                }
+
+                if payload_len > 0 {
+                    let off = accumulated as usize;
+                    let payload_usize = payload_len as usize;
+                    let frag_slice =
+                        std::slice::from_raw_parts_mut(out_ptr.add(off), payload_usize);
+                    if !ws_read_exact_or_eof(&mut *stream, frag_slice).unwrap_or(false) {
+                        return -1;
+                    }
+                    for (i, byte) in frag_slice.iter_mut().enumerate() {
+                        *byte ^= mask_key[i % 4];
+                    }
+                }
+                accumulated = new_total;
+
+                if fin {
+                    // RFC 6455 §8.1: a text message's payload MUST be valid
+                    // UTF-8; §8.2 mandates failing the connection with close
+                    // code 1007 on a violation. Validate the fully-reassembled
+                    // message — a fragment boundary may split a multi-byte
+                    // codepoint, so per-frame validation would be wrong.
+                    // `recv_binary` (accept_opcode 0x2) is exempt: binary is an
+                    // opaque byte channel. An empty message is trivially valid
+                    // (and lets us skip a null-`out_ptr` slice construction).
+                    if accept_opcode == 0x1 && accumulated > 0 {
+                        let msg = std::slice::from_raw_parts(out_ptr, accumulated as usize);
+                        if std::str::from_utf8(msg).is_err() {
+                            return ws_fail_close(&mut *stream, 1007);
+                        }
+                    }
+                    return accumulated as i64;
+                }
+                in_fragment = true;
             }
-            in_fragment = true;
         }
     }
 }
@@ -3536,7 +3563,7 @@ pub unsafe extern "C" fn karac_runtime_ws_recv_text(
     out_ptr: *mut u8,
     out_max_len: i64,
 ) -> i64 {
-    ws_recv_data_frame(fd, out_ptr, out_max_len, 0x1)
+    unsafe { ws_recv_data_frame(fd, out_ptr, out_max_len, 0x1) }
 }
 
 /// BINARY counterpart to `karac_runtime_ws_recv_text` — same
@@ -3553,7 +3580,7 @@ pub unsafe extern "C" fn karac_runtime_ws_recv_binary(
     out_ptr: *mut u8,
     out_max_len: i64,
 ) -> i64 {
-    ws_recv_data_frame(fd, out_ptr, out_max_len, 0x2)
+    unsafe { ws_recv_data_frame(fd, out_ptr, out_max_len, 0x2) }
 }
 
 // ── WebSocket HTTP upgrade handshake FFI (stdlib `WebSocket.accept`) ─────
@@ -4589,99 +4616,101 @@ unsafe fn ws_handshake_conn_tls(
     conn_fd: crate::tls::SessionKey,
     config: *mut crate::tls::KaracTlsConfig,
 ) -> Result<crate::tls::SessionKey, (HandshakeStep, String)> {
-    // Take ownership of the accepted connection handle (cross-platform:
-    // `SessionKey` is `RawFd` on unix / `RawSocket` on Windows).
-    let mut sock = crate::tls::tcpstream_from_key(conn_fd);
+    unsafe {
+        // Take ownership of the accepted connection handle (cross-platform:
+        // `SessionKey` is `RawFd` on unix / `RawSocket` on Windows).
+        let mut sock = crate::tls::tcpstream_from_key(conn_fd);
 
-    // Bound the handshake phase (TLS `complete_io` + the HTTP
-    // upgrade over `TlsConnIo`, both of which read through `sock`)
-    // so a peer that stalls the `ClientHello` or dribbles the
-    // upgrade request can't pin a worker thread indefinitely
-    // (slowloris). Two layers: the per-read `set_read_timeout`
-    // reaps a silent stall, and `deadline` (a whole-request
-    // wall-clock bound, enforced via `DeadlineStream` over the TLS
-    // handshake and inside `ws_read_http_request` over the upgrade)
-    // reaps a byte-per-interval dribbler that would re-arm the
-    // per-read clock forever. Both cover only the pre-`101` phase
-    // and are dropped on success before the fd is handed to the
-    // kara `WebSocket`. Same `KARAC_WS_HANDSHAKE_TIMEOUT_MS` knob as
-    // the plain-TCP path.
-    let handshake_timeout = ws_handshake_timeout();
-    if handshake_timeout.is_some() {
-        let _ = sock.set_read_timeout(handshake_timeout);
-    }
-    let deadline = handshake_timeout.map(|t| std::time::Instant::now() + t);
+        // Bound the handshake phase (TLS `complete_io` + the HTTP
+        // upgrade over `TlsConnIo`, both of which read through `sock`)
+        // so a peer that stalls the `ClientHello` or dribbles the
+        // upgrade request can't pin a worker thread indefinitely
+        // (slowloris). Two layers: the per-read `set_read_timeout`
+        // reaps a silent stall, and `deadline` (a whole-request
+        // wall-clock bound, enforced via `DeadlineStream` over the TLS
+        // handshake and inside `ws_read_http_request` over the upgrade)
+        // reaps a byte-per-interval dribbler that would re-arm the
+        // per-read clock forever. Both cover only the pre-`101` phase
+        // and are dropped on success before the fd is handed to the
+        // kara `WebSocket`. Same `KARAC_WS_HANDSHAKE_TIMEOUT_MS` knob as
+        // the plain-TCP path.
+        let handshake_timeout = ws_handshake_timeout();
+        if handshake_timeout.is_some() {
+            let _ = sock.set_read_timeout(handshake_timeout);
+        }
+        let deadline = handshake_timeout.map(|t| std::time::Instant::now() + t);
 
-    // Build a fresh ServerConnection using the borrowed config.
-    let config_arc = crate::tls::clone_config_arc(config);
-    let mut conn = match rustls::ServerConnection::new(config_arc) {
-        Ok(c) => c,
-        Err(e) => return Err((HandshakeStep::TlsConfig, format!("{e}"))),
-    };
-
-    // Drive the TLS handshake to completion against the blocking
-    // socket, wrapped so the whole-request deadline also bounds a
-    // dribbled `ClientHello`. complete_io loops until handshaking
-    // is done.
-    if let Err(e) = conn.complete_io(&mut DeadlineStream::new(&mut sock, deadline)) {
-        return Err((HandshakeStep::TlsHandshake, format!("{e}")));
-    }
-
-    // Register the session keyed by the fd BEFORE the HTTP upgrade
-    // so the TlsConnIo wrapper used by the upgrade machinery finds
-    // it. The fd ownership stays with `sock` for now; we'll
-    // `into_raw_fd` it at the end.
-    let fd = crate::tls::tcpstream_as_key(&sock);
-    // Phase-8 line 22 widening: `register_session_for_fd` now takes
-    // `rustls::Connection`; wrap the freshly-built `ServerConnection`.
-    crate::tls::register_session_for_fd(fd, rustls::Connection::Server(conn));
-
-    // HTTP upgrade exchange over TLS. The `TlsConnIo` wrapper drives
-    // the rustls session against the existing socket. Look up the
-    // session we just inserted so the wrapper holds a borrowed
-    // ServerConnection.
-    let upgrade_outcome = {
-        let session = match crate::tls::lookup_session(fd) {
-            Some(s) => s,
-            None => {
-                // Couldn't find what we just inserted — shouldn't
-                // happen, but failure-mode the connection clean.
-                let _ = crate::tls::tcpstream_into_key(sock);
-                let _ = crate::tls::karac_runtime_tls_close(fd as i64);
-                return Err((
-                    HandshakeStep::SessionLookup,
-                    format!("session lookup miss for fd {fd} immediately after register"),
-                ));
-            }
+        // Build a fresh ServerConnection using the borrowed config.
+        let config_arc = crate::tls::clone_config_arc(config);
+        let mut conn = match rustls::ServerConnection::new(config_arc) {
+            Ok(c) => c,
+            Err(e) => return Err((HandshakeStep::TlsConfig, format!("{e}"))),
         };
-        let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
-        let mut transport = TlsConnIo {
-            conn: &mut sess.conn,
-            sock: &mut sock,
+
+        // Drive the TLS handshake to completion against the blocking
+        // socket, wrapped so the whole-request deadline also bounds a
+        // dribbled `ClientHello`. complete_io loops until handshaking
+        // is done.
+        if let Err(e) = conn.complete_io(&mut DeadlineStream::new(&mut sock, deadline)) {
+            return Err((HandshakeStep::TlsHandshake, format!("{e}")));
+        }
+
+        // Register the session keyed by the fd BEFORE the HTTP upgrade
+        // so the TlsConnIo wrapper used by the upgrade machinery finds
+        // it. The fd ownership stays with `sock` for now; we'll
+        // `into_raw_fd` it at the end.
+        let fd = crate::tls::tcpstream_as_key(&sock);
+        // Phase-8 line 22 widening: `register_session_for_fd` now takes
+        // `rustls::Connection`; wrap the freshly-built `ServerConnection`.
+        crate::tls::register_session_for_fd(fd, rustls::Connection::Server(conn));
+
+        // HTTP upgrade exchange over TLS. The `TlsConnIo` wrapper drives
+        // the rustls session against the existing socket. Look up the
+        // session we just inserted so the wrapper holds a borrowed
+        // ServerConnection.
+        let upgrade_outcome = {
+            let session = match crate::tls::lookup_session(fd) {
+                Some(s) => s,
+                None => {
+                    // Couldn't find what we just inserted — shouldn't
+                    // happen, but failure-mode the connection clean.
+                    let _ = crate::tls::tcpstream_into_key(sock);
+                    let _ = crate::tls::karac_runtime_tls_close(fd as i64);
+                    return Err((
+                        HandshakeStep::SessionLookup,
+                        format!("session lookup miss for fd {fd} immediately after register"),
+                    ));
+                }
+            };
+            let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
+            let mut transport = TlsConnIo {
+                conn: &mut sess.conn,
+                sock: &mut sock,
+            };
+            ws_drive_upgrade_handshake(&mut transport, deadline)
         };
-        ws_drive_upgrade_handshake(&mut transport, deadline)
-    };
 
-    if let Err(reason) = upgrade_outcome {
-        // HTTP upgrade failed (malformed request, missing key
-        // header, etc.). Pull the session out of the registry and
-        // close the fd.
-        let _ = crate::tls::tcpstream_into_key(sock);
-        let _ = crate::tls::karac_runtime_tls_close(fd as i64);
-        return Err((HandshakeStep::WsUpgrade, reason));
+        if let Err(reason) = upgrade_outcome {
+            // HTTP upgrade failed (malformed request, missing key
+            // header, etc.). Pull the session out of the registry and
+            // close the fd.
+            let _ = crate::tls::tcpstream_into_key(sock);
+            let _ = crate::tls::karac_runtime_tls_close(fd as i64);
+            return Err((HandshakeStep::WsUpgrade, reason));
+        }
+
+        // Clear the handshake read-timeout before handing the fd over:
+        // post-upgrade framed I/O parks on read-readiness through the
+        // event loop and must not inherit the bounded handshake deadline.
+        if handshake_timeout.is_some() {
+            let _ = sock.set_read_timeout(None);
+        }
+
+        // Success — relinquish the TcpStream's destructor so the fd
+        // stays open. The kara `WebSocket` value the caller constructs
+        // owns close-on-drop now.
+        Ok(crate::tls::tcpstream_into_key(sock))
     }
-
-    // Clear the handshake read-timeout before handing the fd over:
-    // post-upgrade framed I/O parks on read-readiness through the
-    // event loop and must not inherit the bounded handshake deadline.
-    if handshake_timeout.is_some() {
-        let _ = sock.set_read_timeout(None);
-    }
-
-    // Success — relinquish the TcpStream's destructor so the fd
-    // stays open. The kara `WebSocket` value the caller constructs
-    // owns close-on-drop now.
-    Ok(crate::tls::tcpstream_into_key(sock))
 }
 
 /// Per-listener pool that offloads the (slow, I/O-bound) TLS handshake +
@@ -5039,110 +5068,112 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
     listener_fd: i64,
     config: *mut crate::tls::KaracTlsConfig,
 ) -> i64 {
-    if listener_fd < 0 || config.is_null() {
-        return -1;
-    }
-    // i64 fd ABI → narrow to the platform `SessionKey` (`RawFd` i32 on Unix,
-    // `RawSocket` u64 on Windows) for the internal handshake-pool keying +
-    // `std::net` wrappers; see `register_fd_impl`. The conn fd produced by the
-    // pool is the same key, re-widened to i64 only at this public return
-    // boundary.
-    let listener_fd = listener_fd as crate::tls::SessionKey;
+    unsafe {
+        if listener_fd < 0 || config.is_null() {
+            return -1;
+        }
+        // i64 fd ABI → narrow to the platform `SessionKey` (`RawFd` i32 on Unix,
+        // `RawSocket` u64 on Windows) for the internal handshake-pool keying +
+        // `std::net` wrappers; see `register_fd_impl`. The conn fd produced by the
+        // pool is the same key, re-widened to i64 only at this public return
+        // boundary.
+        let listener_fd = listener_fd as crate::tls::SessionKey;
 
-    let pool = ws_handshake_pool_for(listener_fd, config);
+        let pool = ws_handshake_pool_for(listener_fd, config);
 
-    // Each call: (1) drain the accept backlog (non-blocking) and submit
-    // every pending connection to the handshake workers so K handshakes
-    // overlap, then (2) return the next completed handshake. The caller
-    // (codegen) has already parked on listener-readability, so there is
-    // normally ≥1 pending on entry; draining the rest fills the pipeline.
-    // The done-wait uses a short timeout and re-drains on each tick so a
-    // spurious park wakeup (0 accepted) or a lull while every worker is
-    // mid-handshake can never wedge acceptance — new connections are
-    // picked up within the timeout regardless.
-    loop {
-        {
-            let listener = crate::tls::tcplistener_from_key(listener_fd);
-            let mut submitted = 0usize;
-            // Drain the backlog: accept until WouldBlock (or a real error),
-            // or until the in-flight cap is reached.
-            loop {
-                // Backpressure (line-128 residual-slowloris carve): when a
-                // cap is configured, stop draining once the pending `work`
-                // queue is full so a connection flood can't grow it
-                // unbounded behind the fixed worker pool. Excess connections
-                // stay in the OS accept backlog and are picked up on a later
-                // tick as workers drain the queue. Off by default → this
-                // check is skipped and behaviour is unchanged.
-                if let Some(cap) = pool.max_pending {
-                    let pending = pool.work.lock().unwrap_or_else(|p| p.into_inner()).len();
-                    if pending >= cap {
-                        break;
+        // Each call: (1) drain the accept backlog (non-blocking) and submit
+        // every pending connection to the handshake workers so K handshakes
+        // overlap, then (2) return the next completed handshake. The caller
+        // (codegen) has already parked on listener-readability, so there is
+        // normally ≥1 pending on entry; draining the rest fills the pipeline.
+        // The done-wait uses a short timeout and re-drains on each tick so a
+        // spurious park wakeup (0 accepted) or a lull while every worker is
+        // mid-handshake can never wedge acceptance — new connections are
+        // picked up within the timeout regardless.
+        loop {
+            {
+                let listener = crate::tls::tcplistener_from_key(listener_fd);
+                let mut submitted = 0usize;
+                // Drain the backlog: accept until WouldBlock (or a real error),
+                // or until the in-flight cap is reached.
+                loop {
+                    // Backpressure (line-128 residual-slowloris carve): when a
+                    // cap is configured, stop draining once the pending `work`
+                    // queue is full so a connection flood can't grow it
+                    // unbounded behind the fixed worker pool. Excess connections
+                    // stay in the OS accept backlog and are picked up on a later
+                    // tick as workers drain the queue. Off by default → this
+                    // check is skipped and behaviour is unchanged.
+                    if let Some(cap) = pool.max_pending {
+                        let pending = pool.work.lock().unwrap_or_else(|p| p.into_inner()).len();
+                        if pending >= cap {
+                            break;
+                        }
                     }
+                    let (sock, _addr) = match listener.accept() {
+                        Ok(pair) => pair,
+                        Err(_) => break,
+                    };
+                    // Force the accepted connection into blocking mode. On
+                    // Linux, `accept(2)` always returns a blocking socket
+                    // regardless of the listener's flags. On macOS / BSD,
+                    // accepted sockets *inherit* `O_NONBLOCK` from the
+                    // listener, and `ws_handshake_pool_for` flipped this
+                    // listener non-blocking so the accept-drain loop above
+                    // returns `WouldBlock` instead of stalling. Without
+                    // this reset, the handshake worker's first
+                    // `TlsConnIo::read` returns `WouldBlock` before the
+                    // peer's request lands, `ws_read_http_request` reads it
+                    // as a hard IO error, and every connection fails at the
+                    // WS-upgrade step with no TLS-layer signal. Diagnosed
+                    // 2026-05-30 (M3 macOS-at-1M leg): server-side
+                    // `fail_ws_upgrade=N`, mean handshake ~0.5ms — fast
+                    // enough to be the first-read failure. The blocking
+                    // mode is then load-bearing in the handshake worker's
+                    // synchronous `complete_io` and HTTP read. Regression
+                    // test: `tls::tests::ws_accept_tls_succeeds_with_nonblocking_listener`.
+                    let _ = sock.set_nonblocking(false);
+                    // Disable Nagle on the accepted socket. The TLS handshake
+                    // + RFC 6455 upgrade is a multi-round-trip exchange of
+                    // small records; with Nagle on, a server record can sit
+                    // withheld behind an unacked prior segment until the
+                    // peer's ~40 ms delayed-ACK timer fires — the classic
+                    // fixed handshake-latency floor. Every other comparator
+                    // in the bench (Go forces it runtime-wide, .NET/Node/
+                    // Phoenix via their stacks) runs nodelay; Kāra omitted
+                    // it. Best-effort: a failure here only forgoes the
+                    // latency win, never breaks the connection.
+                    let _ = sock.set_nodelay(true);
+                    let raw = crate::tls::tcpstream_into_key(sock);
+                    let mut q = pool.work.lock().unwrap_or_else(|p| p.into_inner());
+                    q.push_back(raw);
+                    drop(q);
+                    submitted += 1;
                 }
-                let (sock, _addr) = match listener.accept() {
-                    Ok(pair) => pair,
-                    Err(_) => break,
-                };
-                // Force the accepted connection into blocking mode. On
-                // Linux, `accept(2)` always returns a blocking socket
-                // regardless of the listener's flags. On macOS / BSD,
-                // accepted sockets *inherit* `O_NONBLOCK` from the
-                // listener, and `ws_handshake_pool_for` flipped this
-                // listener non-blocking so the accept-drain loop above
-                // returns `WouldBlock` instead of stalling. Without
-                // this reset, the handshake worker's first
-                // `TlsConnIo::read` returns `WouldBlock` before the
-                // peer's request lands, `ws_read_http_request` reads it
-                // as a hard IO error, and every connection fails at the
-                // WS-upgrade step with no TLS-layer signal. Diagnosed
-                // 2026-05-30 (M3 macOS-at-1M leg): server-side
-                // `fail_ws_upgrade=N`, mean handshake ~0.5ms — fast
-                // enough to be the first-read failure. The blocking
-                // mode is then load-bearing in the handshake worker's
-                // synchronous `complete_io` and HTTP read. Regression
-                // test: `tls::tests::ws_accept_tls_succeeds_with_nonblocking_listener`.
-                let _ = sock.set_nonblocking(false);
-                // Disable Nagle on the accepted socket. The TLS handshake
-                // + RFC 6455 upgrade is a multi-round-trip exchange of
-                // small records; with Nagle on, a server record can sit
-                // withheld behind an unacked prior segment until the
-                // peer's ~40 ms delayed-ACK timer fires — the classic
-                // fixed handshake-latency floor. Every other comparator
-                // in the bench (Go forces it runtime-wide, .NET/Node/
-                // Phoenix via their stacks) runs nodelay; Kāra omitted
-                // it. Best-effort: a failure here only forgoes the
-                // latency win, never breaks the connection.
-                let _ = sock.set_nodelay(true);
-                let raw = crate::tls::tcpstream_into_key(sock);
-                let mut q = pool.work.lock().unwrap_or_else(|p| p.into_inner());
-                q.push_back(raw);
-                drop(q);
-                submitted += 1;
-            }
-            let _ = crate::tls::tcplistener_into_key(listener);
-            if submitted > 0 {
-                if let Some(stats) = pool.stats.as_ref() {
-                    stats
-                        .submitted
-                        .fetch_add(submitted as u64, Ordering::Relaxed);
+                let _ = crate::tls::tcplistener_into_key(listener);
+                if submitted > 0 {
+                    if let Some(stats) = pool.stats.as_ref() {
+                        stats
+                            .submitted
+                            .fetch_add(submitted as u64, Ordering::Relaxed);
+                    }
+                    pool.cv_work.notify_all();
                 }
-                pool.cv_work.notify_all();
             }
-        }
 
-        let mut d = pool.done.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(fd) = d.pop_front() {
-            return fd as i64;
-        }
-        // No completed handshake yet — wait briefly, then loop back to
-        // re-drain the backlog and re-check.
-        let (mut g, _timeout) = pool
-            .cv_done
-            .wait_timeout(d, Duration::from_millis(5))
-            .unwrap_or_else(|p| p.into_inner());
-        if let Some(fd) = g.pop_front() {
-            return fd as i64;
+            let mut d = pool.done.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(fd) = d.pop_front() {
+                return fd as i64;
+            }
+            // No completed handshake yet — wait briefly, then loop back to
+            // re-drain the backlog and re-check.
+            let (mut g, _timeout) = pool
+                .cv_done
+                .wait_timeout(d, Duration::from_millis(5))
+                .unwrap_or_else(|p| p.into_inner());
+            if let Some(fd) = g.pop_front() {
+                return fd as i64;
+            }
         }
     }
 }
@@ -8011,15 +8042,17 @@ mod tests {
     /// live, owned socket handle not aliased elsewhere.
     #[allow(dead_code)]
     unsafe fn stream_from_handle(fd: i64) -> std::net::TcpStream {
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::{FromRawFd, RawFd};
-            std::net::TcpStream::from_raw_fd(fd as RawFd)
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::io::{FromRawSocket, RawSocket};
-            std::net::TcpStream::from_raw_socket(fd as RawSocket)
+        unsafe {
+            #[cfg(unix)]
+            {
+                use std::os::unix::io::{FromRawFd, RawFd};
+                std::net::TcpStream::from_raw_fd(fd as RawFd)
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::io::{FromRawSocket, RawSocket};
+                std::net::TcpStream::from_raw_socket(fd as RawSocket)
+            }
         }
     }
 
@@ -8029,15 +8062,17 @@ mod tests {
     /// listener handle not aliased elsewhere.
     #[allow(dead_code)]
     unsafe fn listener_from_handle(fd: i64) -> std::net::TcpListener {
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::{FromRawFd, RawFd};
-            std::net::TcpListener::from_raw_fd(fd as RawFd)
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::io::{FromRawSocket, RawSocket};
-            std::net::TcpListener::from_raw_socket(fd as RawSocket)
+        unsafe {
+            #[cfg(unix)]
+            {
+                use std::os::unix::io::{FromRawFd, RawFd};
+                std::net::TcpListener::from_raw_fd(fd as RawFd)
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::io::{FromRawSocket, RawSocket};
+                std::net::TcpListener::from_raw_socket(fd as RawSocket)
+            }
         }
     }
 

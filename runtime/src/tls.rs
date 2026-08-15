@@ -85,8 +85,10 @@ pub(crate) type SessionKey = std::os::windows::io::RawSocket;
 /// duration the returned value (or anything derived from it) is used.
 #[cfg(unix)]
 pub(crate) unsafe fn tcpstream_from_key(k: SessionKey) -> std::net::TcpStream {
-    use std::os::unix::io::FromRawFd;
-    std::net::TcpStream::from_raw_fd(k)
+    unsafe {
+        use std::os::unix::io::FromRawFd;
+        std::net::TcpStream::from_raw_fd(k)
+    }
 }
 #[cfg(windows)]
 pub(crate) unsafe fn tcpstream_from_key(k: SessionKey) -> std::net::TcpStream {
@@ -101,8 +103,10 @@ pub(crate) unsafe fn tcpstream_from_key(k: SessionKey) -> std::net::TcpStream {
 /// duration the returned value is used.
 #[cfg(unix)]
 pub(crate) unsafe fn tcplistener_from_key(k: SessionKey) -> std::net::TcpListener {
-    use std::os::unix::io::FromRawFd;
-    std::net::TcpListener::from_raw_fd(k)
+    unsafe {
+        use std::os::unix::io::FromRawFd;
+        std::net::TcpListener::from_raw_fd(k)
+    }
 }
 #[cfg(windows)]
 pub(crate) unsafe fn tcplistener_from_key(k: SessionKey) -> std::net::TcpListener {
@@ -224,7 +228,7 @@ pub(crate) fn register_session_for_fd(fd: SessionKey, conn: rustls::Connection) 
 /// `config` must be a non-null pointer obtained from
 /// [`karac_runtime_tls_config_new`] and still valid.
 pub(crate) unsafe fn clone_config_arc(config: *const KaracTlsConfig) -> Arc<ServerConfig> {
-    Arc::clone(&(*config).inner)
+    unsafe { Arc::clone(&(*config).inner) }
 }
 
 /// Failure mode for `build_server_config`. Surfaced internally only —
@@ -328,14 +332,16 @@ pub unsafe extern "C" fn karac_runtime_tls_config_new(
     key_pem: *const u8,
     key_len: i64,
 ) -> *mut KaracTlsConfig {
-    if cert_pem.is_null() || cert_len <= 0 || key_pem.is_null() || key_len <= 0 {
-        return std::ptr::null_mut();
-    }
-    let cert_bytes = std::slice::from_raw_parts(cert_pem, cert_len as usize);
-    let key_bytes = std::slice::from_raw_parts(key_pem, key_len as usize);
-    match build_server_config(cert_bytes, key_bytes) {
-        Ok(c) => Box::into_raw(Box::new(KaracTlsConfig { inner: Arc::new(c) })),
-        Err(_) => std::ptr::null_mut(),
+    unsafe {
+        if cert_pem.is_null() || cert_len <= 0 || key_pem.is_null() || key_len <= 0 {
+            return std::ptr::null_mut();
+        }
+        let cert_bytes = std::slice::from_raw_parts(cert_pem, cert_len as usize);
+        let key_bytes = std::slice::from_raw_parts(key_pem, key_len as usize);
+        match build_server_config(cert_bytes, key_bytes) {
+            Ok(c) => Box::into_raw(Box::new(KaracTlsConfig { inner: Arc::new(c) })),
+            Err(_) => std::ptr::null_mut(),
+        }
     }
 }
 
@@ -350,8 +356,10 @@ pub unsafe extern "C" fn karac_runtime_tls_config_new(
 /// guard).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tls_config_free(config: *mut KaracTlsConfig) {
-    if !config.is_null() {
-        let _ = Box::from_raw(config);
+    unsafe {
+        if !config.is_null() {
+            let _ = Box::from_raw(config);
+        }
     }
 }
 
@@ -377,9 +385,11 @@ pub unsafe extern "C" fn karac_runtime_tls_listener_bind(
     addr_len: i64,
     _config: *mut KaracTlsConfig,
 ) -> i64 {
-    // i64 fd ABI: delegates to `tcp_bind`, which already returns the
-    // listener fd (or a negative error code) as i64.
-    crate::event_loop::karac_runtime_tcp_bind(addr_ptr, addr_len)
+    unsafe {
+        // i64 fd ABI: delegates to `tcp_bind`, which already returns the
+        // listener fd (or a negative error code) as i64.
+        crate::event_loop::karac_runtime_tcp_bind(addr_ptr, addr_len)
+    }
 }
 
 /// Raw `accept(2)` followed by a synchronous TLS handshake. Caller
@@ -409,51 +419,53 @@ pub unsafe extern "C" fn karac_runtime_tls_accept(
     listener_fd: i64,
     config: *mut KaracTlsConfig,
 ) -> i64 {
-    if listener_fd < 0 || config.is_null() {
-        return -1;
+    unsafe {
+        if listener_fd < 0 || config.is_null() {
+            return -1;
+        }
+        // i64 fd ABI → narrow to the platform `SessionKey` (`RawFd` i32 on Unix,
+        // `RawSocket` u64 on Windows). The TLS session map is keyed by this
+        // narrowed handle (register + lookup narrow identically).
+        let listener_key = listener_fd as SessionKey;
+        let cfg = &*config;
+
+        let listener = tcplistener_from_key(listener_key);
+        let accept_result = listener.accept();
+        let _ = tcplistener_into_key(listener);
+        let (mut sock, _addr) = match accept_result {
+            Ok(p) => p,
+            Err(_) => return -1,
+        };
+        // Disable Nagle: the TLS handshake is a multi-RTT exchange of small
+        // records, where Nagle×delayed-ACK injects a ~40 ms stall (full
+        // rationale + measurement at `karac_runtime_ws_accept_tls`).
+        // Best-effort — failure only forgoes the latency win.
+        let _ = sock.set_nodelay(true);
+
+        let mut conn = match ServerConnection::new(Arc::clone(&cfg.inner)) {
+            Ok(c) => c,
+            Err(_) => return -1,
+        };
+
+        if conn.complete_io(&mut sock).is_err() {
+            // sock drops here, closing the underlying fd. `conn` drops too;
+            // any state it allocated is reclaimed.
+            return -1;
+        }
+
+        let key = tcpstream_into_key(sock);
+        let mut reg = sessions().write().unwrap_or_else(|p| p.into_inner());
+        reg.insert(
+            key,
+            Arc::new(Mutex::new(TlsSession {
+                conn: rustls::Connection::Server(conn),
+            })),
+        );
+        // i64 fd ABI: the `SessionKey` (Unix `RawFd` i32 sign-extends; Windows
+        // `RawSocket` u64 occupies the full width) widens losslessly at the public
+        // return boundary; the session map stays keyed by the same handle.
+        key as i64
     }
-    // i64 fd ABI → narrow to the platform `SessionKey` (`RawFd` i32 on Unix,
-    // `RawSocket` u64 on Windows). The TLS session map is keyed by this
-    // narrowed handle (register + lookup narrow identically).
-    let listener_key = listener_fd as SessionKey;
-    let cfg = &*config;
-
-    let listener = tcplistener_from_key(listener_key);
-    let accept_result = listener.accept();
-    let _ = tcplistener_into_key(listener);
-    let (mut sock, _addr) = match accept_result {
-        Ok(p) => p,
-        Err(_) => return -1,
-    };
-    // Disable Nagle: the TLS handshake is a multi-RTT exchange of small
-    // records, where Nagle×delayed-ACK injects a ~40 ms stall (full
-    // rationale + measurement at `karac_runtime_ws_accept_tls`).
-    // Best-effort — failure only forgoes the latency win.
-    let _ = sock.set_nodelay(true);
-
-    let mut conn = match ServerConnection::new(Arc::clone(&cfg.inner)) {
-        Ok(c) => c,
-        Err(_) => return -1,
-    };
-
-    if conn.complete_io(&mut sock).is_err() {
-        // sock drops here, closing the underlying fd. `conn` drops too;
-        // any state it allocated is reclaimed.
-        return -1;
-    }
-
-    let key = tcpstream_into_key(sock);
-    let mut reg = sessions().write().unwrap_or_else(|p| p.into_inner());
-    reg.insert(
-        key,
-        Arc::new(Mutex::new(TlsSession {
-            conn: rustls::Connection::Server(conn),
-        })),
-    );
-    // i64 fd ABI: the `SessionKey` (Unix `RawFd` i32 sign-extends; Windows
-    // `RawSocket` u64 occupies the full width) widens losslessly at the public
-    // return boundary; the session map stays keyed by the same handle.
-    key as i64
 }
 
 /// Phase-8 line 22 — TLS client-side connect + synchronous handshake.
@@ -493,84 +505,88 @@ pub unsafe extern "C" fn karac_runtime_tls_client_connect(
     roots_pem_ptr: *const u8,
     roots_pem_len: i64,
 ) -> i64 {
-    // ── Parse the destination address ──
-    if addr_ptr.is_null() || addr_len <= 0 {
-        return -1;
+    unsafe {
+        // ── Parse the destination address ──
+        if addr_ptr.is_null() || addr_len <= 0 {
+            return -1;
+        }
+        let addr_bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+        let addr_str = match std::str::from_utf8(addr_bytes) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => return -1,
+        };
+
+        // ── Parse the server name (SNI + cert verification) ──
+        if server_name_ptr.is_null() || server_name_len <= 0 {
+            return -1;
+        }
+        let server_name_bytes =
+            std::slice::from_raw_parts(server_name_ptr, server_name_len as usize);
+        let server_name_str = match std::str::from_utf8(server_name_bytes) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        // `ServerName::try_from(String)` yields a `ServerName<'static>`
+        // (owned), which is what `ClientConnection::new` requires.
+        let server_name = match rustls::pki_types::ServerName::try_from(server_name_str.to_owned())
+        {
+            Ok(n) => n,
+            Err(_) => return -1,
+        };
+
+        // ── Build the `ClientConfig` from the supplied trust anchors ──
+        let roots_bytes: &[u8] = if roots_pem_ptr.is_null() || roots_pem_len <= 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(roots_pem_ptr, roots_pem_len as usize)
+        };
+        let client_config = match build_client_config(roots_bytes) {
+            Ok(c) => c,
+            Err(_) => return -1,
+        };
+
+        // ── TCP connect + handshake ──
+        // The TCP-connect leg carries the same branchable causes as the
+        // plain-TCP client (ECONNREFUSED etc.) — surface them via the stable
+        // code (phase-8 line 74). Handshake failures below stay `-1`
+        // (decoded as the TlsError default variant, `Protocol`).
+        let mut sock = match std::net::TcpStream::connect(socket_addr) {
+            Ok(s) => s,
+            Err(e) => return crate::event_loop::net_construct_error_code(&e) as i64,
+        };
+        // Client half of the handshake-latency fix: disable Nagle so the
+        // client's small handshake / WS-upgrade records aren't withheld
+        // behind the peer's delayed-ACK. The 2×2 probe (REPORT.md §p50)
+        // showed client-side Nagle is what leaves the connect-p50 *tail* at
+        // ~47 ms after the server-side fix clears the median. Best-effort.
+        let _ = sock.set_nodelay(true);
+        let mut client_conn = match ClientConnection::new(Arc::new(client_config), server_name) {
+            Ok(c) => c,
+            Err(_) => return -1,
+        };
+        if client_conn.complete_io(&mut sock).is_err() {
+            // `sock` drops here, closing the partially-open TCP connection.
+            return -1;
+        }
+
+        // ── Register the session keyed by fd (same map the server side
+        // uses; `karac_runtime_tls_read`/`_write`/`_close` reach this
+        // through `lookup_session`). ──
+        let key = tcpstream_into_key(sock);
+        let mut reg = sessions().write().unwrap_or_else(|p| p.into_inner());
+        reg.insert(
+            key,
+            Arc::new(Mutex::new(TlsSession {
+                conn: rustls::Connection::Client(client_conn),
+            })),
+        );
+        // i64 fd ABI: see `karac_runtime_tls_accept`'s return note.
+        key as i64
     }
-    let addr_bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
-    let addr_str = match std::str::from_utf8(addr_bytes) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return -1,
-    };
-
-    // ── Parse the server name (SNI + cert verification) ──
-    if server_name_ptr.is_null() || server_name_len <= 0 {
-        return -1;
-    }
-    let server_name_bytes = std::slice::from_raw_parts(server_name_ptr, server_name_len as usize);
-    let server_name_str = match std::str::from_utf8(server_name_bytes) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    // `ServerName::try_from(String)` yields a `ServerName<'static>`
-    // (owned), which is what `ClientConnection::new` requires.
-    let server_name = match rustls::pki_types::ServerName::try_from(server_name_str.to_owned()) {
-        Ok(n) => n,
-        Err(_) => return -1,
-    };
-
-    // ── Build the `ClientConfig` from the supplied trust anchors ──
-    let roots_bytes: &[u8] = if roots_pem_ptr.is_null() || roots_pem_len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(roots_pem_ptr, roots_pem_len as usize)
-    };
-    let client_config = match build_client_config(roots_bytes) {
-        Ok(c) => c,
-        Err(_) => return -1,
-    };
-
-    // ── TCP connect + handshake ──
-    // The TCP-connect leg carries the same branchable causes as the
-    // plain-TCP client (ECONNREFUSED etc.) — surface them via the stable
-    // code (phase-8 line 74). Handshake failures below stay `-1`
-    // (decoded as the TlsError default variant, `Protocol`).
-    let mut sock = match std::net::TcpStream::connect(socket_addr) {
-        Ok(s) => s,
-        Err(e) => return crate::event_loop::net_construct_error_code(&e) as i64,
-    };
-    // Client half of the handshake-latency fix: disable Nagle so the
-    // client's small handshake / WS-upgrade records aren't withheld
-    // behind the peer's delayed-ACK. The 2×2 probe (REPORT.md §p50)
-    // showed client-side Nagle is what leaves the connect-p50 *tail* at
-    // ~47 ms after the server-side fix clears the median. Best-effort.
-    let _ = sock.set_nodelay(true);
-    let mut client_conn = match ClientConnection::new(Arc::new(client_config), server_name) {
-        Ok(c) => c,
-        Err(_) => return -1,
-    };
-    if client_conn.complete_io(&mut sock).is_err() {
-        // `sock` drops here, closing the partially-open TCP connection.
-        return -1;
-    }
-
-    // ── Register the session keyed by fd (same map the server side
-    // uses; `karac_runtime_tls_read`/`_write`/`_close` reach this
-    // through `lookup_session`). ──
-    let key = tcpstream_into_key(sock);
-    let mut reg = sessions().write().unwrap_or_else(|p| p.into_inner());
-    reg.insert(
-        key,
-        Arc::new(Mutex::new(TlsSession {
-            conn: rustls::Connection::Client(client_conn),
-        })),
-    );
-    // i64 fd ABI: see `karac_runtime_tls_accept`'s return note.
-    key as i64
 }
 
 /// Drive rustls's inbound packet processor: ciphertext from socket →
@@ -600,28 +616,30 @@ pub unsafe extern "C" fn karac_runtime_tls_read(
     buf_ptr: *mut u8,
     buf_len: i64,
 ) -> i64 {
-    if stream_fd < 0 {
-        return -1;
-    }
-    if buf_ptr.is_null() || buf_len <= 0 {
-        return 0;
-    }
-    // i64 fd ABI → narrow to the platform `SessionKey`; session map keyed by it.
-    let stream_key = stream_fd as SessionKey;
-
-    let session = {
-        let reg = sessions().read().unwrap_or_else(|p| p.into_inner());
-        match reg.get(&stream_key) {
-            Some(s) => Arc::clone(s),
-            None => return -1,
+    unsafe {
+        if stream_fd < 0 {
+            return -1;
         }
-    };
+        if buf_ptr.is_null() || buf_len <= 0 {
+            return 0;
+        }
+        // i64 fd ABI → narrow to the platform `SessionKey`; session map keyed by it.
+        let stream_key = stream_fd as SessionKey;
 
-    let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
-    let mut sock = tcpstream_from_key(stream_key);
-    let result = drive_read(&mut sess.conn, &mut sock, buf_ptr, buf_len as usize);
-    let _ = tcpstream_into_key(sock);
-    result
+        let session = {
+            let reg = sessions().read().unwrap_or_else(|p| p.into_inner());
+            match reg.get(&stream_key) {
+                Some(s) => Arc::clone(s),
+                None => return -1,
+            }
+        };
+
+        let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
+        let mut sock = tcpstream_from_key(stream_key);
+        let result = drive_read(&mut sess.conn, &mut sock, buf_ptr, buf_len as usize);
+        let _ = tcpstream_into_key(sock);
+        result
+    }
 }
 
 /// Read-side driver. Loops between rustls's `reader().read()` (which
@@ -701,29 +719,31 @@ pub unsafe extern "C" fn karac_runtime_tls_write(
     buf_ptr: *const u8,
     buf_len: i64,
 ) -> i64 {
-    if stream_fd < 0 {
-        return -1;
-    }
-    if buf_ptr.is_null() || buf_len <= 0 {
-        return 0;
-    }
-    // i64 fd ABI → narrow to the platform `SessionKey`; session map keyed by it.
-    let stream_key = stream_fd as SessionKey;
-
-    let session = {
-        let reg = sessions().read().unwrap_or_else(|p| p.into_inner());
-        match reg.get(&stream_key) {
-            Some(s) => Arc::clone(s),
-            None => return -1,
+    unsafe {
+        if stream_fd < 0 {
+            return -1;
         }
-    };
+        if buf_ptr.is_null() || buf_len <= 0 {
+            return 0;
+        }
+        // i64 fd ABI → narrow to the platform `SessionKey`; session map keyed by it.
+        let stream_key = stream_fd as SessionKey;
 
-    let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
-    let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
-    let mut sock = tcpstream_from_key(stream_key);
-    let result = drive_write(&mut sess.conn, &mut sock, buf);
-    let _ = tcpstream_into_key(sock);
-    result
+        let session = {
+            let reg = sessions().read().unwrap_or_else(|p| p.into_inner());
+            match reg.get(&stream_key) {
+                Some(s) => Arc::clone(s),
+                None => return -1,
+            }
+        };
+
+        let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
+        let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
+        let mut sock = tcpstream_from_key(stream_key);
+        let result = drive_write(&mut sess.conn, &mut sock, buf);
+        let _ = tcpstream_into_key(sock);
+        result
+    }
 }
 
 fn drive_write(conn: &mut rustls::Connection, sock: &mut std::net::TcpStream, buf: &[u8]) -> i64 {

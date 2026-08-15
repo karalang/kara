@@ -67,15 +67,17 @@ pub unsafe extern "C" fn karac_runtime_semaphore_acquire(
     sem: *mut KaracSemaphore,
     _timeout: i64,
 ) -> u8 {
-    if sem.is_null() {
-        return 0;
-    }
-    let mut state = (*sem).state.lock().unwrap();
-    if state.0 > 0 {
-        state.0 -= 1;
-        1
-    } else {
-        0
+    unsafe {
+        if sem.is_null() {
+            return 0;
+        }
+        let mut state = (*sem).state.lock().unwrap();
+        if state.0 > 0 {
+            state.0 -= 1;
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -86,12 +88,14 @@ pub unsafe extern "C" fn karac_runtime_semaphore_acquire(
 /// `sem` must be live (or null).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_semaphore_release(sem: *mut KaracSemaphore) {
-    if sem.is_null() {
-        return;
-    }
-    let mut state = (*sem).state.lock().unwrap();
-    if state.0 < state.1 {
-        state.0 += 1;
+    unsafe {
+        if sem.is_null() {
+            return;
+        }
+        let mut state = (*sem).state.lock().unwrap();
+        if state.0 < state.1 {
+            state.0 += 1;
+        }
     }
 }
 
@@ -104,10 +108,12 @@ pub unsafe extern "C" fn karac_runtime_semaphore_release(sem: *mut KaracSemaphor
 /// null); consumes it.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_semaphore_drop(sem: *mut KaracSemaphore) {
-    if sem.is_null() {
-        return;
+    unsafe {
+        if sem.is_null() {
+            return;
+        }
+        drop(Box::from_raw(sem));
     }
-    drop(Box::from_raw(sem));
 }
 
 #[cfg(test)]

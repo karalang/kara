@@ -66,18 +66,20 @@ pub unsafe extern "C" fn karac_runtime_arena_push(
     ptr: *const u8,
     len: i64,
 ) -> i64 {
-    if handle.is_null() || len < 0 || (ptr.is_null() && len > 0) {
-        return -1;
+    unsafe {
+        if handle.is_null() || len < 0 || (ptr.is_null() && len > 0) {
+            return -1;
+        }
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(ptr, len as usize)
+        };
+        let mut items = (*handle).items.lock().unwrap();
+        let idx = items.len() as i64;
+        items.push(bytes.into());
+        idx
     }
-    let bytes: &[u8] = if len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(ptr, len as usize)
-    };
-    let mut items = (*handle).items.lock().unwrap();
-    let idx = items.len() as i64;
-    items.push(bytes.into());
-    idx
 }
 
 /// `arena.get(r)` — stable borrow pointer to the blob at `idx`, with the
@@ -95,22 +97,24 @@ pub unsafe extern "C" fn karac_runtime_arena_get(
     idx: i64,
     out_len: *mut i64,
 ) -> *const u8 {
-    if !out_len.is_null() {
-        *out_len = 0;
-    }
-    if handle.is_null() || out_len.is_null() {
-        return ptr::NonNull::<u8>::dangling().as_ptr();
-    }
-    let items = (*handle).items.lock().unwrap();
-    match usize::try_from(idx).ok().and_then(|i| items.get(i)) {
-        Some(bytes) => {
-            *out_len = bytes.len() as i64;
-            // Stable: the Box<[u8]> buffer never moves (the Vec growing
-            // relocates the box headers, not the bytes) and entries live
-            // until `arena_free` or a `rewind` past them.
-            bytes.as_ptr()
+    unsafe {
+        if !out_len.is_null() {
+            *out_len = 0;
         }
-        None => ptr::NonNull::<u8>::dangling().as_ptr(),
+        if handle.is_null() || out_len.is_null() {
+            return ptr::NonNull::<u8>::dangling().as_ptr();
+        }
+        let items = (*handle).items.lock().unwrap();
+        match usize::try_from(idx).ok().and_then(|i| items.get(i)) {
+            Some(bytes) => {
+                *out_len = bytes.len() as i64;
+                // Stable: the Box<[u8]> buffer never moves (the Vec growing
+                // relocates the box headers, not the bytes) and entries live
+                // until `arena_free` or a `rewind` past them.
+                bytes.as_ptr()
+            }
+            None => ptr::NonNull::<u8>::dangling().as_ptr(),
+        }
     }
 }
 
@@ -134,22 +138,24 @@ pub unsafe extern "C" fn karac_runtime_arena_get_copy(
     dst: *mut u8,
     dst_len: i64,
 ) -> i64 {
-    if dst.is_null() || dst_len <= 0 {
-        return 0;
-    }
-    let out = std::slice::from_raw_parts_mut(dst, dst_len as usize);
-    out.fill(0);
-    if handle.is_null() {
-        return 0;
-    }
-    let items = (*handle).items.lock().unwrap();
-    match usize::try_from(idx).ok().and_then(|i| items.get(i)) {
-        Some(bytes) => {
-            let n = bytes.len().min(out.len());
-            out[..n].copy_from_slice(&bytes[..n]);
-            bytes.len() as i64
+    unsafe {
+        if dst.is_null() || dst_len <= 0 {
+            return 0;
         }
-        None => 0,
+        let out = std::slice::from_raw_parts_mut(dst, dst_len as usize);
+        out.fill(0);
+        if handle.is_null() {
+            return 0;
+        }
+        let items = (*handle).items.lock().unwrap();
+        match usize::try_from(idx).ok().and_then(|i| items.get(i)) {
+            Some(bytes) => {
+                let n = bytes.len().min(out.len());
+                out[..n].copy_from_slice(&bytes[..n]);
+                bytes.len() as i64
+            }
+            None => 0,
+        }
     }
 }
 
@@ -161,11 +167,13 @@ pub unsafe extern "C" fn karac_runtime_arena_get_copy(
 /// `karac_runtime_arena_new`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_arena_len(handle: *mut KaracArena) -> i64 {
-    if handle.is_null() {
-        return 0;
+    unsafe {
+        if handle.is_null() {
+            return 0;
+        }
+        let items = (*handle).items.lock().unwrap();
+        items.len() as i64
     }
-    let items = (*handle).items.lock().unwrap();
-    items.len() as i64
 }
 
 /// `arena.rewind_to(cp)` — truncate to `mark` items, dropping every blob
@@ -181,12 +189,14 @@ pub unsafe extern "C" fn karac_runtime_arena_len(handle: *mut KaracArena) -> i64
 /// `karac_runtime_arena_new`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_arena_rewind(handle: *mut KaracArena, mark: i64) {
-    if handle.is_null() {
-        return;
+    unsafe {
+        if handle.is_null() {
+            return;
+        }
+        let mut items = (*handle).items.lock().unwrap();
+        let mark = mark.clamp(0, items.len() as i64) as usize;
+        items.truncate(mark);
     }
-    let mut items = (*handle).items.lock().unwrap();
-    let mark = mark.clamp(0, items.len() as i64) as usize;
-    items.truncate(mark);
 }
 
 /// Free an arena and every stored blob. Called by codegen's scope-exit
@@ -200,10 +210,12 @@ pub unsafe extern "C" fn karac_runtime_arena_rewind(handle: *mut KaracArena, mar
 /// `karac_runtime_arena_new`; consumes it (must not be used afterward).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_arena_free(handle: *mut KaracArena) {
-    if handle.is_null() {
-        return;
+    unsafe {
+        if handle.is_null() {
+            return;
+        }
+        drop(Box::from_raw(handle));
     }
-    drop(Box::from_raw(handle));
 }
 
 #[cfg(test)]

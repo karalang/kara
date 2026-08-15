@@ -265,33 +265,35 @@ pub unsafe extern "C" fn karac_runtime_gpu_map(
     n: usize,
     elem_size: usize,
 ) -> *mut u8 {
-    let byte_len = n.saturating_mul(elem_size);
+    unsafe {
+        let byte_len = n.saturating_mul(elem_size);
 
-    // Empty dispatch: a unique non-null allocation the caller never reads.
-    if byte_len == 0 {
-        return crate::alloc::karac_alloc_or_panic(1);
+        // Empty dispatch: a unique non-null allocation the caller never reads.
+        if byte_len == 0 {
+            return crate::alloc::karac_alloc_or_panic(1);
+        }
+
+        let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
+        let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
+            crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+        let input = std::slice::from_raw_parts(in_ptr, byte_len);
+
+        let Some(output) = pollster::block_on(dispatch_bytes_async(wgsl, input, elem_size)) else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        debug_assert_eq!(output.len(), byte_len, "element-wise map preserves length");
+
+        // Hand the result back through the collection allocator so the owned
+        // `Vec[T]` the compiler builds frees it with the matching `free`.
+        let out = crate::alloc::karac_alloc_or_panic(byte_len);
+        std::ptr::copy_nonoverlapping(output.as_ptr(), out, byte_len);
+        out
     }
-
-    let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
-    let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
-        crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
-        std::process::abort();
-    };
-    let input = std::slice::from_raw_parts(in_ptr, byte_len);
-
-    let Some(output) = pollster::block_on(dispatch_bytes_async(wgsl, input, elem_size)) else {
-        crate::fatal::write_stderr(
-            b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
-        );
-        std::process::abort();
-    };
-    debug_assert_eq!(output.len(), byte_len, "element-wise map preserves length");
-
-    // Hand the result back through the collection allocator so the owned
-    // `Vec[T]` the compiler builds frees it with the matching `free`.
-    let out = crate::alloc::karac_alloc_or_panic(byte_len);
-    std::ptr::copy_nonoverlapping(output.as_ptr(), out, byte_len);
-    out
 }
 
 /// C entry point for `gpu.dispatch(kernel, buffer)` over a **SoA `layout`-block
@@ -325,42 +327,44 @@ pub unsafe extern "C" fn karac_runtime_gpu_map_multi(
     elem_size: usize,
     out_ptrs: *mut *mut u8,
 ) {
-    let byte_len = n.saturating_mul(elem_size);
-    let out_slots = std::slice::from_raw_parts_mut(out_ptrs, n_buffers);
+    unsafe {
+        let byte_len = n.saturating_mul(elem_size);
+        let out_slots = std::slice::from_raw_parts_mut(out_ptrs, n_buffers);
 
-    // Empty dispatch: a unique non-null allocation per group, never read.
-    if byte_len == 0 || n_buffers == 0 {
-        for slot in out_slots.iter_mut() {
-            *slot = crate::alloc::karac_alloc_or_panic(1);
+        // Empty dispatch: a unique non-null allocation per group, never read.
+        if byte_len == 0 || n_buffers == 0 {
+            for slot in out_slots.iter_mut() {
+                *slot = crate::alloc::karac_alloc_or_panic(1);
+            }
+            return;
         }
-        return;
-    }
 
-    let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
-    let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
-        crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
-        std::process::abort();
-    };
-    let in_ptr_slice = std::slice::from_raw_parts(in_ptrs, n_buffers);
-    let inputs: Vec<&[u8]> = in_ptr_slice
-        .iter()
-        .map(|&p| std::slice::from_raw_parts(p, byte_len))
-        .collect();
+        let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
+        let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
+            crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+        let in_ptr_slice = std::slice::from_raw_parts(in_ptrs, n_buffers);
+        let inputs: Vec<&[u8]> = in_ptr_slice
+            .iter()
+            .map(|&p| std::slice::from_raw_parts(p, byte_len))
+            .collect();
 
-    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, &[], n))
-    else {
-        crate::fatal::write_stderr(
-            b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
-        );
-        std::process::abort();
-    };
-    debug_assert_eq!(outputs.len(), n_buffers, "one output buffer per group");
+        let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, &[], n))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        debug_assert_eq!(outputs.len(), n_buffers, "one output buffer per group");
 
-    for (slot, obytes) in out_slots.iter_mut().zip(outputs.iter()) {
-        debug_assert_eq!(obytes.len(), byte_len, "element-wise map preserves length");
-        let out = crate::alloc::karac_alloc_or_panic(byte_len);
-        std::ptr::copy_nonoverlapping(obytes.as_ptr(), out, byte_len);
-        *slot = out;
+        for (slot, obytes) in out_slots.iter_mut().zip(outputs.iter()) {
+            debug_assert_eq!(obytes.len(), byte_len, "element-wise map preserves length");
+            let out = crate::alloc::karac_alloc_or_panic(byte_len);
+            std::ptr::copy_nonoverlapping(obytes.as_ptr(), out, byte_len);
+            *slot = out;
+        }
     }
 }
 
@@ -405,64 +409,67 @@ pub unsafe extern "C" fn karac_runtime_gpu_dispatch_soa(
     uniform_ptrs: *const *const u8,
     uniform_size: usize,
 ) -> *mut u8 {
-    let aos_total = n.saturating_mul(aos_stride);
+    unsafe {
+        let aos_total = n.saturating_mul(aos_stride);
 
-    // Empty dispatch: a unique non-null allocation the caller never reads.
-    if aos_total == 0 || n_groups == 0 {
-        return crate::alloc::karac_alloc_or_panic(aos_total.max(1));
-    }
-
-    let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
-    let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
-        crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
-        std::process::abort();
-    };
-    let strides = std::slice::from_raw_parts(group_strides, n_groups);
-    let in_ptr_slice = std::slice::from_raw_parts(in_ptrs, n_groups);
-    let inputs: Vec<&[u8]> = in_ptr_slice
-        .iter()
-        .zip(strides.iter())
-        .map(|(&p, &stride)| std::slice::from_raw_parts(p, n * stride))
-        .collect();
-    // Scalar uniforms (GPU-LBM-2): each `uniform_size` bytes (f32 = 4). Guard the
-    // empty case — codegen passes a null `uniform_ptrs` for a zero-uniform kernel,
-    // and `from_raw_parts(null, 0)` violates the aligned-non-null precondition.
-    let uniforms: Vec<&[u8]> = if n_uniforms == 0 {
-        Vec::new()
-    } else {
-        std::slice::from_raw_parts(uniform_ptrs, n_uniforms)
-            .iter()
-            .map(|&p| std::slice::from_raw_parts(p, uniform_size))
-            .collect()
-    };
-
-    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, &uniforms, n))
-    else {
-        crate::fatal::write_stderr(
-            b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
-        );
-        std::process::abort();
-    };
-    debug_assert_eq!(outputs.len(), n_groups, "one output group-array per group");
-
-    // Scatter each struct field from its group's output element to the AoS element.
-    let fgroup = std::slice::from_raw_parts(field_group, n_fields);
-    let fsrc = std::slice::from_raw_parts(field_src, n_fields);
-    let fdst = std::slice::from_raw_parts(field_dst, n_fields);
-    let out = crate::alloc::karac_alloc_or_panic(aos_total);
-    for f in 0..n_fields {
-        let g = fgroup[f];
-        let src_buf = &outputs[g];
-        let gstride = strides[g];
-        for i in 0..n {
-            std::ptr::copy_nonoverlapping(
-                src_buf.as_ptr().add(i * gstride + fsrc[f]),
-                out.add(i * aos_stride + fdst[f]),
-                field_size,
-            );
+        // Empty dispatch: a unique non-null allocation the caller never reads.
+        if aos_total == 0 || n_groups == 0 {
+            return crate::alloc::karac_alloc_or_panic(aos_total.max(1));
         }
+
+        let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
+        let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
+            crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+        let strides = std::slice::from_raw_parts(group_strides, n_groups);
+        let in_ptr_slice = std::slice::from_raw_parts(in_ptrs, n_groups);
+        let inputs: Vec<&[u8]> = in_ptr_slice
+            .iter()
+            .zip(strides.iter())
+            .map(|(&p, &stride)| std::slice::from_raw_parts(p, n * stride))
+            .collect();
+        // Scalar uniforms (GPU-LBM-2): each `uniform_size` bytes (f32 = 4). Guard the
+        // empty case — codegen passes a null `uniform_ptrs` for a zero-uniform kernel,
+        // and `from_raw_parts(null, 0)` violates the aligned-non-null precondition.
+        let uniforms: Vec<&[u8]> = if n_uniforms == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(uniform_ptrs, n_uniforms)
+                .iter()
+                .map(|&p| std::slice::from_raw_parts(p, uniform_size))
+                .collect()
+        };
+
+        let Some(outputs) =
+            pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, &uniforms, n))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        debug_assert_eq!(outputs.len(), n_groups, "one output group-array per group");
+
+        // Scatter each struct field from its group's output element to the AoS element.
+        let fgroup = std::slice::from_raw_parts(field_group, n_fields);
+        let fsrc = std::slice::from_raw_parts(field_src, n_fields);
+        let fdst = std::slice::from_raw_parts(field_dst, n_fields);
+        let out = crate::alloc::karac_alloc_or_panic(aos_total);
+        for f in 0..n_fields {
+            let g = fgroup[f];
+            let src_buf = &outputs[g];
+            let gstride = strides[g];
+            for i in 0..n {
+                std::ptr::copy_nonoverlapping(
+                    src_buf.as_ptr().add(i * gstride + fsrc[f]),
+                    out.add(i * aos_stride + fdst[f]),
+                    field_size,
+                );
+            }
+        }
+        out
     }
-    out
 }
 
 /// Byte-oriented GPU element-wise map core. `input` is the raw element bytes
@@ -797,53 +804,55 @@ pub unsafe extern "C" fn karac_runtime_gpu_upload_soa(
     group_strides: *const usize,
     n: usize,
 ) -> u64 {
-    let handle = next_resident_handle();
+    unsafe {
+        let handle = next_resident_handle();
 
-    // Empty / degenerate: register a bufferless handle (download returns a unique
-    // non-null allocation, dispatch yields another empty handle) — mirrors the
-    // round-trip path's `n == 0` contract without a zero-size wgpu buffer.
-    if n == 0 || n_groups == 0 {
-        resident_registry().lock().unwrap().insert(
-            handle,
-            ResidentSoa {
-                bufs: Vec::new(),
-                sizes: Vec::new(),
-                n: 0,
-            },
-        );
-        return handle;
-    }
+        // Empty / degenerate: register a bufferless handle (download returns a unique
+        // non-null allocation, dispatch yields another empty handle) — mirrors the
+        // round-trip path's `n == 0` contract without a zero-size wgpu buffer.
+        if n == 0 || n_groups == 0 {
+            resident_registry().lock().unwrap().insert(
+                handle,
+                ResidentSoa {
+                    bufs: Vec::new(),
+                    sizes: Vec::new(),
+                    n: 0,
+                },
+            );
+            return handle;
+        }
 
-    let Some(ctx) = gpu_context() else {
-        crate::fatal::write_stderr(
-            b"panic: gpu.upload found no available GPU adapter (no CPU fallback)\n",
-        );
-        std::process::abort();
-    };
-    let device = &ctx.device;
-    let strides = std::slice::from_raw_parts(group_strides, n_groups);
-    let in_ptr_slice = std::slice::from_raw_parts(in_ptrs, n_groups);
-    let mut bufs = Vec::with_capacity(n_groups);
-    let mut sizes = Vec::with_capacity(n_groups);
-    for (&p, &stride) in in_ptr_slice.iter().zip(strides.iter()) {
-        let byte_len = n.saturating_mul(stride);
-        let bytes = std::slice::from_raw_parts(p, byte_len);
-        bufs.push(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("gpu-4b-resident-input"),
-                contents: bytes,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-            }),
-        );
-        sizes.push(byte_len as u64);
+        let Some(ctx) = gpu_context() else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.upload found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        let device = &ctx.device;
+        let strides = std::slice::from_raw_parts(group_strides, n_groups);
+        let in_ptr_slice = std::slice::from_raw_parts(in_ptrs, n_groups);
+        let mut bufs = Vec::with_capacity(n_groups);
+        let mut sizes = Vec::with_capacity(n_groups);
+        for (&p, &stride) in in_ptr_slice.iter().zip(strides.iter()) {
+            let byte_len = n.saturating_mul(stride);
+            let bytes = std::slice::from_raw_parts(p, byte_len);
+            bufs.push(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("gpu-4b-resident-input"),
+                    contents: bytes,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                }),
+            );
+            sizes.push(byte_len as u64);
+        }
+        resident_registry()
+            .lock()
+            .unwrap()
+            .insert(handle, ResidentSoa { bufs, sizes, n });
+        handle
     }
-    resident_registry()
-        .lock()
-        .unwrap()
-        .insert(handle, ResidentSoa { bufs, sizes, n });
-    handle
 }
 
 /// Dispatch a kernel against a RESIDENT input handle, producing a fresh resident
@@ -867,67 +876,69 @@ pub unsafe extern "C" fn karac_runtime_gpu_dispatch_resident(
     uniform_ptrs: *const *const u8,
     uniform_size: usize,
 ) -> u64 {
-    let Some(ctx) = gpu_context() else {
-        crate::fatal::write_stderr(
-            b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
-        );
-        std::process::abort();
-    };
-    let device = &ctx.device;
-    let queue = &ctx.queue;
-    let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
-    let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
-        crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
-        std::process::abort();
-    };
-    // Guard the empty case — codegen passes a null `uniform_ptrs` for a
-    // zero-uniform kernel, and `from_raw_parts(null, 0)` violates the
-    // aligned-non-null precondition (harmless in release, UB-flagged in debug).
-    let uniforms: Vec<&[u8]> = if n_uniforms == 0 {
-        Vec::new()
-    } else {
-        std::slice::from_raw_parts(uniform_ptrs, n_uniforms)
-            .iter()
-            .map(|&p| std::slice::from_raw_parts(p, uniform_size))
-            .collect()
-    };
-
-    // Hold the registry lock across the (submit-only, non-blocking) dispatch: the
-    // input buffers live in the registry and `wgpu::Buffer` is not clonable, so we
-    // read them in place. The single-threaded sim loop never contends this.
-    let mut reg = resident_registry().lock().unwrap();
-    let (output_bufs, sizes, n) = {
-        let Some(input) = reg.get(&in_handle) else {
+    unsafe {
+        let Some(ctx) = gpu_context() else {
             crate::fatal::write_stderr(
-                b"panic: gpu.dispatch on an unknown or already-freed device buffer\n",
+                b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
             );
             std::process::abort();
         };
-        if input.n == 0 {
-            (Vec::new(), Vec::new(), 0)
+        let device = &ctx.device;
+        let queue = &ctx.queue;
+        let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
+        let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
+            crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+        // Guard the empty case — codegen passes a null `uniform_ptrs` for a
+        // zero-uniform kernel, and `from_raw_parts(null, 0)` violates the
+        // aligned-non-null precondition (harmless in release, UB-flagged in debug).
+        let uniforms: Vec<&[u8]> = if n_uniforms == 0 {
+            Vec::new()
         } else {
-            let out = run_compute(
-                device,
-                queue,
-                wgsl,
-                &input.bufs,
-                &input.sizes,
-                &uniforms,
-                input.n,
-            );
-            (out, input.sizes.clone(), input.n)
-        }
-    };
-    let handle = next_resident_handle();
-    reg.insert(
-        handle,
-        ResidentSoa {
-            bufs: output_bufs,
-            sizes,
-            n,
-        },
-    );
-    handle
+            std::slice::from_raw_parts(uniform_ptrs, n_uniforms)
+                .iter()
+                .map(|&p| std::slice::from_raw_parts(p, uniform_size))
+                .collect()
+        };
+
+        // Hold the registry lock across the (submit-only, non-blocking) dispatch: the
+        // input buffers live in the registry and `wgpu::Buffer` is not clonable, so we
+        // read them in place. The single-threaded sim loop never contends this.
+        let mut reg = resident_registry().lock().unwrap();
+        let (output_bufs, sizes, n) = {
+            let Some(input) = reg.get(&in_handle) else {
+                crate::fatal::write_stderr(
+                    b"panic: gpu.dispatch on an unknown or already-freed device buffer\n",
+                );
+                std::process::abort();
+            };
+            if input.n == 0 {
+                (Vec::new(), Vec::new(), 0)
+            } else {
+                let out = run_compute(
+                    device,
+                    queue,
+                    wgsl,
+                    &input.bufs,
+                    &input.sizes,
+                    &uniforms,
+                    input.n,
+                );
+                (out, input.sizes.clone(), input.n)
+            }
+        };
+        let handle = next_resident_handle();
+        reg.insert(
+            handle,
+            ResidentSoa {
+                bufs: output_bufs,
+                sizes,
+                n,
+            },
+        );
+        handle
+    }
 }
 
 /// Download a resident SoA handle back to a host AoS buffer and FREE the handle
@@ -955,55 +966,57 @@ pub unsafe extern "C" fn karac_runtime_gpu_download_soa(
     aos_stride: usize,
     n: usize,
 ) -> *mut u8 {
-    // Remove the handle up front — download consumes it (freeing the device
-    // buffers when `resident` drops at end of scope).
-    let Some(resident) = resident_registry().lock().unwrap().remove(&handle) else {
-        crate::fatal::write_stderr(
-            b"panic: gpu.download on an unknown or already-freed device buffer\n",
-        );
-        std::process::abort();
-    };
-    let aos_total = n.saturating_mul(aos_stride);
-    if aos_total == 0 || resident.bufs.is_empty() {
-        return crate::alloc::karac_alloc_or_panic(aos_total.max(1));
-    }
-
-    let Some(ctx) = gpu_context() else {
-        crate::fatal::write_stderr(
-            b"panic: gpu.download found no available GPU adapter (no CPU fallback)\n",
-        );
-        std::process::abort();
-    };
-    let Some(group_bytes) = readback(&ctx.device, &ctx.queue, &resident.bufs, &resident.sizes)
-    else {
-        crate::fatal::write_stderr(b"panic: gpu.download failed to map device buffers\n");
-        std::process::abort();
-    };
-
-    // Scatter each struct field from its group's element to the AoS element —
-    // identical to the round-trip `karac_runtime_gpu_dispatch_soa` scatter. Each
-    // group's per-element stride is `sizes[g] / n`.
-    let fgroup = std::slice::from_raw_parts(field_group, n_fields);
-    let fsrc = std::slice::from_raw_parts(field_src, n_fields);
-    let fdst = std::slice::from_raw_parts(field_dst, n_fields);
-    let strides: Vec<usize> = resident.sizes.iter().map(|&s| (s as usize) / n).collect();
-    let out = crate::alloc::karac_alloc_or_panic(aos_total);
-    for f in 0..n_fields {
-        let g = fgroup[f];
-        let src_buf = &group_bytes[g];
-        let gstride = strides[g];
-        for i in 0..n {
-            std::ptr::copy_nonoverlapping(
-                src_buf.as_ptr().add(i * gstride + fsrc[f]),
-                out.add(i * aos_stride + fdst[f]),
-                field_size,
+    unsafe {
+        // Remove the handle up front — download consumes it (freeing the device
+        // buffers when `resident` drops at end of scope).
+        let Some(resident) = resident_registry().lock().unwrap().remove(&handle) else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.download on an unknown or already-freed device buffer\n",
             );
+            std::process::abort();
+        };
+        let aos_total = n.saturating_mul(aos_stride);
+        if aos_total == 0 || resident.bufs.is_empty() {
+            return crate::alloc::karac_alloc_or_panic(aos_total.max(1));
         }
+
+        let Some(ctx) = gpu_context() else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.download found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        let Some(group_bytes) = readback(&ctx.device, &ctx.queue, &resident.bufs, &resident.sizes)
+        else {
+            crate::fatal::write_stderr(b"panic: gpu.download failed to map device buffers\n");
+            std::process::abort();
+        };
+
+        // Scatter each struct field from its group's element to the AoS element —
+        // identical to the round-trip `karac_runtime_gpu_dispatch_soa` scatter. Each
+        // group's per-element stride is `sizes[g] / n`.
+        let fgroup = std::slice::from_raw_parts(field_group, n_fields);
+        let fsrc = std::slice::from_raw_parts(field_src, n_fields);
+        let fdst = std::slice::from_raw_parts(field_dst, n_fields);
+        let strides: Vec<usize> = resident.sizes.iter().map(|&s| (s as usize) / n).collect();
+        let out = crate::alloc::karac_alloc_or_panic(aos_total);
+        for f in 0..n_fields {
+            let g = fgroup[f];
+            let src_buf = &group_bytes[g];
+            let gstride = strides[g];
+            for i in 0..n {
+                std::ptr::copy_nonoverlapping(
+                    src_buf.as_ptr().add(i * gstride + fsrc[f]),
+                    out.add(i * aos_stride + fdst[f]),
+                    field_size,
+                );
+            }
+        }
+        // The device buffers are fully read (the readback poll waited); recycle them
+        // for a subsequent frame's upload/dispatch (GPU-SLIP-4 buffer pooling).
+        recycle_buffers(resident.bufs, &resident.sizes);
+        out
     }
-    // The device buffers are fully read (the readback poll waited); recycle them
-    // for a subsequent frame's upload/dispatch (GPU-SLIP-4 buffer pooling).
-    recycle_buffers(resident.bufs, &resident.sizes);
-    out
 }
 
 /// Free a resident SoA handle's device buffers (GPU-SLIP-4b) — the drop-glue
