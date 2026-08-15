@@ -2885,9 +2885,47 @@ impl<'ctx> super::Codegen<'ctx> {
                     },
                 ..
             }) => {
+                // B-2026-08-15-25 — the override used to require the recorded
+                // type to be a STRUCT, which silently excluded every other shape
+                // the heuristic cannot recover. A `bool` is `i1` — an INT — so a
+                // closure returning a builtin predicate (`|s| s.starts_with(p)`,
+                // `|m| m.contains_key(k)`) kept the heuristic's `i64` and the
+                // body's `ret i1` failed LLVM module verification, on a program
+                // `karac check` accepts and the interpreter runs.
+                //
+                // The gate is now the sentinel itself rather than the shape it
+                // produced. `i64` IS the heuristic's "I gave up" answer (the
+                // fallback arm at the bottom of `infer_closure_return_type`), so
+                // whenever the typechecker recorded something else, the recorded
+                // type is strictly better information — that is the same
+                // reasoning the struct case already shipped on, just not
+                // restricted to structs.
+                //
+                // A genuinely `i64`-returning body is unaffected: the recorded
+                // type is `i64` too and the two agree. A fieldless enum
+                // (`a.cmp(b)` → `Ordering`) never reaches here — its own arm
+                // resolves the layout, so the heuristic is not `i64` for it.
+                //
+                // A BORROW return is excluded, and this is the one case the old
+                // struct-only gate was accidentally right about. `|a| a` over a
+                // borrowed payload records `ref i64`, which lowers to `ptr` —
+                // but the body DEREF-ON-USES the borrow and returns the pointee,
+                // so the recorded type describes the binding, not the value that
+                // leaves. Taking it emitted `ret i64` against a `ptr` signature:
+                // the same verifier failure this fix exists to remove, pointing
+                // the other way. `infer_closure_return_type`'s own `Identifier`
+                // arm already reports the POINTEE for a `ref` param
+                // (B-2026-08-08-30), so the heuristic is the authority here.
+                //
+                // Only `Ref`/`MutRef` are excluded, not every pointer-shaped
+                // record: a closure returning a handle-backed builtin (`Map`,
+                // `Tensor`) also lowers to `ptr`, and there the handle IS the
+                // value returned, so the record is right.
+                let recorded_is_borrow = matches!(rt.kind, TypeKind::Ref(_) | TypeKind::MutRef(_));
                 let recorded = self.llvm_type_for_type_expr(rt);
                 if heuristic_rt == self.context.i64_type().into()
-                    && matches!(recorded, BasicTypeEnum::StructType(_))
+                    && recorded != heuristic_rt
+                    && !recorded_is_borrow
                 {
                     recorded
                 } else {
@@ -3263,9 +3301,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 // operator applied to non-array type" because `w` never reached
                 // `vec_elem_types`, while `karac check` passed and the
                 // interpreter ran it.
+                // B-2026-08-15-28 — but NOT for a handle-backed builtin. A
+                // `Map`/`Set`/`Tensor`/… value IS a pointer, and the closure ABI
+                // passes that pointer directly (`call %closure_fn(%env, %m)`
+                // where `%m` is the loaded handle). Registering it as a borrow
+                // adds a second load on top of it, so the body derefs the handle
+                // and calls the runtime with the map's first WORD as a pointer:
+                // `|m| m.len()` returned 529 for a one-entry map, and
+                // `m.contains_key(k)` segfaulted. The handle already IS the
+                // reference — there is nothing to deref.
+                let borrows_a_handle = match &te.kind {
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => match &inner.kind {
+                        TypeKind::Path(p) => p
+                            .segments
+                            .last()
+                            .is_some_and(|n| super::types_lowering::builtin_opaque_ptr_handle(n)),
+                        _ => false,
+                    },
+                    _ => false,
+                };
                 if let Some(inner_ty) = self.inner_type_of_ref(&te) {
-                    self.ref_params.insert(param_name.clone(), inner_ty);
-                    self.signature_ref_params.insert(param_name.clone());
+                    if !borrows_a_handle {
+                        self.ref_params.insert(param_name.clone(), inner_ty);
+                        self.signature_ref_params.insert(param_name.clone());
+                    }
                 }
                 match &te.kind {
                     TypeKind::Ref(inner) | TypeKind::MutRef(inner) => {

@@ -96091,6 +96091,89 @@ fn main() {
         );
     }
 
+    /// B-2026-08-15-25 and B-2026-08-15-28 — a closure whose body is a builtin
+    /// predicate, and a closure taking a handle-backed builtin by `ref`.
+    ///
+    /// Both are detectors: on the parent this program does not build at all
+    /// (six "Function return type does not match operand type of return inst"
+    /// failures), and the shapes that DID build there read garbage.
+    ///
+    /// -25: `infer_closure_return_type` falls back to `i64` when it cannot
+    /// recover a body's surface type, and the override that repairs that from
+    /// the typechecker-recorded `Fn(T) -> R` only fired for STRUCT returns. A
+    /// `bool` is `i1` and a `u8` is `i8` — both ints — so both kept the `i64`
+    /// signature and the body's `ret` mismatched it. `vecat` is in here for
+    /// exactly that reason: it returns `u8`, not `bool`, so it pins the
+    /// generalization rather than a bool special case.
+    ///
+    /// -28: a `Map`/`Set` value IS a pointer, and the closure ABI passes it
+    /// directly, so registering a `ref Map` parameter as a borrow added a second
+    /// load and the body called the runtime with the map's first word as a
+    /// pointer. `msize`/`ssize` are the pins that would catch it silently —
+    /// `|m| m.len()` returned 529 for a two-entry map on the parent rather than
+    /// crashing, so a fixture that only checked "does it build" would miss it.
+    ///
+    /// Every closure is invoked more than once, and the containers are re-read
+    /// at the end, so a handle corrupted by the old double-deref cannot pass.
+    #[test]
+    fn test_e2e_closure_over_builtin_predicates_and_handle_refs() {
+        assert_eq!(
+            run_program(
+                "struct P { x: i64, y: i64 }\n\
+                 fn starts(p: String) -> Fn(ref String) -> bool { |s| s.starts_with(p) }\n\
+                 fn ends(p: String) -> Fn(ref String) -> bool { |s| s.ends_with(p) }\n\
+                 fn forbids(b: String) -> Fn(ref String) -> bool { |s| not s.contains(b) }\n\
+                 fn keyed(k: String) -> Fn(ref Map[String, i64]) -> bool { |m| m.contains_key(k) }\n\
+                 fn member(e: String) -> Fn(ref Set[String]) -> bool { |st| st.contains(e) }\n\
+                 fn msize() -> Fn(ref Map[String, i64]) -> i64 { |m| m.len() }\n\
+                 fn ssize() -> Fn(ref Set[String]) -> i64 { |st| st.len() }\n\
+                 fn nocap() -> Fn(ref String) -> bool { |s| s.starts_with(\"ab\") }\n\
+                 fn vecat() -> Fn(ref Vec[u8], i64) -> u8 { |w, i| w[i] }\n\
+                 fn slen() -> Fn(ref String) -> i64 { |s| s.len() }\n\
+                 fn psum() -> Fn(ref P) -> i64 { |p| p.x + p.y }\n\
+                 fn vlen() -> Fn(ref Vec[String]) -> i64 { |v| v.len() }\n\
+                 fn main() {\n\
+                     let a = \"abxyc\";\n\
+                     let b = \"hello\";\n\
+                     let g1 = starts(\"ab\");  println(f\"{g1(a)} {g1(b)} {g1(a)}\");\n\
+                     let g2 = ends(\"lo\");    println(f\"{g2(a)} {g2(b)}\");\n\
+                     let g3 = forbids(\"xy\"); println(f\"{g3(a)} {g3(b)}\");\n\
+                     let g4 = nocap();       println(f\"{g4(a)} {g4(b)}\");\n\
+                     let mut m: Map[String, i64] = Map.new();\n\
+                     let _ = m.insert(\"k\", 1);\n\
+                     let _ = m.insert(\"j\", 2);\n\
+                     let g5 = keyed(\"k\");\n\
+                     let g6 = keyed(\"q\");\n\
+                     println(f\"{g5(m)} {g6(m)} {g5(m)}\");\n\
+                     let g7 = msize();\n\
+                     println(f\"{g7(m)}\");\n\
+                     let mut st: Set[String] = Set.new();\n\
+                     let _ = st.insert(\"z\");\n\
+                     let g8 = member(\"z\");\n\
+                     let g9 = member(\"q\");\n\
+                     println(f\"{g8(st)} {g9(st)}\");\n\
+                     let g10 = ssize();\n\
+                     println(f\"{g10(st)}\");\n\
+                     let v: Vec[u8] = [7u8, 8u8, 9u8];\n\
+                     println(f\"{vecat()(v, 1)}\");\n\
+                     let s2 = \"abcd\";\n\
+                     println(f\"{slen()(s2)}\");\n\
+                     let p = P { x: 3, y: 4 };\n\
+                     println(f\"{psum()(p)}\");\n\
+                     let mut vs: Vec[String] = Vec.new();\n\
+                     vs.push(\"a\"); vs.push(\"b\");\n\
+                     println(f\"{vlen()(vs)}\");\n\
+                     println(f\"{m.len()} {st.len()}\");\n\
+                 }\n"
+            ),
+            Some(
+                "true false true\nfalse true\nfalse true\ntrue false\n\
+                 true false true\n2\ntrue false\n1\n8\n4\n7\n2\n2 1\n"
+                    .to_string()
+            )
+        );
+    }
+
     /// B-2026-08-15-7 — a fresh-owned `Vec` temporary into a generic fn's owned
     /// param, across the spellings that decide who frees it.
     ///
