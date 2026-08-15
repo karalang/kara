@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 249 | 0 |
-| leak | 180 | 3 |
+| leak | 180 | 2 |
 | double-free | 129 | 0 |
 | run-vs-build | 121 | 0 |
 | codegen-gap | 109 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 876 | 4 |
+| codegen | 876 | 3 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1212 surfaced · 5 open · 1195 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1212 surfaced · 4 open · 1196 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-15-3 | 2026-08-15 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capacity 0 and re-grows 8 -> 16 -> ... on every round. Both spellings now compile to the same in-place append as `push_str` (B-2026-08-14-23), so the two are equivalent code and the heuristic disagrees with itself: measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends, entirely from the missing reservation. | `src/presize.rs`. `is_push_to` matches only `ExprKind::MethodCall` with `push`/`push_str`/`push_back`, and `top_level_push_count` counts only `StmtKind::Expr` statements, so `StmtKind::Assign { target: V, value: V + x }` and `StmtKind::CompoundAssign { Add, target: V, .. }` are invisible. `find_fill_bound` additionally BAILS on any non-`Expr` statement between the Let and the loop that mentions `V`, which would reject a prelude `s = s + "seed"` the way it currently folds in a prelude `s.push_str("seed")`. |
 | B-2026-08-15-4 | 2026-08-15 | autopar | low | `cost_gate: "unknown"` conflates "the loop lookup failed" (a compiler bug) with "found it, but the iterable is not a shapeable range" (a legitimate limitation) -- the same opaque string for both | disjoint_loop_verdict / reduction_loop_verdict (src/effect_graph.rs) chain two `?`s -- find_loop_in_block then par_cost::extract_loop_shape -- and both collapse to None, which effect_graph.rs reports as (false, "unknown"). |
 | B-2026-08-15-6 | 2026-08-15 | codegen | medium | THE DEEP-CLONED HEAP ELEMENT OF AN INLINE-TEMP-VEC INDEX LEAKS WHEN THE INDEX IS AN F-STRING INTERPOLATION OPERAND but not when it is a direct print argument: `println(f"{names()[1]}")` strands one String per evaluation while `println(names()[1])` is clean. | `compile_inline_temp_vec_index_ex` (src/codegen/collections.rs) deep-clones a non-Copy element before draining the temp buffer — it has to, or the returned value dangles — and the clone's owner is the CONSUMER, via `free_fresh_owned_str_arg` gated on `expr_is_inline_temp_vec_heap_index`. The direct print-argument site calls that; the f-string interpolation lowering does not. |
@@ -147,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1212 surfaced
 
 </details>
 
-### Fixed (1195)
+### Fixed (1196)
 
-<details><summary>1195 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1196 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6761,6 +6760,72 @@ NOTE ON THE SOURCE CASE, unchanged: the Cumulus loop this came from is still
 declined once visible, for the sound reason the row records (`the body reads a
 collection it also writes`). The gain there is observability, which is what the
 row asked for. |
+| B-2026-08-14-25 | codegen | medium | A `String` field of a `shared struct` NEVER releases the buffer its reassignment displaces — one leaked buffer per assignment on every layout, not (a… | FIXED by 04e550b — a sibling session's B-2026-08-15-5, which is THE SAME DEFECT
+reached from the other end (its -O0 test leg caught it on that leg's first run,
+while this row came from twelve hand-written probes). Hardened by 2619830, which
+makes the fixtures gate it at the DEFAULT opt level too.
+
+THE ROW'S PREMISE WAS WRONG, AND CORRECTING IT MAKES THE BUG BIGGER. There is no
+layout boundary. Every `String` field of every `shared struct` leaked its
+displaced buffer on every reassignment, always has, since the release arm was
+written. Field count, field order and the container mix never mattered. What the
+twelve probes were actually sorting on was WHETHER THE OPTIMIZER COULD MAKE THE
+ALLOCATION DISAPPEAR:
+
+    shared struct P { mut label: String }        // ONE field. Nothing else.
+    ...
+        let fresh: String = "epsilonepsilonepsilon" + "zetazetazeta";
+        p.label = fresh;
+    ...
+    println(f"{p.label.len()}");   // LSan CLEAN
+    println(p.label);              // LSan: 693 B leaked in 19 allocations
+
+TWO SEPARATE EFFECTS, and either one alone is enough to hide it — which is why
+the boundary table looked like a boundary. The concat above is LOOP-INVARIANT, so
+LICM hoists it to a single allocation still reachable at exit (the sibling row's
+finding). And `len` is read out of the `{ptr, len, cap}` HEADER, never the heap
+buffer, so with no other observer the allocation is dead and elided outright.
+Defeating one is not enough: an interpolated per-iteration string still measured
+clean while the only read was `.len()`.
+
+HOW LONG IT TOOK TO SEE, recorded because the shape of the search is the lesson.
+Reconstructing this row's leaking `{Vec, Map, Set, String}` fixture at the exact
+commit it was written against came back CLEAN seventeen times — across field
+counts, orders, element types, container traffic, construction sites,
+method-vs-direct assignment, and three ways of building a guaranteed-heap string.
+A positive control (a known leak from B-2026-08-14-36 at that same commit)
+confirmed the harness was detecting leaks throughout, which is what turned the
+hunt from "find the layout" into "the premise is false".
+
+The eighteenth probe reproduced it: a `weak`-TARGETED shared struct — one that is
+the target of a `weak` reference, so its node carries a two-word header — leaks
+693 B / 19 with no read at all. That looked like the discriminator until the
+read-the-content variant showed the plain single-field struct leaking the same
+693 bytes. Weak-targeting is not a second defect; it just keeps the allocations
+alive to run time, defeating both hiding effects at once.
+
+WHAT THIS ROW ADDS ON TOP OF THE FIX (2619830). B-2026-08-15-5 corrected its
+fixture's COMMENT but not its PROGRAM: reverting the release arm and re-running
+at the default opt level left `asan_shared_struct_string_field_reassign_no_leak`
+GREEN, so after the fix landed only the -O0 leg still gated it. That fixture now
+uses an interpolated concat AND reads the field's content, and fails at the
+default level (693 B / 19). The weak-targeted layout gets its own fixture — it is
+the one shape that does not depend on defeating an optimization to fail, so an
+opt-level or pipeline change cannot quietly re-vacuum it. And the CHAINED store
+(`o.inner.label = …`, a shared field of a shared parent) joins the aliasing
+fixture: it reaches the same release through a different call site in
+`compile_field_store` and was covered by nothing. All three fail with the arm
+reverted at the default level — 693, 854 and 693 bytes.
+
+THE GENERAL RULE THIS EARNED: a leak fixture must OBSERVE the value under test,
+with a read that touches what is allocated. `.len()` does not. A fixture that
+skips that measures the optimizer, not the compiler — and reads as proof of
+correctness while asserting nothing, which is precisely how this defect survived
+its own guard fixture and got filed as a layout mystery.
+
+SOURCE-NOTE CORRECTION: this row's investigation field claimed twelve fixtures
+established a layout boundary, verified pre-existing by stashing B-2026-08-14-18.
+The pre-existence was right; the boundary was not. |
 | B-2026-08-14-26 | codegen | high | A field assignment through a CHAINED shared parent (`outer.inner.field = v`, both `shared struct`) is SILENTLY DROPPED under `karac build` while `--i… | FIXED by 38e15acd. The row asks for the branch to be instrumented before anything is changed, because its two prior fixes were mis-diagnosed. Done, and the answer is unambiguous: `place_chain_type_name` resolves correctly (`Some("Inner")`); `nested_store_place_ptr` returns `None`.
 
 ONE LOOKUP, AND IT IS THE SAME ONE B-2026-07-28-6 ALREADY FIXED ONE LAYER UP. `nested_store_place_ptr`'s FieldAccess arm opens with `self.struct_types.get(obj_ty)?`. A `shared struct` is registered ONLY in `shared_types`, so that `?` answers "not a struct" for every shared parent and the walk returns `None` — after which `compile_field_store`'s guard, which needs BOTH the pointer and the type name, exits through the no-op tail. `compile_field_store` itself learned the `shared_types`-first order in B-2026-07-28-6, and this arm already carries THAT SAME ROW's fix for the shared FIELD three lines below (the extra load, because a shared field holds a handle). The parent's layout was the half nobody went back for.
