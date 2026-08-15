@@ -135,7 +135,8 @@ for fp in files:
 
 | Phase | Slice | State | Landed |
 |---|---|---|---|
-| 1 | `infer_method_call` family extraction (~10 slices) | not started | — |
+| 1 | slice 1 — **scalar primitives** (`method_numeric.rs`): `abs`/`signum`/`sqrt`, the `float_math` table, bit-width converters + bit intrinsics, wrapping/saturating/checked/overflowing, `div_euclid`/`rem_euclid`, `pow`, `min`/`max`/`clamp`, `abs_diff`, rotates, `char` surface | **landed** — 768 lines moved; `infer_method_call` 5,873 → 5,132 lines | 2026-08-15 |
+| 1 | slices 2–10 — remaining families (vec mutation, string, map/set, iterator, tensor/column, atomic, tuple, user-impl lookup) | not started | — |
 | 2 | cluster 1 `RuntimeFns` | not started | — |
 | 2 | clusters 2–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |

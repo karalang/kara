@@ -37,6 +37,7 @@ mod gpu_safe;
 mod inference;
 mod items;
 mod lowering;
+mod method_numeric;
 mod patterns;
 mod refinement_elision;
 mod stdlib_io;
