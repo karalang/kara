@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 122 | 0 |
 | codegen-gap | 111 | 1 |
 | missing-feature | 96 | 0 |
-| perf | 69 | 1 |
+| perf | 69 | 0 |
 | false-positive | 64 | 1 |
 | diagnostics | 59 | 1 |
 | crash | 47 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 887 | 2 |
+| codegen | 887 | 1 |
 | typecheck | 173 | 1 |
 | interp | 146 | 1 |
 | ownership | 50 | 0 |
-| autopar | 46 | 1 |
+| autopar | 46 | 0 |
 | other | 42 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1229 surfaced · 4 open · 1213 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1229 surfaced · 3 open · 1214 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-20 | 2026-08-15 | interp | low | THE INTERPRETER BLAMES AN INTEGER OVERFLOW ON A SUB-EXPRESSION THAT CANNOT OVERFLOW: in `let c = (a + b) * m` with `a + b == 3`, the trap is reported at the column of `a`, not of the multiply that actually trapped. The compiled backends point elsewhere on the same line, so `karac run` and `karac build` give two different locations for one fault. | The span attached to the overflow trap in the interpreter's binary-op evaluation. It appears to carry the LEFT OPERAND's span rather than the operation's — which is indistinguishable from correct whenever the left operand is itself the overflowing op, and wrong whenever it is not. |
 | B-2026-08-15-22 | 2026-08-15 | typecheck | medium | A function returning a REUSABLE closure over a heap value is rejected whenever the body passes that capture BY VALUE -- which every stdlib `contains` / `starts_with` / `ends_with` does. The closure analysis calls those calls CONSUMING; the sequential checker does not (the same call twice plus a later use of the needle is accepted). And the diagnostic's own prescribed remedy -- clone the captured value -- does NOT compile, under either reading. | the closure once-vs-repeatable classification's notion of a consuming use, vs the sequential move checker's; and the by-value `substr: String` parameter the typechecker gives `String.contains` (src/typechecker/stdlib_seq.rs:261, whose own comment says the arg shape is all it enforces). |
-| B-2026-08-15-23 | 2026-08-15 | autopar+codegen | high | THE COLLECT-TABULATE LOWERING REPORTS `fanned_out: true, "dispatched across the worker pool"` AND RUNS ENTIRELY ON ONE THREAD. Every `#[par_order_free]` loop whose body pushes UNCONDITIONALLY — the natural parallel-map idiom — is sequential; wrapping the identical push in a tautological `if` restores a 4x speedup. The query claims fan-out for both. | `collect_tabulate` (concurrency.rs:2953, `collect_is_tabulate_shape`) selects an in-place-store lowering for the exactly-one-unconditional-push shape. That lowering does not dispatch. `effect_graph.rs`'s `fanned_out` / `cost_gate` / `reason` are computed from the reduction being CLASSIFIED, not from the lowering actually chosen, so they report fan-out unconditionally. |
 | B-2026-08-15-24 | 2026-08-15 | codegen | low | A TUPLE-element field store through a `mut Slice[(A, B)]` parameter is not lowered — `fn bump(s: mut Slice[(i64, i64)]) { s[0].0 = 99; }` fails the build with `tuple-element assignment through this receiver shape is not yet lowered; bind the tuple to a local first`. LOUD, not silent — filed to record the shape, not as a wrong-answer risk. | the tuple-element assignment lowering's receiver-shape dispatch: an `Index`-rooted receiver whose container is a `Slice` reaches the not-yet-lowered arm. Compare the STRUCT-element sibling, which B-2026-08-15-21 (9b284cb) taught to resolve through `lower_indexed_elem_ptr_slice`. |
 
 ### Wontfix (2)
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1229 surfaced
 
 </details>
 
-### Fixed (1213)
+### Fixed (1214)
 
-<details><summary>1213 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1214 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8814,6 +8813,107 @@ string from the side that was always correct.
 
 Gates: full `--features llvm` sweep of all 98 targets, 12543 tests, 0 failures;
 clippy `--all --all-targets` and fmt clean. |
+| B-2026-08-15-23 | autopar+codegen | high | A `#[par_order_free]` COLLECT-TABULATE LOOP DISPATCHES FOUR WORKERS AND GIVES ALL THE WORK TO ONE: the order-free dynamic chunker sized chunks `.max(… | FIXED by c04bc65 — and the row's diagnosis needs correcting in a way that
+changes what the fix had to be.
+
+THE LOWERING DOES DISPATCH, AND `fanned_out: true` WAS TELLING THE TRUTH. The
+row's tracker concludes that "that lowering does not dispatch" and that
+`fanned_out` is "computed from the reduction being CLASSIFIED, not from the
+lowering actually chosen". Neither holds. Instrumenting `karac_par_reduce_pooled`
+on the row's own minimal pair, both shapes reach the pooled fan-out with
+identical parameters:
+
+    c_uncond (tabulate)  iter_total=64 pool_workers=4 n_workers=4
+                         per_iter_cost=0 gate_skip=false order_free=TRUE
+    f_cond   (control)   iter_total=64 pool_workers=4 n_workers=4
+                         per_iter_cost=0 gate_skip=false order_free=FALSE
+
+Four worker tasks are dispatched to the pool in BOTH cases. Nothing about the
+codegen-time report is false, and no `fanned_out` change is warranted — the
+fan-out happened. What did not happen is any distribution of work across it.
+
+THE DEFECT IS ONE `.max()` IN THE ORDER-FREE CHUNKER. `order_free` (bit 63 of
+`per_iter_cost_units`) routes the dispatch through a dynamic pull loop whose
+chunk size was
+
+    let chunk = iter_total.div_ceil(target_chunks)
+                          .max(MIN_DYNAMIC_CHUNK.min(iter_total));   // 1024
+
+For any `iter_total` below 1024 that second term is just `iter_total`, so
+`chunk == iter_total` and `n_chunks == 1`. All four workers spawn, one pulls the
+single chunk and runs the entire loop, the other three see `idx >= n_chunks` and
+exit. A textbook-correct fan-out that executes at 100% CPU.
+
+The flag is why the conditional shape looked like the discriminator: only the
+tabulate lowering sets `order_free`, so only it took the dynamic path. Every
+other shape in the row's six-row table fell through to the static split and
+parallelized. The conditional was never the cause — it was the marker for "not
+tabulate".
+
+THE SIZE OF IT IS A CLIFF, NOT A CORNER. `n_chunks = ceil(N / max(ceil(N/32),
+1024))` on 4 workers:
+
+    N < 1024                     1 chunk       100% CPU   fully serial
+    1024 <= N < 32768            N/1024        partial    e.g. N=2048 -> 2 chunks
+    N >= 32768                   as intended   ~400%
+
+Measured on this 4-core box, 64 iterations x a 2M-step body, before -> after:
+
+    unconditional push (tabulate)   165 ms / 100% CPU  ->  44 ms / 374%   3.7x
+    conditional push  (control)      44 ms / 375% CPU  ->  44 ms / 377%   unchanged
+
+and the middle band confirmed independently: 2048 iterations measured 196% CPU
+before — exactly the 2 chunks the formula predicts — and 374% after. Output is
+byte-identical throughout.
+
+THE FIX caps the floor at the static-split size, so it can never reduce the chunk
+COUNT below the number of workers waiting to pull one:
+
+    .max(MIN_DYNAMIC_CHUNK.min(iter_total.div_ceil(n_workers)))
+
+The floor's purpose — keeping the atomic pull-loop invisible on small ranges — is
+a constraint on chunk SIZE, and this preserves it exactly while removing its
+ability to starve the pool. At or above `MIN_DYNAMIC_CHUNK * n_workers` the cap
+is inactive and the arithmetic is byte-identical to before; below it, the worst
+case degrades to the equal static split, which is what a range too small to
+over-decompose should have been getting all along. That equality is pinned as a
+test rather than asserted, since "I did not change the hot path" is the claim
+carrying the risk.
+
+WHY IT SURVIVED, which is the part worth keeping. The collapse was WRITTEN DOWN
+AS INTENDED: `test_par_reduce_order_free_covers_range_exactly_once` runs a
+10-iteration case and its doc called it "the tiny-range degenerate (floor
+collapses it to one chunk)". Both existing order-free tests assert that every
+index is covered exactly ONCE — which one worker doing all the work satisfies
+perfectly — so neither could ever have caught this, and the one that came closest
+described the bug as the expected result. That comment is corrected, and the
+chunk COUNT now has its own pin.
+
+MEASUREMENT NOT REPRODUCED: the row's kata-level numbers (457.9 ms -> 130.4 ms,
+3.51x on `bench/paint_enum.kara`) are from the kara-katas repo, which is not
+present in this container. The minimal pair above reproduces the same effect at
+the same ratio (3.7x), and the mechanism is now understood well enough that the
+kata number follows from it; the kata bench should be re-run to confirm, and the
+`bench/probe/paint_enum_guarded.kara` probe should now measure ~1.0x against the
+natural shape rather than 3.5x.
+
+PINS. `test_order_free_chunk_never_starves_workers` sweeps worker counts
+1/2/4/8/64 against ranges spanning the cliff and asserts the chunk count never
+falls below the equal static split — it fails against the stashed formula at
+`n=2 workers=2: 1 chunks is worse than the static split's 2`. Its companion
+`test_order_free_chunk_matches_prior_formula_above_the_floor` pins exact equality
+with the old arithmetic at and above `1024 * n_workers`, and passes on both sides
+by design. The bar is the STATIC SPLIT rather than `n_workers` chunks because
+`ceil(N / ceil(N/W))` is itself below `W` whenever `N` is not a multiple of `W`
+(N=100 over 64 workers is 50 chunks of 2, and no split of 100 does better) — the
+first draft of the pin asserted the stronger thing and was wrong.
+
+GATES: full `--features llvm` suite green (13,756 passed / 0 failed), fmt clean,
+native clippy `--all-targets` clean, and BOTH wasm-cfg clippy targets clean
+(`wasm32-wasip1` and `wasm32-wasip1-threads`) — required here because this
+touches the runtime, and it earned its keep: the first draft of the extraction
+inserted the new fn between `#[cfg(...)]` and `karac_par_reduce_pooled`,
+un-gating the pooled path on sequential wasm. Native clippy is blind to that. |
 
 </details>
 
