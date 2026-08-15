@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 251 | 1 |
+| miscompile | 251 | 0 |
 | leak | 182 | 0 |
 | double-free | 130 | 1 |
 | run-vs-build | 122 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 884 | 2 |
+| codegen | 884 | 1 |
 | typecheck | 172 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced · 3 open · 1209 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced · 2 open · 1210 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-15 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING of a `Vec[Struct]` (`let s = entries[0..2]`) DOUBLE-FREES under `KARAC_AUTO_PAR=0` and SIGSEGVs at `-O0`, while the DEFAULT build is clean and prints the right answer — the inverted polarity means disabling auto-par to rule it out is what triggers the crash. | the range-index let path's element ownership for a struct element with a heap field: the slice and the source Vec both appear to own the element buffers. Auto-par splitting the function happens to mask it. |
-| B-2026-08-15-16 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING crossing an AUTO-PAR JOIN returns the WRONG LENGTH, silently, in the DEFAULT build — `let s = nums[0..2]; return s.len()` yields 1 instead of 2 under `karac build`, garbage under `-O0` and the JIT, and the correct 2 under `--interp` and `KARAC_AUTO_PAR=0`. | the `ReturnSlot` round-trip for a range-slice binding (`collect_return_slots` / `emit_par_run`, src/codegen/stmts.rs + par_blocks.rs): the joined slot loses the VALUE, not just the type name B-2026-08-15-13 fixed for element reads. |
 | B-2026-08-15-19 | 2026-08-15 | autopar | medium | `#[par_order_free]` IS SILENTLY IGNORED when the analyzer does not classify the loop as a collect: no fan-out, no diagnostic, and `karac query concurrency` does not even list the loop among the DECLINED ones — it is absent from `loop_reductions` entirely. The user gets a sequential binary and no way to learn why an explicit opt-in did nothing. | The attribute is an explicit user opt-in — the ledger's own B-2026-07-29-30 renamed it precisely to make it "the caller's promise not to depend on order" — so a loop carrying it and not fanning out is a decision the compiler owes the user an explanation for. `disjoint_write_loops` already emits a `gate` and a `reason` per declined loop; a `#[par_order_free]` collect that fails classification emits nothing at all. |
 
 ### Wontfix (2)
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced
 
 </details>
 
-### Fixed (1209)
+### Fixed (1210)
 
-<details><summary>1209 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1210 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8325,7 +8324,33 @@ that shape carries B-2026-08-15-14's unrelated leak, and pinning it here would
 quarantine another row's defect inside this one's fixture.
 
 GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
-suite, and the asan -O0 leg. |
+suite, and the asan -O0 leg.
+
+CORRECTION APPENDED 2026-08-15, while fixing B-2026-08-15-16.
+
+THE CLOSE NOTE ABOVE OVERSTATES ITS TEST. It says
+`test_e2e_autopar_joined_vec_element_struct_binding` "is the DETECTOR — this row
+is a build failure, so the E2E test is what fails on the parent". It was not a
+detector. It was written into `tests/codegen.rs`, whose harness calls
+`compile_to_object_with_options` with `None` for the concurrency analysis — so
+AUTO-PAR NEVER FIRES IN THAT SUITE, this row's defect never triggered there, and
+the test passed against pre-fix source while asserting nothing.
+
+What WAS verified at close time was the `karac build` CLI on the same program,
+which does fail on the parent. That is a real reproduction; it is not the same
+claim as "the test fails on the parent", and the note conflated the two.
+
+FIXED: the test has been moved to `tests/par_codegen.rs`, which threads
+`concurrency_analyze_typed` and already documents this exact trap for
+B-2026-08-11-16. It is now verified to FAIL against pre-fix source
+(`3c6ac77c~1`) and pass with the fix. The row's own fix is unchanged and was
+always correct — only its regression pin was ineffective.
+
+The ASAN sibling `asan_autopar_joined_vec_element_struct_binding_no_double_free`
+was NOT affected: `tests/memory_sanitizer.rs` does run the concurrency analysis.
+
+ALSO SHARPENED, from the same investigation: B-2026-08-15-15's repro needs
+neither the `Map` local nor the `Vec` being a param. See that row. |
 | B-2026-08-15-14 | codegen | medium | AN INLINE CONTAINER TEMPORARY IN ARGUMENT POSITION FREES ITS BUFFER WITHOUT RELEASING ITS ELEMENTS — `agg(ns.clone())` over a `Vec[shared Node]` stra… | FIXED by fd7254d. The row's unit of measurement was right and its
 attribution was one container off.
 
@@ -8409,6 +8434,83 @@ in 11 allocations.
 
 GATES: full `--features llvm` suite green (13,738 passed / 0 failed), fmt and
 clippy `--all-targets` clean. |
+| B-2026-08-15-16 | codegen | high | A RANGE-SLICE BINDING crossing an AUTO-PAR JOIN returns the WRONG LENGTH, silently, in the DEFAULT build — `let s = nums[0..2]; return s.len()` yield… | FIXED by f0832187, in `infer_expr_llvm_type` (src/codegen/stmts.rs).
+
+THE CAUSE IS ONE MISSING DISTINCTION. That helper sizes an auto-par RETURN SLOT
+before the branch bodies are emitted, and its `Index` arm answered with the
+container's ELEMENT type. Both index spellings are `ExprKind::Index`, so a RANGE
+read got the element answer too: the slot was sized `i64` while the branch wrote
+the slice's `{ptr, len, cap}` header into it. Nothing downstream re-checks a slot
+against what the branch stored, so the value crossed the join truncated and
+`s.len()` read whatever survived.
+
+WHY IT WENT UNNOTICED THIS LONG, which is the useful part: a `Vec[Struct]` slice
+is LAYOUT-IDENTICAL to the slice header (`Entry { String, i64 }` is
+`{ptr, i64, i64}`), so that spelling round-trips correctly BY ACCIDENT. Only an
+element type of a different size shows the defect — `Vec[i64]` truncates 24 bytes
+to 8. The row's own `Vec[i64]` repro was therefore not an arbitrary choice of
+element type; it was the only one that could have surfaced this.
+
+THE FIX DECLINES rather than answering with the slice type. `None` propagates
+through `collect_return_slots`' `?`, the group falls back to sequential, and that
+is the lowering that was already correct here — `KARAC_AUTO_PAR=0` printed the
+right answer throughout. It is also exactly the contract this helper's header
+documents ("any shape it cannot classify returns `None` … it never guesses a wrong
+type"); the bug was that a range index was being classified rather than declined.
+Sizing the slot correctly would additionally have to answer who OWNS the slice — a
+range read is a `cap == 0` view of the source buffer, so routing one through a
+slot means deciding whether the parent's joined binding may free it. That is a real
+design question, and a static type-inference helper is the wrong place to settle
+it.
+
+WHAT THIS DOES NOT FIX, checked rather than assumed. B-2026-08-15-15 (a range
+slice of a `Vec[Struct]` double-frees) is untouched, and the sharper repro found
+here is worth recording on that row: it needs NEITHER the `Map` local NOR the
+`Vec` being a param. `let s = es[0..2]; println(s.len());` in `main` double-frees
+on its own, on the parent, in the DEFAULT build. So -15's "the default build is
+clean" holds only for the one shape auto-par happened to mask, and this fix
+removes that mask for that shape alone — it does not make -15 newly reachable in
+any spelling a user would more naturally write, because those were already broken.
+An attempt to fix -15 here (registering the range binding with no element type, so
+the drain is skipped) did NOT work and was reverted rather than shipped as a
+half-measure; the drain reaching that buffer is emitted somewhere other than the
+let-site tracking gate.
+
+MEASURED against the interpreter as oracle on FIVE configurations — `--interp`,
+JIT, `karac build`, `KARAC_OPT_LEVEL=0`, `KARAC_AUTO_PAR=0` — across seven shapes:
+the constant-bound range; a VARIABLE-bound range (`nums[a..b]`, plus an element
+read THROUGH the slice); a `String` slice, whose range lowering allocates rather
+than views; a group holding both a range binding and an element binding; an
+element-only group as the must-still-work control; and two range bindings in one
+group. Zero divergences, ASAN clean at both optimization levels; the parent
+SEGFAULTS on the same program.
+
+THE TEST HAD TO MOVE, AND SO DID THE ONE FROM THE ROW BEFORE IT. `tests/codegen.rs`
+calls `compile_to_object_with_options` with `None` for the concurrency analysis, so
+AUTO-PAR NEVER FIRES IN THAT ENTIRE SUITE and any auto-par assertion written there
+passes against the broken compiler. `tests/par_codegen.rs` threads the analysis and
+already carries a comment saying exactly this. Both this row's test and
+B-2026-08-15-13's now live there, each verified to FAIL against its own pre-fix
+source and pass with it.
+
+That verification also RETRACTS A CLAIM IN B-2026-08-15-13's CLOSE NOTE. It states
+its E2E test "is the DETECTOR … what fails on the parent". It was not: it passed
+against pre-13 source, because of the harness gap above. What was verified there
+was the `karac build` CLI on the same program — a real reproduction, but not the
+test. The test is a detector now; it was not when that note was written. See
+B-2026-08-15-13's appended correction.
+
+TESTS. `test_e2e_autopar_joined_range_slice_binding` (tests/par_codegen.rs) is the
+detector, verified FAILING with this fix reverted. It carries `f_elem_only` as the
+must-still-work control — an element read has to keep crossing the join with its
+type intact, which is -13's fix — and `f_both`, which puts both spellings in one
+group so a rule that declined too broadly would surface as a wrong `e.weight`. No
+`Vec[String]` or `Vec[Struct]` SLICE appears in it: those carry B-2026-08-15-15's
+double free, and pinning one would quarantine another row's defect inside this
+fixture.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
+suite, and the asan -O0 leg. |
 | B-2026-08-15-17 | codegen | medium | `karac build` PANICS -- `alias attribute 'noalias' emitted on a non-pointer param lowering` -- for a user STRUCT shadowing an owned-ptr handle name p… | FIXED in 454af75, alongside the row that exposed it. `owned_ptr_param_is_noalias_safe`
 now returns false for any name in `user_shadowed_prelude_types` -- a user type of
 that name is not the built-in and does not lower to a `ptr`.
