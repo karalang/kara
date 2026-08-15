@@ -93,10 +93,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 249 | 0 |
-| leak | 178 | 1 |
+| leak | 180 | 3 |
 | double-free | 129 | 0 |
 | run-vs-build | 121 | 0 |
-| codegen-gap | 109 | 1 |
+| codegen-gap | 109 | 0 |
 | missing-feature | 96 | 0 |
 | perf | 68 | 1 |
 | false-positive | 63 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 874 | 4 |
+| codegen | 876 | 5 |
 | typecheck | 171 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 1 |
@@ -124,17 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1210 surfaced · 5 open · 1193 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1212 surfaced · 6 open · 1194 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
-| B-2026-08-14-38 | 2026-08-14 | codegen | low | INDEXING THE RESULT OF A Vec-RETURNING METHOD CALL loud-bails `Index operator applied to non-array type` under `karac build` while `--interp` runs it: `v.clone()[1]`, `v[1..3].to_vec()[0]`, and any other `<method-chain>[i]` whose receiver is a fresh temporary. | `compile_index` (src/codegen/collections.rs) resolves its object through name-keyed registries (`vec_elem_types` / `slice_elem_types` / array slot types); a MethodCall object has no name, so it falls to the generic tail whose ArrayType / VectorType branches cannot match the `{ptr,len,cap}` struct and errors. |
 | B-2026-08-15-2 | 2026-08-15 | codegen+ownership | high | `s.push_str(s)` ON A HEAP STRING THAT MUST GROW IS A USE-AFTER-FREE: the grow reallocs the destination and the copy then reads through the now-stale SOURCE pointer — 5,000 invalid reads under valgrind on one call. It produces the RIGHT ANSWER anyway, so nothing surfaces. The two SLICE spellings of the same aliasing (`s.push_str(s[a..b])`, and via a `let`) are correctly rejected by the ownership checker; only the whole-value self-append reaches codegen. | Two candidate layers, and the fix should probably be both. CODEGEN: `push_str`'s alias guard in `src/codegen/vec_method.rs` is emitted only under `src_borrowed` — an owned source is assumed not to alias, which is true of a fresh temp but false of the destination itself. The grow path calls `emit_string_buffer_grow` (realloc, may move) and then copies from `src_ptr`, captured before the grow. OWNERSHIP: the checker already rejects `s` borrowed as `Slice[T]` while borrowed as `mut ref T`; the whole-value read of `s` as a `push_str` argument is the same conflict and is not flagged. |
 | B-2026-08-15-3 | 2026-08-15 | codegen | low | LOOP-BOUND PRE-SIZING RECOGNIZES THE FILL ONLY AS A `push`/`push_str` METHOD CALL, so an accumulator filled by `s = s + x` or `s += x` starts at capacity 0 and re-grows 8 -> 16 -> ... on every round. Both spellings now compile to the same in-place append as `push_str` (B-2026-08-14-23), so the two are equivalent code and the heuristic disagrees with itself: measured 5.8 ms vs 2.7 ms on 2,000 rounds of 400 appends, entirely from the missing reservation. | `src/presize.rs`. `is_push_to` matches only `ExprKind::MethodCall` with `push`/`push_str`/`push_back`, and `top_level_push_count` counts only `StmtKind::Expr` statements, so `StmtKind::Assign { target: V, value: V + x }` and `StmtKind::CompoundAssign { Add, target: V, .. }` are invisible. `find_fill_bound` additionally BAILS on any non-`Expr` statement between the Let and the loop that mentions `V`, which would reject a prelude `s = s + "seed"` the way it currently folds in a prelude `s.push_str("seed")`. |
 | B-2026-08-15-4 | 2026-08-15 | autopar | low | `cost_gate: "unknown"` conflates "the loop lookup failed" (a compiler bug) with "found it, but the iterable is not a shapeable range" (a legitimate limitation) -- the same opaque string for both | disjoint_loop_verdict / reduction_loop_verdict (src/effect_graph.rs) chain two `?`s -- find_loop_in_block then par_cost::extract_loop_shape -- and both collapse to None, which effect_graph.rs reports as (false, "unknown"). |
+| B-2026-08-15-6 | 2026-08-15 | codegen | medium | THE DEEP-CLONED HEAP ELEMENT OF AN INLINE-TEMP-VEC INDEX LEAKS WHEN THE INDEX IS AN F-STRING INTERPOLATION OPERAND but not when it is a direct print argument: `println(f"{names()[1]}")` strands one String per evaluation while `println(names()[1])` is clean. | `compile_inline_temp_vec_index_ex` (src/codegen/collections.rs) deep-clones a non-Copy element before draining the temp buffer — it has to, or the returned value dangles — and the clone's owner is the CONSUMER, via `free_fresh_owned_str_arg` gated on `expr_is_inline_temp_vec_heap_index`. The direct print-argument site calls that; the f-string interpolation lowering does not. |
+| B-2026-08-15-7 | 2026-08-15 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED BY VALUE TO A GENERIC FN'S OWNED PARAM IS NEVER DROPPED — `take(nums.clone())` strands one buffer per call when `take` is `take[T](v: Vec[T])`, while the identical call into a non-generic `take_i(v: Vec[i64])` is clean. | The monomorph call path (`compile_generic_call` / `compile_mono_function`, src/codegen.rs) does not run the caller-side owned-temp argument cleanup the ordinary call path does — the arg value is stored into the inlined body's param slot and no cleanup is queued for it on the caller's frame. |
 
 ### Wontfix (2)
 
@@ -147,9 +148,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1210 surfaced
 
 </details>
 
-### Fixed (1193)
+### Fixed (1194)
 
-<details><summary>1193 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1194 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7380,6 +7381,68 @@ THIS IS NOT DIAGNOSTICS-ONLY, which is the part worth measuring rather than reas
 MEASURED against the interpreter as oracle on all four surfaces at both optimization levels: the reuse shapes, three calls in one expression, the method and trait-method paths, heap elements, a fresh temporary, and the `Fn`-slot shape that previously would not build at all. Zero divergences, ASAN + LeakSanitizer clean. Every new test was checked against the parent source rather than assumed non-vacuous: the three ownership tests fail there with the exact move diagnostic, the closures test fails with the once-into-`Fn` error, the oracle test fails with the phantom drop, and both `mut Slice[T]` controls pass on both sides.
 
 GATES: fmt / clippy / the full `--features llvm` suite clean. The asan `-O0` leg flags one fixture, `asan_shared_struct_string_field_reassign_no_leak` (B-2026-08-14-25) — its source contains no slice of any kind, so this change cannot reach it. |
+| B-2026-08-14-38 | codegen | low | INDEXING THE RESULT OF A Vec-RETURNING METHOD CALL loud-bails `Index operator applied to non-array type` under `karac build` while `--interp` runs it… | FIXED. `<method-chain>[i]` now lowers: `v.clone()[1]`, `nums[1..3].to_vec()[0]`,
+`b.copy_items()[1]`, and the same shapes inside a generic body all build and
+agree byte-for-byte with `--interp`, `karac run` (JIT), the default auto-par
+build, and `KARAC_AUTO_PAR=0`.
+
+THE MISSING FACT, AND WHY IT NEEDED ITS OWN TABLE. `compile_index`'s nameless-Vec
+fallback (`inline_temp_vec_te`) recovers a temporary's element type from the
+CALLEE'S SIGNATURE — which exists for a free fn / closure and for the one
+built-in `tensor.shape()`, and for nothing else. A method call has no such entry,
+and the obvious substitute is unavailable for a structural reason: the parser
+stamps a postfix expression with its RECEIVER's span, so the `Index` and its
+object share one key in `expr_types` and the index's ELEMENT type wins there. The
+typechecker now records the receiver's own `Vec[T]` under that span in a
+dedicated `index_recv_vec_types` — the same remedy, for the same collision, as
+`tensor_index_recv_types` (B-2026-08-14-17) and `temp_recv_elem_types`
+(B-2026-07-20-2). Materialization is then the pre-existing
+`compile_inline_temp_vec_index_ex`, unchanged.
+
+OWNERSHIP, THE HALF THE ROW CALLED OUT. The signature path only ever fires for a
+fresh owned return; a method result can be a borrow, so this leg decides for
+itself via `expr_yields_fresh_owned_temp`. A `ref Vec` return is `Type::Ref` and
+never gets recorded at all, so a borrow cannot reach the free — the row's
+`<map>.get(k).unwrap()[i]` sibling (B-2026-07-15-27) keeps its own earlier arm
+and its `owns_temp = false`.
+
+GENERICS. Inside a generic body the recorded element is that body's `T`, so
+`subst_monomorph_type_params` runs before it sizes the load; `pick[T]`
+instantiated at `i64` and at `String` in one program pins both.
+
+THE NEAR-MISS WORTH RECORDING: the first cut fixed the READ and leaked the
+ELEMENT CLONE. A non-Copy element is deep-cloned before the temp's buffer is
+drained (otherwise the returned value dangles), and that clone is freed by the
+CONSUMER — via `expr_is_inline_temp_vec_heap_index`, which carried its OWN copy
+of the which-receivers-are-serviceable list and still named only two of the three
+sources. So the read was right, the temp buffer was correctly dropped, and every
+non-ASAN test was green while LSan reported 2960 B in 120 allocations over 20
+iterations. Both sides now ask one helper (`inline_index_recv_vec_te`) for the
+same dispatch order, so they cannot drift apart again. The general lesson is the
+same one B-2026-08-05-7 records: a predicate that enumerates shapes is a second
+copy of the dispatch, and copies rot.
+
+DECLINES LEFT LOUD AND UNCHANGED (each a DIFFERENT dispatcher, none of them this
+row's index path): `v.clone().clone()[2]` — "no handler for method 'clone' on
+non-identifier receiver"; `rows.clone()[1].len()` — "indexed-receiver method
+requires the indexed container to be a named variable"; and a `ref Vec[T]`
+-returning method indexed inline, which stays a build error deliberately, since
+admitting it means teaching this path to read through a borrow's pointer ABI.
+
+TESTS: `test_e2e_inline_index_method_returned_vec` (all five spellings +
+two monomorphs) with its interpreter oracle twin
+`test_index_of_method_returned_vec`; `test_inline_index_method_returned_vec_takes
+_the_temp_path` pins the synth-materialization structurally, because the E2E
+soft-skips without the runtime archives and the old failure was a compile ERROR;
+`asan_indexing_a_vec_returning_method_call_owns_its_temporary` is the LSan gate
+for both ownership halves.
+
+TWO PRE-EXISTING LEAKS FOUND IN THE NEIGHBOURHOOD, both reproduced with this fix
+STASHED and filed separately rather than folded in: B-2026-08-15-6 (an
+inline-temp-Vec heap element leaks when the index is an f-string interpolation
+operand rather than a direct print argument) and B-2026-08-15-7 (a fresh-owned
+Vec TEMPORARY passed to a GENERIC fn's owned param is never dropped — no clone,
+no index, no element return needed). |
 | B-2026-08-15-1 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints… | FIXED by 8668bbf2. Two gaps, not one, and the first alone produces a WORSE program than the bug — which is the reason to record the order they were found in.
 
 GAP 1 IS THE HEAD-GATE THE ROW NAMED. The `let` fallback that registers an unannotated binding from the typechecker's recorded surface (`pattern_binding_types` / `pattern_binding_inner_types`) dispatches on the head name, and its collection arm reads `surface == "Map" || surface == "Set"`. The sorted heads matched nothing, so the binding got a slot in `self.variables` and no side-table entry at all. Nothing about them is special here: `extract_map_kv_types` and `extract_set_elem_type` have admitted `SortedMap` / `SortedSet` since they existed, and `register_var_from_type_expr` fills the Map/Set tables from either head. The gate was simply never widened when the sorted variants shipped.
