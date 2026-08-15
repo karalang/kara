@@ -322,7 +322,8 @@ pub(crate) fn loop_reductions_json(
 ///   parallelize" is the failure mode a queryable decline replaces.
 /// - `reason` — the same decision in prose. On a proof it names the interval,
 ///   e.g. ``iteration `dy` writes `out` only within [dy * (4 * dw), (dy + 1) *
-///   (4 * dw))``.
+///   (4 * dw))``. This field is the PROOF's prose on every entry, including one
+///   the cost model then declined — see `cost_reason`.
 /// - `targets` — per written collection, its `stride` and `base`, so a reader
 ///   can check the interval the compiler believes in against the one they meant.
 ///
@@ -336,6 +337,14 @@ pub(crate) fn loop_reductions_json(
 ///   (`declined_memory_bound`, `declined_below_cost_threshold`,
 ///   `declined_variable_k_param_bound`), and `"n/a"` when the proof itself
 ///   declined — there is no dispatch to gate.
+/// - `cost_reason` — the COST decision in prose, the counterpart to
+///   `cost_gate` exactly as `reason` is to `gate` (B-2026-08-15-8). It cannot
+///   share `reason`: a loop can be proven disjoint AND cost-declined, and then
+///   `reason` reports the proof that succeeded while nothing explains the
+///   decline. Two loops differing only in `cost_gate` used to render identical
+///   `reason` strings, so the reader had a tag and no prose — the same gap
+///   B-2026-08-15-4 closed for the reduction path, where `reason` carries the
+///   cost verdict's own words because that path has no proof to describe.
 ///
 /// The verdict comes from [`crate::par_cost::fanout_verdict`], the SAME
 /// function `codegen/disjoint_par.rs` calls, so the query cannot drift from the
@@ -373,24 +382,39 @@ pub(crate) fn disjoint_write_loops_json(
                 .collect();
             // A declined proof never reaches the cost model, so it reports
             // `n/a` rather than a gate name it did not run.
-            let (fanned_out, cost_gate) = if !crate::par_cost::auto_par_enabled() {
+            //
+            // B-2026-08-15-8 — every arm also yields the cost decision's own
+            // PROSE. It cannot share `reason`, which on this path describes the
+            // disjointness proof: a proven loop the cost model then declines
+            // renders an entry whose `reason` reads as a success (it is one)
+            // while `cost_gate` says no, and nothing says why. The two are
+            // answers to different questions and both are worth having.
+            let (fanned_out, cost_gate, cost_reason) = if !crate::par_cost::auto_par_enabled() {
                 // B-2026-08-05-13 — `KARAC_AUTO_PAR=0` disables every auto-par
                 // lowering, so no dispatch is emitted no matter what the proof
                 // and cost model say. Reporting the cost verdict here would
                 // describe a binary that does not exist.
-                (false, "declined_auto_par_disabled")
+                (
+                    false,
+                    "declined_auto_par_disabled",
+                    "auto-par disabled by KARAC_AUTO_PAR=0",
+                )
             } else if !d.proven() {
-                (false, "n/a")
+                (
+                    false,
+                    "n/a",
+                    "the disjointness proof declined, so the cost model never ran — \
+                     `gate` and `reason` carry the decision that stopped this loop",
+                )
             } else {
                 let verdict = match func {
                     Some(f) => disjoint_loop_verdict(f, program, d, decision_key),
                     None => LoopVerdict::FunctionUnavailable,
                 };
-                let (fanned_out, gate, _) = verdict.render();
-                (fanned_out, gate)
+                verdict.render()
             };
             format!(
-                "{{\"statement\":{},\"loop_line\":{},\"loop_var\":{},\"disjoint_writes\":{},\"gate\":{},\"fanned_out\":{},\"cost_gate\":{},\"targets\":[{}],\"reason\":{}}}",
+                "{{\"statement\":{},\"loop_line\":{},\"loop_var\":{},\"disjoint_writes\":{},\"gate\":{},\"fanned_out\":{},\"cost_gate\":{},\"cost_reason\":{},\"targets\":[{}],\"reason\":{}}}",
                 d.stmt_index,
                 d.loop_line,
                 json_string(&d.loop_var),
@@ -398,6 +422,7 @@ pub(crate) fn disjoint_write_loops_json(
                 json_string(d.tag()),
                 fanned_out,
                 json_string(cost_gate),
+                json_string(cost_reason),
                 targets.join(","),
                 json_string(&d.reason),
             )

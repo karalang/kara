@@ -626,10 +626,12 @@ idle-holder (Demo 1) + Parallax (Demo 2). -->
 
     ```json
     {"loop_line":15,"loop_var":"dy","disjoint_writes":true,"gate":"proven",
-     "fanned_out":true,"cost_gate":"fanout",
+     "fanned_out":true,"cost_gate":"fanout","cost_reason":"dispatched across the worker pool",
      "targets":[{"name":"out","stride":"4 * dw","base":"0","writes":1}],
      "reason":"iteration `dy` writes `out` only within [dy * (4 * dw), (dy + 1) * (4 * dw))"}
     ```
+
+    **`cost_reason` was added later (`B-2026-08-15-8`).** `reason` on this path is the disjointness PROOF's prose, so a loop that proved disjoint and was then cost-declined rendered a success sentence beside a declining `cost_gate` and nothing explaining it — two loops differing only in an inclusive vs exclusive range produced identical `reason` strings. The reduction path had no such gap because it has no proof to describe and spends `reason` on the cost verdict. `cost_reason` is the cost half everywhere, on all four decline tags plus `fanout`; a proof-declined entry says the cost model never ran.
 
     **`KARAC_PAR_ORDER_FREE_FLAG` deliberately left off.** It fits by construction (slots stay at identity; every iteration writes a footprint keyed by its own index), so the runtime could legally chop into more chunks than workers and let workers pull dynamically — the P/E-core balancing win. It is a pure scheduling knob with no correctness stake here, and turning it on belongs with the re-bench in the Prism/Veil sub-slice where the effect is measurable rather than asserted.
 

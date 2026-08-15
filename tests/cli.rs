@@ -2055,6 +2055,165 @@ fn test_query_concurrency_shape_decline_is_distinct_from_lookup_failure() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// B-2026-08-15-8 — a disjoint-write entry the cost model declined must say
+/// WHY in prose, not just carry a tag.
+///
+/// This is the sibling gap to B-2026-08-15-4, and it exists because the two
+/// report paths use `reason` for different things. A reduction has no proof to
+/// describe, so `reason` there IS the cost verdict's prose. A disjoint-write
+/// entry's `reason` is the disjointness PROOF's prose — which is a success
+/// story even on an entry the cost model then declined. So `incl_disjoint` and
+/// `ok_disjoint` below, identical but for an inclusive range, used to render
+/// character-for-character identical `reason` strings while differing in
+/// `cost_gate`: the reader got a tag to look up and no sentence.
+///
+/// The fix is additive (`cost_reason`), and the first assertion is what keeps
+/// it honest: `reason` must STILL be the proof's prose and must still match
+/// across that pair. Overloading `reason` with the cost verdict would satisfy
+/// a naive "the strings differ now" test while destroying the interval proof
+/// that is this array's reason for existing.
+///
+/// All four decline tags are covered, plus `fanout` and the proof-declined
+/// `n/a` path, because the prose-less rendering was never specific to the
+/// unshapeable tag — that tag is only what made it visible.
+#[test]
+fn test_query_concurrency_disjoint_write_cost_decline_carries_prose() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-cost-reason-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // A body heavy enough to clear the cost gates, so `ok_disjoint` is a real
+    // `fanout`; `incl_disjoint` is its inclusive-range twin, differing in
+    // nothing else. That pair is the ledger row's own repro.
+    let heavy = "let x = (i as f64) * 0.001; \
+                 out[i] = x.sin() * x.cos() + x.sqrt() * x.ln() + x.exp() * x.tan();";
+    let src = format!(
+        "fn ok_disjoint(out: mut ref Vec[f64], n: i64) {{ for i in 0i64..n {{ {heavy} }} }}\n\
+         fn incl_disjoint(out: mut ref Vec[f64], n: i64) {{ for i in 0i64..=n {{ {heavy} }} }}\n\
+         fn const_trip(out: mut ref Vec[f64]) {{ for i in 0i64..8i64 {{ {heavy} }} }}\n\
+         fn light(out: mut ref Vec[i64], n: i64) {{ for i in 0i64..n {{ out[i] = i; }} }}\n\
+         fn work(i: i64) -> f64 {{ let x = (i as f64) * 0.001; return x.sin() * x.cos(); }}\n\
+         fn cheap_call(out: mut ref Vec[f64], n: i64) {{ \
+            for i in 0i64..n {{ out[i] = work(i); }} }}\n\
+         fn indirect(out: mut ref Vec[i64], idx: Vec[i64], n: i64) {{ \
+            for i in 0i64..n {{ out[idx[i]] = i * i * i + (i / 3i64) * (i % 7i64); }} }}\n\
+         fn main() {{ println(1); }}\n"
+    );
+
+    let path = tmp.join("cost_reason.kara");
+    std::fs::write(&path, &src).unwrap();
+    let out = karac_bin()
+        .args(["query", "concurrency", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query failed: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let doc: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("query concurrency emitted invalid JSON");
+
+    // function -> (cost_gate, cost_reason, reason)
+    let mut seen: Vec<(String, String, String, String)> = Vec::new();
+    for f in doc["functions"].as_array().expect("functions array") {
+        let name = f["function"].as_str().unwrap_or("?").to_string();
+        for l in f["disjoint_write_loops"].as_array().into_iter().flatten() {
+            seen.push((
+                name.clone(),
+                l["cost_gate"].as_str().unwrap_or("?").to_string(),
+                l["cost_reason"].as_str().unwrap_or("").to_string(),
+                l["reason"].as_str().unwrap_or("").to_string(),
+            ));
+        }
+    }
+    let get = |n: &str| -> (String, String, String) {
+        seen.iter()
+            .find(|(f, _, _, _)| f == n)
+            .map(|(_, g, cr, r)| (g.clone(), cr.clone(), r.clone()))
+            .unwrap_or_else(|| panic!("no disjoint-write entry for {n}; got {seen:?}"))
+    };
+
+    // The baseline must really fan out, or a test that only inspects declines
+    // would pass with auto-par wholly broken.
+    let (ok_gate, _, ok_reason) = get("ok_disjoint");
+    assert_eq!(
+        ok_gate, "fanout",
+        "the exclusive-range twin must itself fan out; got {seen:?}",
+    );
+
+    // `reason` stays the PROOF's prose on both halves of the ledger's pair —
+    // the guard against "fixing" this by overloading the field.
+    let (incl_gate, incl_cost_reason, incl_reason) = get("incl_disjoint");
+    assert_eq!(
+        incl_reason, ok_reason,
+        "`reason` describes the disjointness proof, which succeeded identically \
+         for both; a difference here means the cost verdict was written over the \
+         interval proof instead of beside it",
+    );
+    assert_ne!(
+        incl_gate, ok_gate,
+        "the pair must differ in cost_gate, or there is no prose gap to pin",
+    );
+    assert!(
+        !incl_cost_reason.is_empty() && incl_cost_reason.contains("range"),
+        "the declining gate must explain what shape it wanted; got {incl_cost_reason:?}",
+    );
+
+    // A proof that declined never reached the cost model, and says exactly
+    // that rather than borrowing a gate name it never ran.
+    let (ind_gate, ind_cost_reason, _) = get("indirect");
+    assert_eq!(ind_gate, "n/a", "the proof declined, so no gate applies");
+    assert!(
+        ind_cost_reason.contains("never ran"),
+        "a proof-declined entry must say the cost model did not run; got {ind_cost_reason:?}",
+    );
+
+    // Every entry carries prose, and each distinct gate explains ITSELF —
+    // one string shared across gates is the same defect in a new place.
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for (f, gate, cost_reason, _) in &seen {
+        assert!(
+            !cost_reason.is_empty(),
+            "{f}: cost_gate {gate:?} rendered no prose",
+        );
+        pairs.push((gate.clone(), cost_reason.clone()));
+    }
+    let mut gates: Vec<String> = pairs.iter().map(|(g, _)| g.clone()).collect();
+    gates.sort();
+    gates.dedup();
+    let mut prose: Vec<String> = pairs.iter().map(|(_, r)| r.clone()).collect();
+    prose.sort();
+    prose.dedup();
+    assert_eq!(
+        prose.len(),
+        gates.len(),
+        "distinct gates must have distinct prose; got {pairs:?}",
+    );
+
+    // All four decline tags, so the fix is not scoped to the one that exposed
+    // it. `const_trip`/`light`/`cheap_call` exist for these three.
+    for tag in [
+        "declined_unshapeable_loop",
+        "declined_memory_bound",
+        "declined_below_cost_threshold",
+        "declined_variable_k_param_bound",
+    ] {
+        assert!(
+            gates.iter().any(|g| g == tag),
+            "{tag} is unreachable in this source, so its prose is unpinned; got {gates:?}",
+        );
+    }
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// The nested-loop carve-out on the memory-bound gate, query side
 /// (B-2026-07-31-10). Same source as `par_codegen`'s
 /// `test_ir_memory_bound_gate_nested_loop_body_fans_out`, which pins that
