@@ -49580,4 +49580,85 @@ fn main() {
             "asan_fstring_inline_temp_vec_index_element_no_leak",
         );
     }
+
+    /// B-2026-08-15-7 — a fresh-owned `Vec` temporary passed by value to a
+    /// GENERIC fn's owned param was never dropped, while the identical call into
+    /// a non-generic twin was clean.
+    ///
+    /// The mono prologue enters every bare non-borrow param that lands in
+    /// `vec_elem_types` into `owned_vecstr_params`, which is the caller-retains
+    /// convention: the callee deep-copies at each retaining consume site and
+    /// never frees the caller's buffer. The ordinary call path answers that by
+    /// materializing every fresh heap `Vec` temp into the caller's scope; the
+    /// monomorph path did so only for a param spelled as a BARE type parameter,
+    /// so `fn take[T](v: Vec[T])` — the ordinary way to write it — stranded one
+    /// buffer per call.
+    ///
+    /// `head` is deliberately the callee that READS the buffer. A callee like
+    /// `take` that only asks for `len()` leaves the cloned bytes unread, and at
+    /// the default opt level LLVM then deletes the allocation outright and the
+    /// fixture asserts over memory that was never touched — this leak is
+    /// invisible at `-O2` and plain at `-O0` for exactly that reason. Both are
+    /// kept: `take` for the row's headline spelling, `head` so the fixture cannot
+    /// go vacuous if the `-O0` leg is ever dropped.
+    ///
+    /// `pick` is the double-free direction. The bare-`T` arm excludes a param
+    /// whose type param appears in the return type, because a forwarding tail
+    /// hands the caller's own buffer back out; the container arm deliberately
+    /// does not inherit that exclusion, so a forwarding tail in CONTAINER
+    /// spelling is pinned here as single-free. `sink` pins the `mut ref`
+    /// accumulator, whose pushed element must be the callee's deep copy rather
+    /// than the caller's buffer.
+    #[test]
+    fn asan_generic_owned_vec_param_temp_arg_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn take[T](v: Vec[T]) -> i64 { return v.len(); }
+fn head[T](v: Vec[T]) -> T { return v[0]; }
+fn passthru[T](v: Vec[T]) -> Vec[T] { return v; }
+fn id[T](v: Vec[T]) -> Vec[T] { return v; }
+fn pick[T](a: Vec[T], b: Vec[T]) -> Vec[T] { return id(a); }
+fn sink[T](acc: mut ref Vec[Vec[T]], v: Vec[T]) { acc.push(v); }
+fn mk() -> Vec[i64] { let v: Vec[i64] = [11, 22, 33, 44, 55, 66, 77, 88]; return v; }
+fn main() {
+    let nums: Vec[i64] = [1, 2, 3, 4, 5, 6, 7, 8];
+    let ns: Vec[String] = ["alphaalphaalpha", "betabetabeta", "gammagammagamma"];
+    let mut acc: Vec[Vec[i64]] = Vec.new();
+    let mut k = 0;
+    while k < 20 {
+        println(take(nums.clone()));
+        println(take(ns.clone()));
+        println(head(nums.clone()));
+        println(head(ns.clone()));
+        println(take(mk()));
+        println(take([7, 8, 9]));
+        let p = passthru(ns.clone());
+        println(p[1]);
+        let w = pick(nums.clone(), mk());
+        println(w[0]);
+        sink(mut acc, nums.clone());
+        k = k + 1;
+    }
+    println(acc.len());
+    println(acc[19][7]);
+    println("done");
+}
+"#,
+            &[
+                "8",
+                "3",
+                "1",
+                "alphaalphaalpha",
+                "8",
+                "3",
+                "betabetabeta",
+                "1",
+            ]
+            .repeat(20)
+            .into_iter()
+            .chain(["20", "8", "done"])
+            .collect::<Vec<_>>(),
+            "asan_generic_owned_vec_param_temp_arg_no_leak",
+        );
+    }
 }

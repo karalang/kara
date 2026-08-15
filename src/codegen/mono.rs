@@ -1141,32 +1141,67 @@ impl<'ctx> super::Codegen<'ctx> {
         self.closure_fn_types = saved.closure_fn_types;
     }
 
-    /// Is the callee's parameter at `idx` written as a BARE type parameter
-    /// (`v: T`), by value? That is the exact shape B-2026-07-11-35 routes
-    /// through `owned_vecstr_params` — the mono resolves `T` to its concrete
-    /// `Vec`/`String` and every retaining consume site in the body deep-copies
-    /// it, so the caller keeps ownership of the argument and must free a fresh
-    /// temporary itself (B-2026-08-11-3).
+    /// B-2026-08-15-7 — the CONTAINER sibling of
+    /// [`Self::generic_param_is_bare_type_param`]: a by-value param whose type
+    /// is written out (`v: Vec[T]`, `v: Vec[i64]`) rather than as a bare type
+    /// parameter.
     ///
-    /// Borrow forms (`ref T` / `mut ref T` / `mut Slice[T]`) are excluded: they
-    /// never enter `owned_vecstr_params`, so the callee neither copies nor
-    /// consumes and the caller's own binding still owns the buffer. A param
-    /// spelled with the type param NESTED (`v: Vec[T]`) is excluded too — only
-    /// a single path segment naming one of the callee's own generic params
-    /// matches.
+    /// The two are disjoint by construction (this one rejects exactly what that
+    /// one accepts), so the arm built on it cannot disturb the shapes
+    /// B-2026-08-11-3 tuned. They are nonetheless the same ownership case: the
+    /// mono prologue enters EVERY bare non-borrow param that lands in
+    /// `vec_elem_types` into `owned_vecstr_params` (see `compile_mono_function`),
+    /// and how the param was SPELLED is not one of its inputs. So `v: Vec[T]` is
+    /// caller-retains just like `v: T` is, and a fresh temporary argument has no
+    /// owner on either side — which is why `take(nums.clone())` leaked one buffer
+    /// per call while the non-generic twin `take_i(v: Vec[i64])` was clean: the
+    /// ordinary call path materializes every fresh heap Vec temp with no
+    /// callee-shape test at all.
     ///
-    /// A callee that can hand the parameter BACK OUT is rejected, and the test
-    /// is syntactic rather than a body walk: if the declared return type
-    /// mentions the same type param anywhere (`-> T`, `-> Vec[T]`,
-    /// `-> Option[T]`), the caller's consumer of the RESULT may own the very
-    /// buffer being passed in, and a caller-side free would be the second one.
-    /// This is strictly stronger than `fn_returns_param`, which only recognizes
-    /// a param reaching a return site bare or inside an aggregate literal and so
-    /// answers false for a FORWARDING tail (`fn pick[T](a: T, b: T) -> T {
-    /// id(a) }`) — measured as a real double-free abort, not a hypothetical.
-    /// The leak this fix targets is on a `push`-shaped sink (return type unit,
-    /// or anything not mentioning `T`), which the rule admits.
-    fn generic_param_is_bare_type_param(generic_fn: &Function, idx: usize) -> bool {
+    /// The return-type exclusion is NOT inherited, and that is measured rather
+    /// than assumed. It exists on the bare-`T` arm because a forwarding tail
+    /// (`fn pick[T](a: T, b: T) -> T { id(a) }`) hands the caller's own buffer
+    /// back out, and a caller-side free is then the second one. The container
+    /// spelling cannot do that: an owned `Vec` param is deep-copied at every
+    /// retaining consume site INCLUDING the return, so the value the caller binds
+    /// is always an independent buffer. The non-generic twins are the control —
+    /// `fn passthru(v: Vec[i64]) -> Vec[i64] { return v; }` and a
+    /// forwarding-tail sibling are both single-free under LSan with the very same
+    /// unconditional materialization this arm performs.
+    ///
+    /// NOTE the negation is against the SPELLING test alone
+    /// ([`Self::generic_param_is_bare_type_param_spelling`]), never against
+    /// `generic_param_is_bare_type_param` — that one folds the return-type
+    /// exclusion in, so negating it would read "container spelling OR a bare
+    /// type param that IS returned" and hand this arm precisely the forwarding
+    /// tail the exclusion exists to keep out. Measured, not hypothetical: an
+    /// earlier draft negated the combined predicate and turned
+    /// `fn pick[T](a: T, b: T) -> T { id(a) }` into an ASAN double-free abort —
+    /// the same shape, and the same failure, that B-2026-08-11-3 had already
+    /// recorded once.
+    fn generic_param_is_owned_container(generic_fn: &Function, idx: usize) -> bool {
+        let Some(param) = generic_fn.params.get(idx) else {
+            return false;
+        };
+        // A borrow never transfers ownership: `ref` / `mut ref` / `mut Slice`
+        // params are excluded from `owned_vecstr_params` by the same test in the
+        // mono prologue, and the caller's own binding still owns the buffer.
+        if matches!(
+            param.ty.kind,
+            TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
+        ) {
+            return false;
+        }
+        !Self::generic_param_is_bare_type_param_spelling(generic_fn, idx)
+    }
+
+    /// The SPELLING half of [`Self::generic_param_is_bare_type_param`]: is the
+    /// param written as a single-segment path naming one of the callee's own
+    /// generic params (`v: T`), by value? Split out so the container arm can ask
+    /// about spelling alone — see the note on
+    /// [`Self::generic_param_is_owned_container`] for why the combined predicate
+    /// is the wrong thing to negate.
+    fn generic_param_is_bare_type_param_spelling(generic_fn: &Function, idx: usize) -> bool {
         let Some(param) = generic_fn.params.get(idx) else {
             return false;
         };
@@ -1183,13 +1218,52 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         let tp = &path.segments[0];
-        let declares_tp = generic_fn
+        generic_fn
             .generic_params
             .as_ref()
-            .is_some_and(|gp| gp.params.iter().any(|p| &p.name == tp));
-        if !declares_tp {
+            .is_some_and(|gp| gp.params.iter().any(|p| &p.name == tp))
+    }
+
+    /// Is the callee's parameter at `idx` written as a BARE type parameter
+    /// (`v: T`), by value, AND not handed back out? That is the exact shape
+    /// B-2026-07-11-35 routes through `owned_vecstr_params` — the mono resolves
+    /// `T` to its concrete `Vec`/`String` and every retaining consume site in
+    /// the body deep-copies it, so the caller keeps ownership of the argument
+    /// and must free a fresh temporary itself (B-2026-08-11-3).
+    ///
+    /// Borrow forms (`ref T` / `mut ref T` / `mut Slice[T]`) are excluded: they
+    /// never enter `owned_vecstr_params`, so the callee neither copies nor
+    /// consumes and the caller's own binding still owns the buffer. A param
+    /// spelled with the type param NESTED (`v: Vec[T]`) is excluded too — only
+    /// a single path segment naming one of the callee's own generic params
+    /// matches. That nested spelling is not unowned, merely not THIS predicate's
+    /// business: [`Self::generic_param_is_owned_container`] claims it, and the
+    /// call site admits either.
+    ///
+    /// A callee that can hand the parameter BACK OUT is rejected, and the test
+    /// is syntactic rather than a body walk: if the declared return type
+    /// mentions the same type param anywhere (`-> T`, `-> Vec[T]`,
+    /// `-> Option[T]`), the caller's consumer of the RESULT may own the very
+    /// buffer being passed in, and a caller-side free would be the second one.
+    /// This is strictly stronger than `fn_returns_param`, which only recognizes
+    /// a param reaching a return site bare or inside an aggregate literal and so
+    /// answers false for a FORWARDING tail (`fn pick[T](a: T, b: T) -> T {
+    /// id(a) }`) — measured as a real double-free abort, not a hypothetical.
+    /// The leak this fix targets is on a `push`-shaped sink (return type unit,
+    /// or anything not mentioning `T`), which the rule admits.
+    ///
+    /// The exclusion is why this predicate must not be negated to obtain the
+    /// container case — see the note on
+    /// [`Self::generic_param_is_owned_container`].
+    fn generic_param_is_bare_type_param(generic_fn: &Function, idx: usize) -> bool {
+        if !Self::generic_param_is_bare_type_param_spelling(generic_fn, idx) {
             return false;
         }
+        let param = &generic_fn.params[idx];
+        let TypeKind::Path(path) = &param.ty.kind else {
+            return false;
+        };
+        let tp = &path.segments[0];
         !generic_fn
             .return_type
             .as_ref()
@@ -1303,13 +1377,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     | ExprKind::PrefixCollectionLiteral { .. }
                     | ExprKind::RepeatLiteral { .. }
             );
-            let is_fresh_bare_type_param_vec_temp = (self.expr_yields_fresh_owned_temp(&a.value)
+            let is_fresh_vec_temp_for_owned_param = (self.expr_yields_fresh_owned_temp(&a.value)
                 || is_collection_literal_arg)
                 && self.llvm_ty_is_vec_struct(val.get_type())
                 && !self.string_typed_exprs.contains(&arg_key)
                 && !self.rhs_stages_fstr_acc(&a.value)
-                && Self::generic_param_is_bare_type_param(&generic_fn, i);
-            if is_fresh_string_temp || is_fresh_bare_type_param_vec_temp {
+                && (Self::generic_param_is_bare_type_param(&generic_fn, i)
+                    || Self::generic_param_is_owned_container(&generic_fn, i));
+            if is_fresh_string_temp || is_fresh_vec_temp_for_owned_param {
                 self.materialize_owned_temp(val, arg_key);
             }
         }

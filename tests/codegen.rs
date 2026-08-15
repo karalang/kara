@@ -96048,6 +96048,62 @@ fn main() {
         );
     }
 
+    /// B-2026-08-15-7 — a fresh-owned `Vec` temporary into a generic fn's owned
+    /// param, across the spellings that decide who frees it.
+    ///
+    /// Also a regression guard rather than the detector: the values were right
+    /// before the fix and the leak is what
+    /// `asan_generic_owned_vec_param_temp_arg_no_leak` catches. The value this
+    /// adds is over the DOUBLE-FREE direction — `passthru` and `pick` (a
+    /// forwarding tail) are the shapes where the caller-side drop this fix adds
+    /// could collide with the result consumer's, and a collision that ASAN sees
+    /// as a double free would show here as a corrupted read. `nums` and `ns` are
+    /// re-read at the end: the callee must have deep-copied, so the caller's own
+    /// bindings are still intact after being cloned into six calls.
+    #[test]
+    fn test_e2e_generic_owned_vec_param_temp_arg() {
+        assert_eq!(
+            run_program(
+                "fn take[T](v: Vec[T]) -> i64 { return v.len(); }\n\
+                 fn head[T](v: Vec[T]) -> T { return v[0]; }\n\
+                 fn take_i(v: Vec[i64]) -> i64 { return v.len(); }\n\
+                 fn passthru[T](v: Vec[T]) -> Vec[T] { return v; }\n\
+                 fn id[T](v: Vec[T]) -> Vec[T] { return v; }\n\
+                 fn pick[T](a: Vec[T], b: Vec[T]) -> Vec[T] { return id(a); }\n\
+                 fn sink[T](acc: mut ref Vec[Vec[T]], v: Vec[T]) { acc.push(v); }\n\
+                 fn two[T](v: Vec[i64], t: T) -> i64 { return v.len(); }\n\
+                 fn mk() -> Vec[i64] { let v: Vec[i64] = [10, 20, 30]; return v; }\n\
+                 fn main() {\n\
+                     let nums: Vec[i64] = [1, 2, 3, 4, 5];\n\
+                     let ns: Vec[String] = [\"alpha\", \"beta\", \"gamma\"];\n\
+                     println(take(nums.clone()));\n\
+                     println(take(ns.clone()));\n\
+                     println(head(nums.clone()));\n\
+                     println(head(ns.clone()));\n\
+                     println(take_i(nums.clone()));\n\
+                     println(take(mk()));\n\
+                     println(take([7, 8, 9]));\n\
+                     let p = passthru(nums.clone());\n\
+                     println(p[2]);\n\
+                     let q = passthru(ns.clone());\n\
+                     println(q[1]);\n\
+                     let w = pick(nums.clone(), mk());\n\
+                     println(w[0]);\n\
+                     let mut acc: Vec[Vec[i64]] = Vec.new();\n\
+                     sink(mut acc, nums.clone());\n\
+                     sink(mut acc, mk());\n\
+                     println(acc.len());\n\
+                     println(acc[0][1]);\n\
+                     println(acc[1][2]);\n\
+                     println(two(nums.clone(), 5));\n\
+                     println(nums.len());\n\
+                     println(ns[0]);\n\
+                 }\n"
+            ),
+            Some("5\n3\n1\nalpha\n5\n3\n3\n3\nbeta\n1\n2\n2\n30\n5\n5\nalpha\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-6 — every consumer of an inline-temp-`Vec` index reads the
     /// same element, whichever spelling it is written in.
     ///
