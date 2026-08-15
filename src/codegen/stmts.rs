@@ -3708,7 +3708,29 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .insert(var_name.clone(), self.context.i8_type().into());
                                 self.string_vars.insert(var_name.clone());
                                 detected = true;
-                            } else if surface == "Map" || surface == "Set" {
+                            } else if matches!(
+                                surface.as_str(),
+                                "Map" | "Set" | "SortedMap" | "SortedSet"
+                            ) {
+                                // B-2026-08-15-1 — the SORTED heads belong on
+                                // this arm too. They were absent, so an
+                                // unannotated `let m = <call returning
+                                // SortedMap>` (or a place source, `let m =
+                                // h.sm`) landed in `self.variables` with a slot
+                                // and in NONE of the collection side-tables:
+                                // Display fell through to the value-kind arms
+                                // and printed the raw control pointer, and
+                                // method dispatch loud-failed at `m.len()`.
+                                // Nothing about the sorted heads made them
+                                // special here — `extract_map_kv_types` /
+                                // `extract_set_elem_type` have admitted them
+                                // all along; the head-name gate was simply
+                                // never widened when the sorted variants
+                                // shipped. The annotated spelling of the same
+                                // binding was correct throughout, which is what
+                                // made this an annotation-sensitive divergence
+                                // rather than a missing feature.
+                                //
                                 // #28 (B-2026-06-14-9) — a Map/Set bound to a
                                 // LOCAL from a PLACE source (`let mm = s.m` /
                                 // `let mm = h.m.0`) with no annotation. The

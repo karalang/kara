@@ -29879,6 +29879,98 @@ SortedSet{}
         }
     }
 
+    /// B-2026-08-15-1 — an UNANNOTATED binding of a `SortedMap` / `SortedSet`.
+    ///
+    /// The row above fixed how these RENDER; this is the spelling it could not
+    /// reach, because the binding was never registered as a collection at all.
+    /// `let m = mkm()` with no annotation landed in `self.variables` with a
+    /// slot and in NONE of the side-tables, so Display fell through to the
+    /// value-kind arms and printed the raw control pointer (a different number
+    /// every run) while `m.len()` was a hard codegen error. Two independent
+    /// gaps, and the first one alone produces a WORSE result than the bug:
+    ///
+    ///  * the `let` fallback's head-gate listed `Map` / `Set` but not their
+    ///    sorted variants, so nothing was registered. Widening it repairs
+    ///    `len()` and stops the pointer-print —
+    ///  * — and then renders `{zz: 1, aa: 2}`: plain-`Map` prefix, INSERTION
+    ///    order. `register_var_from_type_expr` writes the Map/Set tables for
+    ///    both heads but never wrote `sorted_collection_vars`, the separate
+    ///    ordering marker the annotated `let` path sets inline. So every
+    ///    binding registered through the registrar — a place source, a struct
+    ///    field, a synthetic element, a closure param — silently lost its
+    ///    sortedness.
+    ///
+    /// Lines 03 and 06 are what pin the second half: they iterate, so a
+    /// binding that registered but lost its marker prints `zz,aa,mm,` here and
+    /// is correct on every other line.
+    #[test]
+    fn test_e2e_unannotated_sorted_collection_binding_registers() {
+        let src = r#"
+struct Holder { sm: SortedMap[String, i64], ss: SortedSet[String] }
+
+fn mkm() -> SortedMap[String, i64] {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    let _ = m.insert("zz", 1);
+    let _ = m.insert("aa", 2);
+    let _ = m.insert("mm", 3);
+    return m;
+}
+fn mks() -> SortedSet[String] {
+    let mut s: SortedSet[String] = SortedSet.new();
+    let _ = s.insert("zz");
+    let _ = s.insert("aa");
+    let _ = s.insert("mm");
+    return s;
+}
+
+fn main() {
+    let m1: SortedMap[String, i64] = mkm();
+    println(f"01 {m1} {m1.len()}");
+
+    let m2 = mkm();
+    println(f"02 {m2} {m2.len()}");
+
+    let mut acc = "";
+    for k in m2.keys() { acc = acc + k + ","; }
+    println(f"03 {acc}");
+
+    let hit = m2.contains_key("mm");
+    println(f"04 {hit} {m2.is_empty()}");
+
+    let s2 = mks();
+    let shit = s2.contains("aa");
+    println(f"05 {s2} {s2.len()} {shit}");
+    let mut sacc = "";
+    for v in s2.iter() { sacc = sacc + v + ","; }
+    println(f"06 {sacc}");
+
+    let h = Holder { sm: mkm(), ss: mks() };
+    let bm = h.sm;
+    println(f"07 {bm} {bm.len()}");
+    let bs = h.ss;
+    println(f"08 {bs} {bs.len()}");
+
+    let mut pm: Map[String, i64] = Map.new();
+    let _ = pm.insert("zz", 1);
+    println(f"09 {pm} {pm.len()}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "01 SortedMap{aa: 2, mm: 3, zz: 1} 3\n\
+                 02 SortedMap{aa: 2, mm: 3, zz: 1} 3\n\
+                 03 aa,mm,zz,\n\
+                 04 true false\n\
+                 05 SortedSet{aa, mm, zz} 3 true\n\
+                 06 aa,mm,zz,\n\
+                 07 SortedMap{aa: 2, mm: 3, zz: 1} 3\n\
+                 08 SortedSet{aa, mm, zz} 3\n\
+                 09 {zz: 1} 1\n"
+            ),
+        );
+    }
+
     #[test]
     fn e2e_sorted_map_ordered_methods_codegen() {
         // B-2026-07-18-1: the ordered-only `SortedMap` methods — `min`/`max`/

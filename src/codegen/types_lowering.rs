@@ -1829,6 +1829,20 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return;
         }
+        // B-2026-08-15-1 — `SortedMap[K,V]` / `SortedSet[T]` register under the
+        // Map/Set side-tables below (they share `KaracMap` storage, and
+        // `extract_map_kv_types` / `extract_set_elem_type` admit both heads),
+        // but the ORDERING marker is a separate table and this registrar never
+        // wrote it. The `let`-with-annotation path sets it inline, so an
+        // annotated binding was correct and every binding registered through
+        // HERE — a place source, a struct field, a synthetic index/tuple
+        // element, a closure param — silently lost its sortedness: iteration
+        // and min/max fell back to insertion order and Display printed the
+        // plain `Map`/`Set` prefix. Set before the arms below rather than
+        // inside them, because each returns early.
+        if crate::codegen::helpers::is_sorted_collection_type(te) {
+            self.sorted_collection_vars.insert(var_name.to_string());
+        }
         if let Some((k_ty, v_ty)) = self.extract_map_kv_types(te) {
             self.map_key_types.insert(var_name.to_string(), k_ty);
             self.map_val_types.insert(var_name.to_string(), v_ty);

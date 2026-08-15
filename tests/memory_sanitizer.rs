@@ -48152,6 +48152,59 @@ fn main() {
         );
     }
 
+    /// B-2026-08-15-1 — the leak question the row filed as unmeasured.
+    ///
+    /// Its detail closed with "Whether the handle is also leaked at scope exit
+    /// was NOT measured", and the doubt was reasonable: the `let` fallback's
+    /// existing `Map`/`Set` arm documents itself as DISPATCH-ONLY —
+    /// `register_var_from_type_expr` queues no `FreeMapHandle`, on the
+    /// reasoning that a PLACE source is a caller-retains alias whose owner
+    /// frees it. A CALL RESULT is not that: `mkm()` hands back a fresh handle
+    /// with no other owner, so if the same arm registered dispatch and nothing
+    /// else, the handle would leak once per binding.
+    ///
+    /// It does not — the ownership tracking is armed elsewhere on the let path
+    /// and is head-agnostic, so it was already correct while the dispatch
+    /// tables were not. Measured rather than argued, over both spellings and
+    /// both containers, with `String` keys so a leaked handle drags its whole
+    /// key storage with it.
+    #[test]
+    fn asan_unannotated_sorted_collection_binding_frees_its_handle() {
+        assert_clean_asan_run(
+            r#"
+fn mkm() -> SortedMap[String, i64] {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    let _ = m.insert("zzzzzzzzzzzzzzzzzzzz", 1);
+    let _ = m.insert("aaaaaaaaaaaaaaaaaaaa", 2);
+    return m;
+}
+fn mks() -> SortedSet[String] {
+    let mut s: SortedSet[String] = SortedSet.new();
+    let _ = s.insert("zzzzzzzzzzzzzzzzzzzz");
+    let _ = s.insert("aaaaaaaaaaaaaaaaaaaa");
+    return s;
+}
+
+fn main() {
+    let m1: SortedMap[String, i64] = mkm();
+    println(f"{m1.len()}");
+    let m2 = mkm();
+    println(f"{m2.len()}");
+    let mut acc = "";
+    for k in m2.keys() { acc = acc + k + ","; }
+    println(f"{acc.len()}");
+    let s1: SortedSet[String] = mks();
+    println(f"{s1.len()}");
+    let s2 = mks();
+    println(f"{s2.len()}");
+    println("end");
+}
+"#,
+            &["2", "2", "42", "2", "2", "end"],
+            "unannotated_sorted_collection_binding",
+        );
+    }
+
     /// B-2026-08-14-15 leg A — a nested container read into a `let` binding
     /// and then probed with a key-taking method.
     ///
