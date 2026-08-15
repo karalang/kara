@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 96 | 0 |
 | perf | 68 | 0 |
 | false-positive | 63 | 0 |
-| diagnostics | 58 | 0 |
+| diagnostics | 59 | 1 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
 | other | 31 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 884 | 1 |
 | typecheck | 172 | 0 |
-| interp | 145 | 0 |
+| interp | 146 | 1 |
 | ownership | 50 | 0 |
 | autopar | 45 | 0 |
 | other | 42 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced · 1 open · 1211 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1225 surfaced · 2 open · 1211 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-15 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING of a `Vec[Struct]` (`let s = entries[0..2]`) DOUBLE-FREES under `KARAC_AUTO_PAR=0` and SIGSEGVs at `-O0`, while the DEFAULT build is clean and prints the right answer — the inverted polarity means disabling auto-par to rule it out is what triggers the crash. | the range-index let path's element ownership for a struct element with a heap field: the slice and the source Vec both appear to own the element buffers. Auto-par splitting the function happens to mask it. |
+| B-2026-08-15-20 | 2026-08-15 | interp | low | THE INTERPRETER BLAMES AN INTEGER OVERFLOW ON A SUB-EXPRESSION THAT CANNOT OVERFLOW: in `let c = (a + b) * m` with `a + b == 3`, the trap is reported at the column of `a`, not of the multiply that actually trapped. The compiled backends point elsewhere on the same line, so `karac run` and `karac build` give two different locations for one fault. | The span attached to the overflow trap in the interpreter's binary-op evaluation. It appears to carry the LEFT OPERAND's span rather than the operation's — which is indistinguishable from correct whenever the left operand is itself the overflowing op, and wrong whenever it is not. |
 
 ### Wontfix (2)
 
