@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 96 | 0 |
 | perf | 69 | 0 |
 | false-positive | 65 | 1 |
-| diagnostics | 60 | 2 |
+| diagnostics | 60 | 1 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
 | other | 31 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 889 | 0 |
-| typecheck | 174 | 1 |
+| typecheck | 174 | 0 |
 | interp | 146 | 1 |
 | ownership | 51 | 1 |
 | autopar | 46 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1233 surfaced · 3 open · 1218 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1233 surfaced · 2 open · 1219 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-20 | 2026-08-15 | interp | low | THE INTERPRETER BLAMES AN INTEGER OVERFLOW ON A SUB-EXPRESSION THAT CANNOT OVERFLOW: in `let c = (a + b) * m` with `a + b == 3`, the trap is reported at the column of `a`, not of the multiply that actually trapped. The compiled backends point elsewhere on the same line, so `karac run` and `karac build` give two different locations for one fault. | The span attached to the overflow trap in the interpreter's binary-op evaluation. It appears to carry the LEFT OPERAND's span rather than the operation's — which is indistinguishable from correct whenever the left operand is itself the overflowing op, and wrong whenever it is not. |
-| B-2026-08-15-26 | 2026-08-15 | typecheck | low | THE `OnceFnIntoFnSlot` HELP TEXT PRESCRIBES A CLONE ROUTE THAT DOES NOT COMPILE — split out of B-2026-08-15-22 as its fix shape (3). Both readings of "clone the captured value" were tried and both stay rejected. Not simply deletable: with -22 fixed the reported shape no longer reaches this diagnostic, so which shapes still do — and whether the clone advice is right for THEM — is the open question. | the `OnceFnIntoFnSlot` help text (src/typechecker.rs, the once-callable-closure slot rejection) and the set of shapes that still reach it after B-2026-08-15-22. |
 | B-2026-08-15-27 | 2026-08-15 | ownership | low | CALLING AN `Fn(ref T)` CLOSURE TWICE WITH THE SAME ARGUMENT warns "value moved here, used again here" — the closure's parameter is a BORROW, so the call cannot move it, and the program compiles and runs correctly on every backend. A direct call to `fn f(s: ref String)` does not warn. | the ownership checker's treatment of a CLOSURE call's arguments: it appears to ignore the closure type's declared parameter mode and treat every argument as an owned pass. |
 
 ### Wontfix (2)
@@ -145,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1233 surfaced
 
 </details>
 
-### Fixed (1218)
+### Fixed (1219)
 
-<details><summary>1218 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1219 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9168,6 +9167,93 @@ have passed while the handle was still being double-dereferenced.
 
 GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
 suite, and the asan -O0 leg. |
+| B-2026-08-15-26 | typecheck | low | THE `OnceFnIntoFnSlot` HELP TEXT PRESCRIBES A CLONE ROUTE THAT DOES NOT COMPILE — split out of B-2026-08-15-22 as its fix shape (3) | FIXED in 80f24f2. The row asked for three things in order — (1) enumerate the
+shapes that still reach the diagnostic, (2) actually compile the clone remedy on
+each, (3) rewrite the text to offer only routes that were run. All three done,
+and (2) is recorded here in full because the measurement is the durable part.
+
+(1) SHAPES STILL REACHING `OnceFnIntoFnSlot` after B-2026-08-15-22. Each
+verified to still produce exactly this diagnostic:
+
+    take(|| apply(cfg))         capture into an OWNED user-fn parameter
+    take(|| v.push(b))          a builtin that RETAINS its argument
+    take(|| m.insert(b, 1))     ditto, Map
+    take(|| { v.join(b) })      ditto, join
+    take(|| { W { s: b } })     capture moved into a struct literal
+    take(|| eat(v))             a Vec capture into an owned param
+
+So the row's premise held: the diagnostic is far from dead after -22 — a builtin
+that KEEPS what it is handed still demotes, which is exactly the line -22 drew.
+
+(2) THE CLONE REMEDY, COMPILED. It works, but only with FOUR things at once, and
+the message named none of them:
+
+  a. The clone must be INSIDE the body. Cloning outside and capturing the clone
+     (`let c = b.clone(); take(|| eat(c))`) stays `OnceFn` — the clone is
+     consumed exactly as the original was. This is the reading a reader is most
+     likely to try first and it changes nothing.
+  b. The closure needs an `own` capture prefix. Without it the bare closure's
+     `ref` capture trips `closure with 'ref' capture of 'b' escapes its scope`.
+     The prefix ALONE is not a remedy either — `take(own || eat(b))` is still
+     `OnceFn`, so the clone is doing real work; the two are jointly necessary.
+  c. The captured type needs `Clone`. A plain user struct has no `clone` method
+     at all: `no method 'clone' on type 'Cfg'`. That is the type in the
+     COMPILER'S OWN canonical fixture for this error, so the advice it printed
+     could not be typed out on the very program it printed it for.
+  d. The slot must declare `allocates`. Cloning allocates and a bare `Fn()` slot
+     is pure, so without it: `argument 1 has effect allocates(Heap) not declared
+     in slot [pure]`. The spelling is `Fn() with allocates(R)` — a parenthesized
+     effect list does not parse — and `R` must be a declared `effect resource`.
+
+  The full working form, for the record:
+
+      effect resource Heap;
+      fn eat(s: String) { }
+      fn take(f: Fn() with allocates(Heap)) { f() }
+      fn main() { let b = "x"; take(own || { let c = b.clone(); eat(c); }); }
+
+  THE DECISIVE POINT is (d): it means editing the CALLEE'S signature. That is
+  the same "if you control its declaration" precondition the message attached
+  only to its `OnceFn(...)` route — and that route needs none of a/b/c. So the
+  clone route is strictly harder than the alternative it was printed above, and
+  requires a superset of its preconditions. Leading with it walked the reader
+  away from the smaller fix.
+
+  The other two routes were compiled as well, and both work unchanged on every
+  shape in (1): an `OnceFn()` slot, and binding the closure locally and calling
+  it (`let f = || apply(cfg); f();`).
+
+(3) THE REWRITE names the two working routes first and mentions the clone only
+with its preconditions attached, so the reader can price it before starting.
+
+ANSWERING THE ROW'S OPEN QUESTION — "is the clone advice wrong for the remaining
+shapes too, or only for the one that no longer arrives?" It is wrong for ALL of
+them, but not in the way the row anticipated. The row expected either "cloning
+works for genuinely-consuming shapes" or "it never works"; the truth is that it
+works for every one of them and is never a caller-side fix. So the answer is not
+to delete the advice — it is to stop presenting it as the first and easiest
+route when it is the last and hardest.
+
+INCIDENTAL FINDING, not part of this row: a `#[derive(Copy, Clone)]` capture is
+correctly NOT demoted to `OnceFn`, but the bare closure then trips the ownership
+escape check (`closure with 'ref' capture of 'cfg' escapes its scope`); an `own`
+prefix compiles it. Recorded here rather than filed, since it is a diagnostic
+about borrows, not this one.
+
+TESTS. The wording lived in ONE place and was asserted in TWO —
+`src/typechecker/tests.rs` and `tests/closures.rs` both required the phrase
+"clone the captured value". A fix applied to either alone leaves the other
+pinning text that no longer exists, so both moved together; each now asserts the
+ABSENCE of the unqualified clone advice, and the unit copy additionally asserts
+that whenever the clone route IS named its preconditions travel with it. A new
+behaviour test (`the_offered_routes_actually_compile`) compiles both named
+routes and the two near-miss NON-routes (clone-outside, `own`-prefix-alone), so
+the prose cannot drift from what the compiler accepts without a test going red.
+Verified load-bearing: with the old message restored the negative assertion
+fires and prints the offending text.
+
+Gates: full `--features llvm` sweep of all 98 targets, 12550 tests, 0 failures;
+clippy `--all --all-targets` and fmt clean. |
 | B-2026-08-15-28 | codegen | high | A `ref`-DECLARED CLOSURE PARAM OF A HANDLE-BACKED BUILTIN IS DOUBLE-DEREFERENCED — `\|m\| m.len()` over a two-entry `Map` printed 529 under `karac buil… | FIXED by f1474ffe, in the closure param registration (src/codegen/closures.rs),
 alongside B-2026-08-15-25 — not as a convenience, but because -25 could not be
 shipped without it. Correcting -25's return type turned the `Map`/`Set` predicate
