@@ -2425,7 +2425,19 @@ impl<'ctx> super::Codegen<'ctx> {
             || matches!(&field_te.kind, TypeKind::Path(p)
                 if p.segments.last().is_some_and(|n| n == "Map" || n == "Set"
                     || n == "VecDeque" || n == "SortedMap" || n == "SortedSet"));
-        if !is_container || self.is_string_type_expr(&field_te) {
+        // B-2026-08-15-5: String is in, not out. The original exclusion rested
+        // on "already released here, measured" — but the measurement ran at the
+        // default opt level, where the fixture's loop-invariant concat is
+        // hoisted by LICM: one allocation total, still reachable through the
+        // field at exit, so LSan had nothing to report. At -O0 the same loop
+        // allocates per iteration and leaks every displaced buffer (627 B / 19
+        // allocs on the 20-iteration fixture). Nothing on this path ever
+        // released a displaced String; the teardown only sees the final
+        // occupant, same as the container family. A String field read off a
+        // shared node yields an independent copy (same reason the unconditional
+        // self-assign is safe for containers), so `p.label = p.label` frees the
+        // node's buffer while the RHS holds its own.
+        if !is_container && !self.is_string_type_expr(&field_te) {
             return;
         }
         let drop_fn = self.emit_drop_fn_for_type_expr(&field_te);

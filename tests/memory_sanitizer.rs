@@ -48403,18 +48403,20 @@ fn main() {
 
     #[test]
     fn asan_shared_struct_string_field_reassign_no_leak() {
-        // B-2026-08-14-18's over-reach guard, kept in its own fixture and its
-        // own struct shape. A `String` field of a `shared struct` was ALREADY
-        // released on reassignment before this row — measured against the
-        // pre-fix compiler with exactly this program — so the container release
-        // must not touch it. A second release would show up here as a double
-        // free, which is the failure mode a leak-only fixture cannot see.
-        //
-        // One field on purpose. A four-field `Vec, Map, Set, String` shared
-        // struct has a SEPARATE, pre-existing, layout-dependent String leak
-        // (627 bytes over 19 allocations on a 20-iteration loop, identical on
-        // the pre-fix compiler); folding a String reassign into the container
-        // fixture made it assert that unrelated bug instead of this one.
+        // Originally B-2026-08-14-18's over-reach guard, resting on "a String
+        // field of a shared struct was ALREADY released on reassignment —
+        // measured". That measurement was an -O2 artifact: this fixture's
+        // concat is loop-invariant, LICM hoists it to a single allocation that
+        // stays reachable through the field at exit, and LSan sees nothing. At
+        // -O0 the loop allocates per iteration and the truth surfaced — no
+        // release existed anywhere on the path, 627 B leaked over 19
+        // allocations (the same signature earlier misread as a "separate,
+        // layout-dependent leak" of the four-field fixture; it was this bug,
+        // visible whenever the allocations survive to run time). Since
+        // B-2026-08-15-5's fix the displaced String rides the same
+        // release_old_shared_container_field arm as the container family, and
+        // this fixture asserts that at every opt level — leak-clean AND
+        // double-free-clean (a second release would trip ASAN here too).
         assert_clean_asan_run(
             r#"
 shared struct P { mut label: String }
@@ -48431,6 +48433,42 @@ fn main() {
 "#,
             &["33"],
             "asan_shared_struct_string_field_reassign_no_leak",
+        );
+    }
+
+    /// Aliasing companion to the fixture above, mirroring the container
+    /// family's aliasing fixture: the displaced-String release is
+    /// UNCONDITIONAL, so every shape where the RHS reads the node's own buffer
+    /// must stay both correct and ASAN-clean. Safe for the same reason the
+    /// container release is — a String field read off a shared node yields an
+    /// independent copy, so by the time the release fires the RHS holds its
+    /// own buffer, never the one being freed. Covers self-assign
+    /// (`p.label = p.label`), cross-alias through a second handle to the same
+    /// node (`p.label = q.label`), and a compound append through the field
+    /// (`p.label = p.label + "x"`), which reads the old buffer during RHS
+    /// evaluation — before the release — and displaces it after.
+    #[test]
+    fn asan_shared_struct_string_field_reassign_aliasing() {
+        assert_clean_asan_run(
+            r#"
+shared struct P { mut label: String }
+fn main() {
+    let p = P { label: "seedseedseedseedseed" + "tail" };
+    p.label = p.label;
+    println(f"{p.label.len()}");
+    let q = p;
+    p.label = q.label;
+    println(f"{p.label.len()}");
+    let mut k = 0;
+    while k < 5 {
+        p.label = p.label + "x";
+        k = k + 1;
+    }
+    println(p.label);
+}
+"#,
+            &["24", "24", "seedseedseedseedseedtailxxxxx"],
+            "asan_shared_struct_string_field_reassign_aliasing",
         );
     }
 
