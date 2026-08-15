@@ -96363,6 +96363,158 @@ fn main() {
             Some("alpha\n12\ngamma\n108\n5\nbetamax\nalpha-betamax\nbetamax\n".to_string())
         );
     }
+
+    /// The names a user ENUM may shadow without codegen describing it with the
+    /// built-in's layout (B-2026-08-15-12).
+    ///
+    /// `builtin_opaque_ptr_handle`'s list, verbatim. Every one of these lowers
+    /// to a bare `ptr` when it is the built-in, so a user enum of the same name
+    /// whose shadow went unrecorded had its `ref`/owned parameter lowered to a
+    /// pointer instead of its tagged-union type — and the match's payload
+    /// binding was then never registered.
+    const SHADOWABLE_HANDLE_NAMES: [&str; 14] = [
+        "Map",
+        "Set",
+        "SortedMap",
+        "SortedSet",
+        "Tensor",
+        "Column",
+        "DataFrame",
+        "Interner",
+        "Arena",
+        "Request",
+        "File",
+        "Sender",
+        "Receiver",
+        "Channel",
+    ];
+
+    /// B-2026-08-15-12 — a user enum may shadow a prelude handle type; codegen
+    /// must lower it as the enum the user wrote.
+    ///
+    /// The shadow registry (`user_shadowed_prelude_types`, B-2026-08-08-10) was
+    /// populated only by the STRUCT declaration pass, so a user ENUM never
+    /// entered it: `builtin_opaque_ptr_handle` won on the `TypeExpr` lowering
+    /// path, a `ref Request` parameter became an opaque `ptr` rather than the
+    /// tagged union, and the payload binding was never registered — surfacing
+    /// as `codegen failed: Undefined variable 'x'` on a program `karac check`
+    /// accepts and the interpreter runs correctly.
+    ///
+    /// IR, not E2E, is the right pin: the failure was a COMPILE ERROR, so a
+    /// successful `compile_to_ir` is itself the assertion, and it holds without
+    /// the runtime archives an E2E test soft-skips without. The whole list is
+    /// swept because the defect was never about `Request` — that name is simply
+    /// what the router dogfood happened to use.
+    #[test]
+    fn test_user_enum_shadowing_a_prelude_handle_type_lowers_as_the_users_enum() {
+        for name in SHADOWABLE_HANDLE_NAMES {
+            let ir = ir_for(&format!(
+                "enum {name} {{ A(i64), B }}\n\
+                 fn f(e: ref {name}) -> i64 {{ match e {{ A(x) => x, B => 0 }} }}\n\
+                 fn g(e: {name}) -> i64 {{ match e {{ A(x) => x + 1, B => 0 }} }}\n\
+                 fn main() {{ println(f({name}.A(4))); println(g({name}.A(4))); }}\n"
+            ));
+            // The user's enum is a tagged union, never the built-in's bare
+            // `ptr` — if the shadow were still unrecorded this call would have
+            // panicked in `ir_for` long before here.
+            assert!(
+                ir.contains("define"),
+                "{name}: shadowing enum produced no IR",
+            );
+        }
+    }
+
+    /// The E2E half of B-2026-08-15-12: shadowing must produce the RIGHT
+    /// ANSWER, not merely compile.
+    ///
+    /// A fix that registered the shadow but resolved it to the wrong layout
+    /// would satisfy the IR pin above and silently read the payload from the
+    /// wrong offset. `karac run --interp` printed `4` and `5` for this program
+    /// throughout the bug's life, so the interpreter is the oracle and these
+    /// are the values codegen has to match.
+    #[test]
+    fn test_e2e_user_enum_shadowing_a_prelude_handle_type_reads_its_payload() {
+        for name in SHADOWABLE_HANDLE_NAMES {
+            let Some(out) = run_program(&format!(
+                "enum {name} {{ A(i64), B }}\n\
+                 fn f(e: ref {name}) -> i64 {{ match e {{ A(x) => x, B => 0 }} }}\n\
+                 fn g(e: {name}) -> i64 {{ match e {{ A(x) => x + 1, B => 0 }} }}\n\
+                 fn main() {{ println(f({name}.A(4))); println(g({name}.A(4))); \
+                     println(f({name}.B)); }}\n"
+            )) else {
+                return;
+            };
+            assert_eq!(out, "4\n5\n0\n", "{name}: wrong payload read");
+        }
+    }
+
+    /// The row's own repro, whole — a request router with a `shared enum`
+    /// payload passed to a `ref`-taking helper.
+    ///
+    /// Kept alongside the swept list because it is the shape that FOUND the
+    /// defect, and because it exercises the parts the reduction dropped: a
+    /// nested enum payload, a `shared` inner enum, and the binding forwarded to
+    /// another function rather than read in place.
+    #[test]
+    fn test_e2e_shadowed_enum_router_with_shared_payload() {
+        let Some(out) = run_program(
+            "shared enum Method { Get, Post, Delete }\n\
+             enum Request { Simple(Method, String), WithBody(Method, String) }\n\
+             fn method_name(m: ref Method) -> String {\n\
+                 match m { Get => \"GET\", Post => \"POST\", Delete => \"DELETE\" }\n\
+             }\n\
+             fn handle(r: ref Request) -> String {\n\
+                 match r {\n\
+                     Simple(m, _path) => method_name(m),\n\
+                     WithBody(_m, _path) => \"withbody\",\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut reqs: Vec[Request] = Vec.new();\n\
+                 reqs.push(Request.Simple(Method.Post, \"/\"));\n\
+                 reqs.push(Request.WithBody(Method.Get, \"/x\"));\n\
+                 for i in 0..reqs.len() { println(handle(reqs[i])); }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "POST\nwithbody\n");
+    }
+
+    /// The STRUCT half of the same name-keyed dispatch, which was reachable on
+    /// its own before the enum shadow was ever recorded (B-2026-08-15-12).
+    ///
+    /// `owned_ptr_param_is_noalias_safe` is a third list keyed on the built-in
+    /// name, and it did not consult the shadow registry either. A user
+    /// `struct Map` whose shadow WAS recorded therefore lowered correctly to an
+    /// aggregate while the alias pass still stamped `noalias` on it — tripping
+    /// the debug-assert that guards that arm, so `karac build` PANICKED on a
+    /// program `karac check` accepts.
+    ///
+    /// Only the seven `OWNED_VALUE_PTR_TYPES` names take the owned-`ptr` arm,
+    /// and only an OWNED param reaches it (`ref`/`mut ref` are excluded by
+    /// shape), so that is exactly what this sweeps.
+    #[test]
+    fn test_e2e_user_struct_shadowing_an_owned_ptr_handle_takes_no_alias_attr() {
+        for name in [
+            "Tensor",
+            "Column",
+            "DataFrame",
+            "Map",
+            "Set",
+            "SortedMap",
+            "SortedSet",
+        ] {
+            let Some(out) = run_program(&format!(
+                "struct {name} {{ v: i64 }}\n\
+                 fn g(e: {name}) -> i64 {{ return e.v + 1; }}\n\
+                 fn main() {{ println(g({name} {{ v: 4 }})); }}\n"
+            )) else {
+                return;
+            };
+            assert_eq!(out, "5\n", "{name}: shadowing struct read wrong");
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]
@@ -96745,6 +96897,7 @@ mod string_append_in_place {
 /// has already rewritten `s + x` into a `String.add` call. `karac::lower` is
 /// what orders `presize_block` before the operator rewrite; these assert
 /// through it, so a reordering fails here rather than quietly costing 2x.
+#[cfg(feature = "llvm")]
 mod presize_reservation {
     /// THE PARSE AND TYPECHECK ASSERTIONS ARE WHAT KEEP THE DECLINE TEST
     /// HONEST. Its four probes assert that `str_with_cap.buf` is ABSENT — which

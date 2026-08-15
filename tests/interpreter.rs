@@ -33526,3 +33526,44 @@ fn test_index_of_method_returned_vec() {
         "2\n20\n8\ncy\n1\nbo\n"
     );
 }
+
+/// The oracle twin for B-2026-08-15-12. A user enum shadowing a prelude handle
+/// type ran CORRECTLY here throughout the bug's life — codegen was the side
+/// that refused to build it (`Undefined variable 'x'`), which is what made the
+/// row a run-vs-build divergence rather than a wrong answer.
+///
+/// Pinned so the parity is asserted from both ends: `tests/codegen.rs`'s
+/// `test_e2e_user_enum_shadowing_a_prelude_handle_type_reads_its_payload`
+/// asserts the same values out of a built binary, and neither side can drift
+/// without one of them failing.
+#[test]
+fn test_user_enum_shadowing_a_prelude_handle_type() {
+    for name in [
+        "Map",
+        "Set",
+        "SortedMap",
+        "SortedSet",
+        "Tensor",
+        "Column",
+        "DataFrame",
+        "Interner",
+        "Arena",
+        "Request",
+        "File",
+        "Sender",
+        "Receiver",
+        "Channel",
+    ] {
+        assert_eq!(
+            run(&format!(
+                "enum {name} {{ A(i64), B }}\n\
+                 fn f(e: ref {name}) -> i64 {{ match e {{ A(x) => x, B => 0 }} }}\n\
+                 fn g(e: {name}) -> i64 {{ match e {{ A(x) => x + 1, B => 0 }} }}\n\
+                 fn main() {{ println(f({name}.A(4))); println(g({name}.A(4))); \
+                     println(f({name}.B)); }}\n"
+            )),
+            "4\n5\n0\n",
+            "{name}: the interpreter is the oracle here and must not drift",
+        );
+    }
+}

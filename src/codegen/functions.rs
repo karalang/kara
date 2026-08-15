@@ -965,6 +965,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(head)
             .map(String::as_str)
             .unwrap_or(head.as_str());
+        // B-2026-08-15-12 — a USER type of this name is not the built-in, and
+        // does not lower to a `ptr`. This list is name-keyed like every other
+        // built-in dispatch, so it needs the same shadow check they do; without
+        // it, `struct Map { v: i64 }` (or a user enum, once its shadow is
+        // recorded) took `noalias` on a param that lowers to an aggregate, and
+        // the `debug_assert` guarding this arm tripped — `karac build` panicking
+        // on a program `karac check` accepts. That struct case was reachable on
+        // its own, before the enum half of this row existed.
+        if self.user_shadowed_prelude_types.contains(name) {
+            return false;
+        }
         OWNED_VALUE_PTR_TYPES.contains(&name)
     }
 

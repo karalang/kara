@@ -433,6 +433,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(st) = self.struct_types.get(name) {
                         return (*st).into();
                     }
+                    // B-2026-08-15-12 — an ENUM of the shadowed name resolves
+                    // here too. The sibling NAME path (`llvm_type_for_name`)
+                    // already consults `enum_layouts` ahead of
+                    // `builtin_opaque_ptr_handle`; this path consulted only the
+                    // struct maps, so `enum Request { Simple(i64) }` fell
+                    // through to the opaque-handle arm and a `ref Request` param
+                    // lowered to `ptr` instead of the tagged union. The two
+                    // entry points disagreeing about one name is precisely the
+                    // divergence this function's own doc comment warns about.
+                    if let Some(layout) = self.enum_layouts.get(name) {
+                        return layout.llvm_type.into();
+                    }
                 }
                 if name == "Array" {
                     if let Some(arr_ty) = self.llvm_array_type(&path.generic_args) {

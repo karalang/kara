@@ -3448,6 +3448,35 @@ impl<'ctx> super::Codegen<'ctx> {
 
         for item in &program.items {
             if let Item::EnumDef(e) = item {
+                // B-2026-08-15-12 — record a user ENUM that shadows a prelude
+                // type name, the same way `build_struct_types` records a
+                // shadowing struct. Both halves of the B-2026-08-08-10 guard
+                // were struct-only, so `enum Request { Simple(i64) }` left the
+                // set empty: `builtin_opaque_ptr_handle("Request")` then won on
+                // the `TypeExpr` lowering path, a `ref Request` param lowered to
+                // an opaque `ptr` instead of the user's tagged-union layout, and
+                // the match's payload binding was never registered — surfacing
+                // hundreds of lines later as `codegen failed: Undefined variable
+                // 'x'` on a program `karac check` accepts and the interpreter
+                // runs correctly.
+                //
+                // Only the PLAIN enum was exposed. A `shared`/`par` enum is
+                // caught by the `shared_types` / `shared_type_names` test that
+                // runs ahead of the builtin arms, and answers `ptr` — which is
+                // what a reference-semantic type wants anyway. Registering
+                // unconditionally is still right: the guard's job is to say
+                // "this name is the user's", and that is true regardless of
+                // which later arm happens to reach the correct answer first.
+                //
+                // Same `stdlib_origin` gate as the struct site, for the same
+                // reason — spliced stdlib enums flow through this pass too, and
+                // a name-only test would flag the stdlib against itself.
+                if !self.declaring_stdlib_program
+                    && !e.stdlib_origin
+                    && crate::prelude::PRELUDE_TYPES.contains(&e.name.as_str())
+                {
+                    self.user_shadowed_prelude_types.insert(e.name.clone());
+                }
                 // CP4 / CP5: compute per-variant per-field word offsets,
                 // sized via the recursive helper. The variant's total
                 // payload-word count is the last entry's `start + num_words`
