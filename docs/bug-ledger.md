@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 251 | 1 |
-| leak | 182 | 1 |
+| leak | 182 | 0 |
 | double-free | 130 | 1 |
 | run-vs-build | 122 | 0 |
 | codegen-gap | 110 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 884 | 3 |
+| codegen | 884 | 2 |
 | typecheck | 172 | 0 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced · 4 open · 1208 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced · 3 open · 1209 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-15-14 | 2026-08-15 | codegen | medium | A `Vec[shared struct]` CLONED AND PASSED BY VALUE strands one 32-byte RC box — `agg_shared(ns.clone())` over `Vec[Node]` leaks ONE object regardless of call count, so the per-call clone/release pairing is balanced and the container's own scope exit is what fails to release its element references. | the scope-exit drop for a `Vec` whose element is a `shared struct` handle: the buffer is freed without releasing the per-element RC references. NOT B-2026-08-15-13's slot machinery — reproduces under `KARAC_AUTO_PAR=0`, where that code path never runs. |
 | B-2026-08-15-15 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING of a `Vec[Struct]` (`let s = entries[0..2]`) DOUBLE-FREES under `KARAC_AUTO_PAR=0` and SIGSEGVs at `-O0`, while the DEFAULT build is clean and prints the right answer — the inverted polarity means disabling auto-par to rule it out is what triggers the crash. | the range-index let path's element ownership for a struct element with a heap field: the slice and the source Vec both appear to own the element buffers. Auto-par splitting the function happens to mask it. |
 | B-2026-08-15-16 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING crossing an AUTO-PAR JOIN returns the WRONG LENGTH, silently, in the DEFAULT build — `let s = nums[0..2]; return s.len()` yields 1 instead of 2 under `karac build`, garbage under `-O0` and the JIT, and the correct 2 under `--interp` and `KARAC_AUTO_PAR=0`. | the `ReturnSlot` round-trip for a range-slice binding (`collect_return_slots` / `emit_par_run`, src/codegen/stmts.rs + par_blocks.rs): the joined slot loses the VALUE, not just the type name B-2026-08-15-13 fixed for element reads. |
 | B-2026-08-15-19 | 2026-08-15 | autopar | medium | `#[par_order_free]` IS SILENTLY IGNORED when the analyzer does not classify the loop as a collect: no fan-out, no diagnostic, and `karac query concurrency` does not even list the loop among the DECLINED ones — it is absent from `loop_reductions` entirely. The user gets a sequential binary and no way to learn why an explicit opt-in did nothing. | The attribute is an explicit user opt-in — the ledger's own B-2026-07-29-30 renamed it precisely to make it "the caller's promise not to depend on order" — so a loop carrying it and not fanning out is a decision the compiler owes the user an explanation for. `disjoint_write_loops` already emits a `gate` and a `reason` per declined loop; a `#[par_order_free]` collect that fails classification emits nothing at all. |
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1224 surfaced
 
 </details>
 
-### Fixed (1208)
+### Fixed (1209)
 
-<details><summary>1208 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1209 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8327,6 +8326,89 @@ quarantine another row's defect inside this one's fixture.
 
 GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
 suite, and the asan -O0 leg. |
+| B-2026-08-15-14 | codegen | medium | AN INLINE CONTAINER TEMPORARY IN ARGUMENT POSITION FREES ITS BUFFER WITHOUT RELEASING ITS ELEMENTS — `agg(ns.clone())` over a `Vec[shared Node]` stra… | FIXED by fd7254d. The row's unit of measurement was right and its
+attribution was one container off.
+
+WHICH CONTAINER LEAKS. The row concludes "the container's own scope exit is what
+fails to release its element references", meaning the SOURCE `ns`. It does not:
+
+    let mut ns: Vec[Node] = Vec.new(); ns.push(Node { .. });   // no call at all
+    let c = ns.clone(); agg(c);                                // NAMED clone
+
+are both clean, before the fix and after. So is `agg(ns)` — the original passed
+by value with no clone at all. The leak needs the clone to be an INLINE
+TEMPORARY in argument position: `agg(ns.clone())`. The IR says it plainly —
+`main` emits four `karac_free_buf` calls but only ONE per-element `adrop` walk,
+and the walk belongs to `ns`. The `__owned_tmp` slot holding the clone gets a
+bare buffer free.
+
+The row's own discriminator survives intact and is what identifies the temp
+rather than the call: 3 elements through 1 call strand 3 boxes (96 B), 1 element
+through 3 calls strands 1 (32 B). The per-call clone/release pairing was
+balanced all along — it is the temp's own drop that is short.
+
+THE CAUSE IS A SHORTCUT WITH A STALE JUSTIFICATION. `materialize_owned_temp`'s
+Vec branch reads the container's `TypeExpr` out of the hint table and
+immediately narrows it to an LLVM element type, then calls `track_vec_var`. Its
+comment says a MISSING hint entry "degrades to slice-1 behavior (outer buffer
+freed, inner elements leak)" — true, and honest — but the branch took that same
+shortcut with the entry PRESENT. `track_vec_var`'s drain reaches an element only
+when the element is itself a `{ptr,len,cap}` or has a direct Vec/String field. A
+`shared Node` element is an 8-byte RC handle, so the drain saw nothing to do.
+
+The fix routes through `vec_elem_agg_drop_for_type_expr` /
+`vec_elem_map_drop_for_type_expr` — the same choosers the `let` path and the
+for-loop iterable temp already use, which is exactly why the named spelling was
+always clean. That needed a new `extract_vec_elem_type_expr`: the site holds the
+CONTAINER's type expr and the choosers key on the ELEMENT's, and an LLVM type
+cannot stand in for it (`shared Node` and `ref X` are both a bare `ptr`, and
+by-shape struct types collide).
+
+WIDER THAN THE ROW, MEASURED RATHER THAN CLAIMED. One `agg(vs.clone())` call
+each, LSan, before and after:
+
+    Vec[shared Node]                 32 B / 1 obj   ->  clean
+    Vec[Holder], Holder.n shared     32 B / 1 obj   ->  clean
+    Vec[Map[String, i64]]           613 B / 4 obj   ->  clean
+    Vec[Vec[String]]                 25 B / 2 obj   ->  clean
+    Vec[(String, i64)]               clean          ->  clean
+    Vec[Option[String]]              clean          ->  clean
+
+The last two rows are the honest limit: the chooser admits tuple and
+Option/Result elements, so my first draft of the comment claimed those were
+leaking too. They were not — measuring the pre-fix compiler is what caught it,
+and the comment now states the table rather than the guess. What leaked is
+exactly the element kinds the inline drain cannot see through: an RC handle, a
+Map handle, a struct whose `shared` field the value drop skips BY DESIGN, and a
+nested Vec.
+
+THE FAILURE MODE THIS DISPATCH HAS TO AVOID IS A DOUBLE FREE, not a leak. The
+drain treats a per-element drop fn as EXCLUSIVE of its inline recursion, so an
+element routed through both frees its direct heap fields twice. `Vec[Vec[String]]`
+is the shape that would show it — it is in the fixture table above and in the
+pin, and it is clean.
+
+ONE CORRECTION TO THE SEVERITY REASONING. The row argues medium on the grounds
+that the leak is "bounded by the number of distinct shared elements ever
+constructed rather than by call count, so it is a fixed-size leak per container
+rather than an unbounded one". The first half is right; the conclusion holds
+only because the repro reuses ONE container. A loop that builds a FRESH `Vec` each
+iteration and passes `agg(ns.clone())` leaks once per iteration — the bound is
+the number of container TEMPORARIES, which is a program-shape property, not a
+constant. Medium was still the right call for a silent leak with no wrong
+answer, but "fixed-size" was too reassuring. That shape is clean after the fix
+(50 iterations, LSan).
+
+PINS. `asan_inline_container_temp_arg_releases_its_elements` in
+tests/memory_sanitizer.rs carries all four leaking element kinds, both scaling
+directions (3 elements × 1 call, 1 element × 3 calls), the `Vec[Vec[String]]`
+double-free guard, and the NAMED-binding control — which passes on both sides of
+the fix by design, since it is what says the defect is the inline temporary
+rather than the clone. Against the stashed compiler the pin fails with 808 bytes
+in 11 allocations.
+
+GATES: full `--features llvm` suite green (13,738 passed / 0 failed), fmt and
+clippy `--all-targets` clean. |
 | B-2026-08-15-17 | codegen | medium | `karac build` PANICS -- `alias attribute 'noalias' emitted on a non-pointer param lowering` -- for a user STRUCT shadowing an owned-ptr handle name p… | FIXED in 454af75, alongside the row that exposed it. `owned_ptr_param_is_noalias_safe`
 now returns false for any name in `user_shadowed_prelude_types` -- a user type of
 that name is not the built-in and does not lower to a `ptr`.
