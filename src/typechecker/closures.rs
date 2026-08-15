@@ -119,7 +119,12 @@ impl<'a> super::TypeChecker<'a> {
         let reason = if force_repeatable {
             None
         } else {
-            self.closure_consumes_captured_non_copy(body, closure_param_names, outer_bindings)
+            self.closure_consumes_captured_non_copy(
+                body,
+                closure_param_names,
+                &param_types,
+                outer_bindings,
+            )
         };
         match reason {
             Some(r) => {
@@ -168,6 +173,7 @@ impl<'a> super::TypeChecker<'a> {
         &self,
         body: &Expr,
         closure_param_names: &[String],
+        closure_param_types: &[Type],
         outer_bindings: &HashMap<String, Type>,
     ) -> Option<OnceReason> {
         let mut shadow_stack: Vec<HashSet<String>> = Vec::new();
@@ -176,6 +182,22 @@ impl<'a> super::TypeChecker<'a> {
             params_set.insert(n.clone());
         }
         shadow_stack.push(params_set);
+        // B-2026-08-15-22 — the walker needs to TYPE a method-call receiver, and
+        // `expr_types` cannot answer: the parser gives a postfix expression its
+        // receiver's span, so looking up `object.span` returns the METHOD CALL's
+        // own type (`bool` for `s.contains(b)`), not the receiver's. Names are
+        // the reliable key, so resolve receivers through this map instead.
+        //
+        // Extending the captures map with the closure's own PARAMS is safe for
+        // the capture decision it also drives: `name_is_shadowed` is tested
+        // BEFORE `outer.get(name)` at the identifier leaf, and every param name
+        // is in the shadow stack pushed above — so a param can never reach that
+        // lookup, and this only ever feeds the receiver typing.
+        let mut env = outer_bindings.clone();
+        for (n, t) in closure_param_names.iter().zip(closure_param_types) {
+            env.insert(n.clone(), t.clone());
+        }
+        let outer_bindings = &env;
         let mut reason: Option<OnceReason> = None;
         self.walk_capture_consume(
             body,
@@ -189,6 +211,53 @@ impl<'a> super::TypeChecker<'a> {
 
     fn name_is_shadowed(name: &str, shadow_stack: &[HashSet<String>]) -> bool {
         shadow_stack.iter().any(|s| s.contains(name))
+    }
+
+    /// B-2026-08-15-22 — is this a BUILTIN container/String predicate that only
+    /// READS its argument, so passing a capture to it must not demote the
+    /// closure to `OnceFn`?
+    ///
+    /// Gated on the RECEIVER'S TYPE, not on the method name alone, and that is
+    /// the whole safety argument: a user type is free to declare a `contains`
+    /// that stores what it is handed, and this must not speak for it. An
+    /// unknown receiver type (`None`) answers false, so the previous
+    /// consume-everything behaviour is what any shape this cannot classify
+    /// falls back to.
+    ///
+    /// The membership list is deliberately short and every entry was measured
+    /// non-consuming the same way before being added: called TWICE on one
+    /// binding with a read of that binding afterwards, checked clean and run for
+    /// the right answer. `push` / `insert` / `join` and friends retain their
+    /// argument and are absent for that reason — a fixture pins two of them as
+    /// still-demoting.
+    fn builtin_read_only_arg_method(recv_ty: Option<&Type>, method: &str) -> bool {
+        fn peel(t: &Type) -> &Type {
+            match t {
+                Type::Ref(inner) | Type::MutRef(inner) => peel(inner),
+                other => other,
+            }
+        }
+        let Some(recv) = recv_ty.map(peel) else {
+            return false;
+        };
+        match recv {
+            // A `String` receiver's substring predicates: the needle is scanned
+            // for, never kept.
+            Type::Str => matches!(method, "contains" | "starts_with" | "ends_with"),
+            Type::Named { name, .. } if name == "StringSlice" => {
+                matches!(method, "contains" | "starts_with" | "ends_with")
+            }
+            // Container membership: the probe is compared against stored
+            // elements/keys, never adopted.
+            Type::Named { name, .. } if name == "Vec" || name == "VecDeque" => method == "contains",
+            Type::Named { name, .. } if name == "Set" || name == "SortedSet" => {
+                method == "contains"
+            }
+            Type::Named { name, .. } if name == "Map" || name == "SortedMap" => {
+                method == "contains_key"
+            }
+            _ => false,
+        }
     }
 
     fn walk_capture_consume_block(
@@ -398,10 +467,34 @@ impl<'a> super::TypeChecker<'a> {
                     self.walk_capture_consume(&arg.value, arg_mode, outer, shadows, reason);
                 }
             }
-            ExprKind::MethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
                 self.walk_capture_consume(object, CaptureWalkMode::Reading, outer, shadows, reason);
+                // B-2026-08-15-22: the `Call` arm above decides an argument's
+                // mode from the CALLEE'S SIGNATURE; this one had no signature to
+                // consult and called every non-`mut` argument Consuming. For a
+                // builtin read-only predicate that is simply wrong, and it is
+                // wrong in the one place a user cannot work around — the needle
+                // of `s.contains(bad)` is not retained by anything, but
+                // `String.contains` is not a signature anyone can re-declare.
+                //
+                // The two analyses disagreed, and the sequential one is right:
+                // outside a closure, `s.contains(b)` twice followed by `b.len()`
+                // checks clean and runs. So a predicate factory —
+                // `fn forbids(bad: String) -> Fn(ref String) -> bool
+                //  { |s| not s.contains(bad) }`, the ordinary way to build a rule
+                // list — was rejected as `OnceFn` with no spelling that compiles.
+                let recv_ty = match &object.kind {
+                    ExprKind::Identifier(n) => outer.get(n.as_str()),
+                    _ => None,
+                };
+                let arg_is_read_only = Self::builtin_read_only_arg_method(recv_ty, method);
                 for arg in args {
-                    let arg_mode = if arg.mut_marker {
+                    let arg_mode = if arg.mut_marker || arg_is_read_only {
                         CaptureWalkMode::Reading
                     } else {
                         CaptureWalkMode::Consuming

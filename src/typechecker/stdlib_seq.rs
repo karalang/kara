@@ -1119,7 +1119,25 @@ impl<'a> super::TypeChecker<'a> {
                     // an unconverted `Int` needle never matches a `Float`
                     // element.
                     self.record_float_coercion(&arg.value, &elem, &at);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                    // B-2026-08-15-22 — `contains` is a PROBE: it scans for the
+                    // needle and never keeps it, so a BORROWED needle is exactly
+                    // as usable as an owned one. Comparing the raw `at` rejected
+                    // `v.contains(s)` for a `s: ref String` with "expected
+                    // 'String', found 'ref String'", which made the predicate
+                    // unwritable in a closure over a `ref` param — while the
+                    // String-receiver siblings already accepted it, since
+                    // `is_str_like` peels `Ref`/`MutRef`. This brings the
+                    // container arms into line with them.
+                    //
+                    // Peeled ONLY for the assignability comparison: the three
+                    // numeric-coercion checks above keep the raw type, so a
+                    // borrowed numeric needle behaves exactly as it did before
+                    // and no coercion is recorded against a reference.
+                    let probe_at = match &at {
+                        Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                        other => other.clone(),
+                    };
+                    self.check_assignable(&elem, &probe_at, arg.value.span.clone());
                 }
                 Type::Bool
             }
@@ -1476,7 +1494,25 @@ impl<'a> super::TypeChecker<'a> {
                     // an unconverted `Int` needle never matches a `Float`
                     // element.
                     self.record_float_coercion(&arg.value, &elem, &at);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                    // B-2026-08-15-22 — `contains` is a PROBE: it scans for the
+                    // needle and never keeps it, so a BORROWED needle is exactly
+                    // as usable as an owned one. Comparing the raw `at` rejected
+                    // `v.contains(s)` for a `s: ref String` with "expected
+                    // 'String', found 'ref String'", which made the predicate
+                    // unwritable in a closure over a `ref` param — while the
+                    // String-receiver siblings already accepted it, since
+                    // `is_str_like` peels `Ref`/`MutRef`. This brings the
+                    // container arms into line with them.
+                    //
+                    // Peeled ONLY for the assignability comparison: the three
+                    // numeric-coercion checks above keep the raw type, so a
+                    // borrowed numeric needle behaves exactly as it did before
+                    // and no coercion is recorded against a reference.
+                    let probe_at = match &at {
+                        Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                        other => other.clone(),
+                    };
+                    self.check_assignable(&elem, &probe_at, arg.value.span.clone());
                 }
                 Type::Bool
             }

@@ -96048,6 +96048,49 @@ fn main() {
         );
     }
 
+    /// B-2026-08-15-22 — the predicate factory the typecheck fix unblocked has
+    /// to RUN correctly, not merely be admitted.
+    ///
+    /// A typecheck relaxation that let through a program the backend
+    /// miscompiles would be worse than the false positive it removed. The
+    /// closure is invoked REPEATEDLY on purpose: repeatability is exactly what
+    /// the `Fn` slot promises and what the old `OnceFn` demotion denied, so a
+    /// capture that were really consumed would surface as a wrong answer or a
+    /// crash on the second call. The captured needle is also read after the
+    /// calls, to show it was never taken.
+    ///
+    /// ONLY `contains` IS COMPILED HERE, and the omission is measured rather
+    /// than stylistic. `starts_with` / `ends_with` / `Map.contains_key` /
+    /// `Set.contains` inside a closure body all die in codegen with "Function
+    /// return type does not match operand type of return inst" — the closure's
+    /// return is typed `i64` against the predicate's `i1`. That is PRE-EXISTING
+    /// and reachable with no capture at all (`|s| s.starts_with("ab")` fails
+    /// identically on the parent), so it is not this fix's doing; it is filed as
+    /// B-2026-08-15-25. Admitting them at the type level is still correct — the
+    /// interpreter runs every one of them — and the typechecker tests cover the
+    /// full matrix.
+    #[test]
+    fn test_e2e_closure_factory_over_a_read_only_string_predicate() {
+        assert_eq!(
+            run_program(
+                "fn forbids(bad: String) -> Fn(ref String) -> bool { |s| not s.contains(bad) }\n\
+                 fn has_ref(v: Vec[String], s: ref String) -> bool { return v.contains(s); }\n\
+                 fn main() {\n\
+                     let f = forbids(\"xy\");\n\
+                     let a = \"abxyc\";\n\
+                     let b = \"hello\";\n\
+                     println(f\"{f(a)} {f(b)} {f(a)}\");\n\
+                     let mut v: Vec[String] = Vec.new();\n\
+                     v.push(\"one\");\n\
+                     let n = \"one\";\n\
+                     let r = has_ref(v, n);\n\
+                     println(f\"{r} {n.len()}\");\n\
+                 }\n"
+            ),
+            Some("false true false\ntrue 3\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-7 — a fresh-owned `Vec` temporary into a generic fn's owned
     /// param, across the spellings that decide who frees it.
     ///

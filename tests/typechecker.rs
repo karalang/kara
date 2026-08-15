@@ -17035,6 +17035,91 @@ fn test_subsume_oncefn_into_fn_slot_still_rejects() {
     );
 }
 
+/// B-2026-08-15-22 — a BUILTIN read-only predicate must not demote a closure to
+/// `OnceFn` just because its argument is passed by value.
+///
+/// The `Call` arm of the once-callability walker decides an argument's mode from
+/// the callee's signature; the `MethodCall` arm had no signature to consult and
+/// called every non-`mut` argument consuming. That made the ordinary predicate
+/// factory — `fn forbids(bad: String) -> Fn(ref String) -> bool
+/// { |s| not s.contains(bad) }` — unwritable, and unwritable with NO WORKAROUND,
+/// since `String.contains` is not a signature a user can re-declare.
+///
+/// The two analyses disagreed and the sequential one was right: outside a
+/// closure, `s.contains(b)` twice followed by `b.len()` checks clean and runs.
+#[test]
+fn test_builtin_read_only_predicate_does_not_demote_closure_to_oncefn() {
+    for (label, src) in [
+        (
+            "String.contains",
+            "fn f(b: String) -> Fn(ref String) -> bool { |s| s.contains(b) }",
+        ),
+        (
+            "String.starts_with",
+            "fn f(b: String) -> Fn(ref String) -> bool { |s| s.starts_with(b) }",
+        ),
+        (
+            "String.ends_with",
+            "fn f(b: String) -> Fn(ref String) -> bool { |s| s.ends_with(b) }",
+        ),
+        (
+            "Vec.contains",
+            "fn f(v: Vec[String]) -> Fn(ref String) -> bool { |s| v.contains(s) }",
+        ),
+        (
+            "Map.contains_key",
+            "fn f(k: String) -> Fn(ref Map[String, i64]) -> bool { |m| m.contains_key(k) }",
+        ),
+        (
+            "Set.contains",
+            "fn f(e: String) -> Fn(ref Set[String]) -> bool { |st| st.contains(e) }",
+        ),
+    ] {
+        // `typecheck_ok` panics unless the program is clean, which is the whole
+        // assertion — a demoted closure fails the `Fn` slot right here.
+        let _ = typecheck_ok(src);
+        let _ = label;
+    }
+}
+
+/// The other half of B-2026-08-15-22, and the reason the fix is keyed on the
+/// RECEIVER'S TYPE rather than the method name.
+///
+/// A genuine consume must still demote. `push` adopts its argument, a user
+/// function with an owned parameter consumes it, and — the case a name-only rule
+/// would have broken — a USER type is free to declare its own `contains` that
+/// keeps what it is handed. None of these may be admitted.
+#[test]
+fn test_consuming_method_argument_still_demotes_closure_to_oncefn() {
+    for (label, src) in [
+        (
+            "Vec.push adopts",
+            "fn f(b: String) -> Fn(ref String) -> bool {\n\
+                 |s| { let mut v: Vec[String] = Vec.new(); v.push(b); v.len() > 0 }\n\
+             }",
+        ),
+        (
+            "owned user fn param",
+            "fn sink(x: String) -> i64 { return x.len(); }\n\
+             fn f(b: String) -> Fn(ref String) -> bool { |s| sink(b) > 0 }",
+        ),
+        (
+            "user type's own contains",
+            "struct Bag { seen: Vec[String] }\n\
+             impl Bag {\n\
+                 pub fn contains(mut ref self, x: String) -> bool { self.seen.push(x); true }\n\
+             }\n\
+             fn f(b: String, g: Bag) -> Fn(ref String) -> bool { |s| g.contains(b) }",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            !errors.is_empty(),
+            "{label}: a consuming argument must still make the closure OnceFn"
+        );
+    }
+}
+
 #[test]
 fn test_subsume_function_into_oncefn_through_intermediate_let() {
     // Sub-step 3 admits the upward direction across multi-step flow: a
