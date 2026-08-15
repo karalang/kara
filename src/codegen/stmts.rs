@@ -70,6 +70,237 @@ impl<'ctx> super::Codegen<'ctx> {
     /// roundtrip" arm's choice below: a user `impl Drop` body is fired by the
     /// NLL channel at the OWNER's site, and running the wrapper here would
     /// double it.
+    /// B-2026-08-14-23 — lower `s = s + x` (and `s += x`) as an IN-PLACE append
+    /// when the assignment target is the leftmost operand of the concatenation.
+    ///
+    /// `String + String` allocates a fresh buffer and copies BOTH operands, so
+    /// building a string by repeated append was quadratic. The measurement that
+    /// identified it is that APPEND AND PREPEND COST THE SAME — 25 ms vs 24 ms
+    /// on 2,000 x 400 appends, where nobody can reuse a buffer when prepending —
+    /// while the same appends written as `push_str` take 3 ms. The fast path
+    /// already existed and this shape simply never reached it.
+    ///
+    /// Returns `Ok(true)` when it emitted the append; the caller then returns.
+    /// Every decline falls through to the existing allocate-and-copy path, which
+    /// stays correct, so each guard below is free to be conservative.
+    ///
+    /// THE ALIASING GUARD IS LOAD-BEARING, not defensive tidiness.
+    /// `push_str`'s grow path reallocs the destination and then copies from a
+    /// source pointer captured before the grow, so a source that lives inside
+    /// the destination's own buffer is a use-after-free (B-2026-08-15-2 —
+    /// `s.push_str(s)` is exactly that, 5,000 invalid reads under valgrind).
+    /// `s = s + s` is CORRECT today because it concatenates through a fresh
+    /// buffer, so routing it here would trade a slow program for a broken one.
+    /// Declining on any syntactic mention of the target covers it, and covers
+    /// the indirect forms too (`s + s[0..4]`, `s + f(s)`): an owned local's
+    /// buffer is reachable only through its own name.
+    fn try_compile_string_append_in_place(
+        &mut self,
+        target: &Expr,
+        value: &Expr,
+    ) -> Result<bool, String> {
+        let Some((leftmost, rest)) = Self::flatten_string_add_spine(value) else {
+            return Ok(false);
+        };
+        let ExprKind::Identifier(name) = &target.kind else {
+            return Ok(false);
+        };
+        if !matches!(&leftmost.kind, ExprKind::Identifier(l) if l == name) {
+            return Ok(false);
+        }
+        self.emit_string_append_in_place(name, &rest)
+    }
+
+    /// `s += x` is `s = s + x` by definition, so it reaches the same in-place
+    /// append with the target implicit rather than spelled as the left operand.
+    /// Kept as its own entry point rather than by synthesizing the `Binary` node
+    /// the other caller matches on: the two arms already disagree about spans
+    /// and about which side-tables have run, and a synthetic AST node would have
+    /// to be right about both.
+    fn try_compile_string_compound_append_in_place(
+        &mut self,
+        target: &Expr,
+        value: &Expr,
+    ) -> Result<bool, String> {
+        let ExprKind::Identifier(name) = &target.kind else {
+            return Ok(false);
+        };
+        self.emit_string_append_in_place(name, &[value])
+    }
+
+    /// Shared body: append each operand of `rest` onto the String binding
+    /// `name`, in order, if every guard admits it.
+    fn emit_string_append_in_place(&mut self, name: &str, rest: &[&Expr]) -> Result<bool, String> {
+        // A String binding specifically. `vec_elem_types` alone would also admit
+        // `Vec[u8]`, whose `+` does not exist today but whose element width would
+        // make `push_str`'s byte-wise growth wrong if it ever did.
+        if !self.string_vars.contains(name) || !self.vec_elem_types.contains_key(name) {
+            return Ok(false);
+        }
+        if !rest.iter().all(|e| Self::operand_cannot_reach(e, name)) {
+            return Ok(false);
+        }
+        // ORDER OF OBSERVATION for a multi-operand chain (`s = s + a + b`). The
+        // old path evaluates every operand BEFORE `s` changes; appending in
+        // place mutates `s` between them. That is unobservable unless a later
+        // operand can read `s`, which needs a closure over it — so a chain is
+        // admitted only when its trailing operands are call- and closure-free.
+        // A single operand has nothing to observe and is always admitted.
+        if rest.len() > 1 && !rest.iter().all(|e| Self::expr_is_call_free(e)) {
+            return Ok(false);
+        }
+        let Some(ptr) = self.get_data_ptr(name) else {
+            return Ok(false);
+        };
+        for operand in rest {
+            let arg = CallArg {
+                label: None,
+                mut_marker: false,
+                mut_marker_span: None,
+                value: (*operand).clone(),
+                span: operand.span.clone(),
+            };
+            self.compile_vec_method(name, ptr, "push_str", std::slice::from_ref(&arg))?;
+        }
+        Ok(true)
+    }
+
+    /// Split a left-associated `String` `+` chain into its leftmost leaf and the
+    /// operands appended to it, in source order. `None` when `value` is not an
+    /// addition at all.
+    ///
+    /// BY CODEGEN TIME THE `Binary` NODE IS USUALLY GONE. `src/lowering.rs`
+    /// rewrites every operator on a Named type into a call on its operator
+    /// trait, so `s + "x"` arrives here as `Call { callee: Path["String",
+    /// "add"], args: [s, "x"] }` and `s + " " + t` as those calls nested to the
+    /// left. Matching only `Binary` compiled cleanly, passed every test, and
+    /// silently never fired — the `+=` spelling still got faster because it
+    /// hands its operand over directly and never consults this. Both spellings
+    /// are accepted here so the recognizer does not depend on which passes have
+    /// run.
+    fn flatten_string_add_spine(value: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
+        let mut rest: Vec<&Expr> = Vec::new();
+        let mut cur = value;
+        loop {
+            match &cur.kind {
+                ExprKind::Binary {
+                    op: BinOp::Add,
+                    left,
+                    right,
+                } => {
+                    rest.push(right);
+                    cur = left;
+                }
+                ExprKind::Call { callee, args }
+                    if args.len() == 2
+                        && matches!(
+                            &callee.kind,
+                            ExprKind::Path { segments, .. }
+                                if segments.len() == 2
+                                    && segments[0] == "String"
+                                    && segments[1] == "add"
+                        ) =>
+                {
+                    rest.push(&args[1].value);
+                    cur = &args[0].value;
+                }
+                _ => break,
+            }
+        }
+        if rest.is_empty() {
+            return None;
+        }
+        rest.reverse();
+        Some((cur, rest))
+    }
+
+    /// Can this append operand provably NOT reach the buffer named by `name`?
+    ///
+    /// A WHITELIST, not a "does it mention the name" blacklist, and the
+    /// direction matters: a blacklist that forgets an `ExprKind` returns "no
+    /// mention" for an expression it never looked inside, which here would admit
+    /// an aliasing append and hand `push_str` a source pointing into the
+    /// destination — a use-after-free (B-2026-08-15-2). Every variant this does
+    /// not name returns `false` and simply loses the optimization, so a shape
+    /// added to the AST later degrades to the existing allocate-and-copy path
+    /// rather than to a memory bug.
+    ///
+    /// An owned local's buffer is reachable only through its own name, so
+    /// "no `Identifier(name)` anywhere inside a fully-walked expression" is
+    /// exactly the property required.
+    fn operand_cannot_reach(expr: &Expr, name: &str) -> bool {
+        let ok = |e: &Expr| Self::operand_cannot_reach(e, name);
+        match &expr.kind {
+            // Leaves that name nothing.
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Bool(_)
+            | ExprKind::SelfValue
+            | ExprKind::SelfType
+            | ExprKind::Path { .. } => true,
+            ExprKind::Identifier(n) => n != name,
+            // Structural forms whose children are fully enumerable here.
+            ExprKind::Binary { left, right, .. } => ok(left) && ok(right),
+            ExprKind::Unary { operand, .. } => ok(operand),
+            ExprKind::Cast { expr: inner, .. } | ExprKind::Question(inner) => ok(inner),
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                ok(object)
+            }
+            ExprKind::Index { object, index } => ok(object) && ok(index),
+            ExprKind::Range { start, end, .. } => {
+                start.as_deref().is_none_or(&ok) && end.as_deref().is_none_or(&ok)
+            }
+            ExprKind::Call { callee, args } => ok(callee) && args.iter().all(|a| ok(&a.value)),
+            ExprKind::MethodCall { object, args, .. } => {
+                ok(object) && args.iter().all(|a| ok(&a.value))
+            }
+            ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => items.iter().all(&ok),
+            ExprKind::InterpolatedStringLit(parts) => parts.iter().all(|p| match p {
+                crate::ast::ParsedInterpolationPart::Text(_) => true,
+                crate::ast::ParsedInterpolationPart::Expr(e, _) => ok(e),
+            }),
+            // Everything else — blocks, closures, control flow, `unsafe`, `par`,
+            // providers, and any variant added after this was written.
+            _ => false,
+        }
+    }
+
+    /// Is `expr` free of anything that could run user code — a call, a method
+    /// call, or a closure? Only consulted for a multi-operand chain (see the
+    /// order-of-observation note above), and only for operands that already
+    /// passed [`Self::operand_cannot_reach`], so the same whitelist shape
+    /// applies: an unrecognized variant answers `false` and declines.
+    fn expr_is_call_free(expr: &Expr) -> bool {
+        let ok = Self::expr_is_call_free;
+        match &expr.kind {
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Bool(_)
+            | ExprKind::Identifier(_)
+            | ExprKind::SelfValue
+            | ExprKind::SelfType
+            | ExprKind::Path { .. } => true,
+            ExprKind::Binary { left, right, .. } => ok(left) && ok(right),
+            ExprKind::Unary { operand, .. } => ok(operand),
+            ExprKind::Cast { expr: inner, .. } => ok(inner),
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                ok(object)
+            }
+            ExprKind::Index { object, index } => ok(object) && ok(index),
+            _ => false,
+        }
+    }
+
     /// B-2026-08-14-22 — may a compound assignment to the LOCAL binding `name`
     /// free the buffer its store displaces?
     ///
@@ -7454,6 +7685,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.try_emit_b2_link_store(target, value)? {
                     return Ok(());
                 }
+                // B-2026-08-14-23 — `s = s + x` appends in place instead of
+                // allocating a fresh concatenation of both operands. Intercepted
+                // BEFORE the generic value compile, since the whole point is not
+                // to build that temporary. Declines on every shape it does not
+                // fully recognise, falling through unchanged.
+                if self.try_compile_string_append_in_place(target, value)? {
+                    return Ok(());
+                }
                 // Weak-field store (`node.random = other` / `= None`) — downgrade,
                 // not a strong retain. Intercepted before the generic compile.
                 if self.try_emit_weak_field_store(target, value)? {
@@ -9038,6 +9277,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     CompoundOp::Shl => BinOp::Shl,
                     CompoundOp::Shr => BinOp::Shr,
                 };
+                // B-2026-08-14-23, `+=` spelling — `s += x` IS `s = s + x`, so
+                // it takes the same in-place append. Intercepted before the
+                // generic compile below, which would otherwise build the fresh
+                // concatenation this exists to avoid. Same guards, same
+                // declines; only `Add` on a String binding is admitted.
+                if matches!(op, CompoundOp::Add)
+                    && self.try_compile_string_compound_append_in_place(target, value)?
+                {
+                    return Ok(());
+                }
                 // `*r += rhs` / `r += rhs` where `r` is a let-bound entry slot
                 // ref (`let r = m.entry(k).or_insert(d)`): load the slot pointer
                 // from r's alloca, then load / apply / store back through it.

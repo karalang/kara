@@ -95719,6 +95719,43 @@ fn main() {
             Some("Xabc\nXabc\nXabc\nXzzz\n6\n".to_string())
         );
     }
+
+    /// B-2026-08-14-23 — the VALUE side of the in-place append. The
+    /// optimization must not change a single byte of any spelling, admitted or
+    /// declined, so the admitted shapes are interleaved with the ones that must
+    /// still take the allocate-and-copy path: a self-append (which would be a
+    /// use-after-free through `push_str`), a prepend, a slice of the target, and
+    /// a `mut ref` parameter. Oracle: the interpreter twin
+    /// `tests/interpreter.rs::test_string_append_spellings_agree`.
+    #[test]
+    fn test_e2e_string_append_spellings_agree() {
+        assert_eq!(
+            run_program(
+                "fn mk(n: i64) -> String { let mut t = String.new(); t.push_str(\"v\"); t.push_str(n.to_string()); t }\n\
+                 fn app_ref(s: mut ref String) { s = s + \"R\"; }\n\
+                 fn main() {\n\
+                     let mut s = \"lit\";\n\
+                     s = s + \"abc\"; println(s);\n\
+                     let t = \"T\";\n\
+                     s = s + t; println(s);\n\
+                     s = s + \" \" + t; println(s);\n\
+                     s = s + mk(3i64); println(s);\n\
+                     s += \"P\"; println(s);\n\
+                     let mut d = \"ab\";\n\
+                     d = d + d; println(d);\n\
+                     let mut e = \"ab\";\n\
+                     e = e + e[0..1]; println(e);\n\
+                     let mut p = \"P\";\n\
+                     p = \"X\" + p; println(p);\n\
+                     let mut r = \"r\";\n\
+                     app_ref(mut r); println(r);\n\
+                     let mut z = String.new();\n\
+                     z = z + \"\"; println(z.len());\n\
+                 }\n"
+            ),
+            Some("litabc\nlitabcT\nlitabcT T\nlitabcT Tv3\nlitabcT Tv3P\nabab\naba\nXP\nrR\n0\n".to_string())
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]
@@ -95997,6 +96034,90 @@ mod ref_return_receiver_single_call {
             ),
             1,
             "the String accessor must be emitted once per source call site"
+        );
+    }
+}
+
+#[cfg(feature = "llvm")]
+mod string_append_in_place {
+    //! B-2026-08-14-23 — `s = s + x` and `s += x` extend the left buffer in
+    //! place instead of allocating a fresh concatenation of both operands.
+    //!
+    //! The measurement that identified the bug is that APPEND AND PREPEND COST
+    //! THE SAME (25 ms vs 24 ms on 2,000 x 400 appends), since nobody can reuse
+    //! a buffer when prepending. A wall-clock assertion would be flaky in CI, so
+    //! these pin the STRUCTURAL fact the timing was evidence for: the append
+    //! shapes emit `push_str`'s grow-and-copy and no longer call `String.add`,
+    //! while every declined shape still does.
+
+    fn module_ir(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        karac::codegen::compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen")
+    }
+
+    /// `pstr.grow` is the label prefix `push_str` gives its growth block, so it
+    /// is present exactly when the in-place path was taken.
+    fn appends_in_place(body: &str) -> bool {
+        module_ir(&format!("fn main() {{ {body} }}")).contains("pstr.grow")
+    }
+
+    #[test]
+    fn both_append_spellings_reach_the_in_place_path() {
+        // The plain and compound spellings of the same append. `s += x` IS
+        // `s = s + x`, so a fix that got only one of them would leave the more
+        // common spelling quadratic.
+        assert!(
+            appends_in_place("let mut s = \"\"; s = s + \"abc\"; println(s);"),
+            "`s = s + x` must append in place"
+        );
+        assert!(
+            appends_in_place("let mut s = \"\"; s += \"abc\"; println(s);"),
+            "`s += x` must append in place"
+        );
+        // A chain appends each operand in turn.
+        assert!(
+            appends_in_place("let mut s = \"\"; let t = \"b\"; s = s + \" \" + t; println(s);"),
+            "`s = s + a + b` must append in place"
+        );
+        // A single call-valued operand is admitted; only a multi-operand chain
+        // needs its trailing operands to be call-free.
+        assert!(
+            appends_in_place("let mut s = \"\"; let n = 3i64; s = s + n.to_string(); println(s);"),
+            "a single call-valued operand must append in place"
+        );
+    }
+
+    /// THE DECLINES ARE THE LOAD-BEARING HALF. `push_str`'s grow path reallocs
+    /// the destination and copies from a source pointer captured before the
+    /// grow, so an aliasing source is a use-after-free (B-2026-08-15-2 —
+    /// `s.push_str(s)` is exactly that). `s = s + s` is CORRECT today because it
+    /// concatenates through a fresh buffer; routing it here would trade a slow
+    /// program for a broken one. Prepending has no left buffer to extend at all.
+    #[test]
+    fn aliasing_and_prepend_shapes_decline_the_in_place_path() {
+        assert!(
+            !appends_in_place("let mut s = \"abc\"; s = s + s; println(s);"),
+            "a self-append must NOT reach `push_str` — see B-2026-08-15-2"
+        );
+        assert!(
+            !appends_in_place("let mut s = \"abc\"; s += s; println(s);"),
+            "a compound self-append must NOT reach `push_str` either"
+        );
+        assert!(
+            !appends_in_place("let mut s = \"abc\"; s = s + s[0..2]; println(s);"),
+            "a slice OF the target aliases its buffer and must decline"
+        );
+        assert!(
+            !appends_in_place("let mut s = \"abc\"; s = \"X\" + s; println(s);"),
+            "a prepend has no left buffer to extend"
+        );
+        assert!(
+            !appends_in_place("let mut s = \"abc\"; let t = \"q\"; s = t + \"z\"; println(s);"),
+            "a concatenation not rooted at the target must decline"
         );
     }
 }

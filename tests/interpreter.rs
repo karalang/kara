@@ -33463,3 +33463,35 @@ SortedSet{}
 "
     );
 }
+
+/// B-2026-08-14-23 — the interpreter oracle for the in-place String append.
+/// Values were never in doubt on this backend; what makes it the oracle is that
+/// codegen now takes a structurally different path for the admitted shapes and
+/// must still produce these exact bytes.
+#[test]
+fn test_string_append_spellings_agree() {
+    assert_eq!(
+        run("fn mk(n: i64) -> String { let mut t = String.new(); t.push_str(\"v\"); t.push_str(n.to_string()); t }\n\
+             fn app_ref(s: mut ref String) { s = s + \"R\"; }\n\
+             fn main() {\n\
+                 let mut s = \"lit\";\n\
+                 s = s + \"abc\"; println(s);\n\
+                 let t = \"T\";\n\
+                 s = s + t; println(s);\n\
+                 s = s + \" \" + t; println(s);\n\
+                 s = s + mk(3i64); println(s);\n\
+                 s += \"P\"; println(s);\n\
+                 let mut d = \"ab\";\n\
+                 d = d + d; println(d);\n\
+                 let mut e = \"ab\";\n\
+                 e = e + e[0..1]; println(e);\n\
+                 let mut p = \"P\";\n\
+                 p = \"X\" + p; println(p);\n\
+                 let mut r = \"r\";\n\
+                 app_ref(mut r); println(r);\n\
+                 let mut z = String.new();\n\
+                 z = z + \"\"; println(z.len());\n\
+             }\n"),
+        "litabc\nlitabcT\nlitabcT T\nlitabcT Tv3\nlitabcT Tv3P\nabab\naba\nXP\nrR\n0\n"
+    );
+}
