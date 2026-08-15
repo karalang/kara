@@ -1,19 +1,34 @@
 # CI test-coverage tiers — `--features llvm` E2E + wasm in CI
 
-> **Status:** 🟡 partial (2026-06-12). **Tier 1 landed + required** — the
-> `codegen-e2e` job (`.github/workflows/ci.yml`) runs the `--features llvm`
-> codegen E2E + interpreter + typechecker + self-host oracle on every push/PR,
-> and the `wasm` job runs both wasm clippy arms + both wasm staticlib builds.
-> Both are **required status checks** on `main` (admin-bypassable, so
-> direct-push-to-main still works). **Tier 2 landed (NON-required) — and its
-> first run found 11 (→13 as more `return`-helper tests accreted) real
-> Linux-LSan leaks** the mac suite can't see. **All 13 now fixed — leak gate
-> CLOSED, CI-verified** (run 27457502042: `memory_sanitizer` 220/0, all 14 jobs
-> green); the durable record is the regression tests in
-> `tests/memory_sanitizer.rs` plus phase-12 #14–#20 (the fixes) and #21/#22 +
-> `oversized-enum-payload.md` (two deferred non-gated residuals). **Flip to
-> required** now that it is green. **Tier 3** (wasm E2E + component) open.
-> Supersedes the local `bugs.md` B-2026-06-12-2 follow-on.
+> **Status:** 🟢 all three tiers landed (2026-08-15). **Tier 1 landed +
+> required** — the `codegen-e2e` job (`.github/workflows/ci.yml`) runs the
+> `--features llvm` codegen E2E + interpreter + typechecker + self-host oracle
+> on every push/PR, and the `wasm` job runs both wasm clippy arms + both wasm
+> staticlib builds. Both are **required status checks** on `main`
+> (admin-bypassable, so direct-push-to-main still works). **Tier 2 landed**;
+> its first run found 13 real Linux-LSan leaks the mac suite can't see, all
+> fixed — leak gate CLOSED, CI-verified (run 27457502042: 220/0); durable
+> record in `tests/memory_sanitizer.rs` + phase-12 #14–#20.
+>
+> **Tier 2's required-flip is prepared but NOT DONE — it is an OWNER
+> ONE-CLICK.** Branch protection lives in repo settings, which no in-session
+> tool can reach (the GitHub MCP server exposes no branch-protection API).
+> Owner: Settings → Branches → `main` protection rule → required status
+> checks → add **`Memory sanitizer (ASAN + LeakSanitizer)`** (checks are keyed
+> by job *name*, not job id). The job has been green since the 13 leak fixes
+> landed; its `-arm64` and `-o0` siblings stay non-required by design (the
+> arm64 leg is a cross-check, the `-O0` leg carries a ratchet against known
+> failures).
+>
+> **Tier 3 LANDED 2026-08-15** — the `wasm-e2e` job: `karac build
+> --target=wasm_wasi` through componentization, execution under node's
+> `node:wasi` host, 71 tests. Proven locally before landing with the exact CI
+> recipe (LLVM 18 + wasm-tools + all four archives) — and the first local run
+> FAILED: the component fixture had silently stopped typechecking when
+> implicit i64→i32 narrowing became an error, because nothing anywhere ran
+> these tests. That is the drift class the leg closes. Non-required until it
+> has a green streak, per this file's own rule. Supersedes the local `bugs.md`
+> B-2026-06-12-2 follow-on.
 
 ## Why this exists
 
@@ -119,7 +134,7 @@ enum-leaf drop) / #22 (fresh-temp ctor-arg entry-copy orphan) +
 required** now that it is green. It self-skips if the runner lacks an
 ASAN-capable `cc` (ubuntu-latest's gcc has one).
 
-### Tier 3 — wasm E2E + component ⬜ (the heavy leg)
+### Tier 3 — wasm E2E + component ✅ (landed 2026-08-15, non-required)
 
 The `--features llvm` wasm E2E in `tests/cli.rs` — what would have caught the
 `karac_alloc_or_panic` `size_t` trap (invisible to clippy; only manifests at

@@ -16566,7 +16566,10 @@ pub fn shout(s: String) -> String {
 #[target(wasm_wasi)]
 pub fn make_range(n: i32) -> Vec[i32] {
     let mut out: Vec[i32] = Vec.new();
-    let mut i = 0;
+    // Annotated i32: the un-annotated default (i64) stopped typechecking here
+    // when implicit narrowing into `push` became an error — an out-of-range
+    // value would truncate silently, so the coercion now requires `as i32`.
+    let mut i: i32 = 0;
     while i < n {
         out.push(i);
         i += 1;

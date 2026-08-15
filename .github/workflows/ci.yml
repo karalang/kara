@@ -221,6 +221,77 @@ jobs:
           cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-features --crate-type staticlib
           cargo rustc -p karac-runtime --release --target wasm32-wasip1-threads --no-default-features --features wasm-threads --crate-type staticlib
 
+  # Tier 3 of the CI-coverage plan (docs/spikes/ci-test-coverage.md) — the wasm
+  # E2E + component leg, the last open tier. The `wasm` job above proves the
+  # archives BUILD; this one proves compiled programs RUN: `karac build
+  # --target=wasm_wasi` through componentization (`wasm-tools`), execution
+  # under node's `node:wasi` host, and the browser/threads dual-artifact
+  # surface — the leg that would have caught the `karac_alloc_or_panic`
+  # `size_t` trap, which was invisible to clippy and only manifested at wasm
+  # runtime. Proven before landing: 71/71 locally with this exact recipe — and
+  # the FIRST local run failed, because the component fixture had silently
+  # stopped typechecking when implicit i64→i32 narrowing became an error;
+  # nothing ran these tests anywhere, so nothing noticed. That is the drift
+  # class this job exists to close.
+  #
+  # Deliberately NON-required, per the spike's own rule: node:WASI version
+  # drift is a known flake source, and required-but-flaky teaches everyone to
+  # ignore red. Flip after a stable green history.
+  wasm-e2e:
+    name: WASM E2E (build + component + node:wasi run)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same LLVM recipe as codegen-e2e: the `karac` binary itself needs
+      # --features llvm to emit wasm objects.
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1, wasm32-wasip1-threads
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-e2e
+
+      # Prebuilt binary — `cargo install wasm-tools` would add ~3 min of
+      # compile to every run for the same executable.
+      - name: Install wasm-tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools
+
+      # All four archives from the CLAUDE.md recipe. The wasm pair is what
+      # `--target=wasm_wasi` / `wasm_browser` links; the native lean→full pair
+      # is there so any natively-building test in the filtered set links real
+      # binaries instead of vacuously skipping. Order matters: lean and wasm
+      # builds emit the canonical libkarac_runtime.a name, so each is copied
+      # aside before the full native build overwrites it last.
+      - name: Build runtime archives (wasm pair + native lean → full)
+        run: |
+          mkdir -p target/release
+          cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-features --crate-type staticlib
+          cp target/wasm32-wasip1/release/libkarac_runtime.a target/release/libkarac_runtime_wasm.a
+          cargo rustc -p karac-runtime --release --target wasm32-wasip1-threads --no-default-features --features wasm-threads --crate-type staticlib
+          cp target/wasm32-wasip1-threads/release/libkarac_runtime.a target/release/libkarac_runtime_wasm_threads.a
+          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      # node is preinstalled on ubuntu-latest; the tests self-report the
+      # version on a node:wasi failure so a host-drift flake is attributable.
+      - name: WASM E2E (cargo test --test cli wasm)
+        run: cargo test --features llvm --test cli wasm
+
   # The `--features llvm` codegen surface — the load-bearing correctness gate
   # that, until now, ran ZERO times in CI (`test` runs `cargo test --all`, no
   # `--features llvm`, so the real-binary codegen E2E + the self-hosting oracle
