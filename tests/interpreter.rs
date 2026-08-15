@@ -33595,3 +33595,39 @@ fn test_vec_shared_struct_clone_temp_original_survives_oracle() {
          }\n");
     assert_eq!(out, "15\n3\nalpha\ngamma\n3\n");
 }
+
+#[test]
+fn test_field_store_through_mut_slice_param_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s
+    // `test_e2e_field_store_through_mut_slice_param_reaches_caller`
+    // (B-2026-08-15-21). The interpreter has always applied this write; only
+    // the compiled backends dropped it, so `karac check` was clean and a
+    // Mend-loop oracle run under `--interp` passed while the shipped binary
+    // was wrong. Pinning the values here keeps the parity asserted from the
+    // side that was already correct.
+    let out = run("\n\
+         struct P { x: i64, y: i64 }\n\
+         fn bump_slice(s: mut Slice[P]) { s[0].x = s[0].x + 1; println(f\"inside={s[0].x}\"); }\n\
+         fn bump_at(s: mut Slice[P], i: i64) { s[i].y = 99; }\n\
+         fn bump_vec(v: mut ref Vec[P]) { v[0].x = v[0].x + 100; }\n\
+         fn set_whole(s: mut Slice[P]) { s[1] = P { x: 70, y: 80 }; }\n\
+         fn bump_scalar(s: mut Slice[i64]) { s[0] = s[0] + 1; }\n\
+         fn main() {\n\
+             let mut ps: Vec[P] = Vec.new();\n\
+             ps.push(P { x: 3, y: 7 });\n\
+             ps.push(P { x: 5, y: 11 });\n\
+             bump_slice(mut ps);\n\
+             println(f\"{ps[0].x}\");\n\
+             bump_at(mut ps, 1);\n\
+             println(f\"{ps[1].y}\");\n\
+             bump_vec(mut ps);\n\
+             println(f\"{ps[0].x}\");\n\
+             set_whole(mut ps);\n\
+             println(f\"{ps[1].x} {ps[1].y}\");\n\
+             let mut ns: Vec[i64] = Vec.new();\n\
+             ns.push(41);\n\
+             bump_scalar(mut ns);\n\
+             println(f\"{ns[0]}\");\n\
+         }\n");
+    assert_eq!(out, "inside=4\n4\n99\n104\n70 80\n42\n");
+}

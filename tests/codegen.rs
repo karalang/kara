@@ -96274,6 +96274,57 @@ fn main() {
         );
     }
 
+    /// B-2026-08-15-21 — a FIELD assignment through a `mut Slice[T]` parameter
+    /// emitted NO STORE AT ALL, so the caller's element kept its old value and
+    /// `karac check` was clean. Not a write-back problem: the read-back inside
+    /// the same function (`inside=`) also saw the stale value, which is what
+    /// distinguishes "the store went to a copy" from "no store was emitted".
+    ///
+    /// The three neighbours are in the same program on purpose — each worked
+    /// before the fix, and together they are what localizes the bug to the
+    /// plain-struct element through the Slice ABI rather than to mutation
+    /// through a parameter in general:
+    ///   `mut ref Vec[P]`  field store   — a different container
+    ///   `mut Slice[P]`    WHOLE element — never reaches `compile_field_store`
+    ///   `mut Slice[i64]`  scalar element — no field involved
+    ///
+    /// Paired with an interpreter oracle of the same program in
+    /// `tests/interpreter.rs` — the interpreter was always right here, so the
+    /// twin is what pins run-vs-build parity from both ends.
+    #[test]
+    fn test_e2e_field_store_through_mut_slice_param_reaches_caller() {
+        assert_eq!(
+            run_program(
+                r#"
+struct P { x: i64, y: i64 }
+fn bump_slice(s: mut Slice[P]) { s[0].x = s[0].x + 1; println(f"inside={s[0].x}"); }
+fn bump_at(s: mut Slice[P], i: i64) { s[i].y = 99; }
+fn bump_vec(v: mut ref Vec[P]) { v[0].x = v[0].x + 100; }
+fn set_whole(s: mut Slice[P]) { s[1] = P { x: 70, y: 80 }; }
+fn bump_scalar(s: mut Slice[i64]) { s[0] = s[0] + 1; }
+fn main() {
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { x: 3, y: 7 });
+    ps.push(P { x: 5, y: 11 });
+    bump_slice(mut ps);
+    println(f"{ps[0].x}");
+    bump_at(mut ps, 1);
+    println(f"{ps[1].y}");
+    bump_vec(mut ps);
+    println(f"{ps[0].x}");
+    set_whole(mut ps);
+    println(f"{ps[1].x} {ps[1].y}");
+    let mut ns: Vec[i64] = Vec.new();
+    ns.push(41);
+    bump_scalar(mut ns);
+    println(f"{ns[0]}");
+}
+"#
+            ),
+            Some("inside=4\n4\n99\n104\n70 80\n42\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-14 — a `Vec[shared struct]` clone used as a TEMPORARY
     /// leaked one RC box per element per temp (the leak gate itself lives in
     /// `tests/memory_sanitizer.rs`, which is where LSan runs). This is the

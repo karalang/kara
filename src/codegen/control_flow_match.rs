@@ -6799,9 +6799,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ExprKind::Identifier(vec_var) = &object.kind else {
                     return None;
                 };
-                if !self.vec_elem_types.contains_key(vec_var.as_str())
-                    || !matches!(index.kind, ExprKind::Identifier(_) | ExprKind::Integer(..))
-                {
+                if !matches!(index.kind, ExprKind::Identifier(_) | ExprKind::Integer(..)) {
+                    return None;
+                }
+                // B-2026-08-15-21 — a `mut Slice[T]` container. The registrar
+                // for a `Slice[T]` param writes `slice_elem_types` and returns
+                // BEFORE the `vec_elem_types` insert, so gating this arm on
+                // `vec_elem_types` alone answered "not an indexable place" for
+                // every slice — `s[0].x = v` then declined here, declined at
+                // both fallbacks in `nested_store_place_ptr` (which admit only
+                // field-rooted and impure-index shapes), and left
+                // `compile_field_store` through its no-op tail. The write was
+                // SILENTLY DROPPED: no store was emitted at all, so even an
+                // immediate `s[0].x` read-back inside the same function saw the
+                // stale value, and the caller's buffer was never touched.
+                //
+                // The two neighbouring stores worked and hid this: a WHOLE
+                // element (`s[0] = P { .. }`) never reaches `compile_field_store`,
+                // and a `shared` element is caught by the indexed-shared branch
+                // upstream, which has consulted `slice_elem_types` all along.
+                // Plain-struct elements were the gap.
+                //
+                // Same no-op-tail family as B-2026-08-01-35 (field-rooted
+                // container) and B-2026-08-02-15 (impure index) — one more
+                // receiver shape no resolver covered.
+                if self.slice_elem_types.contains_key(vec_var.as_str()) {
+                    let vec_var = vec_var.clone();
+                    return self
+                        .lower_indexed_elem_ptr_slice(&vec_var, index)
+                        .ok()
+                        .map(|(p, _)| p);
+                }
+                if !self.vec_elem_types.contains_key(vec_var.as_str()) {
                     return None;
                 }
                 // Array-slot Vec bindings have a distinct representation —
