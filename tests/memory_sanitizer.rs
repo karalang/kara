@@ -50178,4 +50178,65 @@ fn main() {
             "range_slice_binding_of_struct_vec_owns_nothing",
         );
     }
+
+    /// B-2026-08-15-21, memory half — the field store 9b284cb makes LAND is
+    /// also the first one that can displace a heap value on this path.
+    ///
+    /// Before, the store was never emitted, so nothing was ever overwritten and
+    /// the old `String` stayed reachable through the caller's Vec. Making the
+    /// write happen is what makes the displaced value's fate observable: the
+    /// overwrite has to free the old buffer exactly once, and the caller's
+    /// element must still own the NEW one at scope exit. A missing displaced
+    /// drop leaks; a doubled one is a double free; neither shows up in the
+    /// output assertion the E2E twin makes.
+    ///
+    /// Added on top of the fix rather than with it: the row's E2E and
+    /// interpreter pins assert the VALUES, and every one of them would still
+    /// pass if the overwrite stranded the old buffer or freed it twice.
+    #[test]
+    fn asan_field_store_through_mut_slice_param_frees_the_displaced_value() {
+        assert_clean_asan_run(
+            r#"
+struct E { name: String, n: i64 }
+struct Tags { items: Vec[String], n: i64 }
+
+fn set_name(s: mut Slice[E]) { s[0].name = "replacedreplacedreplaced"; }
+fn set_all(s: mut Slice[E]) {
+    let mut i = 0;
+    while i < s.len() { s[i].name = "uniformuniformuniform"; i = i + 1; }
+}
+fn set_items(s: mut Slice[Tags]) { s[0].items = ["freshfreshfresh"]; }
+
+fn main() {
+    let mut es: Vec[E] = Vec.new();
+    es.push(E { name: "alphabetical", n: 7 });
+    es.push(E { name: "betamaximum", n: 8 });
+
+    // One displaced String.
+    set_name(mut es);
+    println(f"{es[0].name} {es[1].name}");
+
+    // Every element displaced, in a loop.
+    set_all(mut es);
+    println(f"{es[0].name} {es[1].name} {es.len()}");
+
+    // A displaced CONTAINER field, which strands more than one buffer if the
+    // old value is dropped shallowly or not at all.
+    let mut ts: Vec[Tags] = Vec.new();
+    let seed: Vec[String] = ["oldoldoldoldold", "olderolderolder"];
+    ts.push(Tags { items: seed, n: 1 });
+    set_items(mut ts);
+    println(f"{ts[0].items[0]} {ts[0].items.len()}");
+    println("end");
+}
+"#,
+            &[
+                "replacedreplacedreplaced betamaximum",
+                "uniformuniformuniform uniformuniformuniform 2",
+                "freshfreshfresh 1",
+                "end",
+            ],
+            "field_store_through_mut_slice_param_frees_displaced",
+        );
+    }
 }
