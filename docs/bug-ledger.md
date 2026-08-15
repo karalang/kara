@@ -96,10 +96,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 177 | 2 |
 | double-free | 129 | 0 |
 | run-vs-build | 121 | 1 |
-| codegen-gap | 108 | 0 |
-| missing-feature | 96 | 1 |
+| codegen-gap | 109 | 1 |
+| missing-feature | 96 | 0 |
 | perf | 67 | 1 |
-| false-positive | 62 | 0 |
+| false-positive | 63 | 1 |
 | diagnostics | 55 | 1 |
 | crash | 46 | 0 |
 | soundness | 45 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 871 | 5 |
-| typecheck | 171 | 1 |
+| codegen | 872 | 6 |
+| typecheck | 171 | 0 |
 | interp | 145 | 0 |
-| ownership | 49 | 1 |
+| ownership | 50 | 2 |
 | autopar | 42 | 1 |
 | other | 41 | 0 |
 | cli | 30 | 0 |
@@ -124,17 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1205 surfaced · 7 open · 1186 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1207 surfaced · 8 open · 1187 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-14-20 | 2026-08-14 | typecheck | low | THE `String -> bytes -> String` ROUND TRIP DOES NOT TYPECHECK: `String.from_utf8(s.bytes())` fails with "expected 'Vec<u8>', found 'Slice[u8]'", and `Slice` has no `to_vec()`, so the only way back is a hand-rolled push loop. | `String.bytes()` returns `Slice[u8]`; `String.from_utf8` is signed `(Vec[u8]) -> Result[String, Utf8Error]`. Nothing bridges them — no implicit borrow-to-owned at the argument, and no `Slice.to_vec()` / `Vec.from_slice()`. |
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
 | B-2026-08-14-36 | 2026-08-14 | codegen | medium | A `Map` or `Set` TEMPORARY that is printed and not bound leaks its whole handle — `println(f"{mk()}")` in a 40-print loop strands 21440 bytes over 120 allocations, with no other owner to free it. | `try_compile_map_or_set_display` renders without registering a `FreeMapHandle`. Extract the binding path's drop-shape derivation (`src/codegen/maps.rs`, near the `track_map_var_with_val_drop` call — six call sites derive it near-identically today) into a helper over the key/value `TypeExpr`s, then gate the call on `print_vec_operand_is_owned_temp`. |
+| B-2026-08-14-37 | 2026-08-14 | ownership | low | AN IMMUTABLE `Slice[T]` FORMAL REPORTS ITS OWNED `Vec[T]` ARGUMENT AS MOVED: `fn take(xs: Slice[u8])` called as `take(v)` warns `value 'v' moved here, used again here` on any later use of `v`, even though a read-only slice formal only borrows. | `param_modes_from_signature` (src/ownership.rs) maps `TypeKind::Ref -> Ref`, `MutRef` / `MutSlice -> MutRef`, and EVERYTHING ELSE to `Own` — so a bare `Slice[T]` (immutable) formal falls in the `_` arm and is classified owned. `mut Slice[T]` is correct (it has its own `TypeKind::MutSlice`); only the read-only spelling is wrong. |
+| B-2026-08-14-38 | 2026-08-14 | codegen | low | INDEXING THE RESULT OF A Vec-RETURNING METHOD CALL loud-bails `Index operator applied to non-array type` under `karac build` while `--interp` runs it: `v.clone()[1]`, `v[1..3].to_vec()[0]`, and any other `<method-chain>[i]` whose receiver is a fresh temporary. | `compile_index` (src/codegen/collections.rs) resolves its object through name-keyed registries (`vec_elem_types` / `slice_elem_types` / array slot types); a MethodCall object has no name, so it falls to the generic tail whose ArrayType / VectorType branches cannot match the `{ptr,len,cap}` struct and errors. |
 | B-2026-08-15-1 | 2026-08-15 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints raw bytes, and `m.len()` is a hard codegen error — while the same program with a type annotation, or with plain `Map`/`Set`, is correct on every surface. | The `let` path derives the collection side-tables (`map_key_type_exprs` / `var_elem_type_exprs` / `set_elem_type_exprs` / `sorted_collection_vars`) from the ANNOTATION; the callee's declared return type is never consulted for the `SortedMap` / `SortedSet` heads, so an unannotated call-result binding registers nothing. The plain `Map` / `Set` equivalent registers fine, so the head-gate is the gap, not the call-result shape. |
 | B-2026-08-15-2 | 2026-08-15 | codegen+ownership | high | `s.push_str(s)` ON A HEAP STRING THAT MUST GROW IS A USE-AFTER-FREE: the grow reallocs the destination and the copy then reads through the now-stale SOURCE pointer — 5,000 invalid reads under valgrind on one call. It produces the RIGHT ANSWER anyway, so nothing surfaces. The two SLICE spellings of the same aliasing (`s.push_str(s[a..b])`, and via a `let`) are correctly rejected by the ownership checker; only the whole-value self-append reaches codegen. | Two candidate layers, and the fix should probably be both. CODEGEN: `push_str`'s alias guard in `src/codegen/vec_method.rs` is emitted only under `src_borrowed` — an owned source is assumed not to alias, which is true of a fresh temp but false of the destination itself. The grow path calls `emit_string_buffer_grow` (realloc, may move) and then copies from `src_ptr`, captured before the grow. OWNERSHIP: the checker already rejects `s` borrowed as `Slice[T]` while borrowed as `mut ref T`; the whole-value read of `s` as a `push_str` argument is the same conflict and is not flagged. |
 
@@ -149,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1205 surfaced
 
 </details>
 
-### Fixed (1186)
+### Fixed (1187)
 
-<details><summary>1186 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1187 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6464,6 +6465,25 @@ pre-existing against the stashed compiler. Filed as B-2026-08-14-30.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-14-20 | typecheck | low | THE `String -> bytes -> String` ROUND TRIP DOES NOT TYPECHECK: `String.from_utf8(s.bytes())` fails with "expected 'Vec<u8>', found 'Slice[u8]'", and… | FIXED by ebc20d37 — BOTH of the row's suggested fixes, because they are not alternatives: one makes the round trip a single call, the other gives every borrowed view a way back to an owned container. `String.from_utf8` is re-signed over `Slice[u8]`, and `Slice[T]` gains `to_vec() -> Vec[T]`.
+
+THE WIDENING COSTS NOTHING AND IS NOT AN OWNERSHIP CHANGE. `Slice[T]` already accepts an owned `Vec[T]` / `Array[T, N]` (and their `ref` borrows) at a call boundary — the general coercion in `types_compatible` — so every existing `String.from_utf8(v)` call site keeps working and this is a pure widening of what typechecks. What it does NOT change, contrary to how the type reads: the ownership pass maps an immutable `Slice[T]` formal to `OwnershipMode::Own` (`param_modes_from_signature`), so a `Vec[u8]` argument is still reported moved on reuse — exactly as it is for a user `fn take(xs: Slice[u8])`, checked rather than assumed. That is a property of every slice formal, not of this signature; filed separately rather than fixed here, because changing it changes the ownership rule for every slice parameter in the language.
+
+`to_vec` NEEDED THE ELEMENT TYPE THE TABLES DID NOT HAVE. Codegen's arm memcpys a trivially-copyable element and deep-clones a heap one — get that wrong and either two owners free one buffer or the copy leaks — and the only thing that can tell them apart is the source-level element `TypeExpr`. The LLVM element type says how WIDE a slot is; a `String`, a `Vec[i64]` and a plain three-word struct all lower to the same aggregate. `let b = s.bytes()` registered the LLVM half only (`infer_slice_elem_from_rhs`), so a slice bound from an EXPRESSION rather than an annotation had no entry at all. Added `slice_elem_type_expr_from_rhs`, the `TypeExpr` twin over the same four RHS shapes, registered alongside its sibling.
+
+TWO RECEIVER SHAPES REACHED NO ARM, and both are how the method is naturally spelled. The whole `Slice` method block is IDENTIFIER-KEYED — it looks the receiver up by name in `slice_elem_types` — so `s.bytes().to_vec()` fell through to the loud "no handler on non-identifier receiver". A slice OWNS NOTHING, which is what makes the fix small: unlike the fresh-temp `Vec` sibling there is no buffer to drop-track, no element walk to thread and no span-keyed table to consult, so `try_compile_nonident_slice_method` spills the two words to a slot, registers a synthetic name, re-dispatches and unregisters. It runs LAST, after every other dispatcher has declined: the syntactic gate can name a receiver that is not a slice (`Response.bytes()` returns an owned `Vec[u8]`), so the real discrimination is the compiled value's SHAPE, and running last means a receiver compiled and then rejected leaves dead IR in an already-failing compile rather than a duplicated side effect in a working one.
+
+The second shape is a RANGE INDEX, and it is method-agnostic — not this row's method at all. `v[a..b]` is a `Slice[T]` VIEW, but the indexed-receiver path treated every `Index` receiver as an ELEMENT access: it registered the synth binding from the CONTAINER's element `TypeExpr` (so a `Vec[i64]` window looked like a scalar `i64`) and GEP'd to one element instead of building a `{ptr, len}` header. `v[1..3].len()` failed identically to `v[1..3].to_vec()`, under `karac build` while `--interp` ran the program. Routed to the same materialization, gated by the exact `string_typed_exprs` test the String-slice arm at the head of that function uses, so the two are mutually exclusive by construction — `s[a..b]` on a String is a fresh OWNED String, not a view, and keeps its own path. That head comment recorded this as an open follow-up ("`s[a..b].len()`/`.bytes()` etc. still bind the slice to a `let` first"); the container half of it is closed here.
+
+A LEAK THE OUTPUT COMPARISON CANNOT SEE, and it is PRE-EXISTING — verified on the parent commit rather than assumed. `String.from_utf8(<fresh owned Vec temp>)` has no binding to carry a scope-exit drop, and the path only READS the range (`karac_runtime_cstr_to_string` copies the bytes into a fresh String), so nothing ever freed the argument's buffer: `String.from_utf8(mk_bytes())` leaks 8 bytes on the parent and leaked 8 here. It matters now because the widening makes `s.bytes().to_vec()` a second spelling that lands on it. Fixed by drop-tracking the compiled temp under two gates, both load-bearing: the SHAPE gate keeps borrow-shaped arguments out (`s.bytes()` / `v.as_slice()` are 2-field views into a buffer somebody else owns — freeing one takes the source's storage), and the FRESH-TEMP gate keeps NAMED arguments out (`String.from_utf8(v)` must leave `v` its own drop).
+
+THE INTERPRETER HAD ITS OWN TRAP, and it is the opposite of codegen's. `Value::Array` is an `Arc`-shared cell, so the obvious `to_vec` — hand back the receiver, or `.clone()` it — makes the result an ALIAS of its source: `copy[0][0] = 77` was visible through the source on `--interp` while both compiled backends printed it unchanged. `deep_clone_value` IS this method (its `Slice` arm is documented as producing "an independent owned snapshot"), so the arm routes to it. Both receiver shapes are accepted because a `Slice[T]` SLOT is type-erased there: a `Vec` coerced at a call boundary and a `chunks`/`windows` element both arrive as `Value::Array`, and a `Value::Slice`-only arm answered `no method 'to_vec' on type 'Vec'` for two shapes the typechecker accepts. `shared` elements keep their identity either way — `deep_clone_value` Arc-bumps those, matching what codegen's per-element clone helper does.
+
+ONE SHAPE STILL FAILS AND IS NOT THIS ROW'S. Indexing the RESULT of a Vec-returning method call — `v[1..3].to_vec()[0]` — bails "Index operator applied to non-array type". `v.clone()[1]` fails identically, so it is the general index-into-a-temporary gap, not anything to do with `to_vec`; bind the result to a `let` first. Filed separately.
+
+MEASURED against the interpreter as oracle on all four surfaces at both optimization levels: the row's literal repro; the round trip through `to_vec`; the owned-`Vec[u8]` argument that must keep working; invalid bytes still reaching `Err`; and for `to_vec` — a bound slice, a chained receiver, a range index, an `as_slice_mut` receiver, a `chunks` element, a `Slice` PARAMETER, an empty window, `String` elements and NESTED `Vec` elements. Zero divergences. The write-the-copy-read-the-source lines are the ones that pin independence; every other line prints the same numbers whether the result aliases or not.
+
+GATES: fmt / clippy / the full `--features llvm` suite clean, and the whole fixture — including the heap-element and fresh-temp shapes — is ASAN + LeakSanitizer clean at both optimization levels. |
 | B-2026-08-14-21 | codegen | high | `s += x` ON A `mut ref String` PARAMETER IS SILENTLY DROPPED IN COMPILED CODE: the callee's append never reaches the caller's binding | FIXED by e6605e9. The row's three-spelling repro reproduces exactly as written
 — `plus_eq` printed `X` under JIT / build / `KARAC_AUTO_PAR=0` while the
 interpreter printed `Xabc` — and all four surfaces now agree, with the loop
