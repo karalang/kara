@@ -139,6 +139,26 @@ pub fn classify_function_body_with(
     body: &Block,
     param_types: HashMap<String, Type>,
 ) -> Classification {
+    // B-2026-08-15-32 — a parameter DECLARED `OnceFn(...)` is once-callable,
+    // and calling it twice is the one thing that annotation exists to forbid.
+    //
+    // `once_callable_closures` was populated only at `let` bindings, by
+    // INFERRING once-ness from a closure body the walker can see. A parameter
+    // has no body here — its once-ness is declared, in the signature — so
+    // `fn run(g: OnceFn()) { g(); g(); }` passed clean while the identical
+    // local was reported. The two halves of once-callability (inferred for
+    // locals, declared for params) had only the first wired up.
+    //
+    // Seeded from `param_types`, which carries `Type::OnceFunction` for such a
+    // parameter since B-2026-08-15-29 taught `param_types_for_function` to
+    // recover a function-typed param's annotation. `Type::Function` is
+    // deliberately NOT seeded: a repeatable closure may be called any number
+    // of times, which is the whole distinction between the two types.
+    let once_callable_closures: HashSet<String> = param_types
+        .iter()
+        .filter(|(_, ty)| matches!(ty, Type::OnceFunction { .. }))
+        .map(|(name, _)| name.clone())
+        .collect();
     let mut classifier = UseClassifier {
         tc,
         method_self_modes: &prelude.method_self_modes,
@@ -150,7 +170,7 @@ pub fn classify_function_body_with(
         local_types: HashMap::new(),
         classification: Classification::default(),
         consume_origin_ctx: ConsumeOrigin::Direct,
-        once_callable_closures: HashSet::new(),
+        once_callable_closures,
         closure_span_stack: Vec::new(),
         closure_local_stack: Vec::new(),
     };
@@ -392,17 +412,35 @@ impl<'a> UseClassifier<'a> {
                     0
                 };
                 self.walk_expr(value, rhs_mode);
-                if rhs_is_closure {
+                let rhs_is_once = rhs_is_closure && {
                     let post_capture_count = self
                         .classification
                         .consume_origins
                         .values()
                         .filter(|o| **o == ConsumeOrigin::ClosureCapture)
                         .count();
-                    if post_capture_count > pre_capture_count {
-                        for name in pattern.binding_names() {
-                            self.once_callable_closures.insert(name);
-                        }
+                    post_capture_count > pre_capture_count
+                };
+                // B-2026-08-15-32 — a `let` REBINDS the name, so it must clear
+                // a stale once-callable mark as well as set a fresh one.
+                //
+                // This arm only ever inserted, which was harmless while the
+                // set was populated here alone: a name could not be marked
+                // before its own `let`. Seeding parameters broke that
+                // invariant, and `fn run(g: OnceFn()) { let g = || …; g(); g(); }`
+                // then reported a move of the LOCAL — a repeatable closure that
+                // may be called any number of times — because the parameter's
+                // mark outlived the shadow. Clearing on every `let` restores
+                // the invariant for both sources.
+                //
+                // Not gated on `rhs_is_closure`: `let g = 5;` shadowing an
+                // `OnceFn` parameter must clear the mark too, and it produces
+                // no capture consume to distinguish it.
+                for name in pattern.binding_names() {
+                    if rhs_is_once {
+                        self.once_callable_closures.insert(name);
+                    } else {
+                        self.once_callable_closures.remove(&name);
                     }
                 }
             }

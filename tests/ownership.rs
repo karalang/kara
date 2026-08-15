@@ -12330,3 +12330,150 @@ fn local_once_callable_closure_reuse_is_still_reported() {
         errors
     );
 }
+
+// ── B-2026-08-15-32: a DECLARED once-callable closure parameter ──
+//
+// `once_callable_closures` was populated only at `let` bindings, by INFERRING
+// once-ness from a closure body the walker can see. A parameter has no body
+// there — its once-ness is DECLARED in the signature — so
+// `fn run(g: OnceFn()) { g(); g(); }` passed clean while the identical local
+// was reported. Calling it twice is the one thing `OnceFn` exists to forbid,
+// so this was a MISSED report, the opposite direction from B-2026-08-15-27
+// and -29's false positives.
+//
+// Seeding parameters also broke an invariant the `let` arm relied on — that a
+// name could not be marked before its own `let` — so that arm now clears a
+// stale mark as well as setting a fresh one. The shadowing tests below are
+// that half, and one of them was already wrong before any of this.
+
+#[test]
+fn once_fn_parameter_called_twice_is_reported() {
+    let errors = ownership_errors(
+        "struct Cfg { name: i64 }\n\
+         fn apply(c: Cfg) { }\n\
+         fn run(g: OnceFn()) { g(); g(); }\n\
+         fn main() {\n\
+             let cfg = Cfg { name: 7 };\n\
+             run(|| apply(cfg));\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "calling a declared OnceFn parameter twice must be reported; got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn distinct_once_fn_parameters_are_tracked_separately() {
+    // Two `OnceFn` params, only the SECOND reused. A whole-signature flag
+    // rather than a per-name mark would report `a` as well, or neither.
+    let errors = ownership_errors(
+        "fn run(a: OnceFn(), b: OnceFn()) { a(); b(); b(); }\n\
+         fn main() { run(|| println(\"1\"), || println(\"2\")); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "the reused OnceFn parameter must be reported; got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn repeatable_fn_parameter_called_twice_is_accepted() {
+    // CONTROL. `Fn()` may be called any number of times — the whole
+    // distinction between the two types. A fix that marked every
+    // function-typed parameter once-callable would fail here.
+    ownership_ok(
+        "fn run(g: Fn()) { g(); g(); }\n\
+         fn main() { run(|| println(\"x\")); }",
+    );
+}
+
+#[test]
+fn once_fn_parameter_called_once_is_accepted() {
+    // CONTROL. One call is exactly what the annotation permits.
+    ownership_ok(
+        "struct Cfg { name: i64 }\n\
+         fn apply(c: Cfg) { }\n\
+         fn run(g: OnceFn()) { g(); }\n\
+         fn main() {\n\
+             let cfg = Cfg { name: 7 };\n\
+             run(|| apply(cfg));\n\
+         }",
+    );
+}
+
+#[test]
+fn a_let_rebinding_clears_a_stale_once_callable_mark() {
+    // A repeatable local SHADOWING a once-callable parameter may be called
+    // twice. Red without the clear-on-rebind half: the parameter's mark
+    // outlived the shadow and the LOCAL was reported.
+    ownership_ok(
+        "fn run(g: OnceFn()) {\n\
+             let g = || println(\"local\");\n\
+             g();\n\
+             g();\n\
+         }\n\
+         fn main() { run(|| println(\"x\")); }",
+    );
+    // Same clear, with a non-closure RHS — `let g = 5;` produces no capture
+    // consume to distinguish it, so the removal cannot be gated on the RHS
+    // being a closure.
+    ownership_ok(
+        "fn run(g: OnceFn()) {\n\
+             let g = 5i64;\n\
+             println(f\"{g}{g}\");\n\
+         }\n\
+         fn main() { run(|| println(\"x\")); }",
+    );
+}
+
+#[test]
+fn a_repeatable_local_shadowing_a_once_callable_local_is_accepted() {
+    // PRE-EXISTING false positive, fixed by the same clear-on-rebind and
+    // measured red at the parent commit — no parameter involved. The `let`
+    // arm only ever inserted, so a once-callable local shadowed by a
+    // repeatable one kept the first binding's mark and its second call was
+    // reported.
+    ownership_ok(
+        "struct Cfg { name: i64 }\n\
+         fn apply(c: Cfg) { }\n\
+         fn main() {\n\
+             let cfg = Cfg { name: 7 };\n\
+             let g = || apply(cfg);\n\
+             let g = || println(\"y\");\n\
+             g();\n\
+             g();\n\
+         }",
+    );
+}
+
+#[test]
+fn a_once_callable_local_shadowing_a_repeatable_parameter_is_reported() {
+    // The reverse direction of the clear: the rebind must still SET a mark
+    // when the new closure is once-callable, not merely clear the old one.
+    let errors = ownership_errors(
+        "struct Cfg { name: i64 }\n\
+         fn apply(c: Cfg) { }\n\
+         fn run(g: Fn()) {\n\
+             let cfg = Cfg { name: 7 };\n\
+             let g = || apply(cfg);\n\
+             g();\n\
+             g();\n\
+         }\n\
+         fn main() { run(|| println(\"x\")); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "a once-callable local shadowing a repeatable param must still be \
+         reported; got: {:?}",
+        errors
+    );
+}
