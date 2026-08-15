@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 251 | 0 |
+| miscompile | 252 | 1 |
 | leak | 182 | 0 |
-| double-free | 130 | 1 |
+| double-free | 130 | 0 |
 | run-vs-build | 122 | 0 |
 | codegen-gap | 110 | 0 |
 | missing-feature | 96 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 884 | 1 |
+| codegen | 885 | 1 |
 | typecheck | 172 | 0 |
 | interp | 146 | 1 |
 | ownership | 50 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1225 surfaced · 2 open · 1211 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1226 surfaced · 2 open · 1212 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-15-15 | 2026-08-15 | codegen | high | A RANGE-SLICE BINDING of a `Vec[Struct]` (`let s = entries[0..2]`) DOUBLE-FREES under `KARAC_AUTO_PAR=0` and SIGSEGVs at `-O0`, while the DEFAULT build is clean and prints the right answer — the inverted polarity means disabling auto-par to rule it out is what triggers the crash. | the range-index let path's element ownership for a struct element with a heap field: the slice and the source Vec both appear to own the element buffers. Auto-par splitting the function happens to mask it. |
 | B-2026-08-15-20 | 2026-08-15 | interp | low | THE INTERPRETER BLAMES AN INTEGER OVERFLOW ON A SUB-EXPRESSION THAT CANNOT OVERFLOW: in `let c = (a + b) * m` with `a + b == 3`, the trap is reported at the column of `a`, not of the multiply that actually trapped. The compiled backends point elsewhere on the same line, so `karac run` and `karac build` give two different locations for one fault. | The span attached to the overflow trap in the interpreter's binary-op evaluation. It appears to carry the LEFT OPERAND's span rather than the operation's — which is indistinguishable from correct whenever the left operand is itself the overflowing op, and wrong whenever it is not. |
+| B-2026-08-15-21 | 2026-08-15 | codegen | high | A FIELD ASSIGNMENT THROUGH A `mut Slice[Struct]` PARAMETER IS SILENTLY DROPPED under codegen — `fn bump(s: mut Slice[P]) { s[0].x = s[0].x + 1; }` leaves the caller's element unchanged where the interpreter increments it. `karac check` is clean, both compiled backends print the stale value, and no heap is involved (`P { x: i64, y: i64 }`). A WHOLE-element assignment through the same parameter works, `mut ref Vec[P]` works, and `mut Slice[i64]` works — so it is the field store through the Slice ABI specifically. | the element-field store path for a `mut Slice[T]` parameter: a whole-element store reaches the caller's buffer and a field store does not. Compare against the `mut ref Vec[T]` path, which is correct for both, and against the whole-element `Slice` store, which is the closest working sibling. |
 
 ### Wontfix (2)
 
@@ -144,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1225 surfaced
 
 </details>
 
-### Fixed (1211)
+### Fixed (1212)
 
-<details><summary>1211 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1212 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -8494,6 +8494,86 @@ Gates: full `--features llvm` sweep of all 98 targets, 12535 tests, 0 failures;
 with run/build/auto-par output parity; clippy `--all --all-targets` and fmt
 clean.
  |
+| B-2026-08-15-15 | codegen | high | A SLICE BINDING IS REGISTERED FOR A VALUE-TYPE STRUCT DROP OF ITS ELEMENT TYPE — `let s = es[0..2]` over a `Vec[Entry]` emits `__karac_drop_struct_En… | FIXED by 409c699. The row's mechanism section was right and its
+prescription — "find which site actually drops the slice binding" — leads
+straight to it.
+
+WHAT WAS EMITTED. `main`'s cleanup contained a bare
+`call void @__karac_drop_struct_Entry(ptr %s)` where `%s` is
+`alloca { ptr, i64 }` — a two-word slice view, not an `Entry`. `Entry` is
+`{ {ptr,len,cap}, i64 }`, so the drop read the slice's `ptr` and `len` as the
+`service` String's first two words, took whatever followed as its `cap`, and
+freed the pointer. That pointer is the SOURCE VEC's element buffer, which `es`'s
+own cleanup then freed again — a 128-byte region double-freed, exactly the size
+ASAN reports and exactly `karac_realloc_or_panic`'s allocation for `es`.
+
+WHY THE GATE FIRED. The let-site struct-drop gate reads `var_type_names`, and for
+a slice binding that table holds the ELEMENT's name: `let s = es[0..2]` over a
+`Vec[Entry]` records `s -> "Entry"`. That is what the element-dispatch paths want
+(`s[0].service` needs it), and the gate misread it as "s IS an Entry". Confirmed
+by instrumenting the gate: `var=s struct=Entry slotty={ptr, i64}` — the binding
+was ALREADY correctly registered in `slice_elem_types`; only this gate never
+asked.
+
+THE ELEMENT'S HEAP FIELD IS WHAT MAKES IT VISIBLE, NOT WHAT MAKES IT WRONG. The
+row notes a `Vec[i64]` range slice does not crash and reads that as the struct
+element being load-bearing. The misread is identical there — `i64` simply is not
+in `struct_types`, so no drop was synthesized and nothing was freed. Both are in
+the fixture.
+
+THE FIX is a guard, not a rewrite: a binding present in `slice_elem_types` is a
+BORROWED VIEW and owns nothing, so it is skipped. Two alternatives were
+considered and rejected. Suppressing the `var_type_names` entry for slice
+bindings would break the element dispatch that entry exists for. Comparing the
+slot's LLVM layout against the registered struct type would also catch this shape
+— but it rejects a legitimate generic monomorph whose slot carries the concrete
+layout while the registry holds the erased base (the B-2026-08-06-2 class), so it
+would trade a double free for a leak. Membership in `slice_elem_types` states the
+actual property being relied on.
+
+THE ROW'S REJECTED ATTEMPT IS EXPLAINED BY THIS. It records that
+`track_vec_var(slot_ptr, None)` at the let-site tracking gate does not stop the
+drain — correct, and the reason is that the drain is not a `FreeVecBuffer` at all.
+It is a `StructDrop`, registered by a different gate a few hundred lines away.
+That note saved the search; recording it was worth more than it looked.
+
+ONE CORRECTION TO THE POLARITY CLAIM, which the row's own sharpening had already
+half-made. "The DEFAULT build is clean" is true only of the shape auto-par
+happened to split. Written plainly — a local `Vec`, no `Map`, no param — the
+default build double-frees:
+
+    struct Entry { service: String, weight: i64 }
+    fn main() {
+        let mut es: Vec[Entry] = Vec.new();
+        es.push(Entry { service: "alpha", weight: 3 });
+        es.push(Entry { service: "betamax", weight: 5 });
+        let s = es[0..2];
+        println(s.len());
+    }
+
+so the inverted-polarity trap is real but is a property of one fixture, not of
+the defect. The pin is written without the scenery for that reason. After the
+fix, that program and the row's original both print the right answer under the
+default build, `KARAC_AUTO_PAR=0`, `KARAC_OPT_LEVEL=0`, ASAN and `--interp`.
+
+NEIGHBOURS SWEPT, all clean after: `es.as_slice()`, a `Slice[Entry]` PARAM
+re-sliced inside the callee, element field READS through the slice
+(`s[0].service`), and the source Vec still owning and printing its elements after
+the slice's scope ends.
+
+ONE UNRELATED FINDING, split out rather than folded in: a FIELD assignment
+through a `mut Slice[Struct]` parameter is silently dropped under codegen —
+`fn bump(s: mut Slice[P]) { s[0].x = s[0].x + 1; }` leaves the caller's element
+unchanged where the interpreter increments it. It reproduces on the pre-fix
+compiler, needs no heap field, and a WHOLE-element assignment through the same
+parameter works, so it is neither caused by nor related to this row.
+
+PINS. `asan_range_slice_binding_of_struct_vec_owns_nothing` in
+tests/memory_sanitizer.rs fails against the stashed compiler with
+`attempting double-free on 0x50c000000040`.
+
+GATES: full `--features llvm` suite green (13,740 passed / 0 failed), fmt and
+clippy `--all-targets` clean. |
 | B-2026-08-15-16 | codegen | high | A RANGE-SLICE BINDING crossing an AUTO-PAR JOIN returns the WRONG LENGTH, silently, in the DEFAULT build — `let s = nums[0..2]; return s.len()` yield… | FIXED by f0832187, in `infer_expr_llvm_type` (src/codegen/stmts.rs).
 
 THE CAUSE IS ONE MISSING DISTINCTION. That helper sizes an auto-par RETURN SLOT
