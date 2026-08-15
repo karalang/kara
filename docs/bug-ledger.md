@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 250 | 1 |
+| miscompile | 250 | 0 |
 | leak | 181 | 1 |
 | double-free | 129 | 0 |
 | run-vs-build | 122 | 1 |
-| codegen-gap | 109 | 0 |
+| codegen-gap | 110 | 1 |
 | missing-feature | 96 | 0 |
 | perf | 68 | 0 |
 | false-positive | 63 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 879 | 3 |
+| codegen | 880 | 3 |
 | typecheck | 172 | 1 |
 | interp | 145 | 0 |
 | ownership | 50 | 0 |
@@ -124,16 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1217 surfaced · 4 open · 1201 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1218 surfaced · 4 open · 1202 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-9 | 2026-08-15 | codegen | medium | A FRESH-OWNED `Vec` TEMPORARY PASSED TO A BARE-`T` GENERIC PARAM THAT THE CALLEE RETURNS is never dropped -- `pick(x.clone(), y.clone())` on `fn pick[T](a: T, b: T) -> T { id(a) }` strands one buffer per call, while the same forwarding tail in CONTAINER spelling (`a: Vec[T]`) is clean as of B-2026-08-15-7. | `generic_param_is_bare_type_param` (src/codegen/mono.rs) rejects a bare-`T` param whose type param appears in the declared return type, so `compile_generic_call` queues no caller-side materialization for it. Deliberate: B-2026-08-11-3 measured the unguarded version as a real double free on this exact shape and chose the leak as the conservative direction. |
-| B-2026-08-15-10 | 2026-08-15 | codegen | high | The `UseAfterMove` DEFENSIVE COPY that `cli.rs` promises works in `main` and IS MISSING IN EVERY OTHER FUNCTION: a `String` moved into a `Map` key and then reused prints GARBAGE BYTES on both compiled backends while the interpreter is correct. `karac check` passes (the diagnostic is a non-fatal warning by design). The same code in `main` is fine, which is why this class keeps reading as fixed. | the `UseAfterMove` defensive-copy emission (`is_fatal_ownership_kind` / cli.rs:1477 documents the promise; B-2026-08-10-21 delivered it for the `{ptr,len,cap}` family). The context discriminator -- `main` vs any other function -- is the new fact. |
 | B-2026-08-15-11 | 2026-08-15 | typecheck | high | EXHAUSTIVENESS IS NOT CHECKED when the `match` scrutinee is a `ref` PARAMETER -- `fn f(m: ref M) -> i64 { match m { A => 1 } }` over a three-variant enum passes `karac check`, and hitting the missing arm SEGFAULTS under AOT, INFINITE-LOOPS under the JIT, and raises an `internal error ... (the typechecker should have rejected this)` under the interpreter. Every other scrutinee form -- owned param, local binding, `Option`, `Result` -- is correctly rejected. | the exhaustiveness pass's scrutinee-type resolution: it recognizes an owned/local enum and misses `ref <Enum>` parameters. `match m { }` -- ZERO arms over a populated enum -- also passes, so the gate is not firing at all rather than mis-counting arms. |
 | B-2026-08-15-12 | 2026-08-15 | codegen | medium | `codegen failed: Undefined variable 'm'` on a program `karac check` accepts and the interpreter runs correctly: an enum-variant pattern binds a `shared enum` payload and passes it to a `ref`-taking helper. NOT reduced below 32 lines -- every attempt to shrink it further made the failure disappear, and the shapes that look responsible in isolation all build. | codegen's variable-scope map for a payload bound by an enum-variant pattern -- `Undefined variable 'm'` is emitted for the binding in `Simple(m, _path) => Outcome.Ok(method_name(m))`. |
+| B-2026-08-15-13 | 2026-08-15 | codegen | medium | A `Map`/`Set` LOCAL IN A FUNCTION WITH A `Vec[Struct]` PARAM makes `let e = entries[0]; e.field` FAIL TO BUILD — `codegen: cannot resolve field '...' on this receiver (its type was not recorded for codegen)`. No move, no reuse, no loop, and the Map is never used. Drop the Map local, or swap it for a Vec local, or make the Vec a LOCAL instead of a param, and the same program builds. `karac check` is clean and the interpreter runs it, so this is a run-vs-build divergence that only the compiled backends see. | the let-binding type record for a Vec-element struct (`var_type_names`), and whatever a `Map`/`Set` local changes about the path that writes it. The receiver reaches `compile_field_access` with no entry and takes the loud B-2026-07-20-9 arm, which is behaving correctly — the missing record is upstream of it. |
 
 ### Wontfix (2)
 
@@ -146,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1217 surfaced
 
 </details>
 
-### Fixed (1201)
+### Fixed (1202)
 
-<details><summary>1201 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1202 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -7912,6 +7912,109 @@ to the phase-6-runtime query-surface block, whose JSON sample predates the field
 Gates: `cargo test --test cli` 546 pass, `concurrency` 147, `concurrency_report`
 4, `effectchecker` 420; `cargo clippy --all --all-targets --features llvm
 -D warnings` exit 0; fmt clean. |
+| B-2026-08-15-10 | codegen | high | A `UseAfterMove` WHOSE MOVE IS A CALL ARGUMENT GETS NO DEFENSIVE COPY: `uam_defensive_copy` covers three POSITIONS (a `let` RHS and the two struct-li… | FIXED by 74e558f. The use-after-free is gone on both compiled backends
+at every optimization level, and the row's central claim needs one correction
+that changes where the bug actually was.
+
+THE DEFENSIVE COPY WAS NOT WORKING IN `main`. It was not emitted ANYWHERE.
+Dumping the IR for the two programs the row contrasts — the miscompiling callee
+and its `main` twin — the loop bodies are byte-identical modulo register
+numbering, and NEITHER contains a single `uam.`-prefixed value, which is what
+every arm of `uam_defensive_copy` names its result. So the row's discriminator
+is real and its explanation is not: `main` is not the one place the copy fires,
+it is the one place the damage cannot be observed.
+
+WHAT IS ACTUALLY EMITTED, and why it looks fine until it doesn't. The move
+disarms the source — `store i64 0` into `e.service`'s `cap` — so the later reuse
+reloads `{ptr, len, 0}`: the RIGHT BYTES, pointing into the buffer the consumer
+now owns, with a cap that makes every drop skip them. That is a borrow, not a
+double owner, and the distinction is the whole reason this hid for so long:
+
+  * nothing double-frees, so ASAN is CLEAN on the `main` twin — I ran it;
+  * nothing leaks either (the consumer frees it), so LSan is clean too;
+  * the read is correct for as long as the consumer is alive.
+
+In `main` the consumer outlives every read, so the program prints the right
+answer under ASAN and under LSan and at -O0 through -O3. In a callee the map
+dies at scope exit and the escaping `Vec[Stat]` walks out holding the freed
+pointer: `heap-use-after-free`, freed by `karac_map_free_with_drop_vec`, read by
+`karac_string_clone`. Same emitted code, different lifetime.
+
+WHY NO COPY RAN: THE POSITION, NOT THE TYPE. `uam_defensive_copy` has exactly
+three call sites — a `let` RHS and the two struct-literal field inits — and
+those are three POSITIONS, not three type cases. B-2026-08-13-14 and -19 both
+widened the TYPE axis (field access, tuple element) inside that same set of
+positions. A move written as a CALL ARGUMENT is a fourth position, and there is
+no fourth hook to add: an argument has no shared compile path, because every
+builtin, method and free-fn lowers its own. `index.insert(e.service, 0)` was
+therefore never copied, and `suppress_source_vec_cleanup_for_arg_ex` disarmed
+the source on schedule.
+
+THE FIX COPIES THE SOURCE, NOT THE CONSUMER, because by the time any disarm site
+runs the consumer already holds `{ptr,len,cap}` and there is nothing left to
+intercept on that side. The source place is still right there, and it is what
+that helper already writes to. `uam_reclone_source_field` overwrites the moved
+field with an independent deep copy instead of zeroing its cap, reaching the
+same end state the consumer-side copy reaches — two owners, two buffers, one
+free each — from the only direction still available. It runs from inside
+`suppress_source_vec_cleanup_for_arg_ex`, which every one of its ~94 call sites
+funnels through, so the argument position is covered in one edit rather than
+per-lowering. The site is recorded in `uam_copied_sites` for the reason that set
+exists: every disarm keys on "a copy really happened", so a source that now owns
+its own buffer keeps its cleanup at every site, not just the one that copied it.
+
+Scoped exactly like the consumer-side field copy, and the scope IS the safety
+argument: the same four roots are excluded (they already get an independent
+buffer from `deep_copy_owned_struct_param_field_move`, and copying twice leaks
+the first), `shared` structs stay with the refcount machinery, a `ref Struct`
+slot is refused (it points into the caller's frame), and only a field LAID OUT
+as `{ptr,len,cap}` is touched — read off the slot's own layout, not the declared
+type-expr, which reads as an erased placeholder inside a monomorph
+(B-2026-08-06-2's lesson at the disarm's own GEP). Every shape it declines is
+left exactly as it was, so partial coverage stays MONOTONE: this can remove
+use-after-frees, never introduce a double free at a shape it half-copied.
+
+MEASURED. Twelve fixtures spanning the axes the row tabulated, each built with
+`-fsanitize=address` and run under LSan. Before: the three callee shapes report
+`heap-use-after-free`; after: all twelve clean, no leak, no double free, right
+output. `karac run` (JIT), `karac build` (AOT) and `--interp` agree, and AOT
+agrees with itself at -O0/-O1/-O2/-O3 — the row noted -O0 failed differently,
+which is what a lifetime bug does and an optimizer artifact does not.
+
+THE SECOND SYMPTOM IS A DIFFERENT BUG, and the row's own framing for it does not
+survive contact either. It asked whether the unresolved field type is "the same
+missing record" — it is not, and it is not about the move at all:
+
+    struct Entry { service: String }
+    fn agg(entries: Vec[Entry]) -> String {
+        let mut index: Map[String, usize] = Map.new();   // any Map/Set local
+        let e = entries[0];
+        return e.service;                                // no reuse anywhere
+    }
+
+still fails to build. Drop the `Map` local and it builds; swap it for a `Vec`
+local and it builds; make `entries` a LOCAL instead of a param and it builds —
+in a callee, which also refutes the row's "identical source in `main` builds"
+reading of this symptom: `main` is not the discriminator here, the Vec being a
+PARAM is. Instrumenting the failure, `var_type_names` holds `entries` and the
+later binding but never `e`, so the receiver has no recorded struct type. A
+`Map`/`Set` local in a function with a `Vec[Struct]` param is what suppresses
+that record. Split out rather than buried here.
+
+PINS, and one of them is deliberately a test that passes both ways.
+`asan_use_after_move_as_call_argument_copies_in_a_callee`
+(tests/memory_sanitizer.rs) and
+`e2e_uam_moved_field_reused_as_call_argument_in_a_callee` (tests/codegen.rs)
+both FAIL against the stashed compiler — the ASAN one with the
+use-after-free, the E2E one with `Some("N\u{fffd}\u{fffd}W\u{5}...")` against
+`Some("alphabetical betamaximum\n")`. Their neighbour
+`e2e_uam_call_argument_main_shaped_control_is_correct_either_way` PASSES on both
+sides, and that is its job: it is the shape every earlier fixture for this class
+was written in, and it is kept as the standing evidence for why a `main`-based
+fixture reported green through the whole life of this bug. Both real pins live
+in a callee for the same reason. The ASAN fixture also carries a `Vec[String]`
+field moved into a `Set`, so a copy that duplicated only the outer buffer would
+surface as a double free of an element rather than as a pass. |
 
 </details>
 
