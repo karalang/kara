@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 122 | 0 |
 | codegen-gap | 110 | 0 |
 | missing-feature | 96 | 0 |
-| perf | 68 | 0 |
+| perf | 69 | 1 |
 | false-positive | 64 | 1 |
 | diagnostics | 59 | 1 |
 | crash | 47 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 885 | 1 |
+| codegen | 886 | 2 |
 | typecheck | 173 | 1 |
 | interp | 146 | 1 |
 | ownership | 50 | 0 |
-| autopar | 45 | 0 |
+| autopar | 46 | 1 |
 | other | 42 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1227 surfaced · 3 open · 1212 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1228 surfaced · 4 open · 1212 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-20 | 2026-08-15 | interp | low | THE INTERPRETER BLAMES AN INTEGER OVERFLOW ON A SUB-EXPRESSION THAT CANNOT OVERFLOW: in `let c = (a + b) * m` with `a + b == 3`, the trap is reported at the column of `a`, not of the multiply that actually trapped. The compiled backends point elsewhere on the same line, so `karac run` and `karac build` give two different locations for one fault. | The span attached to the overflow trap in the interpreter's binary-op evaluation. It appears to carry the LEFT OPERAND's span rather than the operation's — which is indistinguishable from correct whenever the left operand is itself the overflowing op, and wrong whenever it is not. |
 | B-2026-08-15-21 | 2026-08-15 | codegen | high | A FIELD ASSIGNMENT THROUGH A `mut Slice[Struct]` PARAMETER IS SILENTLY DROPPED under codegen — `fn bump(s: mut Slice[P]) { s[0].x = s[0].x + 1; }` leaves the caller's element unchanged where the interpreter increments it. `karac check` is clean, both compiled backends print the stale value, and no heap is involved (`P { x: i64, y: i64 }`). A WHOLE-element assignment through the same parameter works, `mut ref Vec[P]` works, and `mut Slice[i64]` works — so it is the field store through the Slice ABI specifically. | the element-field store path for a `mut Slice[T]` parameter: a whole-element store reaches the caller's buffer and a field store does not. Compare against the `mut ref Vec[T]` path, which is correct for both, and against the whole-element `Slice` store, which is the closest working sibling. |
 | B-2026-08-15-22 | 2026-08-15 | typecheck | medium | A function returning a REUSABLE closure over a heap value is rejected whenever the body passes that capture BY VALUE -- which every stdlib `contains` / `starts_with` / `ends_with` does. The closure analysis calls those calls CONSUMING; the sequential checker does not (the same call twice plus a later use of the needle is accepted). And the diagnostic's own prescribed remedy -- clone the captured value -- does NOT compile, under either reading. | the closure once-vs-repeatable classification's notion of a consuming use, vs the sequential move checker's; and the by-value `substr: String` parameter the typechecker gives `String.contains` (src/typechecker/stdlib_seq.rs:261, whose own comment says the arg shape is all it enforces). |
+| B-2026-08-15-23 | 2026-08-15 | autopar+codegen | high | THE COLLECT-TABULATE LOWERING REPORTS `fanned_out: true, "dispatched across the worker pool"` AND RUNS ENTIRELY ON ONE THREAD. Every `#[par_order_free]` loop whose body pushes UNCONDITIONALLY — the natural parallel-map idiom — is sequential; wrapping the identical push in a tautological `if` restores a 4x speedup. The query claims fan-out for both. | `collect_tabulate` (concurrency.rs:2953, `collect_is_tabulate_shape`) selects an in-place-store lowering for the exactly-one-unconditional-push shape. That lowering does not dispatch. `effect_graph.rs`'s `fanned_out` / `cost_gate` / `reason` are computed from the reduction being CLASSIFIED, not from the lowering actually chosen, so they report fan-out unconditionally. |
 
 ### Wontfix (2)
 
