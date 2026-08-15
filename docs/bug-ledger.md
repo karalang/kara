@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 249 | 0 |
 | leak | 177 | 2 |
-| double-free | 129 | 1 |
+| double-free | 129 | 0 |
 | run-vs-build | 121 | 1 |
 | codegen-gap | 108 | 0 |
 | missing-feature | 96 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 871 | 6 |
+| codegen | 871 | 5 |
 | typecheck | 171 | 1 |
 | interp | 145 | 0 |
 | ownership | 49 | 1 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1205 surfaced · 8 open · 1185 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1205 surfaced · 7 open · 1186 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-14-20 | 2026-08-14 | typecheck | low | THE `String -> bytes -> String` ROUND TRIP DOES NOT TYPECHECK: `String.from_utf8(s.bytes())` fails with "expected 'Vec<u8>', found 'Slice[u8]'", and `Slice` has no `to_vec()`, so the only way back is a hand-rolled push loop. | `String.bytes()` returns `Slice[u8]`; `String.from_utf8` is signed `(Vec[u8]) -> Result[String, Utf8Error]`. Nothing bridges them — no implicit borrow-to-owned at the argument, and no `Slice.to_vec()` / `Vec.from_slice()`. |
 | B-2026-08-14-23 | 2026-08-14 | codegen | medium | `s = s + x` NEVER REUSES THE LEFT BUFFER, so building a string by repeated append is 21x slower than `s.push_str(x)` and 17x slower than the same spelling in Rust. Prepending and appending cost Kāra exactly the same, which is the measurement that identifies it. | The `String + String` lowering allocates a fresh buffer and copies both operands unconditionally. When the assignment target IS the left operand — `s = s + x`, the single most common way to build a string in a loop — the left buffer could be extended in place instead, which is what `push_str` already does. |
 | B-2026-08-14-25 | 2026-08-14 | codegen | medium | A `String` field of a `shared struct` leaks its displaced value on reassignment for SOME field layouts and not others — `{Vec, Map, Set, String}` leaks 627 bytes over 19 allocations on a 20-iteration reassign loop while every three-field subset of the same types, and the same four with the `String` declared FIRST and no container traffic, are clean. Pre-existing and layout-dependent, so a single-shape fixture reports the whole class as fine. | The `shared struct` field-assignment path for a `String` field. Layout-dependent: clean at 1-3 fields and for `{String, Vec, Map, Set}`, leaks for `{Vec, Map, Set, String}`. Start by diffing the emitted IR of the clean `{Map, Set, String}` case against the leaking four-field one — they differ by a single unused field. |
-| B-2026-08-14-32 | 2026-08-14 | codegen | high | an index read into a heap-owning Vec, used as the value of an `if`/`match` ARM, is freed by both the binding and the container -- `let w = if c { v[i] } else { .. }` aborts with a double free while `let w = v[i]` is correct | src/codegen/stmts.rs:4074 and let_binding_is_borrow_elided (stmts.rs:1581) test only the TOP-LEVEL RHS kind for ExprKind::Index; an index read reached through an If/Match arm is invisible to them, so the binding registers an owned cleanup over a pointer the container still owns. |
 | B-2026-08-14-33 | 2026-08-14 | autopar | medium | `query concurrency` reports `fanned_out: false, cost_gate: "unknown"` for a disjoint-write loop nested in an `if` or a block that DOES fan out -- the lowering is right and the report contradicts it | find_loop_by_span (src/effect_graph.rs:453) walks block.stmts and recurses only into For/While/Loop bodies -- not If arms, nested Blocks, or final_expr -- so disjoint_loop_verdict returns None and effect_graph.rs:395 degrades to (false, "unknown") for a loop that actually fanned out. |
 | B-2026-08-14-36 | 2026-08-14 | codegen | medium | A `Map` or `Set` TEMPORARY that is printed and not bound leaks its whole handle — `println(f"{mk()}")` in a 40-print loop strands 21440 bytes over 120 allocations, with no other owner to free it. | `try_compile_map_or_set_display` renders without registering a `FreeMapHandle`. Extract the binding path's drop-shape derivation (`src/codegen/maps.rs`, near the `track_map_var_with_val_drop` call — six call sites derive it near-identically today) into a helper over the key/value `TypeExpr`s, then gate the call on `print_vec_operand_is_owned_temp`. |
 | B-2026-08-15-1 | 2026-08-15 | codegen | medium | An UNANNOTATED `let m = <call returning SortedMap/SortedSet>` registers nothing in codegen: `f"{m}"` prints the control pointer, `println(m)` prints raw bytes, and `m.len()` is a hard codegen error — while the same program with a type annotation, or with plain `Map`/`Set`, is correct on every surface. | The `let` path derives the collection side-tables (`map_key_type_exprs` / `var_elem_type_exprs` / `set_elem_type_exprs` / `sorted_collection_vars`) from the ANNOTATION; the callee's declared return type is never consulted for the `SortedMap` / `SortedSet` heads, so an unannotated call-result binding registers nothing. The plain `Map` / `Set` equivalent registers fine, so the head-gate is the gap, not the call-result shape. |
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1205 surfaced
 
 </details>
 
-### Fixed (1185)
+### Fixed (1186)
 
-<details><summary>1185 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1186 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -6939,6 +6938,62 @@ frees the owner's handle nor strands anything.
 
 Suite green with `--features llvm`; clippy `--all --all-targets --features llvm`
 and fmt clean. |
+| B-2026-08-14-32 | codegen | high | an index read into a heap-owning Vec, used as the value of an `if`/`match` ARM, is freed by both the binding and the container -- `let w = if c { v[i… | FIXED by 97c63ac.
+
+The clone goes in the ARM, never at the merge: by then the value is a phi, and
+cloning that would also clone the arms that produced a fresh owned temporary,
+leaking every original. Only the arm knows what it yielded. A hook already sat
+in exactly that position -- `deepcopy_owned_param_branch_tail`, which deep-copies
+an owned-param branch tail for the identical reason from a different aliasing
+source -- so the fix extends that dispatcher with an index arm and every consumer
+(`if`, `if let`, `match`, closure tails) is covered by one change.
+
+WHAT THE ROW GOT WRONG, and it matters. The row proposed two directions and
+called (a) "extend the borrow-elision predicate through arms" viable-but-leaky.
+Neither was the shape of the real fix, because both assumed the decision could be
+made at the let-site from the RHS. It cannot: the let-site sees a phi. The row's
+own observation about the merge was the load-bearing one and the fix direction
+should have been read off it directly.
+
+WHAT THE ROW MISSED ENTIRELY: cloning unconditionally LEAKS wherever the branch
+value is discarded. LSan measured 330 bytes / 20 objects for
+`if c { v[0] } else { v[1] };` in a 20-iteration loop. So the clone is gated on
+an `own_value` argument -- explicit rather than a field read, so every call site
+has to answer, because the directions are not symmetric: a spurious clone is a
+leak the corpus catches, a missing one is a double free in a user's program.
+
+The gate started as a one-shot flag set at the statement site, and LSan found 990
+more bytes across three positions it missed: `for` body tails, `while` body
+tails, and block-wrapped discards. A flag is taken by whichever branch compiles
+FIRST, which is the discarded one only when it is also the next thing compiled --
+in a loop body after other statements, or inside a block whose own statements
+compile first, the wrong branch took it; and left set it would reach a nested
+`let` that genuinely owns its value and hand back the very double free being
+fixed. Replaced with a per-function SPAN SET (`compute_discarded_branch_spans`,
+alongside the existing borrow-elision pre-pass) keyed on each branch's
+condition/scrutinee -- the span the branch compilers actually hold. Immune to
+compile order.
+
+Discard is INHERITED, so the pass also records `else if` chains, `else` blocks
+whose tail is a branch, and `match` arm bodies that are themselves branches: each
+compiles through its own `compile_if`/`compile_match` looking up its own span, so
+recording only the outermost leaves every inner link cloning into a leak. Found
+by reading the pass back rather than by a failing test, and pinned in the fixture
+so it stays found.
+
+FIVE TESTS. Two LSan fixtures proven live BY ABLATION -- remove the clone and the
+double-free one fails, remove the discard gate and the leak one fails -- covering
+all four discarding positions plus the else-if chain and a nested `let` inside a
+discarded arm. A third LSan fixture guards the merge-versus-arm decision going
+forward and CANNOT fail under either ablation; its comment says so plainly rather
+than implying it is a live test. Twinned codegen/interpreter value tests carry
+every crashing shape plus the owned-call arm that must not be cloned, and re-read
+the container afterwards to prove its buffers survived.
+
+Verified after rebasing onto 11 upstream commits (several codegen fixes):
+codegen 2972 passed, interpreter 1523 passed, memory_sanitizer 1085 passed, fmt
+and clippy clean. apps/cumulus -- the app that surfaced this -- builds and its
+streamed stack stays byte-identical to the resident one. |
 | B-2026-08-14-34 | resolver+ownership | medium | DIAGNOSTIC OUTPUT IS NONDETERMINISTIC RUN-TO-RUN on the same binary and the same input, in two independent places: a resolver "did you mean" suggesti… | FIXED by a5cb578. Both legs reproduce exactly as filed and are deterministic
 after: 30/30 identical on each leg's repro, and a three-runs-per-file sweep of
 all 819 `.kara` files in the katas / examples / selfhost corpora reports ZERO
