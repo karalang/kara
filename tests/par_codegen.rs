@@ -1921,6 +1921,172 @@ fn main() {
         }
     }
 
+    /// B-2026-08-15-13 — a `Vec`-element STRUCT binding that crosses an auto-par
+    /// join kept no type, so a later field read failed the build.
+    ///
+    /// This one is the detector, not a regression guard: on the parent every
+    /// program below fails to compile outright with "cannot resolve field
+    /// 'service' … its type was not recorded for codegen", so `run_program`
+    /// returns `None`.
+    ///
+    /// THE ROW'S TRIGGER IS A PROXY AND THE FIXTURE ENCODES THE REAL ONE. It was
+    /// filed as "a `Map`/`Set` local plus a `Vec[Struct]` PARAM", with three
+    /// one-line controls that build. All three are really the same fact:
+    /// auto-par declined to split the function. `KARAC_AUTO_PAR=0` compiles the
+    /// failing program correctly, and each control performs zero par splits — the
+    /// `Map` local is just what makes two statements look independent enough to
+    /// parallelize. So the fixture keeps the `Map` local as the way to PROVOKE a
+    /// split, not as the defect.
+    ///
+    /// The slot's type name resolved from an annotation or from a `Call` RHS
+    /// whose return type names a struct; an element read had no arm, so the
+    /// binding joined untyped. `agg_prim` and `agg_field` are the
+    /// must-not-over-fire controls — a primitive element and a scalar field must
+    /// not be recorded as a struct — and `agg_shared` covers `shared_types`,
+    /// which the sibling fallback had to be widened for once already
+    /// (B-2026-08-08-19).
+    #[test]
+    fn test_e2e_autopar_joined_vec_element_struct_binding() {
+        assert_eq!(
+            run_program(
+                "struct Entry { service: String, weight: i64 }\n\
+                 shared struct Node { label: String }\n\
+                 fn agg(entries: Vec[Entry]) -> String {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let e = entries[0];\n\
+                     return e.service;\n\
+                 }\n\
+                 fn agg_method(entries: Vec[Entry]) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let e = entries[1];\n\
+                     return e.service.len() + e.weight;\n\
+                 }\n\
+                 fn agg_shared(ns: Vec[Node]) -> String {\n\
+                     let mut seen: Set[String] = Set.new();\n\
+                     let n = ns[0];\n\
+                     return n.label;\n\
+                 }\n\
+                 fn agg_prim(nums: Vec[i64]) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let n = nums[1];\n\
+                     return n + 100;\n\
+                 }\n\
+                 fn agg_field(entries: Vec[Entry]) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let w = entries[1].weight;\n\
+                     return w;\n\
+                 }\n\
+                 fn agg_nested(rows: Vec[Vec[Entry]]) -> String {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let inner = rows[0];\n\
+                     let e = inner[1];\n\
+                     return e.service;\n\
+                 }\n\
+                 fn agg_two(entries: Vec[Entry]) -> String {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let a = entries[0];\n\
+                     let b = entries[1];\n\
+                     return a.service + \"-\" + b.service;\n\
+                 }\n\
+                 fn main() {\n\
+                     let mut es: Vec[Entry] = Vec.new();\n\
+                     es.push(Entry { service: \"alpha\", weight: 3 });\n\
+                     es.push(Entry { service: \"betamax\", weight: 5 });\n\
+                     println(agg(es.clone()));\n\
+                     println(agg_method(es.clone()));\n\
+                     let mut ns: Vec[Node] = Vec.new();\n\
+                     ns.push(Node { label: \"gamma\" });\n\
+                     println(agg_shared(ns));\n\
+                     let nums: Vec[i64] = [7, 8, 9];\n\
+                     println(agg_prim(nums));\n\
+                     println(agg_field(es.clone()));\n\
+                     let mut rows: Vec[Vec[Entry]] = Vec.new();\n\
+                     rows.push(es.clone());\n\
+                     println(agg_nested(rows));\n\
+                     println(agg_two(es.clone()));\n\
+                     println(es[1].service);\n\
+                 }\n"
+            ),
+            Some("alpha\n12\ngamma\n108\n5\nbetamax\nalpha-betamax\nbetamax\n".to_string())
+        );
+    }
+
+    /// B-2026-08-15-16 — a RANGE-SLICE binding that crosses an auto-par join.
+    ///
+    /// LIVES IN THIS FILE FOR THE SAME REASON ITS NEIGHBOUR DOES:
+    /// `tests/codegen.rs`'s harness calls `compile_to_object_with_options` with
+    /// `None` for the concurrency analysis, so auto-par never fires there and
+    /// this assertion passes against the broken compiler — asserting nothing.
+    /// Verified by building the pre-fix source both ways.
+    ///
+    /// `infer_expr_llvm_type` answered its `Index` arm with the ELEMENT type for
+    /// both index spellings, so a range read sized the return slot as `i64`
+    /// while the branch wrote a `{ptr, len, cap}` slice header into it. It
+    /// stayed hidden because a `Vec[Struct]` slice is layout-identical to that
+    /// header and round-tripped by accident; `Vec[i64]` truncates 24 bytes to 8
+    /// and reads garbage, which folds to a plausible `1` at the default opt
+    /// level and SEGFAULTS at `-O0`.
+    ///
+    /// `f_elem_only` is the must-still-work control — an ELEMENT read has to
+    /// keep crossing the join with its type intact, which is the neighbouring
+    /// row's fix. `f_both` puts both spellings in one group, so a rule that
+    /// declined too broadly would surface as a wrong `e.weight`.
+    ///
+    /// Deliberately no `Vec[String]` or `Vec[Struct]` SLICE: those carry
+    /// B-2026-08-15-15's separate double free, which this row does not fix.
+    #[test]
+    fn test_e2e_autopar_joined_range_slice_binding() {
+        let src = "struct Entry { service: String, weight: i64 }\n\
+                 fn f_range(nums: Vec[i64]) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let s = nums[0..2];\n\
+                     return s.len();\n\
+                 }\n\
+                 fn f_range_vars(nums: Vec[i64], a: i64, b: i64) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let s = nums[a..b];\n\
+                     return s.len() + s[0];\n\
+                 }\n\
+                 fn f_str_slice(txt: String) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let t = txt[0..3];\n\
+                     return t.len();\n\
+                 }\n\
+                 fn f_both(nums: Vec[i64], entries: Vec[Entry]) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let s = nums[0..3];\n\
+                     let e = entries[1];\n\
+                     return s.len() + e.weight;\n\
+                 }\n\
+                 fn f_elem_only(entries: Vec[Entry]) -> String {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let e = entries[0];\n\
+                     return e.service;\n\
+                 }\n\
+                 fn f_two_ranges(nums: Vec[i64]) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let s = nums[0..2];\n\
+                     let u = nums[1..4];\n\
+                     return s.len() * 10 + u.len();\n\
+                 }\n\
+                 fn main() {\n\
+                     let nums: Vec[i64] = [7, 8, 9, 10, 11];\n\
+                     println(f_range(nums.clone()));\n\
+                     println(f_range_vars(nums.clone(), 1, 4));\n\
+                     println(f_str_slice(\"abcdefgh\"));\n\
+                     let mut es: Vec[Entry] = Vec.new();\n\
+                     es.push(Entry { service: \"alpha\", weight: 3 });\n\
+                     es.push(Entry { service: \"betamax\", weight: 5 });\n\
+                     println(f_both(nums.clone(), es.clone()));\n\
+                     println(f_elem_only(es.clone()));\n\
+                     println(f_two_ranges(nums.clone()));\n\
+                     println(nums.len());\n\
+                 }\n";
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "2\n11\n3\n8\nalpha\n23\n5\n");
+        }
+    }
+
     // ── Atomic op arity — run/build agreement (B-2026-06-30-5) ─────
 
     /// E2E: the explicit-ordering atomic form (`fetch_add(v, ord)` through a

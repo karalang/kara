@@ -2134,7 +2134,37 @@ impl<'ctx> super::Codegen<'ctx> {
             // this `par` block, so the lookup resolves. A block-local
             // collection isn't registered yet at slot-sizing time and falls
             // through to `None` (the pre-existing branch-local contract).
-            ExprKind::Index { object, .. } => {
+            ExprKind::Index { object, index } => {
+                // B-2026-08-15-16: a RANGE index is a SLICE, not an element.
+                // Both spellings are `ExprKind::Index`, so answering with the
+                // element type here sized the auto-par return slot as (say)
+                // `i64` while the branch wrote the slice's `{ptr, len, cap}`
+                // header into it. Nothing downstream re-checks that, so
+                // `let s = nums[0..2]` crossed the join as a truncated struct
+                // and `s.len()` read whatever survived — garbage at `-O0` and
+                // under the JIT, folding to a plausible `1` at the default opt
+                // level. A SILENT wrong answer in the default configuration,
+                // while `--interp` and `KARAC_AUTO_PAR=0` were both correct.
+                //
+                // It stayed hidden because a `Vec[Struct]` slice is layout-
+                // identical to the slice header, so that spelling round-tripped
+                // by accident; only a `Vec[i64]`, truncating 24 bytes to 8,
+                // showed it.
+                //
+                // DECLINING is the fix rather than answering with the slice
+                // type. `None` propagates through `collect_return_slots`' `?`
+                // and the group falls back to sequential — the lowering that
+                // was already correct here, and the contract this fn's header
+                // documents for any shape it cannot classify, which is why it is
+                // written to never guess. Sizing the slot correctly would also
+                // have to answer who OWNS the slice: a range read is a `cap == 0`
+                // view of the source buffer, so routing one through a slot means
+                // deciding whether the parent's joined binding may free it. That
+                // is a real design question and not one to settle inside a
+                // static type-inference helper.
+                if matches!(&index.kind, ExprKind::Range { .. }) {
+                    return None;
+                }
                 if let ExprKind::Identifier(base) = &object.kind {
                     if let Some(&elem) = self.vec_elem_types.get(base.as_str()) {
                         return Some(elem);
