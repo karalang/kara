@@ -158,7 +158,16 @@ fn render_function(
     // line, not one per loop, so the opportunities the report exists to show
     // are still what stands out.
     let declined = decision.disjoint_write_loops.len() - disjoint.len();
-    if groups.is_empty() && reductions.is_empty() && disjoint.is_empty() && declined == 0 {
+    // B-2026-08-15-19 — an annotated loop that declined keeps the function in
+    // the report even when it has nothing else to show. A function whose only
+    // interesting property is that the author's `#[par_order_free]` did nothing
+    // is precisely the function they are running this report on.
+    if groups.is_empty()
+        && reductions.is_empty()
+        && disjoint.is_empty()
+        && declined == 0
+        && decision.declined_par_loops.is_empty()
+    {
         return false;
     }
 
@@ -258,6 +267,20 @@ fn render_function(
             declined,
             if lines.len() == 1 { "" } else { "s" },
             lines.join(", "),
+        ));
+    }
+
+    // B-2026-08-15-19 — an ANNOTATED loop that did not fan out. Unlike the
+    // disjoint-write summary above, this prints the reason INLINE rather than
+    // pointing at `karac query concurrency`: the author wrote
+    // `#[par_order_free]` on this exact loop, so they are already looking at
+    // the answer to "did it work", and the reason is one short line. Sending
+    // them to a second tool to find out that their opt-in did nothing is most
+    // of the defect this was filed for.
+    for d in &decision.declined_par_loops {
+        out.push_str(&format!(
+            "  `#[par_order_free]` loop at line {} did NOT fan out — {}\n",
+            d.loop_line, d.reason,
         ));
     }
 
@@ -485,6 +508,7 @@ mod tests {
                 total_statements: 2,
                 statement_spans: Vec::new(),
                 loop_reductions: Vec::new(),
+                declined_par_loops: Vec::new(),
                 disjoint_write_loops: Vec::new(),
                 serialization_points: Vec::new(),
                 reorder_opportunities: Vec::new(),

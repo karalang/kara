@@ -357,6 +357,28 @@ pub(crate) fn loop_reductions_json(
 /// per-thread fork-depth cap (`KARAC_PAR_MAX_FORK_DEPTH`) — neither a
 /// compile-time property. Same reading as `loop_reductions`' field of the same
 /// name.
+/// Loops the author annotated `#[par_order_free]` that did not fan out, with the
+/// obligation that stopped each (B-2026-08-15-19).
+///
+/// Sibling of [`disjoint_write_loops_json`] and rendered for the same reason:
+/// the declined case is the point of the surface. Empty for a program with no
+/// annotated loops, and empty for one whose annotated loops all fanned out.
+pub(crate) fn declined_par_loops_json(fc: &FunctionConcurrency) -> String {
+    let entries: Vec<String> = fc
+        .declined_par_loops
+        .iter()
+        .map(|d| {
+            format!(
+                "{{\"statement\":{},\"loop_line\":{},\"annotated\":\"par_order_free\",\"fanned_out\":false,\"reason\":{}}}",
+                d.stmt_index,
+                d.loop_line,
+                json_string(d.reason),
+            )
+        })
+        .collect();
+    format!("[{}]", entries.join(","))
+}
+
 pub(crate) fn disjoint_write_loops_json(
     fc: &FunctionConcurrency,
     func: Option<&Function>,
@@ -845,7 +867,7 @@ pub(crate) fn build_concurrency_graph_json(
         .filter_map(|(key, node)| {
             analysis.function_decisions.get(key).map(|fc| {
                 format!(
-                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"loop_reductions\":{},\"disjoint_write_loops\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
+                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"loop_reductions\":{},\"declined_par_loops\":{},\"disjoint_write_loops\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
                     json_string(key),
                     node.line,
                     fc.total_statements,
@@ -857,6 +879,7 @@ pub(crate) fn build_concurrency_graph_json(
                         program,
                         key,
                     ),
+                    declined_par_loops_json(fc),
                     disjoint_write_loops_json(
                         fc,
                         program.and_then(|p| function_by_decision_key(p, key)),

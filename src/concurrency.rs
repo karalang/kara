@@ -610,6 +610,9 @@ pub struct FunctionConcurrency {
     /// See `docs/implementation_checklist/phase-7-codegen.md` — "Auto-par
     /// reduction recognition" — for the policy and slicing plan.
     pub loop_reductions: Vec<LoopReduction>,
+    /// Loops the author annotated `#[par_order_free]` that did NOT fan out,
+    /// each with the obligation that stopped it. See [`DeclinedParLoop`].
+    pub declined_par_loops: Vec<DeclinedParLoop>,
     /// Loops whose body writes a collection at a computed index, with the
     /// per-iteration disjointness proof (or the obligation that failed). The
     /// third compute-fan-out shape; see [`DisjointWriteLoop`].
@@ -847,6 +850,37 @@ pub struct LoopReduction {
     /// the non-integer-accumulator fan-out gate
     /// (`par_cost::accumulator_type_fans_out`, B-2026-07-31-14).
     pub accumulator_type: Option<String>,
+}
+
+/// A loop the author ANNOTATED `#[par_order_free]` that did not fan out, and the
+/// obligation that stopped it.
+///
+/// The attribute is an explicit opt-in — B-2026-07-29-30 renamed it precisely to
+/// make it "the caller's promise not to depend on order" — so a loop carrying it
+/// and lowering sequentially is a decision the compiler owes the author an
+/// explanation for. Before B-2026-08-15-19 there was none: the loop did not
+/// appear in `loop_reductions` (it is not a reduction), it did not appear in
+/// `disjoint_write_loops` (it is not that shape either), and no diagnostic was
+/// emitted. `karac query concurrency` reported nothing at all about it.
+///
+/// Deliberately a SEPARATE list rather than a `declined` flag on
+/// [`LoopReduction`]: codegen consumes `loop_reductions` to choose a lowering,
+/// and putting non-reductions in it would invite exactly the confusion this row
+/// was filed about. These records are reporting-only.
+///
+/// Unannotated loops are not recorded. Every loop in a program that is not a
+/// reduction would qualify, which is noise, not an explanation — the signal is
+/// that the AUTHOR asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclinedParLoop {
+    /// Index of the top-level statement holding the loop.
+    pub stmt_index: usize,
+    /// Source line of the loop header.
+    pub loop_line: usize,
+    /// The obligation that failed, phrased as what the fan-out needed and did
+    /// not get. Static strings attached at the decline site, so they cannot
+    /// drift from the condition that produced them.
+    pub reason: &'static str,
 }
 
 /// A loop whose body writes a collection at a computed index — the third
@@ -1844,6 +1878,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 total_statements,
                 statement_spans: Vec::new(),
                 loop_reductions: Vec::new(),
+                declined_par_loops: Vec::new(),
                 disjoint_write_loops: Vec::new(),
                 serialization_points: Vec::new(),
                 reorder_opportunities: Vec::new(),
@@ -1937,7 +1972,7 @@ impl<'a> ConcurrencyChecker<'a> {
         // has a loop-carried dependency that the parallel-group analysis
         // correctly serializes, but the loop's iteration space can still
         // be split across workers when the op is associative + commutative.
-        let loop_reductions = self.recognize_reductions(func);
+        let (loop_reductions, declined_par_loops) = self.recognize_reductions(func);
 
         // Step 4b: Recognize loops over provably-disjoint indexed writes — the
         // third compute-fan-out shape. Independent of both the parallel-group
@@ -1963,6 +1998,7 @@ impl<'a> ConcurrencyChecker<'a> {
             total_statements,
             statement_spans,
             loop_reductions,
+            declined_par_loops,
             disjoint_write_loops,
             serialization_points,
             reorder_opportunities,
@@ -2356,13 +2392,14 @@ impl<'a> ConcurrencyChecker<'a> {
         find_in_block(body, name, types)
     }
 
-    fn recognize_reductions(&self, func: &Function) -> Vec<LoopReduction> {
+    fn recognize_reductions(&self, func: &Function) -> (Vec<LoopReduction>, Vec<DeclinedParLoop>) {
         let mut out = Vec::new();
         // Threaded rather than looked up at the gate: the walk is recursive
         // and does not carry the enclosing `Function`.
         let frozen = self.frozen_param_names(func);
-        self.recognize_reductions_in_block(&func.body, &mut out, &frozen);
-        out
+        let mut declined = Vec::new();
+        self.recognize_reductions_in_block(&func.body, &mut out, &mut declined, &frozen);
+        (out, declined)
     }
 
     /// Walk the function body for loops over indexed writes and run the
@@ -2763,6 +2800,7 @@ impl<'a> ConcurrencyChecker<'a> {
         &self,
         block: &Block,
         out: &mut Vec<LoopReduction>,
+        declined: &mut Vec<DeclinedParLoop>,
         frozen: &HashSet<String>,
     ) {
         // B-2026-08-14-24 — the tail expression is walked with the statements.
@@ -2790,12 +2828,11 @@ impl<'a> ConcurrencyChecker<'a> {
                     else_branch,
                     ..
                 } => {
-                    self.recognize_reductions_in_block(then_block, out, frozen);
+                    self.recognize_reductions_in_block(then_block, out, declined, frozen);
                     if let Some(else_expr) = else_branch {
                         match &else_expr.kind {
-                            ExprKind::Block(else_block) => {
-                                self.recognize_reductions_in_block(else_block, out, frozen)
-                            }
+                            ExprKind::Block(else_block) => self
+                                .recognize_reductions_in_block(else_block, out, declined, frozen),
                             // `else if ..` chains through as an If expression.
                             ExprKind::If { .. } => {
                                 let chain = Block {
@@ -2803,7 +2840,7 @@ impl<'a> ConcurrencyChecker<'a> {
                                     final_expr: Some(Box::new((**else_expr).clone())),
                                     span: else_expr.span.clone(),
                                 };
-                                self.recognize_reductions_in_block(&chain, out, frozen);
+                                self.recognize_reductions_in_block(&chain, out, declined, frozen);
                             }
                             _ => {}
                         }
@@ -2812,7 +2849,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 }
                 // A BARE BLOCK hid its loop the same way.
                 ExprKind::Block(inner) | ExprKind::Seq(inner) => {
-                    self.recognize_reductions_in_block(inner, out, frozen);
+                    self.recognize_reductions_in_block(inner, out, declined, frozen);
                     continue;
                 }
                 // ... and so did a MATCH arm.
@@ -2823,7 +2860,7 @@ impl<'a> ConcurrencyChecker<'a> {
                             final_expr: Some(Box::new(arm.body.clone())),
                             span: arm.body.span.clone(),
                         };
-                        self.recognize_reductions_in_block(&arm_block, out, frozen);
+                        self.recognize_reductions_in_block(&arm_block, out, declined, frozen);
                     }
                     continue;
                 }
@@ -2842,11 +2879,32 @@ impl<'a> ConcurrencyChecker<'a> {
                 } => (body, attributes.as_slice()),
                 _ => unreachable!("filtered above"),
             };
-            self.recognize_reductions_in_block(body, out, frozen);
+            self.recognize_reductions_in_block(body, out, declined, frozen);
             let induction_var = loop_induction_var(expr);
-            if let Some((accumulator, op)) =
-                self.classify_loop_body(body, attributes, induction_var.as_deref())
-            {
+            // B-2026-08-15-19: an ANNOTATED loop that does not fan out owes the
+            // author a reason, on every path out of here — the classifier's own
+            // decline and both soundness gates below. `note_decline` is a no-op
+            // for an unannotated loop, so the reporting surface stays the set of
+            // loops whose author actually asked for parallelism.
+            let annotated = attributes.iter().any(|a| a.is_par_order_free());
+            let note_decline = |declined: &mut Vec<DeclinedParLoop>, reason: &'static str| {
+                if annotated {
+                    declined.push(DeclinedParLoop {
+                        stmt_index: idx,
+                        loop_line: expr.span.line,
+                        reason,
+                    });
+                }
+            };
+            let classified = self.classify_loop_body(body, attributes, induction_var.as_deref());
+            let classified = match classified {
+                Ok(c) => Some(c),
+                Err(reason) => {
+                    note_decline(declined, reason);
+                    None
+                }
+            };
+            if let Some((accumulator, op)) = classified {
                 // B-2026-07-16-6 soundness gate: the reduction lowering runs
                 // this body on MULTIPLE worker threads, so any value the body
                 // touches that is reachable from outside one iteration is
@@ -2859,6 +2917,11 @@ impl<'a> ConcurrencyChecker<'a> {
                 // explicit `spawn` capture does; decline the reduction (the
                 // loop lowers sequentially) when it doesn't.
                 if !self.loop_body_types_cross_task_safe(body, frozen) {
+                    note_decline(
+                        declined,
+                        "the body touches a plain `shared` value, whose refcount header is \
+non-atomic and would race across workers",
+                    );
                     continue;
                 }
                 // B-2026-07-23-20 soundness gate: decline when the body passes a
@@ -2867,6 +2930,11 @@ impl<'a> ConcurrencyChecker<'a> {
                 // write gates below can't see a mutation performed inside the
                 // callee).
                 if self.loop_body_shares_outer_mut_borrow(body) {
+                    note_decline(
+                        declined,
+                        "the body passes a `mut ref` to a loop-invariant buffer, which every \
+worker would write",
+                    );
                     continue;
                 }
                 // A reduction whose per-iteration delta recurses into the
@@ -3184,12 +3252,27 @@ impl<'a> ConcurrencyChecker<'a> {
     /// alongside as loop-counter steps). Returns `None` for any other
     /// shape: multiple distinct accumulators, mixed ops, non-reduction
     /// writes, or writes nested inside `if`/`else`/inner-loop branches.
+    /// `Err` carries the OBLIGATION THAT FAILED, not a generic "no".
+    ///
+    /// B-2026-08-15-19: a loop carrying `#[par_order_free]` is the one case
+    /// where the compiler knows the author expected parallelism, and returning
+    /// a bare `None` left them with a sequential binary and nothing to read —
+    /// the loop did not even appear among the declined ones in
+    /// `karac query concurrency`. `DisjointWriteLoop`'s doc has stated the
+    /// principle since it was written: *"one record per candidate loop,
+    /// whether or not the proof discharged: the declined case is the whole
+    /// point of the surface"*. This is that, for the reduction path.
+    ///
+    /// The strings are `&'static str` and are attached AT the decline site, so
+    /// they cannot drift away from the condition that produced them — a
+    /// post-hoc re-diagnosis of the body would be free to disagree with the
+    /// real reason, which is worse than silence.
     fn classify_loop_body(
         &self,
         body: &Block,
         attributes: &[Attribute],
         induction_var: Option<&str>,
-    ) -> Option<(String, ReductionOp)> {
+    ) -> Result<(String, ReductionOp), &'static str> {
         // `#[par_order_free]` opts into the collect-shape recognizer
         // (`acc.push(x)` and `if cond { acc.push(x); }`). Other loops
         // see only the scalar-reduction shapes. See
@@ -3217,7 +3300,10 @@ impl<'a> ConcurrencyChecker<'a> {
                     "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
                 ),
                 StmtKind::Assign { target, value } => {
-                    let name = identifier_name(target)?;
+                    let name = identifier_name(target).ok_or(
+                        "the assignment target is not a plain name, so it cannot be a \
+ reduction accumulator",
+                    )?;
                     if let_introduced.contains(&name) {
                         // Assign to a body-local name (re-bound after let).
                         // Not loop-carried; ignored.
@@ -3251,26 +3337,32 @@ impl<'a> ConcurrencyChecker<'a> {
                         // i = i + const_lit — the loop's own counter step;
                         // ignored.
                     } else {
-                        let op = reduction_binary_shape(value, &name)?;
+                        let op = reduction_binary_shape(value, &name).ok_or(
+                        "the assignment is not `acc = acc <op> delta` with an associative \
+and commutative op",
+                    )?;
                         match reduction {
                             None => reduction = Some((name, op)),
                             Some((ref existing_name, existing_op)) => {
                                 if existing_name != &name || existing_op != op {
-                                    return None;
+                                    return Err("the body reduces into more than one accumulator, or with more than one operator — fan-out combines a single accumulator");
                                 }
                             }
                         }
                     }
                 }
                 StmtKind::CompoundAssign { target, op, value } => {
-                    let name = identifier_name(target)?;
+                    let name = identifier_name(target).ok_or(
+                        "the compound-assignment target is not a plain name, so it cannot be a \
+reduction accumulator",
+                    )?;
                     if let_introduced.contains(&name) {
                         continue;
                     }
                     let Some(red_op) = ReductionOp::from_compound_op(op) else {
                         // Sub / Div / Mod / Shl / Shr — not in the
                         // associative + commutative allow-list.
-                        return None;
+                        return Err("the compound-assignment operator is not associative and commutative, so per-worker partials cannot be combined");
                     };
                     // Mirror of the Assign-branch induction-first rule:
                     // `i += 1` matches the `+` reduction shape, so check
@@ -3287,7 +3379,7 @@ impl<'a> ConcurrencyChecker<'a> {
                         None => reduction = Some((name, red_op)),
                         Some((ref existing_name, existing_op)) => {
                             if existing_name != &name || existing_op != red_op {
-                                return None;
+                                return Err("the body reduces into more than one accumulator, or with more than one operator — fan-out combines a single accumulator");
                             }
                         }
                     }
@@ -3310,7 +3402,7 @@ impl<'a> ConcurrencyChecker<'a> {
                             None => reduction = Some((name, op)),
                             Some((ref existing_name, existing_op)) => {
                                 if existing_name != &name || existing_op != op {
-                                    return None;
+                                    return Err("the body reduces into more than one accumulator, or with more than one operator — fan-out combines a single accumulator");
                                 }
                             }
                         }
@@ -3332,7 +3424,7 @@ impl<'a> ConcurrencyChecker<'a> {
                             None => reduction = Some((name, op)),
                             Some((ref existing_name, existing_op)) => {
                                 if existing_name != &name || existing_op != op {
-                                    return None;
+                                    return Err("the body reduces into more than one accumulator, or with more than one operator — fan-out combines a single accumulator");
                                 }
                             }
                         }
@@ -3365,7 +3457,7 @@ impl<'a> ConcurrencyChecker<'a> {
                                 Some((ref existing_name, existing_op)) => {
                                     if existing_name != &name || existing_op != ReductionOp::Collect
                                     {
-                                        return None;
+                                        return Err("the body reduces into more than one accumulator, or with more than one operator — fan-out combines a single accumulator");
                                     }
                                 }
                             }
@@ -3380,7 +3472,7 @@ impl<'a> ConcurrencyChecker<'a> {
                                 Some((ref existing_name, existing_op)) => {
                                     if existing_name != &name || existing_op != ReductionOp::Collect
                                     {
-                                        return None;
+                                        return Err("the body reduces into more than one accumulator, or with more than one operator — fan-out combines a single accumulator");
                                     }
                                 }
                             }
@@ -3395,7 +3487,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     self.collect_expr_inner_writes(expr, &mut inner_writes);
                     for w in &inner_writes {
                         if !let_introduced.contains(w) {
-                            return None;
+                            return Err("a statement writes a name declared outside the loop and it is not a recognized reduction or `push`");
                         }
                     }
                 }
@@ -3405,7 +3497,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     // a captured-write reads its surrounding loop's
                     // accumulator state in a way the fan-out / combine
                     // model doesn't preserve.
-                    return None;
+                    return Err("the body has a `defer`, which runs at scope exit rather than per iteration");
                 }
             }
         }
@@ -3423,7 +3515,7 @@ impl<'a> ConcurrencyChecker<'a> {
                         None => reduction = Some((name, op)),
                         Some((ref existing_name, existing_op)) => {
                             if existing_name != &name || existing_op != op {
-                                return None;
+                                return Err("the body reduces into more than one accumulator, or with more than one operator — fan-out combines a single accumulator");
                             }
                         }
                     }
@@ -3434,7 +3526,7 @@ impl<'a> ConcurrencyChecker<'a> {
                         None => reduction = Some((name, op)),
                         Some((ref existing_name, existing_op)) => {
                             if existing_name != &name || existing_op != op {
-                                return None;
+                                return Err("the body reduces into more than one accumulator, or with more than one operator — fan-out combines a single accumulator");
                             }
                         }
                     }
@@ -3452,7 +3544,7 @@ impl<'a> ConcurrencyChecker<'a> {
                             None => reduction = Some((name, ReductionOp::Collect)),
                             Some((ref existing_name, existing_op)) => {
                                 if existing_name != &name || existing_op != ReductionOp::Collect {
-                                    return None;
+                                    return Err("the body reduces into more than one accumulator, or with more than one operator — fan-out combines a single accumulator");
                                 }
                             }
                         }
@@ -3462,7 +3554,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     self.collect_expr_inner_writes(e, &mut inner_writes);
                     for w in &inner_writes {
                         if !let_introduced.contains(w) {
-                            return None;
+                            return Err("a statement writes a name declared outside the loop and it is not a recognized reduction or `push`");
                         }
                     }
                 }
@@ -3471,13 +3563,16 @@ impl<'a> ConcurrencyChecker<'a> {
                 self.collect_expr_inner_writes(e, &mut inner_writes);
                 for w in &inner_writes {
                     if !let_introduced.contains(w) {
-                        return None;
+                        return Err("a statement writes a name declared outside the loop and it is not a recognized reduction or `push`");
                     }
                 }
             }
         }
 
-        reduction
+        reduction.ok_or(
+            "the body has no recognized reduction: fan-out needs an associative \
+accumulate into one name, or — with `#[par_order_free]` — a bare `acc.push(..)`",
+        )
     }
 
     /// Recognize the conditional collect shape:

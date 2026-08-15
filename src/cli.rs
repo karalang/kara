@@ -11301,7 +11301,7 @@ fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &str) {
     match analysis.function_decisions.get(function) {
         Some(fc) => {
             println!(
-                "{{\"function\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"loop_reductions\":{},\"disjoint_write_loops\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
+                "{{\"function\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"loop_reductions\":{},\"declined_par_loops\":{},\"disjoint_write_loops\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
                 json_string(function),
                 fc.total_statements,
                 crate::effect_graph::statement_spans_json(fc, filename),
@@ -11315,6 +11315,7 @@ fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &str) {
                     Some(&pipeline.parsed.program),
                     function,
                 ),
+                crate::effect_graph::declined_par_loops_json(fc),
                 crate::effect_graph::disjoint_write_loops_json(
                     fc,
                     crate::effect_graph::function_by_decision_key(

@@ -4189,6 +4189,143 @@ fn test_reduction_recognized_for_conditional_push_with_empty_else() {
 }
 
 #[test]
+fn test_declined_par_loop_records_the_failed_obligation() {
+    // B-2026-08-15-19. The shape from kata 272's bench kernel, reduced: an
+    // annotated loop whose body mutates a name declared outside it, so the
+    // collect classifier declines. Before this row it declined SILENTLY — the
+    // loop appeared in no list at all, and `karac query concurrency` reported
+    // nothing about it, so the author's opt-in read as "not a candidate"
+    // rather than "considered, and here is why not".
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut out: Vec[i64] = Vec.new();
+            let mut cursor: i64 = 0i64;
+            #[par_order_free]
+            for i in 0i64..100i64 {
+                cursor = cursor + i;
+                out.push(cursor);
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.declined_par_loops.len(),
+        1,
+        "an annotated loop that does not fan out must be recorded, got {:?}",
+        main_fc.declined_par_loops
+    );
+    let d = &main_fc.declined_par_loops[0];
+    // Two accumulators — a `+` into `cursor` and a collect into `out` — which
+    // is a sharper answer than "not a collect shape" and is the one the author
+    // can act on.
+    assert!(
+        d.reason.contains("more than one accumulator"),
+        "the reason must name the obligation that failed, got {:?}",
+        d.reason
+    );
+}
+
+#[test]
+fn test_declined_par_loop_names_an_outer_write() {
+    // A third decline site: a write to an outer name that is not a reduction
+    // shape at all.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut out: Vec[i64] = Vec.new();
+            let mut last: i64 = 0i64;
+            #[par_order_free]
+            for i in 0i64..100i64 {
+                if i > 3i64 { last = i * 2i64; }
+                out.push(i);
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.declined_par_loops.len(), 1);
+    let reason = main_fc.declined_par_loops[0].reason;
+    assert!(
+        reason.contains("outside the loop") || reason.contains("more than one accumulator"),
+        "an outer non-reduction write must decline with a reason naming it, got {reason:?}"
+    );
+}
+
+#[test]
+fn test_declined_par_loop_names_a_non_associative_op() {
+    // A different decline site reaching the same surface, so the reason is
+    // demonstrably attached AT the site rather than being one generic string.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut acc: i64 = 100i64;
+            #[par_order_free]
+            for i in 0i64..10i64 {
+                acc -= i;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.declined_par_loops.len(), 1);
+    assert!(
+        main_fc.declined_par_loops[0]
+            .reason
+            .contains("not associative"),
+        "subtraction must decline for its own reason, got {:?}",
+        main_fc.declined_par_loops[0].reason
+    );
+}
+
+#[test]
+fn test_unannotated_loops_are_not_recorded_as_declines() {
+    // The surface is the set of loops whose AUTHOR asked. Recording every
+    // non-reduction loop in every program would be noise, not an explanation,
+    // and would bury the one line that matters.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut acc: i64 = 100i64;
+            for i in 0i64..10i64 {
+                acc -= i;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.declined_par_loops.is_empty(),
+        "an unannotated loop must not appear, got {:?}",
+        main_fc.declined_par_loops
+    );
+}
+
+#[test]
+fn test_annotated_loop_that_fans_out_is_not_a_decline() {
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut out: Vec[i64] = Vec.new();
+            #[par_order_free]
+            for i in 0i64..100i64 {
+                out.push(i * 2i64);
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.declined_par_loops.is_empty(),
+        "a loop that fanned out must not also be reported as declined, got {:?}",
+        main_fc.declined_par_loops
+    );
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert!(!main_fc.loop_reductions[0].seq);
+}
+
+#[test]
 fn test_reduction_rejects_bare_push_without_par_order_free() {
     // Same source as the bare-push-recognized test above but with the
     // attribute removed — the same `results.push(k)` body that
