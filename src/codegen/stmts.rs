@@ -1794,6 +1794,40 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         _ => None,
                     };
+                    // B-2026-08-15-13: the third RHS shape that names a struct,
+                    // after the annotation and the call return — an ELEMENT READ
+                    // out of a `Vec` of structs (`let e = entries[0]`). Same
+                    // failure as the two above and the same one-line shape of
+                    // gap: the binding crossed the join with no `var_type_names`
+                    // entry, so `e.service` hit the loud "cannot resolve field"
+                    // arm on a program that builds with auto-par off.
+                    //
+                    // `vec_index_elem_type_expr` is the resolver the sequential
+                    // let path already uses for this RHS, so the two lanes agree
+                    // by construction rather than by a second copy of the rule.
+                    // A RANGE index is excluded: `v[a..b]` is a slice, not an
+                    // element, and its binding is a `Vec`/`Slice` rather than the
+                    // element struct.
+                    let index_elem_struct = match &stmt.kind {
+                        StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                            match &value.kind {
+                                ExprKind::Index { object, index }
+                                    if !matches!(&index.kind, ExprKind::Range { .. }) =>
+                                {
+                                    self.vec_index_elem_type_expr(object).and_then(|te| {
+                                        match &te.kind {
+                                            crate::ast::TypeKind::Path(p) => {
+                                                p.segments.last().cloned()
+                                            }
+                                            _ => None,
+                                        }
+                                    })
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
                     // B-2026-08-08-19: `shared_types` as well as `struct_types`.
                     // `declare_structs` routes a `shared struct` / `par struct`
                     // into `shared_types` and an ordinary one into
@@ -1807,7 +1841,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // that builds with auto-par off. Same shape as the
                     // struct-of-Vecs case this fallback was added for; that fix
                     // just reached for the wrong half of the pair.
-                    call_ret_struct.filter(|n| {
+                    call_ret_struct.or(index_elem_struct).filter(|n| {
                         self.struct_types.contains_key(n.as_str())
                             || self.shared_types.contains_key(n.as_str())
                     })

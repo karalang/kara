@@ -96273,6 +96273,96 @@ fn main() {
             Some("1\n5\n2\n3\n4\n7\n42\nbeta\nalpha\n1\n5\n3\nbeta\n".to_string())
         );
     }
+
+    /// B-2026-08-15-13 — a `Vec`-element STRUCT binding that crosses an auto-par
+    /// join kept no type, so a later field read failed the build.
+    ///
+    /// This one is the detector, not a regression guard: on the parent every
+    /// program below fails to compile outright with "cannot resolve field
+    /// 'service' … its type was not recorded for codegen", so `run_program`
+    /// returns `None`.
+    ///
+    /// THE ROW'S TRIGGER IS A PROXY AND THE FIXTURE ENCODES THE REAL ONE. It was
+    /// filed as "a `Map`/`Set` local plus a `Vec[Struct]` PARAM", with three
+    /// one-line controls that build. All three are really the same fact:
+    /// auto-par declined to split the function. `KARAC_AUTO_PAR=0` compiles the
+    /// failing program correctly, and each control performs zero par splits — the
+    /// `Map` local is just what makes two statements look independent enough to
+    /// parallelize. So the fixture keeps the `Map` local as the way to PROVOKE a
+    /// split, not as the defect.
+    ///
+    /// The slot's type name resolved from an annotation or from a `Call` RHS
+    /// whose return type names a struct; an element read had no arm, so the
+    /// binding joined untyped. `agg_prim` and `agg_field` are the
+    /// must-not-over-fire controls — a primitive element and a scalar field must
+    /// not be recorded as a struct — and `agg_shared` covers `shared_types`,
+    /// which the sibling fallback had to be widened for once already
+    /// (B-2026-08-08-19).
+    #[test]
+    fn test_e2e_autopar_joined_vec_element_struct_binding() {
+        assert_eq!(
+            run_program(
+                "struct Entry { service: String, weight: i64 }\n\
+                 shared struct Node { label: String }\n\
+                 fn agg(entries: Vec[Entry]) -> String {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let e = entries[0];\n\
+                     return e.service;\n\
+                 }\n\
+                 fn agg_method(entries: Vec[Entry]) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let e = entries[1];\n\
+                     return e.service.len() + e.weight;\n\
+                 }\n\
+                 fn agg_shared(ns: Vec[Node]) -> String {\n\
+                     let mut seen: Set[String] = Set.new();\n\
+                     let n = ns[0];\n\
+                     return n.label;\n\
+                 }\n\
+                 fn agg_prim(nums: Vec[i64]) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let n = nums[1];\n\
+                     return n + 100;\n\
+                 }\n\
+                 fn agg_field(entries: Vec[Entry]) -> i64 {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let w = entries[1].weight;\n\
+                     return w;\n\
+                 }\n\
+                 fn agg_nested(rows: Vec[Vec[Entry]]) -> String {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let inner = rows[0];\n\
+                     let e = inner[1];\n\
+                     return e.service;\n\
+                 }\n\
+                 fn agg_two(entries: Vec[Entry]) -> String {\n\
+                     let mut index: Map[String, usize] = Map.new();\n\
+                     let a = entries[0];\n\
+                     let b = entries[1];\n\
+                     return a.service + \"-\" + b.service;\n\
+                 }\n\
+                 fn main() {\n\
+                     let mut es: Vec[Entry] = Vec.new();\n\
+                     es.push(Entry { service: \"alpha\", weight: 3 });\n\
+                     es.push(Entry { service: \"betamax\", weight: 5 });\n\
+                     println(agg(es.clone()));\n\
+                     println(agg_method(es.clone()));\n\
+                     let mut ns: Vec[Node] = Vec.new();\n\
+                     ns.push(Node { label: \"gamma\" });\n\
+                     println(agg_shared(ns));\n\
+                     let nums: Vec[i64] = [7, 8, 9];\n\
+                     println(agg_prim(nums));\n\
+                     println(agg_field(es.clone()));\n\
+                     let mut rows: Vec[Vec[Entry]] = Vec.new();\n\
+                     rows.push(es.clone());\n\
+                     println(agg_nested(rows));\n\
+                     println(agg_two(es.clone()));\n\
+                     println(es[1].service);\n\
+                 }\n"
+            ),
+            Some("alpha\n12\ngamma\n108\n5\nbetamax\nalpha-betamax\nbetamax\n".to_string())
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

@@ -49785,4 +49785,71 @@ fn main() {
             "asan_generic_unused_bare_type_param_temp_arg_no_leak",
         );
     }
+
+    /// B-2026-08-15-13's memory half — the direction its fix could go wrong.
+    ///
+    /// That row was a BUILD failure, so its own detector is an E2E test. What
+    /// belongs here is the consequence of fixing it: the joined binding now
+    /// carries a struct type name it did not have before, and a `var_type_names`
+    /// entry is what arms struct-shaped drops. If the parent lane's new
+    /// registration were to schedule a drop the par branch already owns, a
+    /// program that merely failed to compile would start double-freeing instead
+    /// — strictly worse. The `String` field is what makes that observable: a
+    /// second drop of `Entry` frees its buffer twice.
+    ///
+    /// Loop-driven so a per-iteration imbalance accumulates for LSan rather than
+    /// showing up once at exit.
+    ///
+    /// The `shared struct` arm of the E2E sibling is deliberately NOT here. It
+    /// strands one 32-byte RC box — a leak that reproduces identically under
+    /// `KARAC_AUTO_PAR=0`, where the slot machinery this fix touches never runs,
+    /// so it is not this fix's doing. It is only newly REACHABLE, because the
+    /// program could not be compiled at all before. Filed separately
+    /// (B-2026-08-15-14); pinning it here would quarantine an unrelated defect
+    /// inside this row's fixture.
+    #[test]
+    fn asan_autopar_joined_vec_element_struct_binding_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct Entry { service: String, weight: i64 }
+fn agg(entries: Vec[Entry]) -> String {
+    let mut index: Map[String, usize] = Map.new();
+    let e = entries[0];
+    return e.service;
+}
+fn agg_two(entries: Vec[Entry]) -> String {
+    let mut index: Map[String, usize] = Map.new();
+    let a = entries[0];
+    let b = entries[1];
+    return a.service + "-" + b.service;
+}
+fn agg_nested(rows: Vec[Vec[Entry]]) -> String {
+    let mut index: Map[String, usize] = Map.new();
+    let inner = rows[0];
+    let e = inner[1];
+    return e.service;
+}
+fn main() {
+    let mut es: Vec[Entry] = Vec.new();
+    es.push(Entry { service: "alphaalphaalpha", weight: 3 });
+    es.push(Entry { service: "betabetabeta", weight: 5 });
+    let mut k = 0;
+    let mut t = 0;
+    while k < 20 {
+        t = t + agg(es.clone()).len();
+        t = t + agg_two(es.clone()).len();
+        let mut rows: Vec[Vec[Entry]] = Vec.new();
+        rows.push(es.clone());
+        t = t + agg_nested(rows).len();
+        k = k + 1;
+    }
+    println(t);
+    println(es[1].service);
+    println("done");
+}
+"#,
+            &["1100", "betabetabeta", "done"],
+            "asan_autopar_joined_vec_element_struct_binding_no_double_free",
+        );
+    }
 }
