@@ -10368,41 +10368,28 @@ impl<'ctx> super::Codegen<'ctx> {
         // does and moves the other way, so element type does not separate them
         // either. Until something does, a blanket arch gate trades one set of
         // katas for another, which is not an improvement.
-        // ON AARCH64 THE KERNEL CHOICE DEPENDS ON ELEMENT SIZE, and the probe
-        // does not know that — it measures branch predictability alone, which
-        // is the only thing that mattered on the x86 host it was calibrated on.
-        // Measured here on the isolated kernel (150k x 25 rounds, six patterns),
-        // branchless/branchy in cycles on the UNPREDICTABLE (random) pattern —
-        // the only one where the probe's answer is in doubt:
+        // THE ELEMENT-WIDTH GATE THAT USED TO LIVE HERE IS GONE, because the
+        // thing it worked around is fixed. It forced the branchy kernel for
+        // elements wider than a register on aarch64, on the measurement that
+        // branchless lost 1.27x to branchy on random `(i64,i64)` while winning
+        // 1.24x on `i64`. That asymmetry was not about width as such — it was
+        // the branchless kernel selecting the VALUE, which pinned both elements
+        // wide and round-tripped them through SIMD registers (see the
+        // `bl.src.sel` comment). Selecting the source ADDRESS instead took that
+        // kernel from 834M to 564M cycles on random `(i64,i64)`, which puts it
+        // BACK AHEAD of branchy there (0.86x) and leaves the 8-byte case
+        // unchanged.
         //
-        //     i64        8 B   0.81x   branchless wins by 1.24x
-        //     (i64,i64) 16 B   1.27x   branchy     wins by 1.27x
-        //
-        // The ranking INVERTS with element width. A branchless merge selects the
-        // whole element, so at 16 bytes it is two selects and a wider copy on
-        // the loop-carried cursor chain; at 8 bytes it is one, and cheap enough
-        // to beat the ~50% misprediction a random merge pays. Above 8 bytes the
-        // select stops paying and the branchy kernel — which this core predicts
-        // well enough — wins.
-        //
-        // So gate on width rather than on the probe for wide elements, and only
-        // on aarch64: the x86 calibration (its 8%/6% few-unique/sawtooth
-        // regressions are why the 40% threshold exists) is untouched.
-        //
-        // This is what the corpus A/B was missing. Forcing branchy everywhere
-        // won #252/#253 and LOST #15/#16/#18 — and those three sort scalar
-        // `i64`, exactly the class this keeps on the branchless path.
-        // `BasicTypeEnum::size_of()` is NOT usable here: for a struct it yields
-        // a `getelementptr` constant EXPRESSION, so `get_zero_extended_constant`
-        // returns None and every tuple element silently reads as narrow — which
-        // is exactly backwards, since tuples are the wide case this gates on.
-        // The target data layout answers it properly.
-        let elem_bytes = self.ensure_target_data()?.get_store_size(&elem_ty);
-        let wide_elem = elem_bytes > 8;
+        // With the kernel fixed the probe's own premise holds on this host as
+        // it does on x86 — branchless for an unpredictable take sequence,
+        // branchy for a predictable one — and it is a better decider than width
+        // ever was, because the split is not width-shaped: on sawtooth and
+        // nearly-sorted the branchy kernel still wins by 5.0x and 3.6x at the
+        // SAME 16-byte width. A width gate cannot express that; the probe can,
+        // so let it.
         let d_mode = match std::env::var("KARAC_SORT_FORCE").as_deref() {
             Ok("branchless") => one.into(),
             Ok("branchy") => zero.into(),
-            _ if wide_elem && super::driver::native_target_is_aarch64() => zero.into(),
             _ => self
                 .builder
                 .build_select(d_bl, one, zero, "d.mode")
@@ -10691,9 +10678,34 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_compare(inkwell::IntPredicate::SLE, bl_c, zero, "bl.take.a")
             .unwrap();
+        // SELECT THE SOURCE ADDRESS, NOT THE VALUE (B-2026-08-15-30). Selecting
+        // the value forces BOTH elements to be live in registers at the select,
+        // and for an element wider than a register that is expensive on arm64:
+        // LLVM materialises each one in a SIMD register and extracts every field
+        // back to GP registers so the `csel` pair can run on them. Measured on
+        // `(i64,i64)`, the emitted inner loop was
+        //
+        //     ldr q0,[..]; mov.d x4,v0[1]; fmov x5,d0     <- 3 instrs per operand
+        //     ldr q0,[..]; mov.d x6,v0[1]; fmov x7,d0
+        //     cmp; csel; csel; stp; cinc; cinc; ...        = 17 instrs/element
+        //
+        // with the SIMD->GP moves sitting on the loop-carried critical path,
+        // which is what put this kernel at IPC ~1.4 and made it LOSE to the
+        // branchy merge on wide elements — the opposite of its purpose.
+        //
+        // Selecting the pointer instead leaves one `csel` on a GP register and
+        // one element-sized copy from the winner. The comparator's own loads
+        // then narrow to whatever it actually reads (just the key, for the
+        // usual `|a, b| a.0.cmp(b.0)`), instead of being pinned wide by the
+        // select. Semantics are unchanged: same element chosen, same store.
+        let bl_src_sel = self
+            .builder
+            .build_select(bl_take_a, bl_ea_addr, bl_eb_addr, "bl.src.sel")
+            .unwrap()
+            .into_pointer_value();
         let bl_val = self
             .builder
-            .build_select(bl_take_a, bl_ea, bl_eb, "bl.val")
+            .build_load(elem_ty, bl_src_sel, "bl.val")
             .unwrap();
         let bl_to = unsafe {
             self.builder
