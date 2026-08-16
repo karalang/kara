@@ -1,6 +1,6 @@
 # Spike: state decomposition — `Codegen` (439 fields) and `infer_method_call` (5.9k lines)
 
-**Status:** 🚧 **IN PROGRESS — Phase 1 twelve slices landed (`infer_method_call` 5,873 → 828 lines, -86%); Phase 2 queued behind the open codegen bugs.** This doc is the live coordination point for the refactor: the cluster map below is measured (not guessed), and the status table at the bottom is updated as slices land. **Other agents: read § Coordination protocol before editing `src/codegen.rs` or `src/typechecker/expr_method_call.rs`.**
+**Status:** 🚧 **IN PROGRESS — Phase 1 COMPLETE — thirteen slices landed (`infer_method_call` 5,873 → 694 lines, -88%); Phase 2 queued behind the open codegen bugs.** This doc is the live coordination point for the refactor: the cluster map below is measured (not guessed), and the status table at the bottom is updated as slices land. **Other agents: read § Coordination protocol before editing `src/codegen.rs` or `src/typechecker/expr_method_call.rs`.**
 
 *Origin: project-review item 6 ("schedule state-level decomposition of Codegen — not as a launch item, but before any MLIR/backend-swap ambition is taken seriously; same treatment for `infer_method_call`"). Owner decided 2026-08-15 to start now rather than defer, on the reasoning in § Why now.*
 
@@ -147,7 +147,8 @@ for fp in files:
 | 1 | slice 10 — **path + raw-pointer receivers** (`method_identifier_receiver.rs` 2nd entry point, `method_pointer.rs`): concrete-type UFCS `TypeName[Args].method(..)`, and the raw-pointer instance-method surface | **landed** — 309 lines moved; 1,838 → 1,542 | 2026-08-16 |
 | 1 | slice 11 — **nominal-receiver tail** (`method_nominal_tail.rs`): distinct-type `.raw()` + no-deref rule, `cmp`, `to_string` (String / `Display` struct / all-unit `Display` enum), tuple receivers — the last built-in guards before user-`impl` dispatch | **landed** — 206 lines moved; 1,542 → 1,346 | 2026-08-16 |
 | 1 | slice 12 — **fresh-temp receiver recording** (`method_temp_receiver.rs`) + **`Vector[T, N]` SIMD** (`method_simd.rs`): the span-keyed `temp_recv_*` side tables codegen reads to reconstruct a temporary receiver's shape, and the portable-SIMD instance surface | **landed** — 536 lines moved; 1,346 → 828 | 2026-08-16 |
-| 1 | slice 13+ — residual (string, map/set, `Array[T, N]`, and the receiver-normalization preamble) | in progress | — |
+| 1 | slice 13 — **named containers** (`method_mapset.rs`): `Map`/`Entry`/`SortedMap`/`SortedSet`/`Set` (type params thread through return types), plus the `Regex`, `CStr`/`CString` and HTTP named types | **landed** — 142 lines moved; 828 → 694 | 2026-08-16 |
+| 1 | **remaining residual** — the receiver-normalization preamble (`obj_ty` → `receiver_for_lookup` / `obj_ty_for_named` / `vec_elem_for_dispatch`), 14 extracted-family call sites, and ~10 small blocks of 9–27 lines each (`spawn`/`join`, refinement, slice, `to_string`, fallible-alloc). No further clean family boundary — the residual is the function's own logic. | judgement call: stop here | — |
 | 2 | cluster 1 `RuntimeFns` | not started | — |
 | 2 | clusters 2–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
