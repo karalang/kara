@@ -2308,16 +2308,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // and drops the matching half of its runtime bounds check.
         let pushed_bounds = self.collect_asserted_bounds_from_guard(condition);
         let mut pushed_count = pushed_bounds.len();
-        self.asserted_index_bounds.extend(pushed_bounds);
+        self.bce.asserted_index_bounds.extend(pushed_bounds);
         // Descending-loop skip (bce_length_pin.rs, B-2026-07-17-1): if this is a
         // recognised inner descending loop, its index is transitively proven
         // `< vec.len()` (length pin + enclosing counter bound). Push the
         // UpperBound facts so `emit_split_bounds_check` drops the upper half;
         // the lower half stays for LLVM to fold from the `k >= LO` guard.
         let cond_key = crate::resolver::SpanKey::from_span(&condition.span);
-        if let Some(skip) = self.descending_skips.get(&cond_key).cloned() {
+        if let Some(skip) = self.bce.descending_skips.get(&cond_key).cloned() {
             for vec_var in &skip.vec_vars {
-                self.asserted_index_bounds
+                self.bce
+                    .asserted_index_bounds
                     .push(super::state::AssertedIndexBound::UpperBound {
                         idx_var: skip.idx_var.clone(),
                         vec_var: vec_var.clone(),
@@ -2332,16 +2333,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // `emit_split_bounds_check` drops the upper half on `v[base + lo]` and
         // `v[base + hi]` — and the sign half too when the analysis could also
         // place the row origin and both indices at or above zero.
-        if let Some(skip) = self.converging_skips.get(&cond_key).cloned() {
+        if let Some(skip) = self.bce.converging_skips.get(&cond_key).cloned() {
             for vec_var in &skip.vec_vars {
                 for idx_var in &skip.idx_vars {
-                    self.asserted_index_bounds
-                        .push(super::state::AssertedIndexBound::SumIndex {
+                    self.bce.asserted_index_bounds.push(
+                        super::state::AssertedIndexBound::SumIndex {
                             base_var: skip.base_var.clone(),
                             idx_var: idx_var.clone(),
                             vec_var: vec_var.clone(),
                             lower_proven: skip.lower_proven,
-                        });
+                        },
+                    );
                     pushed_count += 1;
                 }
             }
@@ -2356,7 +2358,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // interval-based CVP can't (control_flow_bce.rs § midpoint).
         let binsearch_guard = Self::binsearch_guard_pair(condition);
         if let Some(pair) = binsearch_guard.clone() {
-            self.binsearch_guard_stack.push(pair);
+            self.bce.binsearch_guard_stack.push(pair);
         }
         // Per-iteration scope frame, same shape as compile_for_range — see
         // its comment for the leak rationale.
@@ -2366,10 +2368,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // scope's stack untouched. Nested loops therefore see only their
         // own and outer-loop bounds, never inner-loop leftovers.
         for _ in 0..pushed_count {
-            self.asserted_index_bounds.pop();
+            self.bce.asserted_index_bounds.pop();
         }
         if binsearch_guard.is_some() {
-            self.binsearch_guard_stack.pop();
+            self.bce.binsearch_guard_stack.pop();
         }
         // Small constant-trip counted loop → hint LLVM to fully unroll
         // (B-2026-06-17-7): the back-edge branch built below carries
@@ -2414,8 +2416,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // whole-function fail-closed analysis guarantees the fact stays true to
         // end of function, so the pin needs no later invalidation.
         let cond_key = crate::resolver::SpanKey::from_span(&condition.span);
-        if let Some(pin) = self.pending_vec_len_pins.remove(&cond_key) {
-            self.vec_len_pins.push((pin.bound, pin.vec_var));
+        if let Some(pin) = self.bce.pending_vec_len_pins.remove(&cond_key) {
+            self.bce.vec_len_pins.push((pin.bound, pin.vec_var));
         }
         Ok(self.context.i64_type().const_int(0, false).into())
     }

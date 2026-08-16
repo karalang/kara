@@ -1097,7 +1097,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
             }
             let n_pushed = facts.len();
-            self.asserted_index_bounds.extend(facts);
+            self.bce.asserted_index_bounds.extend(facts);
             n_pushed
         } else {
             0
@@ -1145,7 +1145,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // this worker's body only. Done before propagating any body error
         // so the bounds stack is balanced even on the error path.
         for _ in 0..pushed_bce_facts {
-            self.asserted_index_bounds.pop();
+            self.bce.asserted_index_bounds.pop();
         }
         body_result?;
 

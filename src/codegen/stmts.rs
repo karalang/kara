@@ -384,7 +384,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // being scoped/restored, which is safe because the keys are SPANS —
         // a site from a sibling block can never collide with one here.
         for key in super::accum_overflow::check_free_accumulator_sites(block) {
-            self.check_free_accum_sites.insert(key);
+            self.bce.check_free_accum_sites.insert(key);
         }
         // Branch-free stride-1 `.chars()` lowering (B-2026-07-27-7): which of
         // this block's `let`s bind a stable all-ASCII string constant. Only
@@ -4043,7 +4043,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if self.vec_elem_types.contains_key(coll_name.as_str())
                                     || self.slice_elem_types.contains_key(coll_name.as_str())
                                 {
-                                    self.len_alias.insert(var_name.clone(), coll_name.clone());
+                                    self.bce
+                                        .len_alias
+                                        .insert(var_name.clone(), coll_name.clone());
                                 }
                             }
                         }
@@ -7833,7 +7835,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // statement was proven non-trapping. Taken by the first `add`
                 // the RHS reaches — which, for the recognized
                 // `<ident> + <literal>` shape, is the only one.
-                self.elide_next_add_overflow_check = self
+                self.bce.elide_next_add_overflow_check = self
+                    .bce
                     .check_free_accum_sites
                     .contains(&crate::resolver::SpanKey::from_span(&stmt.span));
                 // Phase-B2 link-store fast path: `<bare>.link =

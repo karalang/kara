@@ -4587,7 +4587,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // could also place the row origin and both converging indices at or
         // above zero.
         if let Some((a, b)) = Self::index_sum_var_pair(index) {
-            let hit = self.asserted_index_bounds.iter().find_map(|f| match f {
+            let hit = self.bce.asserted_index_bounds.iter().find_map(|f| match f {
                 AssertedIndexBound::SumIndex {
                     base_var,
                     idx_var,
@@ -4609,7 +4609,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let mut has_lower = false;
         let mut has_upper = false;
-        for fact in &self.asserted_index_bounds {
+        for fact in &self.bce.asserted_index_bounds {
             match fact {
                 AssertedIndexBound::LowerBound { idx_var } if idx_var == idx_name => {
                     has_lower = true;
@@ -4702,16 +4702,16 @@ impl<'ctx> super::Codegen<'ctx> {
         lower_proven: bool,
         upper_proven: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let arm = self.elide_proven_index_add_overflow
+        let arm = self.bce.elide_proven_index_add_overflow
             && lower_proven
             && upper_proven
             && Self::index_sum_var_pair(index).is_some();
         if !arm {
             return self.compile_expr(index);
         }
-        let saved = std::mem::replace(&mut self.elide_next_add_overflow_check, true);
+        let saved = std::mem::replace(&mut self.bce.elide_next_add_overflow_check, true);
         let out = self.compile_expr(index);
-        self.elide_next_add_overflow_check = saved;
+        self.bce.elide_next_add_overflow_check = saved;
         out
     }
 

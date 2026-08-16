@@ -5049,7 +5049,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let pushed = if matches!(op, BinOp::And) {
             let facts = self.collect_asserted_bounds_from_guard(left);
             let n = facts.len();
-            self.asserted_index_bounds.extend(facts);
+            self.bce.asserted_index_bounds.extend(facts);
             n
         } else {
             0
@@ -5081,7 +5081,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // scope sees only its own bounds. Compile_while's body-entry push
         // re-establishes them for body code on the long-lived path.
         for _ in 0..pushed {
-            self.asserted_index_bounds.pop();
+            self.bce.asserted_index_bounds.pop();
         }
 
         self.builder.position_at_end(merge_bb);
@@ -5629,7 +5629,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // arithmetic. `take` clears the latch, so exactly one add per
             // armed statement can consume it. See `codegen::accum_overflow`
             // for the bound proof and the pattern it admits.
-            BinOp::Add if std::mem::take(&mut self.elide_next_add_overflow_check) => {
+            BinOp::Add if std::mem::take(&mut self.bce.elide_next_add_overflow_check) => {
                 self.builder.build_int_add(lv, rv, "add.bounded").unwrap()
             }
             BinOp::Add => self.emit_checked_int_arith("add", lv, rv, is_unsigned)?,

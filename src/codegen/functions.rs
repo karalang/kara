@@ -2569,15 +2569,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // `vec_len_pins` starts empty and each pin activates when `compile_while`
         // / `compile_for_range_with_step` finishes emitting the matching fill
         // loop (so it is live only after).
-        self.vec_len_pins.clear();
-        self.pending_vec_len_pins =
+        self.bce.vec_len_pins.clear();
+        self.bce.pending_vec_len_pins =
             crate::codegen::bce_length_pin::compute_vec_length_pins(&func.body);
         // Descending-loop bounds-check skips (B-2026-07-17-1): the rolling-1D-DP
         // in-place-update shape. Whole-body analysis, consumed in `compile_while`
         // keyed on the inner descending loop's condition span. Opt out with
         // `KARAC_BCE_DESC_SKIP=0` (soundness-critical BCE escape hatch + A/B lever;
         // mirrors `KARAC_RC_ELIDE_REF_PARAMS`).
-        self.descending_skips = if std::env::var("KARAC_BCE_DESC_SKIP").as_deref() == Ok("0") {
+        self.bce.descending_skips = if std::env::var("KARAC_BCE_DESC_SKIP").as_deref() == Ok("0") {
             std::collections::HashMap::new()
         } else {
             crate::codegen::bce_length_pin::compute_descending_skips(&func.body)
@@ -2585,7 +2585,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Converging two-pointer skips (B-2026-08-04-8): the row-major
         // `v[base + lo]` / `v[base + hi]` shape. Same whole-body-analysis and
         // kill-switch discipline as the descending path above.
-        self.converging_skips = if std::env::var("KARAC_BCE_CONV_SKIP").as_deref() == Ok("0") {
+        self.bce.converging_skips = if std::env::var("KARAC_BCE_CONV_SKIP").as_deref() == Ok("0") {
             std::collections::HashMap::new()
         } else {
             crate::codegen::bce_length_pin::compute_converging_skips(&func.body)
@@ -2599,9 +2599,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // condition span, and the local proof is the stronger one to trust).
         // `interproc_conv_skips` is empty when either kill switch is set, so
         // no gate is needed here.
-        if let Some(extra) = self.interproc_conv_skips.get(&func.name) {
+        if let Some(extra) = self.bce.interproc_conv_skips.get(&func.name) {
             for (key, skip) in extra {
-                self.converging_skips
+                self.bce
+                    .converging_skips
                     .entry(*key)
                     .or_insert_with(|| skip.clone());
             }

@@ -221,7 +221,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // A local binding to `v.len()` (`let n = v.len()`) resolves the guard
             // RHS back to the Vec.
             ExprKind::Identifier(name) => {
-                if let Some(v) = self.len_alias.get(name.as_str()) {
+                if let Some(v) = self.bce.len_alias.get(name.as_str()) {
                     return Some(v.clone());
                 }
                 self.resolve_len_pin(expr)
@@ -238,7 +238,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// whose length equals that bound, if any.
     fn resolve_len_pin(&self, expr: &Expr) -> Option<String> {
         let bt = super::bce_length_pin::normalize_bound(expr)?;
-        self.vec_len_pins
+        self.bce
+            .vec_len_pins
             .iter()
             .find(|(bound, _)| *bound == bt)
             .map(|(_, vec)| vec.clone())
@@ -973,7 +974,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// search guard, for non-midpoint RHS, or when the binding shadows a
     /// guard variable.
     pub(super) fn try_emit_binsearch_midpoint_assumes(&mut self, pattern: &Pattern, value: &Expr) {
-        let Some((lo, hi)) = self.binsearch_guard_stack.last().cloned() else {
+        let Some((lo, hi)) = self.bce.binsearch_guard_stack.last().cloned() else {
             return;
         };
         let PatternKind::Binding(mid) = &pattern.kind else {
@@ -1042,7 +1043,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_call(assume_fn, &[lt.into()], "")
             .unwrap();
         // Flag the gated second optimization pass (see the field doc).
-        self.binsearch_assume_emitted = true;
+        self.bce.binsearch_assume_emitted = true;
     }
 }
 
