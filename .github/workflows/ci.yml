@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Nightly backfill: `cancel-in-progress` (below) deliberately trades
+  # per-commit signal on `main` for queue health, so a push burst can leave
+  # the final main state as the only tested commit — and a red intermediate
+  # state invisible. One scheduled full run a day guarantees main gets a
+  # complete, uncancelled verdict regardless of the day's push pattern
+  # (project-review-2026-08-16 item 6). 03:17 UTC — off the :00 spike, quiet
+  # for this repo's push hours.
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,7 +44,10 @@ env:
 # commits straight to `main` — so a check that cannot get a runner would block
 # every contributor rather than merely delay them.
 concurrency:
-  group: ci-${{ github.ref }}
+  # Keyed by event too, so the nightly `schedule` run gets its own group: a
+  # backfill run must neither cancel nor be cancelled by a push run — pushes
+  # still supersede pushes, PRs still supersede PRs, per ref.
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -317,6 +330,10 @@ jobs:
   oracle-sync:
     name: Oracle corpus sync guard
     runs-on: ubuntu-latest
+    # A diff-range guard needs a range: on the nightly/dispatch backfill there
+    # is no before..after to compare (github.event.before is empty), so the
+    # job would run the script against a bogus base. Push/PR runs keep it.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
 
     steps:
       - uses: actions/checkout@v4
