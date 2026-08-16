@@ -58,10 +58,10 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         if self.struct_types.contains_key(&type_name) {
-            let saved = self.deep_copy_rc_inc_bare_shared;
-            self.deep_copy_rc_inc_bare_shared = true;
+            let saved = self.drop_rc.deep_copy_rc_inc_bare_shared;
+            self.drop_rc.deep_copy_rc_inc_bare_shared = true;
             self.deep_copy_struct_heap_fields_in_place(elem_slot, &type_name);
-            self.deep_copy_rc_inc_bare_shared = saved;
+            self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
             return;
         }
         if let Some(layout) = self.enum_layouts.get(&type_name).cloned() {
@@ -8114,7 +8114,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(fn_val) = self.current_fn else {
             return self.compile_expr(body);
         };
-        let cleanup_depth = self.scope_cleanup_actions.len();
+        let cleanup_depth = self.drop_rc.scope_cleanup_actions.len();
         self.return_retargets.push(super::state::ReturnRetarget {
             fn_val,
             cleanup_depth,
@@ -8137,7 +8137,7 @@ impl<'ctx> super::Codegen<'ctx> {
         fn_val: FunctionValue<'ctx>,
         body: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let cleanup_depth = self.scope_cleanup_actions.len();
+        let cleanup_depth = self.drop_rc.scope_cleanup_actions.len();
         self.return_retargets.push(super::state::ReturnRetarget {
             fn_val,
             cleanup_depth,

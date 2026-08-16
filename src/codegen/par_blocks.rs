@@ -620,7 +620,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ptr: parent_alloca,
             },
         };
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(action);
         }
     }
@@ -1722,13 +1722,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // explicit `par` blocks and any future analysis/emission drift.
         let saved_deque_head_slots = std::mem::take(&mut self.mapset.deque_head_slots);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+        let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         // Branch body needs its own root cleanup frame so the
         // `track_vec_var` / `track_map_var` / `track_rc_var` calls
         // emitted while compiling the branch's stmts have a frame to
         // push into. `track_*` is a no-op when `scope_cleanup_actions`
         // is empty (its body is `if let Some(frame) =
-        // self.scope_cleanup_actions.last_mut()`); without the push
+        // self.drop_rc.scope_cleanup_actions.last_mut()`); without the push
         // here, every branch-local Vec / String / Map / RC binding
         // silently fails to queue its cleanup action and leaks at
         // branch exit. Mirrors `compile_function`'s entry-time push
@@ -1737,7 +1737,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // ran while the branch's body was already mid-emission with
         // (sometimes) other frames pushed by nested control flow;
         // the normal-completion path runs at branch root.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
 
         self.current_fn = Some(branch_fn);
@@ -2194,11 +2194,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // Before the `ret void`, fire every cleanup the branch body
         // accumulated (Vec/String buffer frees, Map handle frees, RC
         // decs). The branch body started with an empty cleanup frame
-        // (`std::mem::take(&mut self.scope_cleanup_actions)` above), so
+        // (`std::mem::take(&mut self.drop_rc.scope_cleanup_actions)` above), so
         // the queue holds only allocations made INSIDE the branch — none
         // of the parent's pre-branch allocations are at risk of getting
         // double-freed here. Pre-fix, the queue was just discarded by
-        // the `self.scope_cleanup_actions = saved_cleanup` restore below,
+        // the `self.drop_rc.scope_cleanup_actions = saved_cleanup` restore below,
         // leaking every branch-local allocation; the kata-6 bench at
         // K = 10_000 measured ~474 MiB peak RSS from this leak alone.
         // The cancel-path branch above (`emit_branch_cancel_check`)
@@ -2255,7 +2255,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // into the return struct, so the parent receives an
                 // intact pointer. Mirrors the Vec `cap=0` suppression
                 // pattern, generalised over the RC cleanup shapes.
-                let frame_idx = self.scope_cleanup_actions.len().saturating_sub(1);
+                let frame_idx = self.drop_rc.scope_cleanup_actions.len().saturating_sub(1);
                 let published_ptr = self.variables.get(&slot.binding_name).map(|v| v.ptr);
                 let mut nullify_local: Option<PointerValue<'ctx>> = None;
                 let mut zero_opt_tag: Option<(PointerValue<'ctx>, StructType<'ctx>)> = None;
@@ -2282,7 +2282,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .find(|c| !live.contains(c))
                         .unwrap_or(u64::MAX)
                 }
-                if let Some(frame) = self.scope_cleanup_actions.get(frame_idx) {
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.get(frame_idx) {
                     for action in frame {
                         match action {
                             CleanupAction::RcDec { name, .. } if *name == slot.binding_name => {
@@ -2390,7 +2390,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // alloca — the parent becomes the unique owner, exactly
                 // like the Vec `track_vec_var` re-track.
                 let local_ptr = self.variables.get(&slot.binding_name).map(|v| v.ptr);
-                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                     frame.retain(|action| {
                         let transfer = match action {
                             CleanupAction::FreeMapHandle {
@@ -2578,7 +2578,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Restore outer state.
         self.branch_cancel_ptr = saved_cancel_ptr;
-        self.scope_cleanup_actions = saved_cleanup;
+        self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;

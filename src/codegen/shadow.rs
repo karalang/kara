@@ -123,7 +123,7 @@ impl<'ctx> super::Codegen<'ctx> {
             inline_option_agg_payload_vars: self.inline_option_agg_payload_vars.remove(name),
             boxed_enum_payload_vars: self.boxed_enum_payload_vars.remove(name),
             boxed_optres_payload_view_vars: self.boxed_optres_payload_view_vars.remove(name),
-            rc_fallback_heap_types: self.rc_fallback_heap_types.remove(name),
+            rc_fallback_heap_types: self.drop_rc.rc_fallback_heap_types.remove(name),
         }
     }
 
@@ -224,7 +224,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.boxed_enum_payload_vars.insert(key.clone());
         }
         if let Some(v) = snap.rc_fallback_heap_types {
-            self.rc_fallback_heap_types.insert(key, v);
+            self.drop_rc.rc_fallback_heap_types.insert(key, v);
         }
     }
 
@@ -342,7 +342,7 @@ impl<'ctx> super::Codegen<'ctx> {
             inline_option_agg_payload_vars: self.inline_option_agg_payload_vars.clone(),
             boxed_enum_payload_vars: self.boxed_enum_payload_vars.clone(),
             boxed_optres_payload_view_vars: self.boxed_optres_payload_view_vars.clone(),
-            rc_fallback_heap_types: self.rc_fallback_heap_types.clone(),
+            rc_fallback_heap_types: self.drop_rc.rc_fallback_heap_types.clone(),
         }
     }
 
@@ -384,6 +384,6 @@ impl<'ctx> super::Codegen<'ctx> {
         self.inline_option_agg_payload_vars = snap.inline_option_agg_payload_vars;
         self.boxed_enum_payload_vars = snap.boxed_enum_payload_vars;
         self.boxed_optres_payload_view_vars = snap.boxed_optres_payload_view_vars;
-        self.rc_fallback_heap_types = snap.rc_fallback_heap_types;
+        self.drop_rc.rc_fallback_heap_types = snap.rc_fallback_heap_types;
     }
 }

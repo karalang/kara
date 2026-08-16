@@ -33,12 +33,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// derive site by walking field types and recursing through this fn.
     pub(super) fn emit_clone_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
         let type_name = Self::display_mangle_te(te);
-        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.clone_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.clone_fn_cache.insert(type_name, f);
+            self.drop_rc.clone_fn_cache.insert(type_name, f);
             return f;
         }
         match &te.kind {
@@ -117,7 +117,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // shallow path, tracked on the ledger.)
                 if head == Some("Option") {
                     if let Some(f) = self.emit_option_value_clone_fn(te) {
-                        self.clone_fn_cache.insert(type_name, f);
+                        self.drop_rc.clone_fn_cache.insert(type_name, f);
                         return f;
                     }
                 }
@@ -128,7 +128,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the typecheck gate excludes uncovered heap halves).
                 if head == Some("Result") {
                     if let Some(f) = self.emit_result_value_clone_fn(te) {
-                        self.clone_fn_cache.insert(type_name, f);
+                        self.drop_rc.clone_fn_cache.insert(type_name, f);
                         return f;
                     }
                 }
@@ -143,13 +143,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(name) = head {
                     if self.struct_types.contains_key(name) {
                         if let Some(f) = self.emit_struct_clone_fn(name) {
-                            self.clone_fn_cache.insert(type_name, f);
+                            self.drop_rc.clone_fn_cache.insert(type_name, f);
                             return f;
                         }
                     }
                     if self.enum_layouts.contains_key(name) {
                         if let Some(f) = self.emit_enum_clone_fn(name) {
-                            self.clone_fn_cache.insert(type_name, f);
+                            self.drop_rc.clone_fn_cache.insert(type_name, f);
                             return f;
                         }
                     }
@@ -214,12 +214,12 @@ impl<'ctx> super::Codegen<'ctx> {
         heap_type: StructType<'ctx>,
     ) -> FunctionValue<'ctx> {
         let cache_key = format!("cloneown_{type_name}");
-        if let Some(&f) = self.clone_fn_cache.get(&cache_key) {
+        if let Some(&f) = self.drop_rc.clone_fn_cache.get(&cache_key) {
             return f;
         }
         let fn_name = format!("karac_cloneown_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.clone_fn_cache.insert(cache_key, f);
+            self.drop_rc.clone_fn_cache.insert(cache_key, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -231,7 +231,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let clone_fn = self
             .module
             .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
-        self.clone_fn_cache.insert(cache_key, clone_fn);
+        self.drop_rc.clone_fn_cache.insert(cache_key, clone_fn);
 
         let entry_bb = self.context.append_basic_block(clone_fn, "entry");
         let inc_bb = self.context.append_basic_block(clone_fn, "rc_inc");
@@ -272,7 +272,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> FunctionValue<'ctx> {
         let fn_name = format!("karac_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.clone_fn_cache.insert(type_name.to_string(), f);
+            self.drop_rc.clone_fn_cache.insert(type_name.to_string(), f);
             return f;
         }
         let val_ty = self.llvm_type_for_type_expr(te);
@@ -285,7 +285,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let clone_fn = self
             .module
             .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
-        self.clone_fn_cache.insert(type_name.to_string(), clone_fn);
+        self.drop_rc
+            .clone_fn_cache
+            .insert(type_name.to_string(), clone_fn);
 
         let entry_bb = self.context.append_basic_block(clone_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -444,12 +446,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// callers don't special-case Strings.
     pub(super) fn emit_string_clone_fn(&mut self) -> FunctionValue<'ctx> {
         let type_name = "String".to_string();
-        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.clone_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = "karac_clone_String".to_string();
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.clone_fn_cache.insert(type_name, f);
+            self.drop_rc.clone_fn_cache.insert(type_name, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -461,7 +463,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let clone_fn = self
             .module
             .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
-        self.clone_fn_cache.insert(type_name, clone_fn);
+        self.drop_rc.clone_fn_cache.insert(type_name, clone_fn);
 
         let entry_bb = self.context.append_basic_block(clone_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -493,12 +495,12 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_vec_clone_fn(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
         let elem_name = Self::display_mangle_te(elem_te);
         let type_name = format!("Vec_{elem_name}");
-        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.clone_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.clone_fn_cache.insert(type_name, f);
+            self.drop_rc.clone_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -518,7 +520,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let clone_fn = self
             .module
             .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
-        self.clone_fn_cache.insert(type_name, clone_fn);
+        self.drop_rc.clone_fn_cache.insert(type_name, clone_fn);
 
         let entry_bb = self.context.append_basic_block(clone_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -700,12 +702,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let key_name = Self::display_mangle_te(key_te);
         let val_name = Self::display_mangle_te(val_te);
         let type_name = format!("Map_{key_name}_{val_name}");
-        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.clone_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.clone_fn_cache.insert(type_name, f);
+            self.drop_rc.clone_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -726,7 +728,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let clone_fn = self
             .module
             .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
-        self.clone_fn_cache.insert(type_name, clone_fn);
+        self.drop_rc.clone_fn_cache.insert(type_name, clone_fn);
 
         let entry_bb = self.context.append_basic_block(clone_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -871,12 +873,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let elems_owned: Vec<TypeExpr> = elems.to_vec();
         let parts: Vec<String> = elems_owned.iter().map(Self::display_mangle_te).collect();
         let type_name = format!("tuple_{}", parts.join("_"));
-        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.clone_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.clone_fn_cache.insert(type_name, f);
+            self.drop_rc.clone_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -899,7 +901,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let clone_fn = self
             .module
             .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
-        self.clone_fn_cache.insert(type_name, clone_fn);
+        self.drop_rc.clone_fn_cache.insert(type_name, clone_fn);
 
         let entry_bb = self.context.append_basic_block(clone_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -944,12 +946,12 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let type_name = format!("struct_{struct_name}");
-        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.clone_fn_cache.get(&type_name) {
             return Some(f);
         }
         let fn_name = format!("karac_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.clone_fn_cache.insert(type_name, f);
+            self.drop_rc.clone_fn_cache.insert(type_name, f);
             return Some(f);
         }
         let struct_ty = *self.struct_types.get(struct_name)?;
@@ -972,7 +974,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
         // Cache the declaration BEFORE emitting child clone fns so a
         // self-recursive struct (`S { next: Vec[S] }`) terminates.
-        self.clone_fn_cache.insert(type_name, clone_fn);
+        self.drop_rc.clone_fn_cache.insert(type_name, clone_fn);
 
         // Emit per-field child clone fns up front (each repositions the
         // builder, so finish them before filling this fn's entry block).
@@ -1032,12 +1034,12 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let type_name = format!("enum_{enum_name}");
-        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.clone_fn_cache.get(&type_name) {
             return Some(f);
         }
         let fn_name = format!("karac_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.clone_fn_cache.insert(type_name, f);
+            self.drop_rc.clone_fn_cache.insert(type_name, f);
             return Some(f);
         }
 
@@ -1052,7 +1054,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .module
             .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
         // Cache before recursing so a self-recursive enum terminates.
-        self.clone_fn_cache.insert(type_name, clone_fn);
+        self.drop_rc.clone_fn_cache.insert(type_name, clone_fn);
 
         // Per-variant field TypeExprs — drive the per-field deep clone.
         let variant_field_tes: Vec<(String, Vec<TypeExpr>)> = self
@@ -1323,12 +1325,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// gates them out at the dispatch site before emission.
     pub(super) fn emit_try_clone_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
         let type_name = Self::display_mangle_te(te);
-        if let Some(&f) = self.try_clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.try_clone_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_try_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.try_clone_fn_cache.insert(type_name, f);
+            self.drop_rc.try_clone_fn_cache.insert(type_name, f);
             return f;
         }
         match &te.kind {
@@ -1360,14 +1362,18 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> FunctionValue<'ctx> {
         let fn_name = format!("karac_try_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.try_clone_fn_cache.insert(type_name.to_string(), f);
+            self.drop_rc
+                .try_clone_fn_cache
+                .insert(type_name.to_string(), f);
             return f;
         }
         let val_ty = self.llvm_type_for_type_expr(te);
         let bool_t = self.context.bool_type();
         let saved_bb = self.builder.get_insert_block();
         let f = self.declare_try_clone_fn(&fn_name);
-        self.try_clone_fn_cache.insert(type_name.to_string(), f);
+        self.drop_rc
+            .try_clone_fn_cache
+            .insert(type_name.to_string(), f);
 
         let entry = self.context.append_basic_block(f, "entry");
         self.builder.position_at_end(entry);
@@ -1393,12 +1399,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// so the only allocation is fallible.
     pub(super) fn emit_string_try_clone_fn(&mut self) -> FunctionValue<'ctx> {
         let type_name = "String".to_string();
-        if let Some(&f) = self.try_clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.try_clone_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = "karac_try_clone_String".to_string();
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.try_clone_fn_cache.insert(type_name, f);
+            self.drop_rc.try_clone_fn_cache.insert(type_name, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -1408,7 +1414,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_ty = self.vec_struct_type();
         let saved_bb = self.builder.get_insert_block();
         let f = self.declare_try_clone_fn(&fn_name);
-        self.try_clone_fn_cache.insert(type_name, f);
+        self.drop_rc.try_clone_fn_cache.insert(type_name, f);
 
         let entry = self.context.append_basic_block(f, "entry");
         let empty_bb = self.context.append_basic_block(f, "empty");
@@ -1540,12 +1546,12 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_vec_try_clone_fn(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
         let elem_name = Self::display_mangle_te(elem_te);
         let type_name = format!("Vec_{elem_name}");
-        if let Some(&f) = self.try_clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.try_clone_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_try_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.try_clone_fn_cache.insert(type_name, f);
+            self.drop_rc.try_clone_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -1561,7 +1567,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let saved_bb = self.builder.get_insert_block();
         let f = self.declare_try_clone_fn(&fn_name);
-        self.try_clone_fn_cache.insert(type_name, f);
+        self.drop_rc.try_clone_fn_cache.insert(type_name, f);
 
         let entry = self.context.append_basic_block(f, "entry");
         let empty_bb = self.context.append_basic_block(f, "empty");
@@ -1814,12 +1820,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let elems_owned: Vec<TypeExpr> = elems.to_vec();
         let parts: Vec<String> = elems_owned.iter().map(Self::display_mangle_te).collect();
         let type_name = format!("tuple_{}", parts.join("_"));
-        if let Some(&f) = self.try_clone_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.try_clone_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_try_clone_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.try_clone_fn_cache.insert(type_name, f);
+            self.drop_rc.try_clone_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -1840,7 +1846,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let saved_bb = self.builder.get_insert_block();
         let f = self.declare_try_clone_fn(&fn_name);
-        self.try_clone_fn_cache.insert(type_name, f);
+        self.drop_rc.try_clone_fn_cache.insert(type_name, f);
 
         let entry = self.context.append_basic_block(f, "entry");
         self.builder.position_at_end(entry);
@@ -1977,12 +1983,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_drop_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.drop_fn_cache.insert(type_name, f);
+            self.drop_rc.drop_fn_cache.insert(type_name, f);
             return f;
         }
         match &te.kind {
@@ -2066,7 +2072,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Vec/Map/Set/String (those return above), so this can't re-enter
                 // the collection arms — no unbounded recursion.
                 if let Some(f) = self.vec_elem_agg_drop_for_type_expr(te) {
-                    self.drop_fn_cache.insert(type_name, f);
+                    self.drop_rc.drop_fn_cache.insert(type_name, f);
                     return f;
                 }
                 self.emit_primitive_drop_fn(&type_name)
@@ -2082,7 +2088,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_primitive_drop_fn(&mut self, type_name: &str) -> FunctionValue<'ctx> {
         let fn_name = format!("karac_drop_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.drop_fn_cache.insert(type_name.to_string(), f);
+            self.drop_rc.drop_fn_cache.insert(type_name.to_string(), f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2091,7 +2097,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
-        self.drop_fn_cache.insert(type_name.to_string(), drop_fn);
+        self.drop_rc
+            .drop_fn_cache
+            .insert(type_name.to_string(), drop_fn);
 
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2112,12 +2120,12 @@ impl<'ctx> super::Codegen<'ctx> {
     #[allow(dead_code)]
     pub(super) fn emit_string_drop_fn(&mut self) -> FunctionValue<'ctx> {
         let type_name = "String".to_string();
-        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = "karac_drop_String".to_string();
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.drop_fn_cache.insert(type_name, f);
+            self.drop_rc.drop_fn_cache.insert(type_name, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2128,7 +2136,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
-        self.drop_fn_cache.insert(type_name, drop_fn);
+        self.drop_rc.drop_fn_cache.insert(type_name, drop_fn);
 
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");
         let free_bb = self.context.append_basic_block(drop_fn, "free");
@@ -2189,12 +2197,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// drop of a shared struct, and any nested `Vec[Tensor]`).
     pub(super) fn emit_tensor_drop_fn(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
         let type_name = Self::display_mangle_te(te);
-        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_drop_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.drop_fn_cache.insert(type_name, f);
+            self.drop_rc.drop_fn_cache.insert(type_name, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2203,7 +2211,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
-        self.drop_fn_cache.insert(type_name, drop_fn);
+        self.drop_rc.drop_fn_cache.insert(type_name, drop_fn);
 
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2255,12 +2263,12 @@ impl<'ctx> super::Codegen<'ctx> {
             Self::display_mangle_te(ok_te),
             Self::display_mangle_te(err_te)
         );
-        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return Some(f);
         }
         let fn_name = format!("karac_drop_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.drop_fn_cache.insert(type_name, f);
+            self.drop_rc.drop_fn_cache.insert(type_name, f);
             return Some(f);
         }
 
@@ -2280,7 +2288,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
-        self.drop_fn_cache.insert(type_name, drop_fn);
+        self.drop_rc.drop_fn_cache.insert(type_name, drop_fn);
 
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");
         let ok_bb = self.context.append_basic_block(drop_fn, "ok");
@@ -2447,12 +2455,12 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let payload_name = Self::display_mangle_te(payload_te);
         let type_name = format!("Option_{payload_name}");
-        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return Some(f);
         }
         let fn_name = format!("karac_drop_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.drop_fn_cache.insert(type_name, f);
+            self.drop_rc.drop_fn_cache.insert(type_name, f);
             return Some(f);
         }
 
@@ -2490,7 +2498,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
-        self.drop_fn_cache.insert(type_name, drop_fn);
+        self.drop_rc.drop_fn_cache.insert(type_name, drop_fn);
 
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");
         let some_bb = self.context.append_basic_block(drop_fn, "some");
@@ -2582,12 +2590,12 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_vec_drop_fn(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
         let elem_name = Self::display_mangle_te(elem_te);
         let type_name = format!("Vec_{elem_name}");
-        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_drop_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.drop_fn_cache.insert(type_name, f);
+            self.drop_rc.drop_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -2603,7 +2611,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
-        self.drop_fn_cache.insert(type_name, drop_fn);
+        self.drop_rc.drop_fn_cache.insert(type_name, drop_fn);
 
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");
         let loop_cond_bb = self.context.append_basic_block(drop_fn, "loop.cond");
@@ -2753,12 +2761,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let elems_owned: Vec<TypeExpr> = elems.to_vec();
         let parts: Vec<String> = elems_owned.iter().map(Self::display_mangle_te).collect();
         let type_name = format!("tuple_{}", parts.join("_"));
-        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_drop_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.drop_fn_cache.insert(type_name, f);
+            self.drop_rc.drop_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -2779,7 +2787,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
-        self.drop_fn_cache.insert(type_name, drop_fn);
+        self.drop_rc.drop_fn_cache.insert(type_name, drop_fn);
 
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2824,12 +2832,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let k_name = Self::display_mangle_te(key_te);
         let v_name = Self::display_mangle_te(val_te);
         let type_name = format!("Map_{k_name}_{v_name}");
-        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+        if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_drop_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.drop_fn_cache.insert(type_name, f);
+            self.drop_rc.drop_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -2838,7 +2846,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
-        self.drop_fn_cache.insert(type_name, drop_fn);
+        self.drop_rc.drop_fn_cache.insert(type_name, drop_fn);
 
         // Classify the halves BEFORE positioning into the body — the
         // value-side synthesis may emit sibling drop fns (it repositions

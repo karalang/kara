@@ -1026,7 +1026,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // elements are freed once at scope exit.
         let te = if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
             super::Codegen::vec_type_expr_from_element(&elem_te)
-        } else if let Some(te) = self.owned_temp_drops.get(&key).cloned() {
+        } else if let Some(te) = self.drop_rc.owned_temp_drops.get(&key).cloned() {
             te
         } else {
             return Ok(None);
@@ -1127,7 +1127,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         use super::state::VarSlot;
         let key = (iterable.span.offset, iterable.span.length);
-        let te = if let Some(te) = self.owned_temp_drops.get(&key).cloned() {
+        let te = if let Some(te) = self.drop_rc.owned_temp_drops.get(&key).cloned() {
             te
         } else if let Some(te) = self.mapset.temp_recv_mapset_types.get(&key).cloned() {
             te
@@ -1395,7 +1395,7 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Block,
         continue_bb: inkwell::basic_block::BasicBlock<'ctx>,
     ) -> Result<(), String> {
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         self.compile_block(body)?;
         if self
             .builder
@@ -1409,7 +1409,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_unconditional_branch(continue_bb)
                 .unwrap();
         } else {
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
         Ok(())
     }
@@ -1510,7 +1510,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         // Condition: i < end (or i <= end for inclusive)
@@ -1574,7 +1574,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `null_init_slot_in_entry_block` for nested-block shared-struct
         // lets) only matters for the unreachable-body case, not the
         // iterate-then-cleanup case.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         self.compile_block(body)?;
         for _ in 0..pushed_for_count {
             self.asserted_index_bounds.pop();
@@ -1594,7 +1594,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // every frame in the stack including this one. Pop without
             // emitting so the frame doesn't shadow the surrounding
             // scope's bindings.
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
 
         // Increment by `step_val`
@@ -1697,7 +1697,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(cond_bb);
@@ -1805,7 +1805,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: latch_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         // cond: pull the next line. `rc == 0` (EOF) → exit; else → body.
@@ -1922,7 +1922,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         // Condition: i < len
@@ -2078,7 +2078,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(cond_bb);
@@ -2238,7 +2238,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(cond_bb);
@@ -2421,7 +2421,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(cond_bb);
@@ -2548,7 +2548,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue_bb: incr_bb,
                 break_bb: shared_exit,
                 result_slot: None,
-                cleanup_depth: self.scope_cleanup_actions.len(),
+                cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
             });
 
             self.builder.position_at_end(cond_bb);
@@ -2701,7 +2701,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(cond_bb);
@@ -2843,7 +2843,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(cond_bb);
@@ -3004,7 +3004,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         // Condition: idx < len.
@@ -3233,7 +3233,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: latch_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
         self.compile_loop_body_with_cleanup(body, latch_bb)?;
         self.loop_stack.pop();
@@ -3283,7 +3283,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: slow_latch_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
         self.compile_loop_body_with_cleanup(body, slow_latch_bb)?;
         self.loop_stack.pop();
@@ -3350,7 +3350,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         // Condition: byte_offset < len. (Empty string: len == 0, falls
@@ -3471,7 +3471,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_type_names
                 .insert(bind_name.clone(), "char".to_string());
         }
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         self.compile_block(body)?;
         if self
             .builder
@@ -3486,7 +3486,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drain_top_frame_with_emit();
             self.builder.build_unconditional_branch(incr_bb).unwrap();
         } else {
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
 
         // Increment: store the decoded post-char offset, then branch back to
@@ -3551,7 +3551,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         // Condition: idx < len.
@@ -3691,7 +3691,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue_bb: cont_bb,
                 break_bb: exit_bb,
                 result_slot: None,
-                cleanup_depth: self.scope_cleanup_actions.len(),
+                cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
             });
 
             self.builder.position_at_end(cond_bb);
@@ -3841,7 +3841,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue_bb: loop_bb,
                 break_bb: exit_bb,
                 result_slot: None,
-                cleanup_depth: self.scope_cleanup_actions.len(),
+                cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
             });
 
             self.builder.position_at_end(loop_bb);
@@ -3951,7 +3951,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (B-2026-07-23-1).
         let iter_slot = self.create_entry_alloca(fn_val, "map.iter.slot", ptr_ty.into());
         self.builder.build_store(iter_slot, iter_ptr).unwrap();
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(super::state::CleanupAction::FreeMapIter {
                 iter_alloca: iter_slot,
             });
@@ -3968,7 +3968,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: loop_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         // loop_bb: advance iterator; branch on result.
@@ -4105,7 +4105,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue_bb: cont_bb,
                 break_bb: exit_bb,
                 result_slot: None,
-                cleanup_depth: self.scope_cleanup_actions.len(),
+                cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
             });
 
             self.builder.position_at_end(cond_bb);
@@ -4186,7 +4186,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // exit block below nulls the slot so the normal-path drain no-ops.
         let iter_slot = self.create_entry_alloca(fn_val, "set.iter.slot", ptr_ty.into());
         self.builder.build_store(iter_slot, iter_ptr).unwrap();
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(super::state::CleanupAction::FreeMapIter {
                 iter_alloca: iter_slot,
             });
@@ -4203,7 +4203,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: loop_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(loop_bb);
@@ -4291,7 +4291,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         // Condition: i < N
@@ -4507,7 +4507,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // through to the next element, so drain-emit in place with no
             // branch; a body terminator pops without emitting (the
             // early-exit cleanup walk already drained it).
-            self.scope_cleanup_actions.push(Vec::new());
+            self.drop_rc.scope_cleanup_actions.push(Vec::new());
             self.compile_block(body)?;
             if self
                 .builder
@@ -4518,7 +4518,7 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.drain_top_frame_with_emit();
             } else {
-                self.scope_cleanup_actions.pop();
+                self.drop_rc.scope_cleanup_actions.pop();
             }
         }
         Ok(self.context.i64_type().const_int(0, false).into())

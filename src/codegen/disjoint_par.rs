@@ -424,9 +424,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+        let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
 
         self.current_fn = Some(worker_fn);
         let entry = self.context.append_basic_block(worker_fn, "entry");
@@ -590,7 +590,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (an intermediate `Vec`, a `String`) drops each iteration instead of
         // piling up for the whole chunk. Same discipline as the reduction
         // worker and as `compile_for_range`.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         self.compile_block(body)?;
 
         let current_bb = self.builder.get_insert_block().unwrap();
@@ -611,7 +611,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Defensive: early exits are rejected upstream, so this is
             // unreachable today. Pop the per-iteration frame to keep the stack
             // balanced if a future shape admits it.
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
 
         self.builder.position_at_end(exit_bb);
@@ -621,7 +621,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(None).unwrap();
 
         self.branch_cancel_ptr = saved_cancel_ptr;
-        self.scope_cleanup_actions = saved_cleanup;
+        self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;

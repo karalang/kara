@@ -211,10 +211,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // symmetric with the combined drop's per-element rc-dec (a copy-supported
             // struct can carry a shared handle buried in a `Vec[struct]` element /
             // nested struct — `FnDefNode.params[].ty`, `FnDefNode.body`).
-            let saved = self.deep_copy_rc_inc_bare_shared;
-            self.deep_copy_rc_inc_bare_shared = true;
+            let saved = self.drop_rc.deep_copy_rc_inc_bare_shared;
+            self.drop_rc.deep_copy_rc_inc_bare_shared = true;
             self.deep_copy_struct_heap_fields_in_place(slot, type_name);
-            self.deep_copy_rc_inc_bare_shared = saved;
+            self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
             self.track_struct_var(type_name, slot);
             return true;
         }
@@ -275,7 +275,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         match self.synthesize_tuple_drop_fn_te(agg_ty, elems) {
             Some(drop_fn) => {
-                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                     frame.push(super::state::CleanupAction::StructDrop {
                         struct_alloca: slot,
                         drop_fn,
@@ -1048,10 +1048,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.aggregate_param_copy_supported_struct_mono(type_name) {
             return false;
         }
-        let saved = self.deep_copy_rc_inc_bare_shared;
-        self.deep_copy_rc_inc_bare_shared = true;
+        let saved = self.drop_rc.deep_copy_rc_inc_bare_shared;
+        self.drop_rc.deep_copy_rc_inc_bare_shared = true;
         self.deep_copy_struct_heap_fields_in_place_mono(slot, type_name, mono_st);
-        self.deep_copy_rc_inc_bare_shared = saved;
+        self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
         // Register the PER-MONOMORPH drop (`__karac_drop_struct_Pair$str`) so a
         // field NOT moved out (e.g. `fn peek[T](p: Pair[T]) -> T { p.a.clone()
         // }`) still frees its entry-copied buffer; the base drop skips the
@@ -1636,7 +1636,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // clone independently co-owns the box, symmetric with the leaf's combined
         // struct-drop rc-DEC. The ENTRY-COPY path leaves the flag false and skips
         // this (its shared handling is unchanged — a bump there leaked).
-        if self.deep_copy_rc_inc_bare_shared {
+        if self.drop_rc.deep_copy_rc_inc_bare_shared {
             if let Some(heap_ty) = self.shared_heap_type_for_type_expr(fte) {
                 if let Ok(field_ptr) =
                     self.builder
@@ -1829,7 +1829,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // with the struct drop's per-element rc-dec (`vec_elem_agg_drop_for_type_expr`
         // → `__karac_vec_elem_rc_dec_<T>`). Flag off (plain entry-copy) skips this —
         // its Vec[shared] element handling is unchanged.
-        if self.deep_copy_rc_inc_bare_shared {
+        if self.drop_rc.deep_copy_rc_inc_bare_shared {
             if let Some(heap_ty) = self.shared_heap_type_for_type_expr(elem_te) {
                 if let Ok(field_ptr) =
                     self.builder

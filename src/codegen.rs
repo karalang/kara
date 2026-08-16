@@ -10,6 +10,7 @@ use std::rc::Rc;
 use accel::Accel;
 use contract_state::ContractState;
 use display::Display;
+use drop_rc::DropRc;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -66,6 +67,7 @@ mod disjoint_par;
 mod display;
 mod driver;
 pub mod drop_obs;
+mod drop_rc;
 mod entry_chains;
 mod expr_ops;
 mod exprs;
@@ -136,8 +138,7 @@ use helpers::{
     method_is_compiler_builtin, method_self_is_value,
 };
 use state::{
-    AssertedIndexBound, CleanupAction, EnumLayout, LayoutId, LoopFrame, SharedTypeInfo,
-    SpawnSiteRecord, VarSlot,
+    AssertedIndexBound, EnumLayout, LayoutId, LoopFrame, SharedTypeInfo, SpawnSiteRecord, VarSlot,
 };
 
 // ── Public API ─────────────────────────────────────────────────
@@ -1131,6 +1132,7 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) drop_rc: DropRc<'ctx>,
     pub(crate) pattern_state: PatternState<'ctx>,
     pub(crate) mono_state: MonoState<'ctx>,
     pub(crate) mapset: MapSet<'ctx>,
@@ -1215,22 +1217,6 @@ pub(super) struct Codegen<'ctx> {
     /// keyed here always has a taker.
     pub(crate) boxed_passthrough_owner_alias: std::collections::HashMap<String, String>,
     pub(crate) inline_option_payload_vars: std::collections::HashSet<String>,
-    /// B-2026-08-08-25 leg 1 — sources whose inline `Option`/`Result` payload a
-    /// read-only match LEFT WITH THEM (`scrutinee_is_readonly_inline_optres_local`
-    /// classified the match as a borrow, so no arm binding took ownership).
-    ///
-    /// Exists to keep the one-owner invariant across a CHAIN.
-    /// `suppress_inline_option_result_binding_move` disarms a source binding
-    /// when a consuming combinator took its payload — and for
-    /// `<src>.map(f).unwrap_or(d)` it resolves through the map to `<src>`
-    /// (B-2026-08-07-3), on the premise that the map's arm already owns the
-    /// buffer. Once the arm is classified as a borrow that premise is false:
-    /// the arm frees nothing, so disarming the source too leaves NOBODY, and
-    /// the payload leaks once per evaluation (measured on
-    /// `opt.map(|xs| xs.len()).unwrap_or(0)` — 32 bytes an iteration, invisible
-    /// at the default opt level because a `.len()`-only Vec is a dead
-    /// allocation LLVM deletes outright).
-    pub(crate) inline_optres_retained_sources: std::collections::HashSet<String>,
     /// `Result[T, E]` sibling of `inline_option_payload_vars` — names of
     /// `Result` bindings that registered a `FreeInlineResultPayload` (the Ok
     /// and/or Err half is an inline heap `String`/`Vec`). A `match`/`if let`
@@ -2322,9 +2308,6 @@ pub(super) struct Codegen<'ctx> {
     /// returns (which do) without the over/under-count a single merge-block
     /// inc would cause. See docs/implementation_checklist/phase-7-codegen.md.
     pub(crate) tail_ret_inner: Option<StructType<'ctx>>,
-    /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
-    /// are emitted in reverse-push order at scope exit (innermost first).
-    pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
     /// Active closure-scoped return targets for inline-lowered
     /// `with_provider` bodies (B-2026-07-31-16); innermost last. See
     /// [`state::ReturnRetarget`]. Entries are fn-tagged rather than
@@ -2437,21 +2420,6 @@ pub(super) struct Codegen<'ctx> {
     /// callers leave it `false` — they re-register the new binding's
     /// metadata *after* `bind_pattern`, so the purge there is exactly right.
     pub(crate) suppress_shadow_metadata_purge: bool,
-    /// B-2026-07-10-4 — when set, the deep-copy field walker
-    /// (`deep_copy_one_aggregate_field` / `deep_copy_vec_aggregate_elements_in_place`)
-    /// additionally rc-INCs a bare `shared` handle it would otherwise leave shallow:
-    /// a directly-nested `shared` field, and each element of a `Vec[shared]`. A
-    /// copy-supported struct can carry such a handle BURIED inside a `Vec[struct]`
-    /// element or nested struct (`FnDefNode.params[].ty`, `FnDefNode.body`,
-    /// `EnumDefNode.variants[].fields`) — the entry-copy duplicated the buffers but
-    /// shared the boxes without a refcount bump, while the combined struct-drop
-    /// rc-DECs them per element, so the caller's retained original and the callee's
-    /// copy both dec → double-free (the self-hosted item parser's `render_*` nodes).
-    /// Set only around `make_aggregate_param_callee_owned`'s deep-copy so the copy
-    /// stays symmetric with that drop; false elsewhere. (An earlier global attempt
-    /// leaked because the drop side hadn't yet been reconciled — it since was, so
-    /// the entry-copy inc is now balanced.)
-    pub(crate) deep_copy_rc_inc_bare_shared: bool,
     /// B-2026-07-18-2 — for-loop STRICT-SHARED copy-support mode for
     /// `field_copy_supported`: a DIRECT bare-`shared` field becomes supported
     /// (the move-out "copy" is an rc-INC via `deep_copy_rc_inc_bare_shared`,
@@ -2510,34 +2478,6 @@ pub(super) struct Codegen<'ctx> {
     /// (`scrutinee_is_owned_param_binding` consults this), and its own
     /// let-site registration is memory-only. Cleared per-function.
     pub(crate) param_view_locals: HashSet<String>,
-    /// Phase 7.2 Slice DP — per-enum drop function cache (enum name →
-    /// `__karac_drop_<EnumName>` `FunctionValue`). Lazily populated by
-    /// `emit_enum_drop_switch` on first registration of a value-type
-    /// enum binding via `track_enum_var`. One drop fn per enum type;
-    /// reused across all registration sites for that type. Mirrors the
-    /// existing `display_fn_cache` / `clone_fn_cache` lazy-synth pattern.
-    pub(crate) enum_drop_fns: HashMap<String, FunctionValue<'ctx>>,
-    /// Per-struct lazy drop-fn cache (struct name → `__karac_drop_struct_<Name>`
-    /// `FunctionValue`). Lazily populated by `emit_struct_drop_synthesis` on
-    /// first registration of a non-shared struct binding via `track_struct_var`.
-    /// One drop fn per struct type; reused across registration sites. Mirrors
-    /// `enum_drop_fns`. The drop fn walks fields and frees Vec/String data
-    /// buffers + invokes `karac_map_free` on Map/Set handle fields. Structs
-    /// with no heap-owning fields don't get an entry (the synthesis fn returns
-    /// `None`) and don't reach `CleanupAction::StructDrop`.
-    pub(crate) struct_drop_fns: HashMap<String, FunctionValue<'ctx>>,
-    /// Per-user-type lazy drop-wrapper cache (type name →
-    /// `karac_drop_<Type>` `FunctionValue`). Populated by
-    /// `emit_user_drop_wrappers` for every type in
-    /// `program.drop_method_keys` — i.e., every user type with a
-    /// validated `impl Drop`. The wrapper invokes the user-defined
-    /// `Type.drop` body and then hands off to the existing field-cleanup
-    /// synthesizer (`emit_struct_drop_synthesis`) when the type has
-    /// heap-owning fields. Prereq.2 of the user-`impl Drop` dispatch
-    /// slice (`docs/implementation_checklist/phase-7-codegen.md`).
-    /// Consumed by Prereq.3's scope-exit lowering pass via
-    /// `module.get_function("karac_drop_<Type>")`.
-    pub(crate) user_drop_wrapper_fns: HashMap<String, FunctionValue<'ctx>>,
 
     /// Assignment statements whose `acc = acc + 1` RHS may skip its overflow
     /// check, keyed by the STATEMENT's span (B-2026-07-26-1). Populated per
@@ -2569,33 +2509,6 @@ pub(super) struct Codegen<'ctx> {
     /// facts gone, `index_bounds_already_proven` stops returning the
     /// `(true, true)` this rides on.
     pub(crate) elide_proven_index_add_overflow: bool,
-    /// Per-shared-struct lazy drop-fn cache (shared-struct name →
-    /// `__karac_rc_drop_<Name>` `FunctionValue`, or `None` when the
-    /// struct has no heap-owning fields and `emit_rc_dec` can fall
-    /// through to plain `free(ptr)`). Lazily populated by
-    /// `emit_shared_struct_rc_drop_fn` on first registration of a
-    /// shared-struct binding via `track_rc_var` / `track_rc_option_var`,
-    /// or recursively from another struct's drop body when it
-    /// encounters a shared-typed field. The drop fn walks each field
-    /// of the shared struct's heap layout and, before `free(ptr)`,
-    /// dispatches the appropriate cleanup per field type:
-    ///   - Shared struct field → recursive `__karac_rc_drop_<Name>`
-    ///     call (dec inner refcount; if it hits zero, transitively
-    ///     drop the inner's chain).
-    ///   - `Option[shared T]` field → tag-switch; on Some, dec the
-    ///     inner shared pointer.
-    ///   - Vec / String field → `cap > 0 ? free(data)` (same shape
-    ///     as `CleanupAction::FreeVecBuffer`).
-    ///   - Map / Set handle field → `karac_map_free*` (mirrors
-    ///     `StructDrop`'s field walk).
-    ///
-    /// `None`-cached entries mean "no walk needed" — the drop fn isn't
-    /// emitted and `emit_rc_dec` proceeds with the legacy plain-`free`
-    /// path. Closes the recursive-drop gap for shared-struct chains
-    /// (LeetCode #2 kata bench, 2026-05-17): without this, freeing
-    /// the chain's head leaked every transitive `next: Option[ListNode]`
-    /// because the dec→free path ignored field-bound shared refs.
-    pub(crate) rc_drop_fns: HashMap<String, Option<FunctionValue<'ctx>>>,
     /// Cross-error-type conversion targets at `?` sites — populated from
     /// `Program.question_conversions` (set by the lowering pass from the
     /// typechecker's `question_conversions` map). Key: `(span.offset,
@@ -2839,14 +2752,6 @@ pub(super) struct Codegen<'ctx> {
     /// consults this map before the field-aware cascade so the user's
     /// `cmp` runs instead of a synthesized derive-equivalent lex compare.
     pub(crate) user_ord_typed_exprs: HashMap<(usize, usize), String>,
-    /// Surface `TypeExpr` per heap-owning *temporary* expression —
-    /// populated from `Program.owned_temp_drops` (set by the lowering pass
-    /// from `TypeCheckResult.expr_types`). `materialize_owned_temp` keys
-    /// this by the producing expression's span to reconstruct an unnamed
-    /// temporary's scope-exit cleanup (Vec element type / Map key-val
-    /// classification / RC heap layout). See
-    /// `docs/spikes/general-owned-temp-tracking.md` (slice 2).
-    pub(crate) owned_temp_drops: HashMap<(usize, usize), TypeExpr>,
     /// Pointee surface `TypeExpr` per raw-pointer-typed (`*const T` / `*mut T`)
     /// expression, keyed by span — populated from
     /// `Program.raw_pointer_pointee_types`. The unary-deref arm keys this by the
@@ -3037,10 +2942,6 @@ pub(super) struct Codegen<'ctx> {
     /// threading the `EffectCheckResult` through codegen for v1.
     /// `None` outside par branches.
     pub(crate) branch_cancel_ptr: Option<PointerValue<'ctx>>,
-    // ── RC-fallback bindings ──────────────────────────────────────
-    /// Per-function RC-fallback binding names populated from `OwnershipCheckResult`.
-    /// Function name → set of binding names that need heap-boxing + refcount.
-    pub(crate) rc_fallback_fns: HashMap<String, HashSet<String>>,
     /// Borrow-elision for read-only `let r = v[i]` indexed-element bindings
     /// (B-2026-06-19-6, clone-elision). Per-function set of the RHS index
     /// expression's `SpanKey` for each `let r = v[i]` whose binding `r` is
@@ -3113,57 +3014,6 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_function`) and the call-site arg-inc skip (by position,
     /// in the direct-call arg loop) — both gated on `headerless_types`.
     pub(crate) borrowed_param_skips: HashMap<String, Vec<(String, usize, String)>>,
-    /// RC-elide-ref (env `KARAC_RC_ELIDE_REF_PARAMS`, default ON; opt out `=0`): per-fn
-    /// `(param name, position)` of every `ref`-mode `shared`/`Option[shared]`
-    /// parameter proven **sound to RC-elide** by
-    /// [`crate::rc_elide::safe_elidable_ref_params`] — a private, directly-called
-    /// function whose every call passes this param a *projection* of a named
-    /// binding (a borrow), used only in place (consumed-in-place per
-    /// `result_escape`), with a scalar return and no `mut ref` params (no
-    /// resource escapes). ORed into the same call-site arg-inc skip (by
-    /// position) and callee-side exit-dec skip (by name) as
-    /// `borrowed_param_skips`, WITHOUT the `headerless_types` guard: the
-    /// LSan-verified C2b borrow path (no arg inc, no source transfer/consume, no
-    /// callee exit dec — a pure balanced borrow). Verified flag-on == flag-off on
-    /// the full Linux LSan suite. Empty unless the env flag is set. See
-    /// `docs/spikes/rc-elide-ref-params.md`.
-    pub(crate) rc_elide_ref_params: HashMap<String, Vec<(String, usize)>>,
-    /// Per-function Arc-promoted binding names — the subset of `rc_fallback_fns`
-    /// flagged by the ownership pass as crossing a `par {}` thread boundary.
-    /// Inc/dec on these bindings emits atomic LLVM operations (`atomicrmw add` /
-    /// `atomicrmw sub`, `SeqCst`); the rest stay on plain non-atomic load+arith+store.
-    /// Allocation site is unchanged — the heap layout `{ refcount: i64, payload: T }`
-    /// is identical for both flavors.
-    pub(crate) arc_fallback_fns: HashMap<String, HashSet<String>>,
-    /// Heap struct type for each active RC-fallback binding in the current function.
-    /// Cleared at each `compile_function` call. Key: binding name.
-    pub(crate) rc_fallback_heap_types: HashMap<String, StructType<'ctx>>,
-    /// Synthesized "free the boxed value's heap fields" fn per RC-fallback
-    /// box heap type (`{i64 rc, value}`). When a non-shared aggregate
-    /// (tuple / struct with String/Vec fields) is RC-fallback-boxed, the box
-    /// free at `rc == 0` must recurse into the boxed value's heap fields
-    /// before releasing the box — otherwise those buffers leak
-    /// (B-2026-06-10-8). The fn takes the box pointer, GEPs to the value
-    /// field, and emits a `cap`-guarded `free` for every `{ptr,len,cap}`
-    /// (String/Vec) field, recursing into nested aggregates; it does NOT
-    /// free the box itself (`emit_rc_dec`'s fallback `free` does that after).
-    /// Keyed on the box heap type (module-stable, embeds the value type), so
-    /// bindings of the same boxed type share one fn. Module-level cache like
-    /// `drop_fn_cache` — not cleared per function. A `Vec` with linear
-    /// `StructType`-equality lookup (LLVM `StructType` is `PartialEq` but not
-    /// `Hash`/`Eq`, so it can't key a `HashMap`); the box-type count per
-    /// program is tiny, and `emit_rc_dec` already scans `shared_types` the
-    /// same way.
-    pub(crate) rc_fallback_box_drop_fns: Vec<(StructType<'ctx>, FunctionValue<'ctx>)>,
-    /// Synthesized "free this aggregate's heap fields" drop fns for ANONYMOUS
-    /// aggregates — a let-bound tuple (`let t = (i, f"x")`) the named-struct
-    /// `track_struct_var` / `struct_drop_fns` path can't reach (a tuple has no
-    /// type name). Body is `emit_aggregate_heap_field_frees`. Keyed on the
-    /// aggregate LLVM type; same `Vec` + linear `StructType`-equality lookup
-    /// rationale as `rc_fallback_box_drop_fns` (`StructType` isn't `Hash`).
-    /// Registered as a `CleanupAction::StructDrop` by `track_tuple_var`
-    /// (B-2026-06-11-4 part a).
-    pub(crate) aggregate_drop_fns: Vec<(StructType<'ctx>, FunctionValue<'ctx>)>,
     /// Per-closure capture path modes sourced from
     /// `OwnershipCheckResult::closure_capture_path_modes` — line 353
     /// phase-5 checklist disjoint-capture slice 4. When a closure
@@ -3486,42 +3336,6 @@ pub(super) struct Codegen<'ctx> {
     /// avoids redundant emission and keeps the IR stable. Pinned by
     /// `tests/codegen.rs::test_server_serve_handler_shim_caches`.
     pub(crate) http_shim_cache: HashMap<String, FunctionValue<'ctx>>,
-    /// Per-type clone function cache. Keyed on the canonical mangled type
-    /// name (`display_mangle_te`). Each emitted fn has signature
-    /// `void karac_clone_<typename>(*const T src, *mut T dst)` — caller
-    /// provides both source and destination addresses, callee writes the
-    /// cloned value into the destination slot. Mirror of `display_fn_cache`.
-    pub(crate) clone_fn_cache: HashMap<String, FunctionValue<'ctx>>,
-    /// Per-type *fallible* clone function cache. Keyed by the canonical
-    /// type name (same scheme as `clone_fn_cache`). Each emitted fn has
-    /// signature `i1 karac_try_clone_<typename>(*const T, *mut T, *mut i64)`:
-    /// it clones `src` into `dst` using `karac_alloc_fallible`, returns
-    /// `true` on success, or `false` on the first allocation failure after
-    /// freeing any partially-cloned heap (so the caller leaks nothing) and
-    /// storing the failed allocation's byte count through the third
-    /// out-parameter. Backs `try_clone` codegen (phase-8-stdlib-floor item 8);
-    /// mirror of `clone_fn_cache`. Map/Set element shapes are NOT emitted
-    /// here — those need a fallible `karac_map_*` runtime API (item 8,
-    /// `try_insert` blocker) and are rejected at the dispatch guard before
-    /// any IR is emitted.
-    pub(crate) try_clone_fn_cache: HashMap<String, FunctionValue<'ctx>>,
-    /// Per-type Drop function cache. Keyed by the canonical type name
-    /// (e.g. `"i64"`, `"String"`, `"Vec_i64"`, `"Map_String_i64"`). Each
-    /// emitted fn has signature `void karac_drop_<typename>(*mut T)` and
-    /// releases any heap owned by the value (for primitives: no-op; for
-    /// String: free the data buffer if cap > 0; for Vec: per-element drop
-    /// then free; for tuple: per-field drop; for Map/Set: delegate to the
-    /// existing `karac_map_free*` runtime as a placeholder pending the
-    /// monomorphized Map layout in Slice 1+). Mirror of `clone_fn_cache`.
-    /// See [`wip-monomorphized-collections.md`](../docs/implementation_checklist/wip-monomorphized-collections.md) §3.3.
-    ///
-    /// `#[allow(dead_code)]` until Slice 1 lands the first production
-    /// consumer (monomorphized `Map[i64, i64]` drop, per
-    /// [`phase-7-codegen.md`](../docs/implementation_checklist/phase-7-codegen.md)
-    /// "Monomorphized collections" entry). The framework is foundation;
-    /// it has no production caller until the consumer lands.
-    #[allow(dead_code)]
-    pub(crate) drop_fn_cache: HashMap<String, FunctionValue<'ctx>>,
     /// Lazily-initialized `TargetData` consumed by the layout-introspection
     /// intrinsics (`align_of[T]()`, `offset_of[T](field)`). Constructed
     /// via `create_target_machine().get_target_data()` on first use; the
@@ -7087,7 +6901,25 @@ impl<'ctx> Codegen<'ctx> {
             passthrough_owner_alias: std::collections::HashMap::new(),
             boxed_passthrough_owner_alias: std::collections::HashMap::new(),
             inline_option_payload_vars: std::collections::HashSet::new(),
-            inline_optres_retained_sources: std::collections::HashSet::new(),
+            drop_rc: DropRc {
+                inline_optres_retained_sources: std::collections::HashSet::new(),
+                scope_cleanup_actions: Vec::new(),
+                deep_copy_rc_inc_bare_shared: false,
+                enum_drop_fns: HashMap::new(),
+                struct_drop_fns: HashMap::new(),
+                user_drop_wrapper_fns: HashMap::new(),
+                rc_drop_fns: HashMap::new(),
+                owned_temp_drops: HashMap::new(),
+                rc_fallback_fns: HashMap::new(),
+                rc_elide_ref_params: HashMap::new(),
+                arc_fallback_fns: HashMap::new(),
+                rc_fallback_heap_types: HashMap::new(),
+                rc_fallback_box_drop_fns: Vec::new(),
+                aggregate_drop_fns: Vec::new(),
+                clone_fn_cache: HashMap::new(),
+                try_clone_fn_cache: HashMap::new(),
+                drop_fn_cache: HashMap::new(),
+            },
             inline_result_payload_vars: std::collections::HashSet::new(),
             inline_option_map_payload_vars: std::collections::HashSet::new(),
             inline_option_agg_payload_vars: std::collections::HashSet::new(),
@@ -7374,7 +7206,6 @@ impl<'ctx> Codegen<'ctx> {
                 gpu_buffer_vars: HashSet::new(),
             },
             binding_layouts: HashMap::new(),
-            scope_cleanup_actions: Vec::new(),
             return_retargets: Vec::new(),
             iter_body_retarget_spans: std::collections::HashSet::new(),
             pending_errdefer_payload: None,
@@ -7387,19 +7218,14 @@ impl<'ctx> Codegen<'ctx> {
             compiling_ref_return_let_rhs: false,
             suppress_shadow_metadata_purge: false,
             fn_body_ident_mention_offsets: HashMap::new(),
-            deep_copy_rc_inc_bare_shared: false,
             copy_support_for_loop_shared_mode: false,
             boxed_optres_payload_view_vars: HashMap::new(),
             deboxed_payload_box_ptrs: HashMap::new(),
             param_view_locals: HashSet::new(),
-            enum_drop_fns: HashMap::new(),
-            struct_drop_fns: HashMap::new(),
-            user_drop_wrapper_fns: HashMap::new(),
             check_free_accum_sites: std::collections::HashSet::new(),
             elide_next_add_overflow_check: false,
             elide_proven_index_add_overflow: std::env::var("KARAC_BCE_OVF_SKIP").as_deref()
                 != Ok("0"),
-            rc_drop_fns: HashMap::new(),
             question_conversions: HashMap::new(),
             question_ok_payload_types: HashMap::new(),
             wp_result_types: HashMap::new(),
@@ -7435,7 +7261,6 @@ impl<'ctx> Codegen<'ctx> {
             vector_method_call_spans: HashSet::new(),
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),
-            owned_temp_drops: HashMap::new(),
             raw_pointer_pointee_types: HashMap::new(),
             enum_inst_type_exprs: HashMap::new(),
             concrete_named_type_exprs: HashMap::new(),
@@ -7457,7 +7282,6 @@ impl<'ctx> Codegen<'ctx> {
             used_symbols: Vec::new(),
             used_data_globals: Vec::new(),
             branch_cancel_ptr: None,
-            rc_fallback_fns: HashMap::new(),
             vec_index_borrow_spans: HashSet::new(),
             vec_index_cloned_sites: HashSet::new(),
             elided_bindings: HashMap::new(),
@@ -7467,11 +7291,6 @@ impl<'ctx> Codegen<'ctx> {
             weak_targeted_types: HashSet::new(),
             conditional_adopted_roots: HashMap::new(),
             borrowed_param_skips: HashMap::new(),
-            rc_elide_ref_params: HashMap::new(),
-            arc_fallback_fns: HashMap::new(),
-            rc_fallback_heap_types: HashMap::new(),
-            rc_fallback_box_drop_fns: Vec::new(),
-            aggregate_drop_fns: Vec::new(),
             closure_capture_paths: HashMap::new(),
             par_capture_modes: HashMap::new(),
             atomic_promoted_types: HashSet::new(),
@@ -7517,9 +7336,6 @@ impl<'ctx> Codegen<'ctx> {
             ascii_const_string_lets: HashMap::new(),
             cstr_vars: HashSet::new(),
             http_shim_cache: HashMap::new(),
-            clone_fn_cache: HashMap::new(),
-            try_clone_fn_cache: HashMap::new(),
-            drop_fn_cache: HashMap::new(),
             target_data: init_target_data,
             current_fn_arm64_return_coercion: None,
             current_fn_sret_param: None,
@@ -7568,10 +7384,11 @@ impl<'ctx> Codegen<'ctx> {
         let Some(ow) = ownership else { return };
         for (fn_name, rc_map) in &ow.rc_values {
             let names: HashSet<String> = rc_map.keys().cloned().collect();
-            self.rc_fallback_fns.insert(fn_name.clone(), names);
+            self.drop_rc.rc_fallback_fns.insert(fn_name.clone(), names);
         }
         for (fn_name, arc_set) in &ow.arc_values {
-            self.arc_fallback_fns
+            self.drop_rc
+                .arc_fallback_fns
                 .insert(fn_name.clone(), arc_set.clone());
         }
         // B-2026-08-01-33 mechanism 2 — types promoted to atomic RC so a
@@ -7598,7 +7415,8 @@ impl<'ctx> Codegen<'ctx> {
         self.uam_consume_sites
             .extend(ow.use_after_move_consume_sites.iter().copied());
         for (fn_name, recs) in &ow.elidable_ref_params {
-            self.rc_elide_ref_params
+            self.drop_rc
+                .rc_elide_ref_params
                 .insert(fn_name.clone(), recs.clone());
         }
         // RC elision phase A: per-fn elided-binding sets. Consulted by
@@ -7841,7 +7659,8 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn is_rc_fallback_binding(&self, name: &str) -> bool {
-        self.rc_fallback_fns
+        self.drop_rc
+            .rc_fallback_fns
             .get(&self.current_fn_name)
             .is_some_and(|set| set.contains(name))
     }
@@ -7951,7 +7770,8 @@ impl<'ctx> Codegen<'ctx> {
         // call-site arg inc (the callee's exit dec is skipped
         // symmetrically in `borrowed_param_dec_skip`).
         || self
-            .rc_elide_ref_params
+            .drop_rc
+                .rc_elide_ref_params
             .get(callee)
             .is_some_and(|recs| recs.iter().any(|(_, pos)| *pos == position))
     }
@@ -7970,7 +7790,8 @@ impl<'ctx> Codegen<'ctx> {
         // classified `ref`/borrow → skip its exit dec (the caller
         // skipped the arg inc symmetrically in `borrowed_arg_skip`).
         || self
-            .rc_elide_ref_params
+            .drop_rc
+                .rc_elide_ref_params
             .get(&self.current_fn_name)
             .is_some_and(|recs| recs.iter().any(|(n, _)| n == param_name))
     }
@@ -8065,7 +7886,8 @@ impl<'ctx> Codegen<'ctx> {
     /// lives in the `arc_values` subset for this function key. Inc/dec on
     /// such bindings must use the atomic path.
     fn is_arc_binding(&self, name: &str) -> bool {
-        self.arc_fallback_fns
+        self.drop_rc
+            .arc_fallback_fns
             .get(&self.current_fn_name)
             .is_some_and(|set| set.contains(name))
     }
@@ -8718,7 +8540,7 @@ impl<'ctx> Codegen<'ctx> {
         // Surface TypeExpr per heap-owning temporary expression. Keyed by
         // span; `materialize_owned_temp` consults it to scope-drop unnamed
         // Vec/String (with element type), Map/Set handles, and RC boxes.
-        self.owned_temp_drops = program.owned_temp_drops.clone();
+        self.drop_rc.owned_temp_drops = program.owned_temp_drops.clone();
 
         // Pointee TypeExpr per raw-pointer-typed expression. The unary-deref
         // arm keys this by operand span to load through `*const T` / `*mut T`.
@@ -10096,7 +9918,7 @@ impl<'ctx> Codegen<'ctx> {
                     &mut t_expr_struct_type_names,
                 );
                 std::mem::swap(&mut self.user_ord_typed_exprs, &mut t_user_ord_typed_exprs);
-                std::mem::swap(&mut self.owned_temp_drops, &mut t_owned_temp_drops);
+                std::mem::swap(&mut self.drop_rc.owned_temp_drops, &mut t_owned_temp_drops);
                 std::mem::swap(
                     &mut self.raw_pointer_pointee_types,
                     &mut t_raw_pointer_pointee_types,
@@ -10710,7 +10532,7 @@ impl<'ctx> Codegen<'ctx> {
     fn load_variable(&self, name: &str) -> Result<BasicValueEnum<'ctx>, String> {
         if let Some(slot) = self.variables.get(name) {
             // RC-fallback: the alloca holds a heap ptr → {i64 rc, T value}; load T from field 1.
-            if let Some(&heap_type) = self.rc_fallback_heap_types.get(name) {
+            if let Some(&heap_type) = self.drop_rc.rc_fallback_heap_types.get(name) {
                 let ptr_ty = self.context.ptr_type(AddressSpace::default());
                 let heap_ptr = self
                     .builder
@@ -10759,7 +10581,7 @@ impl<'ctx> Codegen<'ctx> {
             // field write, and a later use derefs `null + 8` (B-2026-06-13-1).
             // Checked before `ref_params` to match `load_variable`'s ordering;
             // an RC-promoted binding is owned, never itself a ref param.
-            if let Some(&heap_type) = self.rc_fallback_heap_types.get(name) {
+            if let Some(&heap_type) = self.drop_rc.rc_fallback_heap_types.get(name) {
                 let ptr_ty = self.context.ptr_type(AddressSpace::default());
                 let heap_ptr = self
                     .builder

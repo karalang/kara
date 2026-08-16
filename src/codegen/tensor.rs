@@ -2379,7 +2379,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(cond_bb);
@@ -5787,7 +5787,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Register a tensor binding's cleanup (scope-exit free of the
     /// single heap block). Mirrors `track_vec_var`.
     pub(super) fn track_tensor_var(&mut self, tensor_alloca: PointerValue<'ctx>) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(super::state::CleanupAction::FreeTensor { tensor_alloca });
         }
     }

@@ -63,7 +63,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `emit_hash_fn_for_type` lazy-synth pattern: the saved insert
     /// block is restored on exit so callers don't have to.
     pub(super) fn emit_enum_drop_switch(&mut self, enum_name: &str) -> Option<FunctionValue<'ctx>> {
-        if let Some(f) = self.enum_drop_fns.get(enum_name) {
+        if let Some(f) = self.drop_rc.enum_drop_fns.get(enum_name) {
             return Some(*f);
         }
         // B-2026-07-31-12 — `Json` is SELF-RECURSIVE (an Array payload holds
@@ -75,7 +75,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // inline-Result payload cleanup, struct enum-field drops — gets it).
         if enum_name == "Json" {
             let f = self.emit_json_recursive_drop_fn();
-            self.enum_drop_fns.insert(enum_name.to_string(), f);
+            self.drop_rc.enum_drop_fns.insert(enum_name.to_string(), f);
             return Some(f);
         }
         // Snapshot what we need before mutably borrowing `self.module`
@@ -97,7 +97,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let fn_name = format!("__karac_drop_{enum_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.enum_drop_fns.insert(enum_name.to_string(), f);
+            self.drop_rc.enum_drop_fns.insert(enum_name.to_string(), f);
             return Some(f);
         }
 
@@ -540,7 +540,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
-        self.enum_drop_fns.insert(enum_name.to_string(), drop_fn);
+        self.drop_rc
+            .enum_drop_fns
+            .insert(enum_name.to_string(), drop_fn);
         Some(drop_fn)
     }
 
@@ -1413,7 +1415,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // mono suffix was produced (a generic struct with bound params); a
         // non-generic struct treats it as absent.
         let subst = mono_suffix.as_ref().and(subst);
-        if let Some(f) = self.struct_drop_fns.get(&cache_key) {
+        if let Some(f) = self.drop_rc.struct_drop_fns.get(&cache_key) {
             return Some(*f);
         }
         // Shared structs use the RC machinery; their cleanup is via
@@ -2121,7 +2123,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let fn_name = format!("__karac_drop_struct_{cache_key}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.struct_drop_fns.insert(cache_key.clone(), f);
+            self.drop_rc.struct_drop_fns.insert(cache_key.clone(), f);
             return Some(f);
         }
 
@@ -2137,7 +2139,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
-        self.struct_drop_fns.insert(cache_key.clone(), drop_fn);
+        self.drop_rc
+            .struct_drop_fns
+            .insert(cache_key.clone(), drop_fn);
 
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -4105,7 +4109,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Option<FunctionValue<'ctx>> {
         // Memoized — both `Some(fn)` (drop fn emitted) and `None`
         // (struct has no walkable fields, plain `free` suffices) cache.
-        if let Some(slot) = self.rc_drop_fns.get(struct_name) {
+        if let Some(slot) = self.drop_rc.rc_drop_fns.get(struct_name) {
             return *slot;
         }
         let info = self.shared_types.get(struct_name)?.clone();
@@ -4213,7 +4217,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // synth fn even for a primitive-only shared struct so its body
         // fires before the free (the field walk below is then all no-ops).
         if !any_walkable && !has_user_drop {
-            self.rc_drop_fns.insert(struct_name.to_string(), None);
+            self.drop_rc
+                .rc_drop_fns
+                .insert(struct_name.to_string(), None);
             return None;
         }
 
@@ -4232,7 +4238,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 | SharedFieldKind::OptionShared(info)
                 | SharedFieldKind::OptionSharedNiche(info) => {
                     if let Some(inner_name) = self.struct_name_for_heap_type(info.heap_type) {
-                        if inner_name != struct_name && !self.rc_drop_fns.contains_key(&inner_name)
+                        if inner_name != struct_name
+                            && !self.drop_rc.rc_drop_fns.contains_key(&inner_name)
                         {
                             let _ = self.emit_shared_struct_rc_drop_fn(&inner_name);
                         }
@@ -4263,7 +4270,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // recursing into a fresh synthesis. Standard memoization
         // discipline; mirrors how `clone_fn_cache` handles self-
         // recursive types.
-        self.rc_drop_fns
+        self.drop_rc
+            .rc_drop_fns
             .insert(struct_name.to_string(), Some(drop_fn));
         self.current_fn = Some(drop_fn);
 
@@ -5388,7 +5396,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         enum_name: &str,
     ) -> Option<FunctionValue<'ctx>> {
-        if let Some(slot) = self.rc_drop_fns.get(enum_name) {
+        if let Some(slot) = self.drop_rc.rc_drop_fns.get(enum_name) {
             return *slot;
         }
         let info = self.shared_types.get(enum_name)?.clone();
@@ -5481,7 +5489,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .as_ref()
             .is_some_and(|p| p.drop_method_keys.contains_key(enum_name));
         if !any_walkable && !has_user_drop {
-            self.rc_drop_fns.insert(enum_name.to_string(), None);
+            self.drop_rc.rc_drop_fns.insert(enum_name.to_string(), None);
             return None;
         }
 
@@ -5499,7 +5507,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
         // Cache BEFORE the body so a self-recursive payload (`Bin(Expr, Expr)`)
         // resolves through `emit_rc_dec`'s `rc_drop_fns` lookup to this fn.
-        self.rc_drop_fns
+        self.drop_rc
+            .rc_drop_fns
             .insert(enum_name.to_string(), Some(drop_fn));
         self.current_fn = Some(drop_fn);
 
@@ -5523,7 +5532,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
             })
             .filter_map(|ht| self.struct_name_for_heap_type(ht))
-            .filter(|n| n != enum_name && !self.rc_drop_fns.contains_key(n))
+            .filter(|n| n != enum_name && !self.drop_rc.rc_drop_fns.contains_key(n))
             .collect();
         for n in sibling_names {
             let is_enum = self
@@ -6501,7 +6510,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
-        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             if owns_body {
                 let Some(replacement) = replacement else {
                     continue;
@@ -7942,14 +7951,16 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     fn emit_user_drop_wrapper(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
-        if let Some(f) = self.user_drop_wrapper_fns.get(type_name) {
+        if let Some(f) = self.drop_rc.user_drop_wrapper_fns.get(type_name) {
             return Some(*f);
         }
         let user_drop_fn = self.module.get_function(&format!("{type_name}.drop"))?;
 
         let fn_name = format!("karac_drop_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.user_drop_wrapper_fns.insert(type_name.to_string(), f);
+            self.drop_rc
+                .user_drop_wrapper_fns
+                .insert(type_name.to_string(), f);
             return Some(f);
         }
 
@@ -7962,7 +7973,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let wrapper = self
             .module
             .add_function(&fn_name, wrapper_ty, Some(Linkage::Internal));
-        self.user_drop_wrapper_fns
+        self.drop_rc
+            .user_drop_wrapper_fns
             .insert(type_name.to_string(), wrapper);
 
         let entry_bb = self.context.append_basic_block(wrapper, "entry");

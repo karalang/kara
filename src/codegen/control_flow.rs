@@ -161,7 +161,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // alias acquire) drains at the END OF THIS ARM — not in the
         // enclosing frame, where a then-block inside a loop would inc once
         // per iteration but dec only once at the enclosing scope's exit.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         // Borrowed identifier scrutinee (slice 3q): a `ref` param or a
         // for-loop ELEMENT binding whose container's per-element drop is armed
         // (`scrutinee_is_borrowed_binding`). A payload binding must alias, not
@@ -349,7 +349,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 then_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
             }
         } else {
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
         let then_end = self.builder.get_insert_block().unwrap();
         if !then_terminated {
@@ -453,7 +453,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: cond_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         // Header: re-evaluate the scrutinee and test the pattern every
@@ -500,7 +500,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(body_bb);
         // Per-iteration scope frame, same shape as `compile_while` — see its
         // comment for the leak rationale.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee with a heap payload field the arm leaves unbound leaks per
         // iteration. Unlike if-let/let-else (one enclosing-frame drop), the
@@ -649,7 +649,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drain_top_frame_with_emit();
             self.builder.build_unconditional_branch(cond_bb).unwrap();
         } else {
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
 
         self.loop_stack.pop();
@@ -2279,7 +2279,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: cond_bb,
             break_bb: exit_bb,
             result_slot: None,
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(cond_bb);
@@ -2294,7 +2294,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `i1`, never heap) and before the branch, so it runs on both the
         // taken and not-taken edges. Condition temps are never live in the
         // body (guards are `bool`), so freeing here is always safe.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         let cond_val = self.compile_expr(condition)?.into_int_value();
         self.drain_top_frame_with_emit();
         self.builder
@@ -2360,7 +2360,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // Per-iteration scope frame, same shape as compile_for_range — see
         // its comment for the leak rationale.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         self.compile_block(body)?;
         // Pop the bounds we pushed for this loop; restore the surrounding
         // scope's stack untouched. Nested loops therefore see only their
@@ -2401,7 +2401,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.attach_unroll_count_metadata(back_edge, 4);
             }
         } else {
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
 
         self.loop_stack.pop();
@@ -2438,7 +2438,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: loop_bb,
             break_bb: exit_bb,
             result_slot: Some(result_slot),
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         self.builder.build_unconditional_branch(loop_bb).unwrap();
@@ -2448,7 +2448,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // lets re-bound on every iteration would otherwise climb refcount
         // N×K and pin the chain). Drained just before the back-edge to
         // `loop_bb`.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         self.compile_block(body)?;
         let body_has_terminator = self
             .builder
@@ -2460,7 +2460,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drain_top_frame_with_emit();
             self.builder.build_unconditional_branch(loop_bb).unwrap();
         } else {
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
 
         self.loop_stack.pop();
@@ -2543,7 +2543,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: continue_unreachable_bb,
             break_bb: exit_bb,
             result_slot: Some(result_slot),
-            cleanup_depth: self.scope_cleanup_actions.len(),
+            cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
         // Compile the body. `compile_block` returns the tail expression's

@@ -286,7 +286,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(n.as_str())
                     .cloned()
                     .unwrap_or_else(|| n.clone());
-                self.inline_optres_retained_sources.insert(owner);
+                self.drop_rc.inline_optres_retained_sources.insert(owner);
             }
         }
         self.pattern_state.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee)
@@ -482,7 +482,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // .pop()` (the early-return path, where the return's own
             // `emit_scope_cleanup` already walked the full stack including
             // this frame and emitted cleanup for its actions).
-            self.scope_cleanup_actions.push(Vec::new());
+            self.drop_rc.scope_cleanup_actions.push(Vec::new());
 
             // B-2026-07-13-6: an arm's PATTERN bindings (`Some(v)`) and body
             // `let`s are ARM-scoped. Checkpoint the name env here so they revert
@@ -967,7 +967,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // including this per-arm frame and emitted cleanup for
                 // its actions before the return. Pop the now-spent frame
                 // so it doesn't shadow subsequent arms' bindings.
-                self.scope_cleanup_actions.pop();
+                self.drop_rc.scope_cleanup_actions.pop();
             }
             // B-2026-07-13-6: revert this arm's pattern/body binds (see the
             // per-arm snapshot above) so the next arm and the post-`match` code
@@ -1385,7 +1385,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return false;
         };
-        self.rc_elide_ref_params
+        self.drop_rc
+            .rc_elide_ref_params
             .get(&self.current_fn_name)
             .is_some_and(|recs| recs.iter().any(|(n, _)| n == name))
     }
@@ -1633,13 +1634,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// frame? The ownership witness for
     /// [`Self::owned_enum_local_that_frees_its_own_payload`].
     fn slot_has_live_enum_drop(&self, slot_ptr: PointerValue<'ctx>) -> bool {
-        self.scope_cleanup_actions.iter().flatten().any(|a| {
-            matches!(
-                a,
-                crate::codegen::state::CleanupAction::EnumDrop { enum_alloca, .. }
-                    if *enum_alloca == slot_ptr
-            )
-        })
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .any(|a| {
+                matches!(
+                    a,
+                    crate::codegen::state::CleanupAction::EnumDrop { enum_alloca, .. }
+                        if *enum_alloca == slot_ptr
+                )
+            })
     }
 
     /// Does `pattern` bind at least one HEAP-BEARING payload field of
@@ -2464,7 +2469,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // its per-element drain too; the clone above duplicated each element's
         // own heap, so the overlay's outer-buffer free alone strands it.
         let payload_elem_agg_drop = self.option_payload_vec_elem_agg_drop(&field_te);
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(
                 crate::codegen::state::CleanupAction::FreeInlineOptionPayload {
                     option_slot: slot,
@@ -2625,7 +2630,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // its per-element drain too; the clone above duplicated each element's
         // own heap, so the overlay's outer-buffer free alone strands it.
         let payload_elem_agg_drop = self.option_payload_vec_elem_agg_drop(&opt_te);
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(
                 crate::codegen::state::CleanupAction::FreeInlineOptionPayload {
                     option_slot: slot,
@@ -3163,7 +3168,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(clone_fn, &[src.into(), slot.into()], "")
             .unwrap();
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(crate::codegen::state::CleanupAction::StructDrop {
                 struct_alloca: slot,
                 drop_fn,
@@ -4051,7 +4056,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             let _ = self.builder.build_store(box_ptr, w0);
         }
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(super::state::CleanupAction::BoxedEnumDrop {
                 // Not a Kāra identifier — the name keys `clear_boxed_enum_
                 // inner_drop` / `suppress_*_for_var`, and this action must never
@@ -4541,7 +4546,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if let BasicTypeEnum::StructType(agg_ty) = slot.ty {
                 let elem_tes = elem_tes.clone();
                 if let Some(drop_fn) = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes) {
-                    if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                         frame.push(crate::codegen::state::CleanupAction::StructDrop {
                             struct_alloca: slot.ptr,
                             drop_fn,
@@ -7748,7 +7753,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let i64_t = self.context.i64_type();
-        for action in self.scope_cleanup_actions.iter().flatten() {
+        for action in self.drop_rc.scope_cleanup_actions.iter().flatten() {
             if let crate::codegen::state::CleanupAction::NestedBoxedEnumDrop {
                 enum_slot,
                 enum_ty,
@@ -8618,7 +8623,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // payload has no other owner to hand off to, so disarming it here
         // leaks. The premise of this disarm — "the map's arm already took the
         // buffer" — only holds while the arm is on the transfer path.
-        if self.inline_optres_retained_sources.contains(name.as_str()) {
+        if self
+            .drop_rc
+            .inline_optres_retained_sources
+            .contains(name.as_str())
+        {
             return;
         }
         let in_option = self.inline_option_payload_vars.contains(name.as_str());
@@ -8719,7 +8728,7 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
-        for frame in self.scope_cleanup_actions.iter_mut() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
             for action in frame.iter_mut() {
                 if let super::state::CleanupAction::BoxedEnumDrop {
                     enum_slot,
@@ -9733,7 +9742,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let alloca = self.create_entry_alloca(fn_val, "__freshtemp_shared_opt", option_ty.into());
         let _ = self.builder.build_store(alloca, sv);
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(crate::codegen::state::CleanupAction::RcDecOption {
                 name: "__freshtemp_shared_opt".to_string(),
                 option_slot: alloca,
@@ -9794,7 +9803,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn?;
         let alloca = self.create_entry_alloca(fn_val, "__freshtemp_inline_res", result_ty.into());
         let _ = self.builder.build_store(alloca, sv);
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(
                 crate::codegen::state::CleanupAction::FreeInlineResultPayload {
                     result_slot: alloca,

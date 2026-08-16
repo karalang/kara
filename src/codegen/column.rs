@@ -4626,7 +4626,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if string_elem {
             self.emit_string_drop_fn();
         }
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(super::state::CleanupAction::FreeColumn {
                 column_alloca,
                 string_elem,

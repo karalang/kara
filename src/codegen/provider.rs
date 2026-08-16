@@ -233,7 +233,7 @@ impl<'ctx> super::Codegen<'ctx> {
         })?;
         // Depth BEFORE the pop frame is pushed, so a retargeted return's
         // bounded drain covers the body's frames AND the ProviderPop frame.
-        let cleanup_depth = self.scope_cleanup_actions.len();
+        let cleanup_depth = self.drop_rc.scope_cleanup_actions.len();
         self.return_retargets.push(super::state::ReturnRetarget {
             fn_val,
             cleanup_depth,
@@ -418,7 +418,8 @@ impl<'ctx> super::Codegen<'ctx> {
     where
         F: FnOnce(&mut Self) -> Result<BasicValueEnum<'ctx>, String>,
     {
-        self.scope_cleanup_actions
+        self.drop_rc
+            .scope_cleanup_actions
             .push((0..n_pops).map(|_| CleanupAction::ProviderPop).collect());
         let body_result = body(self)?;
         let body_has_terminator = self
@@ -430,7 +431,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !body_has_terminator {
             self.drain_top_frame_with_emit();
         } else {
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
         Ok(body_result)
     }

@@ -232,7 +232,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let alloca = self.create_entry_alloca(fn_val, "lz.expr.slot", ptr_ty.into());
         self.builder.build_store(alloca, handle).unwrap();
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(super::state::CleanupAction::ReleaseLazyExpr { alloca });
         }
     }
@@ -245,7 +245,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let alloca = self.create_entry_alloca(fn_val, "lz.plan.slot", ptr_ty.into());
         self.builder.build_store(alloca, handle).unwrap();
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(super::state::CleanupAction::ReleaseLazyPlan { alloca });
         }
     }
@@ -259,7 +259,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let alloca = self.create_entry_alloca(fn_val, "lz.gb.slot", ptr_ty.into());
         self.builder.build_store(alloca, handle).unwrap();
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(super::state::CleanupAction::ReleaseLazyGroupBy { alloca });
         }
     }

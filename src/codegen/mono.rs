@@ -1831,7 +1831,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // scope where the callee's alloca doesn't dominate ("Instruction
             // does not dominate all uses"). Swap to an empty stack for the
             // body and restore the caller's below — parallel to `variables`.
-            let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+            let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
             // A mono body is a top-level function, not a par branch — it must
             // compile with `branch_cancel_ptr = None` so `compile_call`'s
             // cooperative cancel check stays a no-op (the ptr names a par
@@ -1918,7 +1918,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mono_state.type_subst_type_exprs = saved_subst_type_exprs;
             self.loop_stack = saved_loop_stack;
             self.branch_cancel_ptr = saved_cancel_ptr;
-            self.scope_cleanup_actions = saved_cleanup;
+            self.drop_rc.scope_cleanup_actions = saved_cleanup;
             self.restore_var_side_tables(saved_side_tables);
             self.accel.tensor_var_infos = saved_tensor_infos;
             self.var_type_names = saved_var_types;
@@ -2458,7 +2458,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_tensor_infos = std::mem::take(&mut self.accel.tensor_var_infos);
         // Full var-side-table isolation — see `SavedVarSideTables`.
         let saved_side_tables = self.take_var_side_tables();
-        let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+        let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
@@ -2509,7 +2509,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mono_state.type_subst_type_exprs = saved_subst_type_exprs;
         self.loop_stack = saved_loop_stack;
         self.branch_cancel_ptr = saved_cancel_ptr;
-        self.scope_cleanup_actions = saved_cleanup;
+        self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.restore_var_side_tables(saved_side_tables);
         self.accel.tensor_var_infos = saved_tensor_infos;
         self.var_type_names = saved_var_types;
@@ -2673,8 +2673,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // FreeTensor cleanup leaked into the caller's frame and was emitted
         // where the callee's alloca didn't dominate ("Instruction does not
         // dominate all uses").
-        self.scope_cleanup_actions.clear();
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.clear();
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         // Slice 10: reseed module-binding side-tables in monomorphised
         // bodies too (same reason as the `compile_function` path —
         // `var_type_names` is cleared per function).
@@ -3112,7 +3112,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Leave the frame stack as the caller swapped it in
         // (`compile_generic_call` restores its own); clearing keeps the
         // post-body state tidy and matches `compile_function`'s exit.
-        self.scope_cleanup_actions.clear();
+        self.drop_rc.scope_cleanup_actions.clear();
 
         Ok(())
     }

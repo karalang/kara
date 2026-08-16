@@ -414,7 +414,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Precondition 2: plain allocas only.
         for name in [&m.source, &m.counter] {
-            if self.rc_fallback_heap_types.contains_key(name.as_str())
+            if self
+                .drop_rc
+                .rc_fallback_heap_types
+                .contains_key(name.as_str())
                 || self.ref_params.contains_key(name.as_str())
             {
                 return Ok(false);

@@ -5068,7 +5068,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // it. `if`/`match` already scope their conditional sub-blocks this way;
         // short-circuit `and`/`or` is the sibling that was missing it. The RHS
         // *value* is a plain `i1`, never heap, so nothing live escapes the drain.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         let rhs_val = self.compile_expr(right)?.into_int_value();
         self.drain_top_frame_with_emit();
         // Capture the insert block AFTER the drain: a `FreeVecBuffer` drain emits

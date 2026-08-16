@@ -558,7 +558,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Register a `FreeDataFrame` cleanup for a DataFrame binding's slot.
     pub(super) fn track_dataframe_var(&mut self, df_alloca: PointerValue<'ctx>) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(super::state::CleanupAction::FreeDataFrame { df_alloca });
         }
     }

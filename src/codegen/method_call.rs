@@ -8499,7 +8499,7 @@ impl<'ctx> super::Codegen<'ctx> {
             offset: usize::MAX - (uid as usize) - 1,
             length: 1,
         };
-        self.owned_temp_drops.insert(
+        self.drop_rc.owned_temp_drops.insert(
             (prefix_span.offset, prefix_span.length),
             vec_string_te.clone(),
         );
@@ -9234,6 +9234,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (the lowering pass records it for every `Vec`-typed expr). Reused
         // verbatim as the accumulator's annotation so `push` lowers `U`.
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -10001,6 +10002,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -10052,9 +10054,11 @@ impl<'ctx> super::Codegen<'ctx> {
             offset: usize::MAX - (uid as usize) * 2 - 2,
             length: 1,
         };
-        self.owned_temp_drops
+        self.drop_rc
+            .owned_temp_drops
             .insert((span_a.offset, span_a.length), vec_of(&ea));
-        self.owned_temp_drops
+        self.drop_rc
+            .owned_temp_drops
             .insert((span_b.offset, span_b.length), vec_of(&eb));
 
         let ident = |name: &str| Expr {
@@ -10162,6 +10166,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         // Result element type R from `Vec[R]` at the collect span.
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -10305,6 +10310,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // Result element type U from the recorded `Vec[U]` at the collect span.
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -10439,6 +10445,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -10564,6 +10571,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -10774,6 +10782,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -13769,6 +13778,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -13896,6 +13906,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -14022,6 +14033,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -14147,6 +14159,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let result_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -14185,7 +14198,8 @@ impl<'ctx> super::Codegen<'ctx> {
             offset: usize::MAX - (uid as usize) - 1,
             length: 1,
         };
-        self.owned_temp_drops
+        self.drop_rc
+            .owned_temp_drops
             .insert((outer_span.offset, outer_span.length), temp_te.clone());
         let outer_collect = Expr {
             kind: ExprKind::MethodCall {
@@ -14311,6 +14325,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let outer_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -14536,6 +14551,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let vec_te = match self
+            .drop_rc
             .owned_temp_drops
             .get(&(call_span.offset, call_span.length))
         {
@@ -17483,7 +17499,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // return site is well-formed. This is what retires the `LockEarlyExit`
         // (`E0259`) typechecker rejection — early exits from a lock body are now
         // legal and release the lock on the way out.
-        self.scope_cleanup_actions
+        self.drop_rc
+            .scope_cleanup_actions
             .push(vec![super::state::CleanupAction::ReleaseMutex { flag_ptr }]);
 
         let body_val = self.compile_block(body)?;
@@ -17520,7 +17537,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drain_top_frame_with_emit();
             self.builder.build_unconditional_branch(after_bb).unwrap();
         } else {
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
         self.builder.position_at_end(after_bb);
 

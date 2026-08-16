@@ -483,6 +483,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // instead so the gap is a compile error, not a
                     // miscompiled map.
                     let usable_te = self
+                        .drop_rc
                         .owned_temp_drops
                         .get(&key)
                         .cloned()
@@ -3363,7 +3364,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                 self.builder.build_store(slot, val).unwrap();
                 if let Some(drop_fn) = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes) {
-                    if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                         frame.push(super::state::CleanupAction::StructDrop {
                             struct_alloca: slot,
                             drop_fn,
@@ -5193,7 +5194,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.emit_heap_closure_env_inc(fat);
             }
-            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                 frame.push(super::state::CleanupAction::FreeClosureEnv {
                     fat_alloca: field_gep,
                 });
@@ -5257,7 +5258,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_struct_gep(st, struct_alloca, idx as u32, "clo.aggret.envslot")
                 .unwrap();
-            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                 frame.push(super::state::CleanupAction::FreeClosureEnv {
                     fat_alloca: field_gep,
                 });
@@ -5308,7 +5309,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(self.closure_value_type(), field_gep, "clo.owncopy.fat")
                 .unwrap();
             self.emit_heap_closure_env_inc(fat);
-            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                 frame.push(super::state::CleanupAction::FreeClosureEnv {
                     fat_alloca: field_gep,
                 });
@@ -5366,7 +5367,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(fat_ty, elem_gep, "clo.owncopy.tup.fat")
                     .unwrap();
                 self.emit_heap_closure_env_inc(fat);
-                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                     frame.push(super::state::CleanupAction::FreeClosureEnv {
                         fat_alloca: elem_gep,
                     });
@@ -5396,7 +5397,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(fat_ty, elem_gep, "clo.owncopy.arr.fat")
                     .unwrap();
                 self.emit_heap_closure_env_inc(fat);
-                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                     frame.push(super::state::CleanupAction::FreeClosureEnv {
                         fat_alloca: elem_gep,
                     });
@@ -5447,7 +5448,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.emit_heap_closure_env_inc(fat);
             }
-            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                 frame.push(super::state::CleanupAction::FreeClosureEnv {
                     fat_alloca: elem_gep,
                 });
@@ -5505,7 +5506,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.emit_heap_closure_env_inc(fat);
             }
-            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                 frame.push(super::state::CleanupAction::FreeClosureEnv {
                     fat_alloca: elem_gep,
                 });
@@ -5648,7 +5649,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_struct_gep(agg_ty, slot.ptr, idx as u32, "clo.contret.tup.envslot")
                     .unwrap();
-                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                     frame.push(super::state::CleanupAction::FreeClosureEnv {
                         fat_alloca: elem_gep,
                     });
@@ -5673,7 +5674,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         )
                         .unwrap()
                 };
-                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                     frame.push(super::state::CleanupAction::FreeClosureEnv {
                         fat_alloca: elem_gep,
                     });
@@ -5793,7 +5794,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(s) => s.ptr,
             None => return,
         };
-        for frame in self.scope_cleanup_actions.iter_mut() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
             frame.retain(|action| {
                 !matches!(
                     action,
@@ -5822,7 +5823,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(s) => s.ptr,
             None => return,
         };
-        for frame in self.scope_cleanup_actions.iter_mut() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
             frame.retain(|action| match action {
                 crate::codegen::state::CleanupAction::NestedBoxedEnumDrop { enum_slot, .. } => {
                     *enum_slot != slot_ptr
@@ -5848,7 +5849,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // owns (`Vec[Map]` element drop). Removing it from whichever frame
         // holds it is correct for all callers: the binding has been moved,
         // so its origin must never free the handle regardless of frame.
-        for frame in self.scope_cleanup_actions.iter_mut() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
             frame.retain(|action| match action {
                 crate::codegen::state::CleanupAction::FreeMapHandle { map_alloca, .. } => {
                     *map_alloca != slot_ptr
@@ -5890,6 +5891,7 @@ impl<'ctx> super::Codegen<'ctx> {
             None => return,
         };
         let drop = self
+            .drop_rc
             .scope_cleanup_actions
             .iter()
             .flatten()
@@ -5944,7 +5946,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(s) => s.ptr,
             None => return,
         };
-        for frame in self.scope_cleanup_actions.iter_mut() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
             frame.retain(|action| match action {
                 crate::codegen::state::CleanupAction::FreeSoaGroups { soa_alloca, .. } => {
                     *soa_alloca != slot_ptr
@@ -6019,7 +6021,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         let span_key = (arg_expr.span.offset, arg_expr.span.length);
         if self.llvm_ty_is_vec_struct(val.get_type()) {
-            let container_te = self.owned_temp_drops.get(&span_key).cloned();
+            let container_te = self.drop_rc.owned_temp_drops.get(&span_key).cloned();
             let elem_ty = container_te
                 .as_ref()
                 .and_then(|te| self.extract_vec_elem_type(te));
@@ -6119,7 +6121,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !val.is_pointer_value() {
             return;
         }
-        let Some(te) = self.owned_temp_drops.get(&span_key).cloned() else {
+        let Some(te) = self.drop_rc.owned_temp_drops.get(&span_key).cloned() else {
             return;
         };
         let head = match &te.kind {

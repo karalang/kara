@@ -161,5 +161,5 @@ for fp in files:
 | 2 | cluster 10 **`Mono`** (`src/codegen/mono_state.rs`) | **landed** — 9 fields (generic fn ASTs, emitted-mono set, and the active type/const/layout substitution); `Codegen` 321 → 298 fields | 2026-08-16 |
 | 2 | cluster 12 **`PatternMatch`** (`src/codegen/pattern_state.rs`) | **landed** — 17 fields (scrutinee classification flags, Option/Result payload slot+area, per-binding type/borrow-mode tables, variant payload bindings); `Codegen` 298 → 282 fields | 2026-08-16 |
 | 2 | cluster 11 `Concurrency` | **deferred** — B-2026-08-16-1 (open, high) is an auto-par/codegen binding bug; take it after that closes | — |
-| 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
+| 2 | cluster 13 **`DropRc`** (`src/codegen/drop_rc.rs`) | **landed** — 17 fields (scope cleanup stack, per-type drop/clone fn caches, RC/Arc fallback analysis + heap types, `rc_elide_ref_params`, owned-temp drops); unblocked once B-2026-08-15-6/-7 closed; 382 access sites — the widest slice yet; `Codegen` 282 → 266 fields | 2026-08-16 |
 | 2 | clusters 14–15 (`FnCtx`, `VarTables`) | deferred — decide after 13 | — |

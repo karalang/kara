@@ -369,7 +369,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // cleanup's `cap > 0` guard skips it (no double-free). Drains with the
         // channel-end frame at task exit (`drain_top_frame_with_emit` below),
         // before the env struct itself is freed.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         let mut channel_caps: Vec<(PointerValue<'ctx>, bool)> = Vec::new();
         let mut vec_caps = Vec::new();
         for var_name in &free_vars {
@@ -379,7 +379,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let parent_ptr = parent_slot.ptr;
             let wrapper_ptr = self.variables[var_name].ptr;
             let mut is_sender = None;
-            for frame in &self.scope_cleanup_actions {
+            for frame in &self.drop_rc.scope_cleanup_actions {
                 for action in frame {
                     match action {
                         CleanupAction::DropChannelEnd {
@@ -439,7 +439,7 @@ impl<'ctx> super::Codegen<'ctx> {
             vec_caps.clear();
         }
         for (vec_alloca, elem_ty, elem_is_tensor, elem_map_drop, elem_agg_drop) in vec_caps {
-            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                 frame.push(CleanupAction::FreeVecBuffer {
                     vec_alloca,
                     elem_ty,

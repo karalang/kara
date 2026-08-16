@@ -804,13 +804,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             // (`suppress_struct_cleanup_for_tail_identifier`) retracts
                             // this drop when the owned struct is re-wrapped, so exactly
                             // the new box owns it (no double-free, no leak).
-                            let saved_dc = self.deep_copy_rc_inc_bare_shared;
+                            let saved_dc = self.drop_rc.deep_copy_rc_inc_bare_shared;
                             let saved_cs = self.copy_support_for_loop_shared_mode;
-                            self.deep_copy_rc_inc_bare_shared = true;
+                            self.drop_rc.deep_copy_rc_inc_bare_shared = true;
                             self.copy_support_for_loop_shared_mode = true;
                             self.deep_copy_struct_heap_fields_in_place(alloca, tn);
                             self.copy_support_for_loop_shared_mode = saved_cs;
-                            self.deep_copy_rc_inc_bare_shared = saved_dc;
+                            self.drop_rc.deep_copy_rc_inc_bare_shared = saved_dc;
                             self.track_struct_var(tn, alloca);
                         } else {
                             // B-2026-07-09-12 clone-on-extract — a shared-enum struct
@@ -958,7 +958,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // the registration goes memory-only (the
                                 // `else` arm) — the wrapper here doubled the
                                 // body on both backends.
-                                if self.user_drop_wrapper_fns.contains_key(tn)
+                                if self.drop_rc.user_drop_wrapper_fns.contains_key(tn)
                                     && self
                                         .pattern_state
                                         .current_variant_payload_bindings

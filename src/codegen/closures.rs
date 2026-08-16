@@ -3001,8 +3001,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // allocas, which LLVM rejects ("Instruction does not dominate all
         // uses" on `fstr.acc`). The body push below gives `track_*`/cleanup
         // registration a frame of its own.
-        let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
-        self.scope_cleanup_actions.push(Vec::new());
+        let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         // Isolate the par-branch cancel pointer (B-2026-06-18-10). When the
         // enclosing scope is a `par {}` branch the auto-par pass produced,
         // `branch_cancel_ptr` points at THAT branch fn's `cancel_flag` arg. The
@@ -3440,7 +3440,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.closure_fn_types = saved_cfn;
         self.pending_closure_fn_type = saved_pct;
         self.last_fstr_acc = saved_fstr_acc;
-        self.scope_cleanup_actions = saved_cleanup;
+        self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.branch_cancel_ptr = saved_cancel_ptr;
         // Restore the outer fn's owned-param set BEFORE the env is built below
         // (the capture defensive-copy at env-build time keys off the OUTER fn's
@@ -3875,7 +3875,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// holds a plain pointer — a `shared` handle — where taking the slot's
     /// address would produce a pointer-to-pointer.
     fn ident_arg_needs_address(&self, name: &str) -> bool {
-        if self.ref_params.contains_key(name) || self.rc_fallback_heap_types.contains_key(name) {
+        if self.ref_params.contains_key(name)
+            || self.drop_rc.rc_fallback_heap_types.contains_key(name)
+        {
             return true;
         }
         self.variables

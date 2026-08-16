@@ -825,9 +825,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+        let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
 
         self.current_fn = Some(worker_fn);
         let entry = self.context.append_basic_block(worker_fn, "entry");
@@ -1135,7 +1135,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // peak RSS climbed to 498 MiB vs 1.5 MiB on the seq lane. Mirrors
         // the per-iteration frame discipline in `compile_while` /
         // `compile_loop` / `compile_for_range`.
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         // Compile the body in the worker fn's scope. `self.variables` now
         // binds the accumulator + loop var + captures to the worker's
         // local allocas, so the body's compile output reads/writes them
@@ -1174,7 +1174,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // case future shapes admit it). The terminator path already
             // walked its own cleanup via emit_scope_cleanup, so just pop
             // the per-iteration frame to balance the stack.
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
 
         self.builder.position_at_end(exit_bb);
@@ -1195,7 +1195,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Restore outer state.
         self.branch_cancel_ptr = saved_cancel_ptr;
-        self.scope_cleanup_actions = saved_cleanup;
+        self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
@@ -2035,14 +2035,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+        let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
         let saved_elem_types = std::mem::take(&mut self.vec_elem_types);
         // The enclosing function may itself be inside a tabulate loop —
         // its alias scopes are declared in THAT function and must not
         // leak into this worker's body.
         let saved_tab_md = self.tabulate_alias_scopes.take();
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
 
         self.current_fn = Some(worker_fn);
         let entry = self.context.append_basic_block(worker_fn, "entry");
@@ -2313,7 +2313,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 None
             };
-            self.scope_cleanup_actions.push(Vec::new());
+            self.drop_rc.scope_cleanup_actions.push(Vec::new());
             let mut terminated = false;
             for (j, body_stmt) in body.stmts.iter().enumerate() {
                 if let StmtKind::Expr(e) = &body_stmt.kind {
@@ -2392,7 +2392,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(idx_alloca, i_next).unwrap();
                 self.builder.build_unconditional_branch(cond_bb).unwrap();
             } else {
-                self.scope_cleanup_actions.pop();
+                self.drop_rc.scope_cleanup_actions.pop();
             }
         } else {
             let body_result = self.compile_block(body);
@@ -2437,7 +2437,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.tabulate_alias_scopes = saved_tab_md;
         self.vec_elem_types = saved_elem_types;
         self.branch_cancel_ptr = saved_cancel_ptr;
-        self.scope_cleanup_actions = saved_cleanup;
+        self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
@@ -3304,7 +3304,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(body_bb);
         // Per-iteration scope frame for body-local lets (mirrors
         // compile_for_range_with_step).
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         let mut terminated = false;
         let push_arg_of = |e: &Expr| -> Option<Expr> {
             if crate::concurrency::collect_push_shape(e).as_deref() == Some(acc.as_str()) {
@@ -3383,7 +3383,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_store(idx_alloca, i_next).unwrap();
             self.builder.build_unconditional_branch(cond_bb).unwrap();
         } else {
-            self.scope_cleanup_actions.pop();
+            self.drop_rc.scope_cleanup_actions.pop();
         }
 
         self.builder.position_at_end(exit_bb);

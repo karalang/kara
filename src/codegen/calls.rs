@@ -2564,6 +2564,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // be located and removed below, exactly as the `unwrap_or`
                     // f-string leg does (B-2026-07-16-23 leg 3).
                     let cleanup_snap = self
+                        .drop_rc
                         .scope_cleanup_actions
                         .last()
                         .map(|f| f.len())
@@ -2600,7 +2601,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             | ExprKind::RepeatLiteral { .. }
                     );
                     if e_is_tracked_temp {
-                        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                             let mut i = frame.len();
                             while i > cleanup_snap {
                                 i -= 1;
@@ -2873,6 +2874,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `track_vec_var` during compile) can be located and suppressed
             // below (B-2026-07-16-23 leg 3).
             let cleanup_snap = self
+                .drop_rc
                 .scope_cleanup_actions
                 .last()
                 .map(|f| f.len())
@@ -2941,7 +2943,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let default_is_fstring =
                 matches!(&default_arg.value.kind, ExprKind::InterpolatedStringLit(_));
             if default_is_fstring {
-                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                     let mut i = frame.len();
                     while i > cleanup_snap {
                         i -= 1;

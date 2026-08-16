@@ -685,7 +685,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut dropped = false;
         for (name, info) in &self.shared_types {
             if info.heap_type == heap_type {
-                if let Some(Some(drop_fn)) = self.rc_drop_fns.get(name) {
+                if let Some(Some(drop_fn)) = self.drop_rc.rc_drop_fns.get(name) {
                     self.builder
                         .build_call(*drop_fn, &[ptr.into()], "")
                         .unwrap();
@@ -703,6 +703,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // the field free runs exactly once for the binding's last owner —
             // whole-binding moves (which inc/dec the box rc) never double-free.
             if let Some(&(_, value_drop_fn)) = self
+                .drop_rc
                 .rc_fallback_box_drop_fns
                 .iter()
                 .find(|(ty, _)| *ty == heap_type)
@@ -844,6 +845,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// box free (`emit_rc_dec`'s fallback `free`) never recursed into them.
     pub(super) fn register_rc_fallback_box_drop(&mut self, box_heap_type: StructType<'ctx>) {
         if self
+            .drop_rc
             .rc_fallback_box_drop_fns
             .iter()
             .any(|(ty, _)| *ty == box_heap_type)
@@ -862,7 +864,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let fn_name = format!(
             "__karac_rc_fb_value_drop_{}",
-            self.rc_fallback_box_drop_fns.len()
+            self.drop_rc.rc_fallback_box_drop_fns.len()
         );
         let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
         let drop_fn = self.module.add_function(
@@ -871,7 +873,9 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(inkwell::module::Linkage::Internal),
         );
         // Register before emitting the body (idempotency / recursion guard).
-        self.rc_fallback_box_drop_fns.push((box_heap_type, drop_fn));
+        self.drop_rc
+            .rc_fallback_box_drop_fns
+            .push((box_heap_type, drop_fn));
 
         // The body uses `emit_free_if_cap_positive`, which appends basic
         // blocks to `current_fn` — point it at the drop fn during synthesis.
@@ -907,13 +911,21 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.aggregate_has_heap_field(agg_ty) {
             return None;
         }
-        if let Some((_, f)) = self.aggregate_drop_fns.iter().find(|(t, _)| *t == agg_ty) {
+        if let Some((_, f)) = self
+            .drop_rc
+            .aggregate_drop_fns
+            .iter()
+            .find(|(t, _)| *t == agg_ty)
+        {
             return Some(*f);
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
-        let fn_name = format!("__karac_drop_tuple_{}", self.aggregate_drop_fns.len());
+        let fn_name = format!(
+            "__karac_drop_tuple_{}",
+            self.drop_rc.aggregate_drop_fns.len()
+        );
         let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
         let drop_fn = self.module.add_function(
             &fn_name,
@@ -921,7 +933,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(inkwell::module::Linkage::Internal),
         );
         // Register before emitting the body (cache + recursion guard).
-        self.aggregate_drop_fns.push((agg_ty, drop_fn));
+        self.drop_rc.aggregate_drop_fns.push((agg_ty, drop_fn));
         self.current_fn = Some(drop_fn);
         let entry = self.context.append_basic_block(drop_fn, "entry");
         self.builder.position_at_end(entry);
@@ -1049,7 +1061,7 @@ impl<'ctx> super::Codegen<'ctx> {
         agg_ty: StructType<'ctx>,
     ) {
         if let Some(drop_fn) = self.synthesize_aggregate_drop_fn(agg_ty) {
-            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                 frame.push(CleanupAction::StructDrop {
                     struct_alloca: tuple_alloca,
                     drop_fn,
@@ -1126,7 +1138,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut dropped = false;
         for (name, info) in &self.shared_types {
             if info.heap_type == heap_type {
-                if let Some(Some(drop_fn)) = self.rc_drop_fns.get(name) {
+                if let Some(Some(drop_fn)) = self.drop_rc.rc_drop_fns.get(name) {
                     self.builder
                         .build_call(*drop_fn, &[ptr.into()], "")
                         .unwrap();
@@ -1316,7 +1328,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(struct_name) = self.struct_name_for_heap_type(heap_type) {
             let _ = self.emit_shared_struct_rc_drop_fn(&struct_name);
         }
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::RcDec {
                 name: name.to_string(),
                 ptr,
@@ -1339,7 +1351,7 @@ impl<'ctx> super::Codegen<'ctx> {
         link_field_index: usize,
     ) {
         let _ = self.emit_shared_struct_rc_drop_fn(member_type);
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeClusterWalk {
                 name: name.to_string(),
                 ptr,
@@ -1368,7 +1380,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get("Option")
             .and_then(|l| l.tags.get("Some").copied())
             .unwrap_or(1);
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeClusterWalkOption {
                 name: name.to_string(),
                 option_slot,
@@ -1385,7 +1397,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// dec/zero-test/drop dance. No drop-fn synthesis — elision-eligible
     /// types have no heap-owning fields, so there is nothing to walk.
     pub(super) fn track_elided_shared_var(&mut self, name: &str, ptr: PointerValue<'ctx>) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeSharedElided {
                 name: name.to_string(),
                 ptr,
@@ -1464,7 +1476,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get("Option")
             .and_then(|l| l.tags.get("Some").copied())
             .unwrap_or(1);
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::RcDecOption {
                 name: name.to_string(),
                 option_slot,
@@ -1533,7 +1545,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             };
             let _ = self.emit_shared_struct_rc_drop_fn(struct_name);
-            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                 frame.push(CleanupAction::RcDecOption {
                     name: var_name.to_string(),
                     option_slot: result_slot,
@@ -1641,7 +1653,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ),
             None => return,
         };
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::BoxedEnumDrop {
                 name: name.to_string(),
                 enum_slot,
@@ -1803,7 +1815,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the inner box word is the field after it. `coerce_to_payload_words`
         // FLATTENS the payload, which is what makes this plain index arithmetic
         // rather than a nested GEP.
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::NestedBoxedEnumDrop {
                 name: name.to_string(),
                 enum_slot,
@@ -1854,7 +1866,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let i64_t = self.context.i64_type();
-        for action in self.scope_cleanup_actions.iter().flatten() {
+        for action in self.drop_rc.scope_cleanup_actions.iter().flatten() {
             if let CleanupAction::NestedBoxedEnumDrop {
                 enum_slot,
                 enum_ty,
@@ -1918,7 +1930,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // All live frames, not just the top: at a mid-function store a
         // transient RHS-evaluation frame can sit above the frame that owns the
         // binding's action — the same rationale the Map sibling gives.
-        for action in self.scope_cleanup_actions.iter().flatten() {
+        for action in self.drop_rc.scope_cleanup_actions.iter().flatten() {
             let matches_slot = match action {
                 CleanupAction::BoxedEnumDrop { enum_slot, .. }
                 | CleanupAction::NestedBoxedEnumDrop { enum_slot, .. } => *enum_slot == slot.ptr,
@@ -1968,7 +1980,7 @@ impl<'ctx> super::Codegen<'ctx> {
         vec_alloca: PointerValue<'ctx>,
         elem_ty: Option<BasicTypeEnum<'ctx>>,
     ) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeVecBuffer {
                 vec_alloca,
                 elem_ty,
@@ -2001,7 +2013,7 @@ impl<'ctx> super::Codegen<'ctx> {
         elem_ty: BasicTypeEnum<'ctx>,
         agg_drop: inkwell::values::FunctionValue<'ctx>,
     ) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeVecBuffer {
                 vec_alloca,
                 elem_ty: Some(elem_ty),
@@ -2027,7 +2039,7 @@ impl<'ctx> super::Codegen<'ctx> {
         vec_alloca: PointerValue<'ctx>,
         map_elem_drop: crate::codegen::state::MapElemDrop<'ctx>,
     ) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeVecBuffer {
                 vec_alloca,
                 elem_ty: Some(self.context.ptr_type(AddressSpace::default()).into()),
@@ -2047,7 +2059,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Map handle / borrow by type alone. Used for the `iter_axis`
     /// result Vec (`src/codegen/tensor.rs`).
     pub(super) fn track_vec_of_tensors_var(&mut self, vec_alloca: PointerValue<'ctx>) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeVecBuffer {
                 vec_alloca,
                 elem_ty: Some(self.context.ptr_type(AddressSpace::default()).into()),
@@ -2345,7 +2357,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // behavior (outer buffer freed, inner elements leak) — never a
         // double-free or a regression.
         if self.llvm_ty_is_vec_struct(val.get_type()) {
-            let container_te = self.owned_temp_drops.get(&span_key).cloned();
+            let container_te = self.drop_rc.owned_temp_drops.get(&span_key).cloned();
             let elem_ty = container_te
                 .as_ref()
                 .and_then(|te| self.extract_vec_elem_type(te));
@@ -2419,7 +2431,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Map handles and RC boxes are both plain pointers — the lowering-pass
         // hint table is the only signal. No entry → not a tracked owned temp
         // (or a kind this slice doesn't handle) → no cleanup.
-        let te = self.owned_temp_drops.get(&span_key).cloned()?;
+        let te = self.drop_rc.owned_temp_drops.get(&span_key).cloned()?;
         let head = match &te.kind {
             TypeKind::Path(p) => p.segments.first().map(|s| s.as_str()).unwrap_or(""),
             _ => return None,
@@ -3718,7 +3730,7 @@ impl<'ctx> super::Codegen<'ctx> {
         has_cold: bool,
         soa_drop_fn: Option<FunctionValue<'ctx>>,
     ) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeSoaGroups {
                 soa_alloca,
                 soa_struct_ty,
@@ -5584,7 +5596,7 @@ impl<'ctx> super::Codegen<'ctx> {
         val_drop_fn: Option<FunctionValue<'ctx>>,
         key_drop_fn: Option<FunctionValue<'ctx>>,
     ) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeMapHandle {
                 map_alloca,
                 key_is_vec,
@@ -5628,7 +5640,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         let mut found = None;
-        'outer: for frame in self.scope_cleanup_actions.iter().rev() {
+        'outer: for frame in self.drop_rc.scope_cleanup_actions.iter().rev() {
             for action in frame.iter().rev() {
                 if let CleanupAction::FreeMapHandle {
                     map_alloca,
@@ -5659,7 +5671,7 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
-        let dest_tracked = self.scope_cleanup_actions.iter().any(|frame| {
+        let dest_tracked = self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| {
                 matches!(
                     action,
@@ -5670,7 +5682,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if dest_tracked {
             return;
         }
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeMapHandle {
                 map_alloca: dest_slot.ptr,
                 key_is_vec,
@@ -5689,7 +5701,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// int→ptr re-typing arm. The drain emits
     /// `karac_runtime_file_close(load(file_alloca))` on exit.
     pub(super) fn track_file_var(&mut self, file_alloca: PointerValue<'ctx>) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeFileHandle { file_alloca });
         }
     }
@@ -5699,7 +5711,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (idempotent — a no-op if the handle was already consumed by
     /// `gpu.download`), so no move-suppression is needed at the download site.
     pub(super) fn track_gpu_buffer_var(&mut self, buf_alloca: PointerValue<'ctx>) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeGpuBuffer { buf_alloca });
         }
     }
@@ -5711,7 +5723,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Sender`/`Receiver`; `is_sender` selects `drop_sender` (may close) vs
     /// `drop_receiver` at the drain.
     pub(super) fn track_channel_var(&mut self, chan_alloca: PointerValue<'ctx>, is_sender: bool) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::DropChannelEnd {
                 chan_alloca,
                 is_sender,
@@ -5839,7 +5851,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(f) => f,
             None => return,
         };
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::EnumDrop {
                 enum_alloca,
                 drop_fn,
@@ -5887,7 +5899,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if is_nested {
             self.zero_init_option_slot_in_entry_block(option_slot, option_ty);
         }
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeInlineOptionPayload {
                 option_slot,
                 option_ty,
@@ -5987,7 +5999,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(drop_fn) = self.emit_option_drop_fn(&payload) else {
             return;
         };
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::EnumDrop {
                 enum_alloca: option_slot,
                 drop_fn,
@@ -6075,7 +6087,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let payload_elem_agg_drop = self.option_payload_vec_elem_agg_drop(&te);
         let slot = self.create_entry_alloca(cur_fn, "__owned_opt_tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeInlineOptionPayload {
                 option_slot: slot,
                 option_ty,
@@ -6367,7 +6379,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ),
                 None => (None, None),
             };
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeInlineResultPayload {
                 result_slot,
                 result_ty,
@@ -6440,7 +6452,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
         let slot = self.create_entry_alloca(cur_fn, "__owned_res_tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeInlineResultPayload {
                 result_slot: slot,
                 result_ty,
@@ -6488,7 +6500,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if is_nested {
             self.zero_init_option_slot_in_entry_block(option_slot, option_ty);
         }
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeInlineOptionMapPayload {
                 option_slot,
                 option_ty,
@@ -6530,7 +6542,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let slot = self.create_entry_alloca(cur_fn, "__owned_optmap_tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeInlineOptionMapPayload {
                 option_slot: slot,
                 option_ty,
@@ -6892,7 +6904,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     None => return,
                 }
             };
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::StructDrop {
                 struct_alloca,
                 drop_fn,
@@ -6916,7 +6928,7 @@ impl<'ctx> super::Codegen<'ctx> {
         binding_name: &str,
         binding_ptr: PointerValue<'ctx>,
     ) {
-        let drop_fn = match self.user_drop_wrapper_fns.get(type_name) {
+        let drop_fn = match self.drop_rc.user_drop_wrapper_fns.get(type_name) {
             Some(f) => *f,
             None => return,
         };
@@ -6942,7 +6954,7 @@ impl<'ctx> super::Codegen<'ctx> {
         binding_ptr: PointerValue<'ctx>,
         drop_fn: FunctionValue<'ctx>,
     ) {
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::UserDrop {
                 binding_name: binding_name.to_string(),
                 binding_ptr,
@@ -6973,7 +6985,7 @@ impl<'ctx> super::Codegen<'ctx> {
             drop_fn,
             type_name: type_name.to_string(),
         };
-        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             let own_idx = frame.iter().position(|a| {
                 matches!(a, CleanupAction::UserDrop { binding_name: bn, drop_fn: f, .. }
                     if bn == binding_name && !Self::is_container_elem_bodies_fn(*f))
@@ -6983,7 +6995,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 return;
             }
         }
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(action);
         }
     }
@@ -7056,7 +7068,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         let due: Vec<(PointerValue<'ctx>, FunctionValue<'ctx>)> = {
-            let Some(frame) = self.scope_cleanup_actions.last_mut() else {
+            let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() else {
                 return;
             };
             if frame.len() <= mark {
@@ -7152,7 +7164,7 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         }
         let due: Vec<DueDrop<'ctx>> = {
-            let Some(frame) = self.scope_cleanup_actions.last() else {
+            let Some(frame) = self.drop_rc.scope_cleanup_actions.last() else {
                 return;
             };
             frame
@@ -7169,9 +7181,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         ptr,
                         heap_type,
                     } if last_use.get(name.as_str()).copied() == Some(stmt_idx)
-                        && self
-                            .struct_name_for_heap_type(*heap_type)
-                            .is_some_and(|n| self.user_drop_wrapper_fns.contains_key(&n)) =>
+                        && self.struct_name_for_heap_type(*heap_type).is_some_and(|n| {
+                            self.drop_rc.user_drop_wrapper_fns.contains_key(&n)
+                        }) =>
                     {
                         Some(DueDrop::Rc {
                             name: name.clone(),
@@ -7296,7 +7308,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => None,
             })
             .collect();
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.retain(|a| {
                 !matches!(a, CleanupAction::RcDec { name, ptr, .. }
                     if fired_rc.iter().any(|(n, p)| *n == name.as_str() && p == ptr))
@@ -7324,7 +7336,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// retracted, and firing on the stale slot would read moved-from bits
     /// (B-2026-07-31-38's repro shape prints the payload's body twice).
     pub(super) fn has_armed_user_drop(&self, name: &str) -> bool {
-        self.scope_cleanup_actions.iter().any(|frame| {
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| {
                 matches!(action, CleanupAction::UserDrop { binding_name, .. } if binding_name == name)
             })
@@ -7332,7 +7344,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_user_drop_for_var(&mut self, name: &str) {
-        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
                 CleanupAction::UserDrop { binding_name, .. } => binding_name != name,
                 _ => true,
@@ -7381,23 +7393,27 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         name: &str,
     ) -> Option<(PointerValue<'ctx>, FunctionValue<'ctx>)> {
-        self.scope_cleanup_actions.iter().rev().find_map(|frame| {
-            frame.iter().rev().find_map(|action| match action {
-                CleanupAction::UserDrop {
-                    binding_name,
-                    binding_ptr,
-                    drop_fn,
-                    ..
-                } if binding_name == name && Self::is_container_elem_bodies_fn(*drop_fn) => {
-                    Some((*binding_ptr, *drop_fn))
-                }
-                _ => None,
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .rev()
+            .find_map(|frame| {
+                frame.iter().rev().find_map(|action| match action {
+                    CleanupAction::UserDrop {
+                        binding_name,
+                        binding_ptr,
+                        drop_fn,
+                        ..
+                    } if binding_name == name && Self::is_container_elem_bodies_fn(*drop_fn) => {
+                        Some((*binding_ptr, *drop_fn))
+                    }
+                    _ => None,
+                })
             })
-        })
     }
 
     pub(super) fn has_armed_container_elem_bodies(&self, name: &str) -> bool {
-        self.scope_cleanup_actions.iter().any(|frame| {
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| {
                 matches!(action, CleanupAction::UserDrop { binding_name, drop_fn, .. }
                     if binding_name == name && Self::is_container_elem_bodies_fn(*drop_fn))
@@ -7409,7 +7425,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `UserDrop` action for `name` that is NOT a `__karac_dropelems_*`
     /// walker — i.e. the binding's own `karac_drop_<T>` body is still armed.
     pub(super) fn has_armed_own_user_drop(&self, name: &str) -> bool {
-        self.scope_cleanup_actions.iter().any(|frame| {
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| {
                 matches!(action, CleanupAction::UserDrop { binding_name, drop_fn, .. }
                     if binding_name == name && !Self::is_container_elem_bodies_fn(*drop_fn))
@@ -7442,7 +7458,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// installed; here the let-site cannot see the pattern yet, so the drop is
     /// installed optimistically and retracted by the consuming arm.
     pub(super) fn clear_boxed_enum_inner_drop(&mut self, name: &str) {
-        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             for action in frame.iter_mut() {
                 if let CleanupAction::BoxedEnumDrop {
                     name: n,
@@ -7463,7 +7479,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (B-2026-08-03-8). Paired with a masked re-registration by
     /// `disarm_struct_field_bodies_at`.
     pub(super) fn suppress_struct_field_bodies_for_var(&mut self, name: &str) {
-        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
                 CleanupAction::UserDrop {
                     binding_name,
@@ -7476,7 +7492,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_container_elem_bodies_for_var(&mut self, name: &str) {
-        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
                 CleanupAction::UserDrop {
                     binding_name,
@@ -7697,7 +7713,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let target = slot.ptr;
-        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| {
                 !matches!(
                     action,
@@ -7733,7 +7749,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let target = slot.ptr;
-        let has_queued_drop = self.scope_cleanup_actions.iter().any(|frame| {
+        let has_queued_drop = self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| {
                 matches!(
                     action,
@@ -7763,7 +7779,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let target = slot.ptr;
-        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| {
                 !matches!(
                     action,
@@ -7873,11 +7889,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
 
-        for frame_idx in (start_frame..self.scope_cleanup_actions.len()).rev() {
-            let n = self.scope_cleanup_actions[frame_idx].len();
+        for frame_idx in (start_frame..self.drop_rc.scope_cleanup_actions.len()).rev() {
+            let n = self.drop_rc.scope_cleanup_actions[frame_idx].len();
             for action_idx in (0..n).rev() {
                 if matches!(
-                    &self.scope_cleanup_actions[frame_idx][action_idx],
+                    &self.drop_rc.scope_cleanup_actions[frame_idx][action_idx],
                     CleanupAction::UserErrDefer { .. }
                 ) {
                     continue;
@@ -7959,12 +7975,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
 
-        for frame_idx in (0..self.scope_cleanup_actions.len()).rev() {
-            let n = self.scope_cleanup_actions[frame_idx].len();
+        for frame_idx in (0..self.drop_rc.scope_cleanup_actions.len()).rev() {
+            let n = self.drop_rc.scope_cleanup_actions[frame_idx].len();
             // Phase 1: errdefers LIFO within this frame.
             for action_idx in (0..n).rev() {
                 if matches!(
-                    &self.scope_cleanup_actions[frame_idx][action_idx],
+                    &self.drop_rc.scope_cleanup_actions[frame_idx][action_idx],
                     CleanupAction::UserErrDefer { .. }
                 ) {
                     self.emit_cleanup_action_at(
@@ -7975,7 +7991,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Phase 2: non-errdefer actions LIFO within this frame.
             for action_idx in (0..n).rev() {
                 if matches!(
-                    &self.scope_cleanup_actions[frame_idx][action_idx],
+                    &self.drop_rc.scope_cleanup_actions[frame_idx][action_idx],
                     CleanupAction::UserErrDefer { .. }
                 ) {
                     continue;
@@ -8003,25 +8019,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// errdefers are dropped along with the frame on pop, so a block that
     /// registers an `errdefer` but exits normally never fires it.
     pub(super) fn drain_top_frame_with_emit(&mut self) {
-        if self.scope_cleanup_actions.is_empty() {
+        if self.drop_rc.scope_cleanup_actions.is_empty() {
             return;
         }
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
-        let top_idx = self.scope_cleanup_actions.len() - 1;
-        let n = self.scope_cleanup_actions[top_idx].len();
+        let top_idx = self.drop_rc.scope_cleanup_actions.len() - 1;
+        let n = self.drop_rc.scope_cleanup_actions[top_idx].len();
         for action_idx in (0..n).rev() {
             if matches!(
-                &self.scope_cleanup_actions[top_idx][action_idx],
+                &self.drop_rc.scope_cleanup_actions[top_idx][action_idx],
                 CleanupAction::UserErrDefer { .. }
             ) {
                 continue;
             }
             self.emit_cleanup_action_at(top_idx, action_idx, fn_val, vec_ty, ptr_ty, i64_t);
         }
-        self.scope_cleanup_actions.pop();
+        self.drop_rc.scope_cleanup_actions.pop();
     }
 
     /// Dispatch one cleanup action by `(frame_idx, action_idx)` indices into
@@ -8046,7 +8062,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // is slice 2's no-binding form (no extra setup), `Some(name)`
         // is slice 4's binding form (allocate, store staged payload,
         // register in `variables`, emit, restore).
-        let body_and_binding = match &self.scope_cleanup_actions[frame_idx][action_idx] {
+        let body_and_binding = match &self.drop_rc.scope_cleanup_actions[frame_idx][action_idx] {
             CleanupAction::UserDefer(block) => Some((block.clone(), None)),
             CleanupAction::UserErrDefer { binding, body } => Some((body.clone(), binding.clone())),
             _ => None,
@@ -8123,7 +8139,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return;
         }
-        let action_ref = &self.scope_cleanup_actions[frame_idx][action_idx];
+        let action_ref = &self.drop_rc.scope_cleanup_actions[frame_idx][action_idx];
         self.record_drop_obs(action_ref, fn_val);
         self.emit_cleanup_action(action_ref, fn_val, vec_ty, ptr_ty, i64_t);
     }

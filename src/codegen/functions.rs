@@ -1313,7 +1313,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.owned_struct_params.clear();
         self.param_view_locals.clear();
         self.shared_enum_payload_view_vars.clear();
-        self.rc_fallback_heap_types.clear();
+        self.drop_rc.rc_fallback_heap_types.clear();
         // Per-function reset of the name-keyed local-variable type side-
         // tables. These mirror exactly what `register_var_from_type_expr`
         // (the reseed path below) repopulates; leaving them un-cleared
@@ -1362,8 +1362,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.accel.column_var_infos.clear();
         self.accel.tensor_var_infos.clear();
         self.accel.dataframe_var_infos.clear();
-        self.scope_cleanup_actions.clear();
-        self.scope_cleanup_actions.push(Vec::new());
+        self.drop_rc.scope_cleanup_actions.clear();
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
         // Slice 10: reseed module-binding side-tables after the per-fn
         // clear. Module bindings live for the program's lifetime but
         // the clear above wipes their `var_type_names` / `vec_elem_types`
@@ -2325,7 +2325,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
                     let ptr_alloca = self.create_entry_alloca(fn_val, &param_name, ptr_ty.into());
                     self.builder.build_store(ptr_alloca, heap_ptr).unwrap();
-                    self.rc_fallback_heap_types
+                    self.drop_rc
+                        .rc_fallback_heap_types
                         .insert(param_name.clone(), heap_type);
                     self.track_rc_var(&param_name, heap_ptr, heap_type);
                     self.variables.insert(
@@ -2966,7 +2967,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.coro_ctx = None;
         }
 
-        self.scope_cleanup_actions.clear();
+        self.drop_rc.scope_cleanup_actions.clear();
         self.contract_state.current_contract_ensures.clear();
         self.contract_state.current_contract_result_type = None;
         self.contract_state.contract_old_snapshots.clear();
