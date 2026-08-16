@@ -1,6 +1,6 @@
 # Spike: state decomposition — `Codegen` (439 fields) and `infer_method_call` (5.9k lines)
 
-**Status:** 📋 **PLANNED — measurement done, Phase 1 ready to start; Phase 2 queued behind the open codegen bugs.** This doc is the live coordination point for the refactor: the cluster map below is measured (not guessed), and the status table at the bottom is updated as slices land. **Other agents: read § Coordination protocol before editing `src/codegen.rs` or `src/typechecker/expr_method_call.rs`.**
+**Status:** 🚧 **IN PROGRESS — Phase 1 five slices landed (`infer_method_call` 5,873 → 3,591 lines, -39%); Phase 2 queued behind the open codegen bugs.** This doc is the live coordination point for the refactor: the cluster map below is measured (not guessed), and the status table at the bottom is updated as slices land. **Other agents: read § Coordination protocol before editing `src/codegen.rs` or `src/typechecker/expr_method_call.rs`.**
 
 *Origin: project-review item 6 ("schedule state-level decomposition of Codegen — not as a launch item, but before any MLIR/backend-swap ambition is taken seriously; same treatment for `infer_method_call`"). Owner decided 2026-08-15 to start now rather than defer, on the reasoning in § Why now.*
 
@@ -135,8 +135,12 @@ for fp in files:
 
 | Phase | Slice | State | Landed |
 |---|---|---|---|
-| 1 | slice 1 — **scalar primitives** (`method_numeric.rs`): `abs`/`signum`/`sqrt`, the `float_math` table, bit-width converters + bit intrinsics, wrapping/saturating/checked/overflowing, `div_euclid`/`rem_euclid`, `pow`, `min`/`max`/`clamp`, `abs_diff`, rotates, `char` surface | **landed** — 768 lines moved; `infer_method_call` 5,873 → 5,132 lines | 2026-08-15 |
-| 1 | slices 2–10 — remaining families (vec mutation, string, map/set, iterator, tensor/column, atomic, tuple, user-impl lookup) | not started | — |
+| 1 | slice 1 — **scalar primitives** (`method_numeric.rs`): `abs`/`signum`/`sqrt`, the `float_math` table, bit-width converters + bit intrinsics, wrapping/saturating/checked/overflowing, `div_euclid`/`rem_euclid`, `pow`, `min`/`max`/`clamp`, `abs_diff`, rotates, `char` surface | **landed** — 768 lines moved; 5,873 → 5,132 | 2026-08-15 |
+| 1 | slice 2 — **Vec/VecDeque mutation** (`method_vec_mutation.rs`): `push`, `insert`, `extend`/`extend_from_slice`, `pop`/`pop_back`/`pop_front`, `remove`/`swap_remove`, `get_unchecked`, `push_back`/`push_front` | **landed** — 470 lines moved; 5,132 → 4,668 | 2026-08-16 |
+| 1 | slice 3 — **Option/Result combinators** (`method_optres_combinator.rs`): closure-free (`ok`/`err`/`or`/`and`/`ok_or`/`flatten`/`take`/`get_or_insert`) + closure-taking (`unwrap_or_else`/`map_or`/`map_or_else`/`map_err`/`and_then`/`or_else`/`filter`) | **landed** — 386 lines moved; 4,668 → 4,291 | 2026-08-16 |
+| 1 | slice 4 — **Column/DataFrame analytics** (`method_column_analytics.rs`): `zip_with`, `argmin`/`argmax`/`sorted`/`argsort`, the `Column` scalar reductions, the `DataFrame` surface | **landed** — 359 lines moved; 4,291 → 3,942 | 2026-08-16 |
+| 1 | slice 5 — **Column element-wise** (`method_column_elementwise.rs`): `iter`/`iter_valid`/`fillna`/`dropna`, `fold`, `map` (+ Option/Result and Tensor broadcast forms) | **landed** — 361 lines moved; 3,942 → 3,591 | 2026-08-16 |
+| 1 | slices 6–10 — remaining families (string, map/set, iterator, slice/pointer conversions, atomics, tuple, module-path + user-impl lookup tail) | in progress | — |
 | 2 | cluster 1 `RuntimeFns` | not started | — |
 | 2 | clusters 2–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
