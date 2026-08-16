@@ -54,17 +54,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(type_name) = self.var_types.var_type_names.get(src.as_str()).cloned() else {
             return;
         };
-        if self.shared_types.contains_key(&type_name) {
+        if self.type_decls.shared_types.contains_key(&type_name) {
             return;
         }
-        if self.struct_types.contains_key(&type_name) {
+        if self.type_decls.struct_types.contains_key(&type_name) {
             let saved = self.drop_rc.deep_copy_rc_inc_bare_shared;
             self.drop_rc.deep_copy_rc_inc_bare_shared = true;
             self.deep_copy_struct_heap_fields_in_place(elem_slot, &type_name);
             self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
             return;
         }
-        if let Some(layout) = self.enum_layouts.get(&type_name).cloned() {
+        if let Some(layout) = self.type_decls.enum_layouts.get(&type_name).cloned() {
             if !layout.is_shared {
                 self.deep_copy_enum_heap_payload_in_place(&type_name, elem_slot, &layout);
             }
@@ -83,8 +83,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .var_types
                         .var_type_names
                     .get(src.as_str())
-                    .is_some_and(|t| self.struct_types.contains_key(t.as_str())
-                        && !self.shared_types.contains_key(t.as_str())))
+                    .is_some_and(|t| self.type_decls.struct_types.contains_key(t.as_str())
+                        && !self.type_decls.shared_types.contains_key(t.as_str())))
     }
 
     /// B-2026-08-01-29 — reclaim the STAGED deep copy on a no-adopt branch.
@@ -3981,7 +3981,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // of the basic block (LLVM rule), so create all phis
                 // first, then build_insert_value into the aggregate.
                 self.builder.position_at_end(merge_bb);
-                let option_ty = self.enum_layouts["Option"].llvm_type;
+                let option_ty = self.type_decls.enum_layouts["Option"].llvm_type;
                 let tag_phi = self.builder.build_phi(i64_t, "pop.opt.tag").unwrap();
                 tag_phi.add_incoming(&[(&zero, empty_bb), (&one, some_end_bb)]);
                 let mut word_phis: Vec<inkwell::values::PhiValue<'ctx>> =
@@ -5582,8 +5582,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.register_var_from_type_expr(&param_name, te);
                     if let TypeKind::Path(p) = &te.kind {
                         if let Some(seg) = p.segments.first() {
-                            if self.struct_types.contains_key(seg.as_str())
-                                || self.shared_types.contains_key(seg.as_str())
+                            if self.type_decls.struct_types.contains_key(seg.as_str())
+                                || self.type_decls.shared_types.contains_key(seg.as_str())
                             {
                                 self.record_var_type_name(param_name.clone(), seg.clone());
                             }
@@ -7103,12 +7103,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // comparator which would use the IEEE partial order on
                     // `value`.
                     if !matches!(head.as_str(), "F32" | "F64" | "F16" | "Bf16") {
-                        if self.struct_field_type_exprs.contains_key(head)
-                            && !self.shared_types.contains_key(head)
+                        if self.type_decls.struct_field_type_exprs.contains_key(head)
+                            && !self.type_decls.shared_types.contains_key(head)
                         {
                             return self.emit_cmp_fn_for_struct(head, &mangled);
                         }
-                        if self.enum_layouts.contains_key(head) {
+                        if self.type_decls.enum_layouts.contains_key(head) {
                             return self.emit_cmp_fn_for_enum(head, &mangled);
                         }
                     }
@@ -7590,7 +7590,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Option<FunctionValue<'ctx>> {
         // Only types that opt into ordering (`#[derive(Ord/PartialOrd)]` or a
         // user impl) are orderable; others stay rejected at the sort site.
-        if !self.ord_orderable_types.contains(struct_name) {
+        if !self.type_decls.ord_orderable_types.contains(struct_name) {
             return None;
         }
         // A field that recurses back into this same type (`S { next: Vec[S] }`)
@@ -7598,8 +7598,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.cmp_fn_in_progress.contains(struct_name) {
             return None;
         }
-        let struct_ty = *self.struct_types.get(struct_name)?;
-        let field_tes = self.struct_field_type_exprs.get(struct_name)?.clone();
+        let struct_ty = *self.type_decls.struct_types.get(struct_name)?;
+        let field_tes = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)?
+            .clone();
         // Plain field-ordered struct only (mirrors emit_struct_clone_fn's guard).
         if struct_ty.count_fields() as usize != field_tes.len() {
             return None;
@@ -7687,13 +7691,13 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Option<FunctionValue<'ctx>> {
         // Only types that opt into ordering (`#[derive(Ord/PartialOrd)]` or a
         // user impl) are orderable; others stay rejected at the sort site.
-        if !self.ord_orderable_types.contains(enum_name) {
+        if !self.type_decls.ord_orderable_types.contains(enum_name) {
             return None;
         }
         if self.cmp_fn_in_progress.contains(enum_name) {
             return None;
         }
-        let layout = self.enum_layouts.get(enum_name)?.clone();
+        let layout = self.type_decls.enum_layouts.get(enum_name)?.clone();
         if layout.is_shared {
             return None;
         }
@@ -8703,7 +8707,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Recursive lex-cascade compare for a struct value. Walks `struct_name`'s
-    /// fields in declaration order via `self.struct_field_type_names`,
+    /// fields in declaration order via `self.type_decls.struct_field_type_names`,
     /// dispatching per field: integer fields use the signed `-1 / 0 / +1`
     /// select; `String` fields call `karac_string_cmp`; fields whose Kāra
     /// type is itself a `Named` struct (present in `struct_field_type_names`)
@@ -8727,7 +8731,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_neg_one = i64_t.const_int((-1i64) as u64, true);
         let i64_pos_one = i64_t.const_int(1, false);
 
-        let field_type_names = match self.struct_field_type_names.get(struct_name).cloned() {
+        let field_type_names = match self
+            .type_decls
+            .struct_field_type_names
+            .get(struct_name)
+            .cloned()
+        {
             Some(v) => v,
             None => {
                 return Err(format!(
@@ -8849,7 +8858,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     BasicValueEnum::StructValue(av),
                     BasicValueEnum::StructValue(bv),
                     Some(nested_name),
-                ) if self.struct_field_type_names.contains_key(nested_name) => {
+                ) if self
+                    .type_decls
+                    .struct_field_type_names
+                    .contains_key(nested_name) =>
+                {
                     // Nested struct field: recurse. The nested struct's own
                     // `struct_field_type_names` entry exists at codegen time
                     // because `declare_structs` registers every user struct

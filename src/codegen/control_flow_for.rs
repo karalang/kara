@@ -4441,6 +4441,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return false;
                 };
                 let Some(idx) = self
+                    .type_decls
                     .struct_field_names
                     .get(&struct_name)
                     .and_then(|names| names.iter().position(|n| n == field))
@@ -4448,6 +4449,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return false;
                 };
                 let Some(te) = self
+                    .type_decls
                     .struct_field_type_exprs
                     .get(&struct_name)
                     .and_then(|tes| tes.get(idx))

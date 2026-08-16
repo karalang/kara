@@ -542,8 +542,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // bitten. See `wip-always-jit.md` W3.5 bug 4.
             TypeKind::Path(p)
                 if p.segments.len() == 1
-                    && self.struct_field_type_exprs.contains_key(&p.segments[0])
-                    && !self.shared_types.contains_key(&p.segments[0]) =>
+                    && self
+                        .type_decls
+                        .struct_field_type_exprs
+                        .contains_key(&p.segments[0])
+                    && !self.type_decls.shared_types.contains_key(&p.segments[0]) =>
             {
                 let struct_name = p.segments[0].clone();
                 self.emit_hash_fn_for_struct(&struct_name)
@@ -585,8 +588,11 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             TypeKind::Path(p)
                 if p.segments.len() == 1
-                    && self.struct_field_type_exprs.contains_key(&p.segments[0])
-                    && !self.shared_types.contains_key(&p.segments[0]) =>
+                    && self
+                        .type_decls
+                        .struct_field_type_exprs
+                        .contains_key(&p.segments[0])
+                    && !self.type_decls.shared_types.contains_key(&p.segments[0]) =>
             {
                 let struct_name = p.segments[0].clone();
                 self.emit_eq_fn_for_struct(&struct_name)
@@ -901,9 +907,9 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Per-field-recursive hash for a registered user struct. Uses the
-    /// struct's LLVM type from `self.struct_types` and the field
+    /// struct's LLVM type from `self.type_decls.struct_types` and the field
     /// TypeExprs cached during `declare_structs` in
-    /// `self.struct_field_type_exprs`. Shape mirrors
+    /// `self.type_decls.struct_field_type_exprs`. Shape mirrors
     /// `emit_hash_fn_for_tuple`.
     ///
     /// Only invoked for non-shared structs (value layout): shared
@@ -918,11 +924,13 @@ impl<'ctx> super::Codegen<'ctx> {
             return f;
         }
         let field_tes = self
+            .type_decls
             .struct_field_type_exprs
             .get(struct_name)
             .cloned()
             .expect("emit_hash_fn_for_struct: struct must be registered");
         let struct_ty = *self
+            .type_decls
             .struct_types
             .get(struct_name)
             .expect("emit_hash_fn_for_struct: struct LLVM type must be registered");
@@ -999,11 +1007,13 @@ impl<'ctx> super::Codegen<'ctx> {
             return f;
         }
         let field_tes = self
+            .type_decls
             .struct_field_type_exprs
             .get(struct_name)
             .cloned()
             .expect("emit_eq_fn_for_struct: struct must be registered");
         let struct_ty = *self
+            .type_decls
             .struct_types
             .get(struct_name)
             .expect("emit_eq_fn_for_struct: struct LLVM type must be registered");
@@ -1089,11 +1099,13 @@ impl<'ctx> super::Codegen<'ctx> {
             return f;
         }
         let info = self
+            .type_decls
             .shared_types
             .get(struct_name)
             .expect("emit_shared_struct_eq_fn: shared type must be registered")
             .clone();
         let field_tes = self
+            .type_decls
             .struct_field_type_exprs
             .get(struct_name)
             .cloned()
@@ -1167,6 +1179,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 TypeKind::Path(p)
                     if p.segments.len() == 1
                         && self
+                            .type_decls
                             .shared_types
                             .get(p.segments[0].as_str())
                             .map(|si| !si.is_enum)

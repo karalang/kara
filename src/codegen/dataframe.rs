@@ -615,10 +615,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
 
-        let result_layout = self
-            .enum_layouts
-            .get("Result")
-            .ok_or_else(|| "Result layout not registered before DataFrame codegen".to_string())?;
+        let result_layout =
+            self.type_decls.enum_layouts.get("Result").ok_or_else(|| {
+                "Result layout not registered before DataFrame codegen".to_string()
+            })?;
         let result_ty = result_layout.llvm_type;
         let result_slot = self.create_entry_alloca(fn_val, "rcsv.result", result_ty.into());
 

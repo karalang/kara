@@ -2447,7 +2447,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         // Unit enum variant (zero payload fields under some enum layout).
-        let is_unit_variant = self.enum_layouts.values().any(|layout| {
+        let is_unit_variant = self.type_decls.enum_layouts.values().any(|layout| {
             layout.tags.contains_key(name)
                 && layout.field_counts.get(name).copied().unwrap_or(0) == 0
         });
@@ -3673,10 +3673,12 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let tn = self.var_types.var_type_names.get(name)?.clone();
         // Shared (RC) aggregates are co-owned via refcount, not deep-cloned.
-        if self.shared_types.contains_key(&tn) {
+        if self.type_decls.shared_types.contains_key(&tn) {
             return None;
         }
-        if !(self.struct_types.contains_key(&tn) || self.enum_layouts.contains_key(&tn)) {
+        if !(self.type_decls.struct_types.contains_key(&tn)
+            || self.type_decls.enum_layouts.contains_key(&tn))
+        {
             return None;
         }
         let te = TypeExpr {
@@ -4099,7 +4101,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // fn is declared `-> i64` while the body returns the 4-word Option
                 // (LLVM verifier failure).
                 if name == "None" {
-                    if let Some(l) = self.enum_layouts.get("Option") {
+                    if let Some(l) = self.type_decls.enum_layouts.get("Option") {
                         return l.llvm_type.into();
                     }
                 }
@@ -4157,6 +4159,7 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             ExprKind::Unary { operand, .. } => self.infer_closure_return_type(operand, param_types),
             ExprKind::MethodCall { method, .. } if method == "cmp" => self
+                .type_decls
                 .enum_layouts
                 .get("Ordering")
                 .map(|l| BasicTypeEnum::StructType(l.llvm_type))
@@ -4181,7 +4184,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(te) = self.enum_inst_type_from_span(expr) {
                     if let TypeKind::Path(p) = &te.kind {
                         if let Some(name) = p.segments.last() {
-                            if let Some(l) = self.enum_layouts.get(name.as_str()) {
+                            if let Some(l) = self.type_decls.enum_layouts.get(name.as_str()) {
                                 return l.llvm_type.into();
                             }
                         }
@@ -4264,12 +4267,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // against a 4-word Option body (verifier failure).
                     match fname.as_str() {
                         "Some" | "None" => {
-                            if let Some(l) = self.enum_layouts.get("Option") {
+                            if let Some(l) = self.type_decls.enum_layouts.get("Option") {
                                 return l.llvm_type.into();
                             }
                         }
                         "Ok" | "Err" => {
-                            if let Some(l) = self.enum_layouts.get("Result") {
+                            if let Some(l) = self.type_decls.enum_layouts.get("Result") {
                                 return l.llvm_type.into();
                             }
                         }
@@ -4341,7 +4344,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // compiled body produces the full enum struct —
                         // LLVM verifier: "return type does not match
                         // operand type of return inst".
-                        if let Some(layout) = self.enum_layouts.get(target) {
+                        if let Some(layout) = self.type_decls.enum_layouts.get(target) {
                             if layout.tags.contains_key(method) {
                                 return BasicTypeEnum::StructType(layout.llvm_type);
                             }
@@ -4390,7 +4393,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // (no call args). Same type-erased-layout rule as the
             // `Enum.Variant(args)` call form above.
             ExprKind::Path { segments, .. } if segments.len() == 2 => {
-                if let Some(layout) = self.enum_layouts.get(segments[0].as_str()) {
+                if let Some(layout) = self.type_decls.enum_layouts.get(segments[0].as_str()) {
                     if layout.tags.contains_key(segments[1].as_str()) {
                         return BasicTypeEnum::StructType(layout.llvm_type);
                     }
@@ -4421,11 +4424,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .map(Into::into)
                 .or_else(|| {
                     path.last().and_then(|n| {
-                        self.struct_types
+                        self.type_decls
+                            .struct_types
                             .get(n.as_str())
                             .map(|st| (*st).into())
                             .or_else(|| {
-                                self.enum_layouts
+                                self.type_decls
+                                    .enum_layouts
                                     .get(n.as_str())
                                     .map(|l| l.llvm_type.into())
                             })
@@ -4581,7 +4586,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             // Try struct-field-name → index lookup first.
             let idx = if let Some(name) = current_type_name.as_deref() {
-                if let Some(names) = self.struct_field_names.get(name) {
+                if let Some(names) = self.type_decls.struct_field_names.get(name) {
                     names.iter().position(|f| f == step).map(|p| p as u32)
                 } else {
                     None
@@ -4595,7 +4600,7 @@ impl<'ctx> super::Codegen<'ctx> {
             current_ty = struct_ty.get_field_type_at_index(idx)?;
             current_type_name = current_type_name
                 .as_deref()
-                .and_then(|name| self.struct_field_type_names.get(name))
+                .and_then(|name| self.type_decls.struct_field_type_names.get(name))
                 .and_then(|tys| tys.get(idx as usize).cloned())
                 .flatten();
             chain.push(idx);

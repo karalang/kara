@@ -595,8 +595,8 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
         fields: &[FieldInit],
     ) -> Option<(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
-        let struct_ty = *self.struct_types.get(name)?;
-        let field_order = self.struct_field_names.get(name)?;
+        let struct_ty = *self.type_decls.struct_types.get(name)?;
+        let field_order = self.type_decls.struct_field_names.get(name)?;
         let mut values: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(field_order.len());
         for fname in field_order {
             let field = fields.iter().find(|f| &f.name == fname)?;
@@ -625,7 +625,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let enum_name = &segments[0];
         let variant_name = &segments[1];
-        let layout = self.enum_layouts.get(enum_name)?;
+        let layout = self.type_decls.enum_layouts.get(enum_name)?;
         let tag = *layout.tags.get(variant_name)?;
         let field_count = layout.field_counts.get(variant_name).copied().unwrap_or(0);
         if field_count != 0 {

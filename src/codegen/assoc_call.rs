@@ -1621,6 +1621,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Layout seeded into `struct_types` by
             // `seed_builtin_struct_types`.
             let client_ty = self
+                .type_decls
                 .struct_types
                 .get("Client")
                 .copied()
@@ -1863,6 +1864,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Look up the layout — `Result` is registered as part of
                 // the prelude pass.
                 let result_layout = self
+                    .type_decls
                     .enum_layouts
                     .get("Result")
                     .expect("Result layout registered before Server.serve_static dispatch");
@@ -2078,6 +2080,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Identical machinery to `Server.serve_static` — see the
             // long comment around lines 6375-6500 above.
             let result_layout = self
+                .type_decls
                 .enum_layouts
                 .get("Result")
                 .expect("Result layout registered before Server.serve dispatch");
@@ -2266,6 +2269,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
             // rc → Result[Unit, HttpError], same machinery as `serve`.
             let result_layout = self
+                .type_decls
                 .enum_layouts
                 .get("Result")
                 .expect("Result layout registered before Server.serve_ws dispatch");
@@ -2471,6 +2475,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let rc_i32 = call.try_as_basic_value().unwrap_basic().into_int_value();
 
             let result_layout = self
+                .type_decls
                 .enum_layouts
                 .get("Result")
                 .expect("Result layout registered before Server.serve_ws_tls dispatch");
@@ -2695,6 +2700,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // as `serve` / `serve_static` (the rc → Result mapping is
             // transport-independent). ──
             let result_layout = self
+                .type_decls
                 .enum_layouts
                 .get("Result")
                 .expect("Result layout registered before Server.serve_tls dispatch");
@@ -2938,7 +2944,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // shared variant-construction helper. Compound-payload enum
         // codegen (Slice CP) makes this path matter for round-tripping
         // String / Vec / user-struct payloads.
-        if let Some(layout) = self.enum_layouts.get(type_name) {
+        if let Some(layout) = self.type_decls.enum_layouts.get(type_name) {
             if layout.tags.contains_key(method) {
                 if let Some(v) = self.try_compile_enum_variant(method, Some(type_name), _args)? {
                     return Ok(v);

@@ -403,10 +403,14 @@ impl<'ctx> super::Codegen<'ctx> {
         for item in &program.items {
             match item {
                 Item::StructDef(s) if s.is_shared || s.is_par => {
-                    self.shared_type_decl_names.insert(s.name.clone());
+                    self.type_decls
+                        .shared_type_decl_names
+                        .insert(s.name.clone());
                 }
                 Item::EnumDef(e) if e.is_shared || e.is_par => {
-                    self.shared_type_decl_names.insert(e.name.clone());
+                    self.type_decls
+                        .shared_type_decl_names
+                        .insert(e.name.clone());
                 }
                 _ => {}
             }
@@ -468,9 +472,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => None,
                     })
                     .collect();
-                self.struct_field_type_names
+                self.type_decls
+                    .struct_field_type_names
                     .insert(s.name.clone(), field_type_names);
-                self.struct_field_type_exprs
+                self.type_decls
+                    .struct_field_type_exprs
                     .insert(s.name.clone(), field_type_exprs);
                 // Declared generic-param names, for generic-struct field
                 // monomorphization (`mono_struct_type`, B-2026-07-03-23).
@@ -479,14 +485,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     .as_ref()
                     .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
                     .unwrap_or_default();
-                self.struct_generic_params
+                self.type_decls
+                    .struct_generic_params
                     .insert(s.name.clone(), generic_params);
                 // Field names for field-index lookups — registered here for
                 // every struct shape (shared/par/owned alike) so the lookup
                 // tables are complete before either enum sizing or the LLVM
                 // type pass runs.
                 let names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
-                self.struct_field_names.insert(s.name.clone(), names);
+                self.type_decls
+                    .struct_field_names
+                    .insert(s.name.clone(), names);
                 // std.secret: note when the stdlib `Secret[T]` wrapper is in
                 // scope so the derived-Display field walk can redact it. Gated
                 // on `stdlib_origin` so a user's own `struct Secret` (which
@@ -703,7 +712,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 heap_fields.extend_from_slice(&field_types);
                 let heap_type = self.named_shared_heap_type(&s.name, &heap_fields);
 
-                self.shared_types.insert(
+                self.type_decls.shared_types.insert(
                     s.name.clone(),
                     SharedTypeInfo {
                         heap_type,
@@ -742,9 +751,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     && !s.stdlib_origin
                     && crate::prelude::PRELUDE_TYPES.contains(&s.name.as_str())
                 {
-                    self.user_shadowed_prelude_types.insert(s.name.clone());
+                    self.type_decls
+                        .user_shadowed_prelude_types
+                        .insert(s.name.clone());
                 }
-                self.struct_types.insert(s.name.clone(), st);
+                self.type_decls.struct_types.insert(s.name.clone(), st);
             }
         }
     }
@@ -785,7 +796,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // Scoped target-data borrow: extract per-field (align, size)
             // up front, then drop the borrow so `self.context` /
-            // `self.union_types` are usable again below. Without the
+            // `self.type_decls.union_types` are usable again below. Without the
             // explicit scope the returned `&TargetData` would live
             // through `self.context.struct_type(...)` and conflict with
             // the disjoint-field borrow checker.
@@ -836,8 +847,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.context
                     .struct_type(&[primary_ty, pad_ty.into()], false)
             };
-            self.union_types.insert(u.name.clone(), storage_ty);
-            self.union_field_types.insert(u.name.clone(), llvm_fields);
+            self.type_decls
+                .union_types
+                .insert(u.name.clone(), storage_ty);
+            self.type_decls
+                .union_field_types
+                .insert(u.name.clone(), llvm_fields);
         }
     }
 
@@ -2842,7 +2857,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some("Vec") | Some("VecDeque") | Some("String") | Some("str") => {
                     FieldDrop::VecOrString
                 }
-                Some(name) if self.shared_types.contains_key(name) => FieldDrop::Shared,
+                Some(name) if self.type_decls.shared_types.contains_key(name) => FieldDrop::Shared,
                 None => {
                     // Slice 8w: type-parameter-typed param recovery.
                     // Resolve the parameter's `TypeExpr` against the
@@ -3012,6 +3027,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .as_deref()
                         .expect("FieldDrop::Shared implies recorded type_name");
                     let heap_type = self
+                        .type_decls
                         .shared_types
                         .get(type_name)
                         .expect("FieldDrop::Shared implies shared_types entry")
@@ -3257,7 +3273,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
 
                 // Look up struct field names.
-                let all_fields = match self.struct_field_names.get(&struct_name) {
+                let all_fields = match self.type_decls.struct_field_names.get(&struct_name) {
                     Some(f) => f.clone(),
                     None => continue,
                 };
@@ -3399,7 +3415,7 @@ impl<'ctx> super::Codegen<'ctx> {
         group: &SoaGroup,
     ) -> StructType<'ctx> {
         let struct_field_types: Vec<BasicTypeEnum<'ctx>> =
-            if let Some(&st) = self.struct_types.get(struct_name) {
+            if let Some(&st) = self.type_decls.struct_types.get(struct_name) {
                 (0..st.count_fields())
                     .map(|i| st.get_field_type_at_index(i).unwrap())
                     .collect()
@@ -3429,13 +3445,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 crate::ast::Item::StructDef(s) => {
                     let d = crate::typechecker::extract_derived_traits(&s.attributes);
                     if d.contains("Ord") || d.contains("PartialOrd") {
-                        self.ord_orderable_types.insert(s.name.clone());
+                        self.type_decls.ord_orderable_types.insert(s.name.clone());
                     }
                 }
                 crate::ast::Item::EnumDef(e) => {
                     let d = crate::typechecker::extract_derived_traits(&e.attributes);
                     if d.contains("Ord") || d.contains("PartialOrd") {
-                        self.ord_orderable_types.insert(e.name.clone());
+                        self.type_decls.ord_orderable_types.insert(e.name.clone());
                     }
                 }
                 crate::ast::Item::ImplBlock(imp) => {
@@ -3444,7 +3460,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         if (t == "Ord" || t == "PartialOrd") && imp.generic_params.is_none() {
                             if let TypeKind::Path(p) = &imp.target_type.kind {
                                 if let Some(name) = p.segments.last() {
-                                    self.ord_orderable_types.insert(name.clone());
+                                    self.type_decls.ord_orderable_types.insert(name.clone());
                                 }
                             }
                         }
@@ -3497,7 +3513,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     && !e.stdlib_origin
                     && crate::prelude::PRELUDE_TYPES.contains(&e.name.as_str())
                 {
-                    self.user_shadowed_prelude_types.insert(e.name.clone());
+                    self.type_decls
+                        .user_shadowed_prelude_types
+                        .insert(e.name.clone());
                 }
                 // CP4 / CP5: compute per-variant per-field word offsets,
                 // sized via the recursive helper. The variant's total
@@ -3559,7 +3577,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .iter()
                         .all(|v| matches!(v.kind, VariantKind::Unit))
                 {
-                    self.enum_unit_variants.insert(
+                    self.type_decls.enum_unit_variants.insert(
                         e.name.clone(),
                         e.variants.iter().map(|v| v.name.clone()).collect(),
                     );
@@ -3574,7 +3592,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     heap_fields.extend_from_slice(&field_types); // tag + payload words
                     let heap_type = self.named_shared_heap_type(&e.name, &heap_fields);
 
-                    self.shared_types.insert(
+                    self.type_decls.shared_types.insert(
                         e.name.clone(),
                         SharedTypeInfo {
                             heap_type,
@@ -3605,7 +3623,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // values + the refcount cleanup path); a `par enum` is also a
                 // heap pointer, so it sets the same flag. The Rc-vs-Arc atomic
                 // distinction is made separately via `shared_types`'s `is_par`.
-                self.enum_layouts.insert(
+                self.type_decls.enum_layouts.insert(
                     e.name.clone(),
                     EnumLayout {
                         llvm_type,
@@ -3661,10 +3679,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the v1 carve-out and emits an error.
                     _ => {
                         let _ = (outer_enum, outer_variant); // diagnostic context — emitted by typechecker
-                        if self.shared_types.contains_key(name) {
+                        if self.type_decls.shared_types.contains_key(name) {
                             // RC pointer — single word.
                             1
-                        } else if self.enum_layouts.contains_key(name) {
+                        } else if self.type_decls.enum_layouts.contains_key(name) {
                             // Direct enum-in-enum payload — rejected at v1
                             // (CP5 carve-out) by the typechecker's
                             // E_ENUM_NESTED_ENUM_PAYLOAD diagnostic. If we
@@ -3675,7 +3693,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             // *something* runnable rather than crashing
                             // out of the layout pass.
                             1
-                        } else if let Some(field_exprs) = self.struct_field_type_exprs.get(name) {
+                        } else if let Some(field_exprs) =
+                            self.type_decls.struct_field_type_exprs.get(name)
+                        {
                             // User struct — recurse through the *source* field
                             // TypeExprs (registered by `register_struct_metadata`),
                             // NOT the resolved LLVM `StructType`. Using the AST
@@ -3699,7 +3719,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     )
                                 })
                                 .sum()
-                        } else if let Some(struct_ty) = self.struct_types.get(name).copied() {
+                        } else if let Some(struct_ty) =
+                            self.type_decls.struct_types.get(name).copied()
+                        {
                             // Seeded builtin struct with no AST metadata
                             // (`seed_builtin_struct_types` registers LLVM types
                             // but not field TypeExprs) — fall back to LLVM field
@@ -3784,7 +3806,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //   None(tag=0)
         //   Some(tag=1, w0..w(N-1)=payload words; N varies per use site
         //   via `coerce_to_payload_words` at construction)
-        if !self.enum_layouts.contains_key("Option") {
+        if !self.type_decls.enum_layouts.contains_key("Option") {
             let mut tags = HashMap::new();
             tags.insert("None".to_string(), 0u64);
             tags.insert("Some".to_string(), 1u64);
@@ -3809,7 +3831,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 "Some".to_string(),
                 std::iter::repeat_n(EnumDropKind::None, option_payload_words).collect(),
             );
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "Option".to_string(),
                 EnumLayout {
                     llvm_type: enum_type,
@@ -3820,7 +3842,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("Option".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("Option".to_string());
         }
 
         // std.json `Json` enum — baked stdlib in `runtime/stdlib/json.kara`
@@ -3856,7 +3880,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Vec-typed payload's own drop path would handle). When the
         // higher-level Vec[Json] / Vec[(String, Json)] drop landing
         // arrives, switch these to VecOrString.
-        if !self.enum_layouts.contains_key("Json") {
+        if !self.type_decls.enum_layouts.contains_key("Json") {
             let json_enum_type = self
                 .context
                 .struct_type(&[i64_t, i64_t, i64_t, i64_t], false);
@@ -3894,7 +3918,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_drop_kinds.insert("Array".to_string(), vec![EnumDropKind::VecOrString]);
             field_drop_kinds.insert("Object".to_string(), vec![EnumDropKind::VecOrString]);
             field_drop_kinds.insert("Int".to_string(), vec![EnumDropKind::None]);
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "Json".to_string(),
                 EnumLayout {
                     llvm_type: json_enum_type,
@@ -3905,7 +3929,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("Json".to_string());
+            self.type_decls.seeded_enum_names.insert("Json".to_string());
         }
 
         // Stdlib `Ordering` enum — unit-only `Less` / `Equal` / `Greater`,
@@ -3926,7 +3950,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // 1-word `{ i64 tag }` struct at both declaration and value
         // sites. No payload words (every variant is unit) and no
         // drop kinds (no fields to drop).
-        if !self.enum_layouts.contains_key("Ordering") {
+        if !self.type_decls.enum_layouts.contains_key("Ordering") {
             let ordering_type = self.context.struct_type(&[i64_t], false);
             let mut tags = HashMap::new();
             tags.insert("Less".to_string(), 0u64);
@@ -3944,7 +3968,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_drop_kinds.insert("Less".to_string(), Vec::new());
             field_drop_kinds.insert("Equal".to_string(), Vec::new());
             field_drop_kinds.insert("Greater".to_string(), Vec::new());
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "Ordering".to_string(),
                 EnumLayout {
                     llvm_type: ordering_type,
@@ -3955,7 +3979,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("Ordering".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("Ordering".to_string());
         }
 
         // Stdlib `VarError` enum (`runtime/stdlib/var_error.kara`) — unit-only
@@ -3968,7 +3994,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // layout and falls through. 1-word `{ i64 tag }` struct, no payload,
         // no drop kinds (every variant is unit). Tags follow the stdlib
         // declaration order: NotPresent = 0, NotUnicode = 1.
-        if !self.enum_layouts.contains_key("VarError") {
+        if !self.type_decls.enum_layouts.contains_key("VarError") {
             let var_error_type = self.context.struct_type(&[i64_t], false);
             let mut tags = HashMap::new();
             tags.insert("NotPresent".to_string(), 0u64);
@@ -3982,7 +4008,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut field_drop_kinds = HashMap::new();
             field_drop_kinds.insert("NotPresent".to_string(), Vec::new());
             field_drop_kinds.insert("NotUnicode".to_string(), Vec::new());
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "VarError".to_string(),
                 EnumLayout {
                     llvm_type: var_error_type,
@@ -3993,7 +4019,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("VarError".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("VarError".to_string());
         }
 
         // Stdlib `SeekFrom` enum (`runtime/stdlib/io.kara`) — the `whence`
@@ -4013,7 +4041,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the runtime ABI's `whence` encoding, so `compile_file_seek` truncates
         // the tag straight to the `u8` argument. Reordering the variants in
         // io.kara silently changes the ABI mapping; keep the two in step.
-        if !self.enum_layouts.contains_key("SeekFrom") {
+        if !self.type_decls.enum_layouts.contains_key("SeekFrom") {
             let seek_from_type = self.context.struct_type(&[i64_t], false);
             let mut tags = HashMap::new();
             let mut field_counts = HashMap::new();
@@ -4025,7 +4053,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 field_word_offsets.insert((*v).to_string(), Vec::new());
                 field_drop_kinds.insert((*v).to_string(), Vec::new());
             }
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "SeekFrom".to_string(),
                 EnumLayout {
                     llvm_type: seek_from_type,
@@ -4036,7 +4064,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("SeekFrom".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("SeekFrom".to_string());
         }
 
         // Stdlib `IoError` enum (`runtime/stdlib/io_error.kara`) — the `Err`
@@ -4056,7 +4086,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // agrees with this layout. Widest variant is `Other(String)` (3 payload
         // words), so the struct is 4 i64 words; the six byte-error variants are
         // unit. Tags in stdlib declaration order: NotFound = 0 … Other = 6.
-        if !self.enum_layouts.contains_key("IoError") {
+        if !self.type_decls.enum_layouts.contains_key("IoError") {
             let io_error_type = self
                 .context
                 .struct_type(&[i64_t, i64_t, i64_t, i64_t], false);
@@ -4082,7 +4112,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_counts.insert("Other".to_string(), 1usize);
             field_word_offsets.insert("Other".to_string(), vec![(0, 3usize)]);
             field_drop_kinds.insert("Other".to_string(), vec![EnumDropKind::VecOrString]);
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "IoError".to_string(),
                 EnumLayout {
                     llvm_type: io_error_type,
@@ -4093,7 +4123,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("IoError".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("IoError".to_string());
         }
 
         // Stdlib `Utf8Error` enum (`runtime/stdlib/utf8_error.kara`) — returned
@@ -4109,7 +4141,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // variants are unit). `compile_cstr_to_string` only ever builds the two
         // unit variants, but the full shape keeps user-side `Other` matching /
         // construction sound.
-        if !self.enum_layouts.contains_key("Utf8Error") {
+        if !self.type_decls.enum_layouts.contains_key("Utf8Error") {
             let utf8_error_type = self
                 .context
                 .struct_type(&[i64_t, i64_t, i64_t, i64_t], false);
@@ -4129,7 +4161,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_drop_kinds.insert("InvalidByte".to_string(), Vec::new());
             field_drop_kinds.insert("IncompleteSequence".to_string(), Vec::new());
             field_drop_kinds.insert("Other".to_string(), vec![EnumDropKind::VecOrString]);
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "Utf8Error".to_string(),
                 EnumLayout {
                     llvm_type: utf8_error_type,
@@ -4140,7 +4172,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("Utf8Error".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("Utf8Error".to_string());
         }
 
         // Stdlib `NulError` enum (`runtime/stdlib/nul_error.kara`) — returned in
@@ -4154,7 +4188,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // via `VecOrString`, the `InteriorNul` variant is unit. The lowering only
         // ever builds `InteriorNul`, but the full shape keeps user-side `Other`
         // matching / construction sound.
-        if !self.enum_layouts.contains_key("NulError") {
+        if !self.type_decls.enum_layouts.contains_key("NulError") {
             let nul_error_type = self
                 .context
                 .struct_type(&[i64_t, i64_t, i64_t, i64_t], false);
@@ -4170,7 +4204,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut field_drop_kinds = HashMap::new();
             field_drop_kinds.insert("InteriorNul".to_string(), Vec::new());
             field_drop_kinds.insert("Other".to_string(), vec![EnumDropKind::VecOrString]);
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "NulError".to_string(),
                 EnumLayout {
                     llvm_type: nul_error_type,
@@ -4181,7 +4215,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("NulError".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("NulError".to_string());
         }
 
         // Stdlib `AllocError` enum (`runtime/stdlib/alloc_error.kara`) — the
@@ -4195,7 +4231,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //   CapacityOverflow (tag=1) — 0 payload words (fieldless)
         // The lone payload is a pure integer (`usize`), no heap-owning state —
         // drop kinds are uniformly None.
-        if !self.enum_layouts.contains_key("AllocError") {
+        if !self.type_decls.enum_layouts.contains_key("AllocError") {
             let alloc_error_type = self.context.struct_type(&[i64_t, i64_t], false);
             let mut tags = HashMap::new();
             tags.insert("OutOfMemory".to_string(), 0u64);
@@ -4209,7 +4245,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut field_drop_kinds = HashMap::new();
             field_drop_kinds.insert("OutOfMemory".to_string(), vec![EnumDropKind::None]);
             field_drop_kinds.insert("CapacityOverflow".to_string(), Vec::new());
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "AllocError".to_string(),
                 EnumLayout {
                     llvm_type: alloc_error_type,
@@ -4220,7 +4256,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("AllocError".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("AllocError".to_string());
         }
 
         // `BoundedChannel[T]` companion enums (`runtime/stdlib/
@@ -4235,7 +4273,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //
         // `ChannelError` (1 i64 word — tag only):
         //   Full (tag=0) — 0 payload words
-        if !self.enum_layouts.contains_key("ChannelError") {
+        if !self.type_decls.enum_layouts.contains_key("ChannelError") {
             let ty = self.context.struct_type(&[i64_t], false);
             let mut tags = HashMap::new();
             tags.insert("Full".to_string(), 0u64);
@@ -4245,7 +4283,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_word_offsets.insert("Full".to_string(), Vec::new());
             let mut field_drop_kinds = HashMap::new();
             field_drop_kinds.insert("Full".to_string(), Vec::new());
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "ChannelError".to_string(),
                 EnumLayout {
                     llvm_type: ty,
@@ -4256,14 +4294,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("ChannelError".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("ChannelError".to_string());
         }
 
         // `SemaphoreError` (1 i64 word — tag only) — backs the `Semaphore
         // .acquire` lowering's `Err(Timeout)` arm (`src/codegen/backpressure
         // .rs`). Single unit variant, same shape as `ChannelError.Full`.
         //   Timeout (tag=0) — 0 payload words
-        if !self.enum_layouts.contains_key("SemaphoreError") {
+        if !self.type_decls.enum_layouts.contains_key("SemaphoreError") {
             let ty = self.context.struct_type(&[i64_t], false);
             let mut tags = HashMap::new();
             tags.insert("Timeout".to_string(), 0u64);
@@ -4273,7 +4313,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_word_offsets.insert("Timeout".to_string(), Vec::new());
             let mut field_drop_kinds = HashMap::new();
             field_drop_kinds.insert("Timeout".to_string(), Vec::new());
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "SemaphoreError".to_string(),
                 EnumLayout {
                     llvm_type: ty,
@@ -4284,12 +4324,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("SemaphoreError".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("SemaphoreError".to_string());
         }
 
         // `OnFull` (1 i64 word — tag only; both variants payload-free):
         //   Block (tag=0), FailFast (tag=1)  — declaration order.
-        if !self.enum_layouts.contains_key("OnFull") {
+        if !self.type_decls.enum_layouts.contains_key("OnFull") {
             let ty = self.context.struct_type(&[i64_t], false);
             let mut tags = HashMap::new();
             tags.insert("Block".to_string(), 0u64);
@@ -4303,7 +4345,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut field_drop_kinds = HashMap::new();
             field_drop_kinds.insert("Block".to_string(), Vec::new());
             field_drop_kinds.insert("FailFast".to_string(), Vec::new());
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "OnFull".to_string(),
                 EnumLayout {
                     llvm_type: ty,
@@ -4314,7 +4356,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("OnFull".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("OnFull".to_string());
         }
 
         // Phase 6 line 17 slice 9b — stdlib `TcpError` enum. Baked
@@ -4336,7 +4380,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // String/Vec-carrying variants (e.g. an `Other(message:
         // String)` shape) would need the corresponding VecOrString
         // drop kinds.
-        if !self.enum_layouts.contains_key("TcpError") {
+        if !self.type_decls.enum_layouts.contains_key("TcpError") {
             let tcp_error_type = self.context.struct_type(&[i64_t, i64_t], false);
             let mut tags = HashMap::new();
             tags.insert("Interrupted".to_string(), 0u64);
@@ -4367,7 +4411,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_drop_kinds.insert("AddrInUse".to_string(), Vec::new());
             field_drop_kinds.insert("ConnectionRefused".to_string(), Vec::new());
             field_drop_kinds.insert("PermissionDenied".to_string(), Vec::new());
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "TcpError".to_string(),
                 EnumLayout {
                     llvm_type: tcp_error_type,
@@ -4378,7 +4422,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("TcpError".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("TcpError".to_string());
         }
 
         // Phase-8 line 24 — `TlsError` mirrors `TcpError`'s 2-word
@@ -4388,7 +4434,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //   Other       (tag=1) — 1 payload word (i32 errno widened)
         //   Protocol    (tag=2) — 1 payload word (i32 rustls fault code)
         // All payloads are pure integers; drop kinds uniformly None.
-        if !self.enum_layouts.contains_key("TlsError") {
+        if !self.type_decls.enum_layouts.contains_key("TlsError") {
             let tls_error_type = self.context.struct_type(&[i64_t, i64_t], false);
             let mut tags = HashMap::new();
             tags.insert("Interrupted".to_string(), 0u64);
@@ -4421,7 +4467,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_drop_kinds.insert("AddrInUse".to_string(), Vec::new());
             field_drop_kinds.insert("ConnectionRefused".to_string(), Vec::new());
             field_drop_kinds.insert("PermissionDenied".to_string(), Vec::new());
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "TlsError".to_string(),
                 EnumLayout {
                     llvm_type: tls_error_type,
@@ -4432,7 +4478,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("TlsError".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("TlsError".to_string());
         }
 
         // Result[T, E]: { i64 tag, i64 w0, i64 w1, i64 w2, i64 w3, i64 w4 }
@@ -4474,7 +4522,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .context
             .struct_type(&[i64_t, i64_t, i64_t, i64_t, i64_t, i64_t], false);
         let result_payload_words = 5usize;
-        if !self.enum_layouts.contains_key("Result") {
+        if !self.type_decls.enum_layouts.contains_key("Result") {
             let mut tags = HashMap::new();
             tags.insert("Err".to_string(), 0u64);
             tags.insert("Ok".to_string(), 1u64);
@@ -4493,7 +4541,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 "Ok".to_string(),
                 std::iter::repeat_n(EnumDropKind::None, result_payload_words).collect(),
             );
-            self.enum_layouts.insert(
+            self.type_decls.enum_layouts.insert(
                 "Result".to_string(),
                 EnumLayout {
                     llvm_type: result_enum_type,
@@ -4504,7 +4552,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
-            self.seeded_enum_names.insert("Result".to_string());
+            self.type_decls
+                .seeded_enum_names
+                .insert("Result".to_string());
         }
     }
 
@@ -4535,14 +4585,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .context
             .struct_type(&[ptr_ty.into(), i64_t.into(), i64_t.into()], false)
             .into();
-        if !self.struct_types.contains_key("Client") {
+        if !self.type_decls.struct_types.contains_key("Client") {
             // `Client { }` — empty struct, zero fields.
             let client_ty = self.context.struct_type(&[], false);
-            self.struct_types.insert("Client".to_string(), client_ty);
-            self.struct_field_names
+            self.type_decls
+                .struct_types
+                .insert("Client".to_string(), client_ty);
+            self.type_decls
+                .struct_field_names
                 .insert("Client".to_string(), Vec::new());
         }
-        if !self.struct_types.contains_key("Response") {
+        if !self.type_decls.struct_types.contains_key("Response") {
             // `Response { status: i64, body: String, headers: i64 }`.
             // The stdlib `struct Response` declares only `{ status, body }`
             // (its methods are all `#[compiler_builtin]`, so the type is
@@ -4557,8 +4610,10 @@ impl<'ctx> super::Codegen<'ctx> {
             let resp_ty = self
                 .context
                 .struct_type(&[i64_t.into(), str_ty, i64_t.into()], false);
-            self.struct_types.insert("Response".to_string(), resp_ty);
-            self.struct_field_names.insert(
+            self.type_decls
+                .struct_types
+                .insert("Response".to_string(), resp_ty);
+            self.type_decls.struct_field_names.insert(
                 "Response".to_string(),
                 vec![
                     "status".to_string(),
@@ -4576,7 +4631,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // guards on before treating it as the side-table handle, so a
             // user-defined 3-field server `Response { status, body, headers:
             // Vec[...] }` (field 2 a Vec, not i64) is unaffected.
-            self.struct_field_type_names.insert(
+            self.type_decls.struct_field_type_names.insert(
                 "Response".to_string(),
                 vec![
                     Some("i64".to_string()),
@@ -4585,11 +4640,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 ],
             );
         }
-        if !self.struct_types.contains_key("HttpError") {
+        if !self.type_decls.struct_types.contains_key("HttpError") {
             // `HttpError { message: String }`.
             let err_ty = self.context.struct_type(&[str_ty], false);
-            self.struct_types.insert("HttpError".to_string(), err_ty);
-            self.struct_field_names
+            self.type_decls
+                .struct_types
+                .insert("HttpError".to_string(), err_ty);
+            self.type_decls
+                .struct_field_names
                 .insert("HttpError".to_string(), vec!["message".to_string()]);
             // Per-field type names so the drop synthesis frees the
             // `message` String at scope exit (phase-8 line 39 follow-up).
@@ -4600,10 +4658,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // String field, so move-safety is the existing Vec/String
             // cap-zeroing in `suppress_source_vec_cleanup_for_arg`; no
             // handle field, so no `HttpHandleFree`.
-            self.struct_field_type_names
+            self.type_decls
+                .struct_field_type_names
                 .insert("HttpError".to_string(), vec![Some("String".to_string())]);
         }
-        if !self.struct_types.contains_key("JsonError") {
+        if !self.type_decls.struct_types.contains_key("JsonError") {
             // `JsonError { line, column, message }` — the error half of
             // `Json.parse`'s documented `Result[Json, JsonError]`
             // (`runtime/stdlib/json.kara`). Seeded for the same reason as
@@ -4628,9 +4687,10 @@ impl<'ctx> super::Codegen<'ctx> {
             let json_err_ty = self
                 .context
                 .struct_type(&[i64_t.into(), i64_t.into(), str_ty], false);
-            self.struct_types
+            self.type_decls
+                .struct_types
                 .insert("JsonError".to_string(), json_err_ty);
-            self.struct_field_names.insert(
+            self.type_decls.struct_field_names.insert(
                 "JsonError".to_string(),
                 vec![
                     "line".to_string(),
@@ -4638,7 +4698,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     "message".to_string(),
                 ],
             );
-            self.struct_field_type_names.insert(
+            self.type_decls.struct_field_type_names.insert(
                 "JsonError".to_string(),
                 vec![
                     Some("i64".to_string()),
@@ -4673,7 +4733,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }),
                 span: crate::token::Span::default(),
             };
-            self.struct_field_type_exprs.insert(
+            self.type_decls.struct_field_type_exprs.insert(
                 "JsonError".to_string(),
                 vec![path_te("i64"), path_te("i64"), path_te("String")],
             );
@@ -4694,27 +4754,31 @@ impl<'ctx> super::Codegen<'ctx> {
         // struct types, so these unify with the types the tracing pass's
         // `declare_structs` re-derives — which also (re)fills the field-name /
         // drop side tables for the tracing program's own body lowering.
-        if !self.struct_types.contains_key("SpanField") {
+        if !self.type_decls.struct_types.contains_key("SpanField") {
             // `SpanField { key: String, value: String }`.
             let sf_ty = self.context.struct_type(&[str_ty, str_ty], false);
-            self.struct_types.insert("SpanField".to_string(), sf_ty);
-            self.struct_field_names.insert(
+            self.type_decls
+                .struct_types
+                .insert("SpanField".to_string(), sf_ty);
+            self.type_decls.struct_field_names.insert(
                 "SpanField".to_string(),
                 vec!["key".to_string(), "value".to_string()],
             );
-            self.struct_field_type_names.insert(
+            self.type_decls.struct_field_type_names.insert(
                 "SpanField".to_string(),
                 vec![Some("String".to_string()), Some("String".to_string())],
             );
         }
-        if !self.struct_types.contains_key("Span") {
+        if !self.type_decls.struct_types.contains_key("Span") {
             // `Span { name: String, span_id: i64, parent_id: i64,
             //         fields: Vec[SpanField] }`.
             let span_ty = self
                 .context
                 .struct_type(&[str_ty, i64_t.into(), i64_t.into(), str_ty], false);
-            self.struct_types.insert("Span".to_string(), span_ty);
-            self.struct_field_names.insert(
+            self.type_decls
+                .struct_types
+                .insert("Span".to_string(), span_ty);
+            self.type_decls.struct_field_names.insert(
                 "Span".to_string(),
                 vec![
                     "name".to_string(),
@@ -4723,7 +4787,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     "fields".to_string(),
                 ],
             );
-            self.struct_field_type_names.insert(
+            self.type_decls.struct_field_type_names.insert(
                 "Span".to_string(),
                 vec![
                     Some("String".to_string()),
@@ -4733,14 +4797,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 ],
             );
         }
-        if !self.struct_types.contains_key("LogEvent") {
+        if !self.type_decls.struct_types.contains_key("LogEvent") {
             // `LogEvent { level: String, message: String,
             //             fields: Vec[SpanField], span_id: i64 }`.
             let le_ty = self
                 .context
                 .struct_type(&[str_ty, str_ty, str_ty, i64_t.into()], false);
-            self.struct_types.insert("LogEvent".to_string(), le_ty);
-            self.struct_field_names.insert(
+            self.type_decls
+                .struct_types
+                .insert("LogEvent".to_string(), le_ty);
+            self.type_decls.struct_field_names.insert(
                 "LogEvent".to_string(),
                 vec![
                     "level".to_string(),
@@ -4749,7 +4815,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     "span_id".to_string(),
                 ],
             );
-            self.struct_field_type_names.insert(
+            self.type_decls.struct_field_type_names.insert(
                 "LogEvent".to_string(),
                 vec![
                     Some("String".to_string()),
@@ -4759,22 +4825,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 ],
             );
         }
-        if !self.struct_types.contains_key("RequestBuilder") {
+        if !self.type_decls.struct_types.contains_key("RequestBuilder") {
             // Phase-8 line 24 — `RequestBuilder { handle: i64 }`.
             // Single-field opaque handle wrapping a runtime-side
             // `HTTP_BUILDERS` entry. Same seeding rationale as
             // Client / Response / HttpError above.
             let rb_ty = self.context.struct_type(&[i64_t.into()], false);
-            self.struct_types
+            self.type_decls
+                .struct_types
                 .insert("RequestBuilder".to_string(), rb_ty);
-            self.struct_field_names
+            self.type_decls
+                .struct_field_names
                 .insert("RequestBuilder".to_string(), vec!["handle".to_string()]);
             // Field-0 `i64` handle; the drop synthesis treats it as the
             // `HTTP_BUILDERS` side-table key and frees it via
             // `HttpHandleFree` at scope exit (phase-8 line 39 follow-up),
             // so an abandoned (never-`send()`-ed) let-bound builder no
             // longer leaks its runtime entry.
-            self.struct_field_type_names
+            self.type_decls
+                .struct_field_type_names
                 .insert("RequestBuilder".to_string(), vec![Some("i64".to_string())]);
         }
         // Network construction-method result structs (phase-8 line 64 audit:
@@ -4798,10 +4867,11 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             let i64_t = self.context.i64_type();
             for name in ["TcpListener", "TcpStream", "TlsStream", "WebSocket"] {
-                if !self.struct_types.contains_key(name) {
+                if !self.type_decls.struct_types.contains_key(name) {
                     let ty = self.context.struct_type(&[i64_t.into()], false);
-                    self.struct_types.insert(name.to_string(), ty);
-                    self.struct_field_names
+                    self.type_decls.struct_types.insert(name.to_string(), ty);
+                    self.type_decls
+                        .struct_field_names
                         .insert(name.to_string(), vec!["fd".to_string()]);
                     // Field type names so the `Ok(x)` *pattern* destructure
                     // (`reconstruct_payload_value` / the match-arm binding's
@@ -4812,7 +4882,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // heap-bearing field) and the user-Drop wrapper's fd-close
                     // is the sole drop action — no synthesized drop is
                     // registered to shadow it.
-                    self.struct_field_type_names
+                    self.type_decls
+                        .struct_field_type_names
                         .insert(name.to_string(), vec![Some("i64".to_string())]);
                 }
             }
@@ -4821,17 +4892,19 @@ impl<'ctx> super::Codegen<'ctx> {
             // words. Same primitive/pointer fields (no String/Vec/handle), so
             // the synth-drop stays `None` and the user `impl Drop` (frees
             // config + closes fd) remains the only drop action.
-            if !self.struct_types.contains_key("TlsListener") {
+            if !self.type_decls.struct_types.contains_key("TlsListener") {
                 let ptr_ty = self.context.ptr_type(AddressSpace::default());
                 let ty = self
                     .context
                     .struct_type(&[i64_t.into(), ptr_ty.into()], false);
-                self.struct_types.insert("TlsListener".to_string(), ty);
-                self.struct_field_names.insert(
+                self.type_decls
+                    .struct_types
+                    .insert("TlsListener".to_string(), ty);
+                self.type_decls.struct_field_names.insert(
                     "TlsListener".to_string(),
                     vec!["fd".to_string(), "config".to_string()],
                 );
-                self.struct_field_type_names.insert(
+                self.type_decls.struct_field_type_names.insert(
                     "TlsListener".to_string(),
                     vec![Some("i64".to_string()), Some("*mut TlsConfig".to_string())],
                 );
@@ -4847,12 +4920,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // the value flows as `{ i64 }`. Guarded so a user-redefined
             // same-named struct wins.
             for name in ["LazyFrame", "LazyExpr", "LazyGroupBy"] {
-                if !self.struct_types.contains_key(name) {
+                if !self.type_decls.struct_types.contains_key(name) {
                     let ty = self.context.struct_type(&[i64_t.into()], false);
-                    self.struct_types.insert(name.to_string(), ty);
-                    self.struct_field_names
+                    self.type_decls.struct_types.insert(name.to_string(), ty);
+                    self.type_decls
+                        .struct_field_names
                         .insert(name.to_string(), vec!["handle_id".to_string()]);
-                    self.struct_field_type_names
+                    self.type_decls
+                        .struct_field_type_names
                         .insert(name.to_string(), vec![Some("i64".to_string())]);
                 }
             }
@@ -4873,7 +4948,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // entry is seeded (generic — the mono pass owns the LLVM type). Guarded
         // so a user's own `struct AlreadySetError` (in `program.items`, seen by
         // `register_struct_metadata`) is left untouched.
-        if !self.struct_field_names.contains_key("AlreadySetError") {
+        if !self
+            .type_decls
+            .struct_field_names
+            .contains_key("AlreadySetError")
+        {
             let t_param = TypeExpr {
                 kind: TypeKind::Path(PathExpr {
                     segments: vec!["T".to_string()],
@@ -4882,13 +4961,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 }),
                 span: crate::token::Span::default(),
             };
-            self.struct_field_names
+            self.type_decls
+                .struct_field_names
                 .insert("AlreadySetError".to_string(), vec!["rejected".to_string()]);
-            self.struct_field_type_names
+            self.type_decls
+                .struct_field_type_names
                 .insert("AlreadySetError".to_string(), vec![Some("T".to_string())]);
-            self.struct_field_type_exprs
+            self.type_decls
+                .struct_field_type_exprs
                 .insert("AlreadySetError".to_string(), vec![t_param]);
-            self.struct_generic_params
+            self.type_decls
+                .struct_generic_params
                 .insert("AlreadySetError".to_string(), vec!["T".to_string()]);
             // Generic-base `struct_types` placeholder (single `T`-field → the
             // `i64` param fall-through, exactly what `build_struct_types` builds
@@ -4897,7 +4980,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // makes the enum-variant payload binding (`Err(e)`) recognize `e` as
             // a struct rather than a raw word — without it `e.rejected` read the
             // scalar fall-through and returned 0.
-            self.struct_types.insert(
+            self.type_decls.struct_types.insert(
                 "AlreadySetError".to_string(),
                 self.context.struct_type(&[i64_t.into()], false),
             );
@@ -4929,10 +5012,12 @@ impl<'ctx> super::Codegen<'ctx> {
             ("F16", f16_elem),
             ("Bf16", bf16_elem),
         ] {
-            if !self.struct_types.contains_key(name) {
-                self.struct_types
+            if !self.type_decls.struct_types.contains_key(name) {
+                self.type_decls
+                    .struct_types
                     .insert(name.to_string(), self.context.struct_type(&[elem], false));
-                self.struct_field_names
+                self.type_decls
+                    .struct_field_names
                     .insert(name.to_string(), vec!["value".to_string()]);
                 let scalar = match name {
                     "F32" => "f32",
@@ -4940,9 +5025,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     "F16" => "f16",
                     _ => "bf16",
                 };
-                self.struct_field_type_names
+                self.type_decls
+                    .struct_field_type_names
                     .insert(name.to_string(), vec![Some(scalar.to_string())]);
-                self.struct_field_type_exprs.insert(
+                self.type_decls.struct_field_type_exprs.insert(
                     name.to_string(),
                     vec![TypeExpr {
                         kind: TypeKind::Path(PathExpr {
@@ -4982,7 +5068,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if stack.iter().any(|s| s == struct_name) {
             return true; // self-referential — sized via heap pointer, not inline
         }
-        let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
+        let Some(ftes) = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)
+            .cloned()
+        else {
             return false; // unknown field shape → conservative reject
         };
         stack.push(struct_name.to_string());
@@ -5010,7 +5101,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     return false;
                 }
                 // Nested non-shared user struct → recurse.
-                if self.struct_types.contains_key(name) && !self.shared_types.contains_key(name) {
+                if self.type_decls.struct_types.contains_key(name)
+                    && !self.type_decls.shared_types.contains_key(name)
+                {
                     return self.struct_payload_word_aligned(name, stack);
                 }
                 // 8-byte primitives, aggregate handles (String/Vec/Slice/Map/Set →
@@ -5082,8 +5175,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // still empty here. The AST field-type map is registered
                     // early by `register_struct_metadata`.
                     other
-                        if self.struct_field_type_exprs.contains_key(other)
-                            && !self.shared_types.contains_key(other)
+                        if self.type_decls.struct_field_type_exprs.contains_key(other)
+                            && !self.type_decls.shared_types.contains_key(other)
                             && self
                                 .aggregate_param_copy_supported_struct(other, &mut Vec::new())
                             && self.struct_payload_word_aligned(other, &mut Vec::new()) =>
@@ -5113,8 +5206,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // by-value param. Word-alignment still required (the
                     // payload words must line up with the struct's fields).
                     other
-                        if self.struct_field_type_exprs.contains_key(other)
-                            && !self.shared_types.contains_key(other)
+                        if self.type_decls.struct_field_type_exprs.contains_key(other)
+                            && !self.type_decls.shared_types.contains_key(other)
                             && self.struct_owns_shared_field(other, &mut Vec::new())
                             && self.struct_payload_word_aligned(other, &mut Vec::new()) =>
                     {
@@ -5343,7 +5436,7 @@ pub(super) fn state_machine_return_type_for<'ctx>(
             // field that's out of v1 scope. Unknown names (type-
             // params, enums, opaque user types) fall through to
             // `None` so the function stays on the unit-return path.
-            if cg.struct_types.contains_key(other) {
+            if cg.type_decls.struct_types.contains_key(other) {
                 Some(cg.llvm_type_for_name(other))
             } else {
                 None

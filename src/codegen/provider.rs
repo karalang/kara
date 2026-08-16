@@ -732,9 +732,13 @@ impl<'ctx> super::Codegen<'ctx> {
              shapes are a struct literal or an identifier with a known struct type"
                     .to_string()
             })?;
-        let st = *self.struct_types.get(&type_name).ok_or_else(|| {
-            format!("Log.set_exporter: no LLVM struct type for exporter `{type_name}`")
-        })?;
+        let st = *self
+            .type_decls
+            .struct_types
+            .get(&type_name)
+            .ok_or_else(|| {
+                format!("Log.set_exporter: no LLVM struct type for exporter `{type_name}`")
+            })?;
         let export_fn = self
             .module
             .get_function(&format!("{type_name}.export_event"))
@@ -798,9 +802,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 "tracing_emit_event: `StdoutExporter.export_event` not declared".to_string()
             })?;
         let fn_ty = stdout_export.get_type();
-        let stdout_st = *self.struct_types.get("StdoutExporter").ok_or_else(|| {
-            "tracing_emit_event: no LLVM struct type for `StdoutExporter`".to_string()
-        })?;
+        let stdout_st = *self
+            .type_decls
+            .struct_types
+            .get("StdoutExporter")
+            .ok_or_else(|| {
+                "tracing_emit_event: no LLVM struct type for `StdoutExporter`".to_string()
+            })?;
 
         // Compile the event once; both arms consume it (by value).
         let event = self.compile_expr(event_expr)?;
@@ -1494,7 +1502,7 @@ impl<'ctx> super::Codegen<'ctx> {
         expr: &Expr,
         type_name: &str,
     ) -> Result<inkwell::values::PointerValue<'ctx>, String> {
-        if self.shared_types.contains_key(type_name) {
+        if self.type_decls.shared_types.contains_key(type_name) {
             let v = self.compile_expr(expr)?;
             let pv = v.into_pointer_value();
             return Ok(pv);

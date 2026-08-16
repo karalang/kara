@@ -764,6 +764,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // A user generic struct with declared params AND generic args written
             // here (`Box[T]`, `Pair[A, B]`) — not a bare `T` (handled elsewhere).
             if self
+                .type_decls
                 .struct_generic_params
                 .get(struct_name)
                 .is_none_or(|p| p.is_empty())
@@ -776,7 +777,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let ExprKind::Identifier(arg_name) = &arg.value.kind else {
                 continue;
             };
-            let Some(inst) = self.enum_inst_var_types.get(arg_name.as_str()) else {
+            let Some(inst) = self.type_decls.enum_inst_var_types.get(arg_name.as_str()) else {
                 continue;
             };
             let TypeKind::Path(inst_path) = &inst.kind else {
@@ -923,8 +924,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 None => continue,
             };
             let is_collision_class = matches!(head, "String" | "Vec" | "VecDeque")
-                && !self.struct_types.contains_key(head)
-                && !self.enum_layouts.contains_key(head);
+                && !self.type_decls.struct_types.contains_key(head)
+                && !self.type_decls.enum_layouts.contains_key(head);
             if !is_collision_class {
                 continue;
             }
@@ -1041,8 +1042,8 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(head) = p.segments.last() else {
                 continue;
             };
-            if !self.struct_types.contains_key(head.as_str())
-                && !self.enum_layouts.contains_key(head.as_str())
+            if !self.type_decls.struct_types.contains_key(head.as_str())
+                && !self.type_decls.enum_layouts.contains_key(head.as_str())
             {
                 continue;
             }
@@ -1110,7 +1111,7 @@ impl<'ctx> super::Codegen<'ctx> {
             var_elem_type_exprs: std::mem::take(&mut self.var_types.var_elem_type_exprs),
             array_elem_type_exprs: std::mem::take(&mut self.var_types.array_elem_type_exprs),
             closure_ret_vec_te: std::mem::take(&mut self.var_types.closure_ret_vec_te),
-            enum_inst_var_types: std::mem::take(&mut self.enum_inst_var_types),
+            enum_inst_var_types: std::mem::take(&mut self.type_decls.enum_inst_var_types),
             string_vars: std::mem::take(&mut self.var_types.string_vars),
             slice_elem_types: std::mem::take(&mut self.var_types.slice_elem_types),
             map_key_types: std::mem::take(&mut self.mapset.map_key_types),
@@ -1134,7 +1135,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.var_elem_type_exprs = saved.var_elem_type_exprs;
         self.var_types.array_elem_type_exprs = saved.array_elem_type_exprs;
         self.var_types.closure_ret_vec_te = saved.closure_ret_vec_te;
-        self.enum_inst_var_types = saved.enum_inst_var_types;
+        self.type_decls.enum_inst_var_types = saved.enum_inst_var_types;
         self.var_types.string_vars = saved.string_vars;
         self.var_types.slice_elem_types = saved.slice_elem_types;
         self.mapset.map_key_types = saved.map_key_types;
@@ -2895,7 +2896,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // moved it ahead of the ownership call, which needs the same
             // value); this is the recording half, unchanged.
             if let Some(inst) = param_inst {
-                self.enum_inst_var_types.insert(param_name.clone(), inst);
+                self.type_decls
+                    .enum_inst_var_types
+                    .insert(param_name.clone(), inst);
             }
             // B-2026-07-02-11: register the collection / String / struct
             // side-tables for the parameter via the same registrar
@@ -3289,6 +3292,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let name = path.segments.last()?;
         // Must be a struct with declared generic params (Box, Pair, …).
         if self
+            .type_decls
             .struct_generic_params
             .get(name)
             .is_none_or(|p| p.is_empty())
@@ -3378,8 +3382,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "str"
                 | "String"
                 | "char"
-        ) || self.struct_types.contains_key(name)
-            || self.enum_layouts.contains_key(name)
+        ) || self.type_decls.struct_types.contains_key(name)
+            || self.type_decls.enum_layouts.contains_key(name)
     }
 
     /// A scalar-primitive type name whose mangle token would be lossy: narrow
@@ -3480,8 +3484,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `var_type_names`, so the opaque token is still sound).
                     if token == "struct" {
                         if let Some(name) = subst_names.get(&param.name) {
-                            if self.struct_types.contains_key(name)
-                                || self.enum_layouts.contains_key(name)
+                            if self.type_decls.struct_types.contains_key(name)
+                                || self.type_decls.enum_layouts.contains_key(name)
                             {
                                 mangled.push_str(name);
                                 continue;
@@ -3535,8 +3539,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // symbol rather than putting `T` in the symbol table.
                     if Self::is_builtin_container_mangle_name(name)
                         || Self::is_scalar_primitive_mangle_name(name)
-                        || self.struct_types.contains_key(name)
-                        || self.enum_layouts.contains_key(name)
+                        || self.type_decls.struct_types.contains_key(name)
+                        || self.type_decls.enum_layouts.contains_key(name)
                     {
                         mangled.push('$');
                         mangled.push_str(name);

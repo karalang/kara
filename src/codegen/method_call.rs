@@ -605,7 +605,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 };
                 if static_none {
-                    let option_ty = self.enum_layouts["Option"].llvm_type;
+                    let option_ty = self.type_decls.enum_layouts["Option"].llvm_type;
                     return Ok(option_ty.const_zero().into());
                 }
                 let n_val = i64_t.const_int(n, false);
@@ -1389,11 +1389,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // `[start0,end0,…]` offset array (or null when empty) plus a count;
             // codegen builds each `Match` into a fresh `Vec` buffer, then frees
             // the offset array (`free(null)` is a no-op for the empty case).
-            let match_ty = self.struct_types.get("Match").copied().ok_or_else(|| {
-                "codegen: Regex.find_all needs the `Match` struct layout \
+            let match_ty = self
+                .type_decls
+                .struct_types
+                .get("Match")
+                .copied()
+                .ok_or_else(|| {
+                    "codegen: Regex.find_all needs the `Match` struct layout \
                  (regex.kara not registered in compiled_stdlib_programs)"
-                    .to_string()
-            })?;
+                        .to_string()
+                })?;
             let count_slot = self.create_entry_alloca(fn_val, "rx.fa.count", i64_t.into());
             self.builder
                 .build_store(count_slot, i64_t.const_zero())
@@ -4547,6 +4552,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
                 let ord_struct_ty = self
+                    .type_decls
                     .enum_layouts
                     .get("Ordering")
                     .map(|l| l.llvm_type)
@@ -4623,6 +4629,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_int_add(raw, i64_t.const_int(1, false), "cmp.tag")
                         .unwrap();
                     let ord_struct_ty = self
+                        .type_decls
                         .enum_layouts
                         .get("Ordering")
                         .map(|l| l.llvm_type)
@@ -6358,7 +6365,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .var_types
                         .var_type_names
                         .get(recv_name.as_str())
-                        .is_some_and(|tn| self.enum_layouts.contains_key(tn.as_str()))
+                        .is_some_and(|tn| self.type_decls.enum_layouts.contains_key(tn.as_str()))
                     {
                         let recv_name = recv_name.clone();
                         self.suppress_container_elem_bodies_for_var(&recv_name);
@@ -6405,7 +6412,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let receiver_arg: BasicMetadataValueEnum<'ctx> = if first_param_is_ptr
                     && !first_param_is_ref
-                    && self.shared_types.contains_key(&receiver_type)
+                    && self.type_decls.shared_types.contains_key(&receiver_type)
                 {
                     // Owned shared `self`: the heap pointer by value. The
                     // callee's entry emits its own receive-inc ("caller
@@ -6904,7 +6911,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !matches!(&object.kind, ExprKind::Identifier(_))
             && matches!(method, "header" | "body" | "timeout" | "send")
         {
-            let rb_ty = self.struct_types.get("RequestBuilder").copied();
+            let rb_ty = self.type_decls.struct_types.get("RequestBuilder").copied();
             if let Some(rb_ty) = rb_ty {
                 let recv_val = self.compile_expr(object)?;
                 if let BasicValueEnum::StructValue(sv) = recv_val {
@@ -6966,7 +6973,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let sv_ty = sv.get_type();
                 let matched = ["LogEvent", "Span"]
                     .into_iter()
-                    .find(|name| self.struct_types.get(*name) == Some(&sv_ty));
+                    .find(|name| self.type_decls.struct_types.get(*name) == Some(&sv_ty));
                 if let Some(type_name) = matched {
                     let fn_val = self
                         .current_fn
@@ -7746,6 +7753,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // explicitly here.
                         let te = match &object.kind {
                             ExprKind::SelfValue => self
+                                .type_decls
                                 .enum_inst_var_types
                                 .get("self")
                                 .cloned()
@@ -8187,11 +8195,16 @@ impl<'ctx> super::Codegen<'ctx> {
         start: inkwell::values::IntValue<'ctx>,
         end: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let match_ty = self.struct_types.get("Match").copied().ok_or_else(|| {
-            "codegen: Regex.find needs the `Match` struct layout \
+        let match_ty = self
+            .type_decls
+            .struct_types
+            .get("Match")
+            .copied()
+            .ok_or_else(|| {
+                "codegen: Regex.find needs the `Match` struct layout \
              (regex.kara not registered in compiled_stdlib_programs)"
-                .to_string()
-        })?;
+                    .to_string()
+            })?;
         let mut m = match_ty.get_undef();
         m = self
             .builder
@@ -15223,9 +15236,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // receiver into a synth local and re-enter `compile_method_call` with an
         // Identifier, which resolves the same for all three. The `qualified`
         // function-existence check below is the real "is this a method" gate.
-        let is_shared = self.shared_types.contains_key(&type_name);
-        let is_value_enum = !is_shared && self.enum_layouts.contains_key(&type_name);
-        let is_plain_struct = !is_shared && self.struct_types.contains_key(&type_name);
+        let is_shared = self.type_decls.shared_types.contains_key(&type_name);
+        let is_value_enum = !is_shared && self.type_decls.enum_layouts.contains_key(&type_name);
+        let is_plain_struct = !is_shared && self.type_decls.struct_types.contains_key(&type_name);
         if !(is_shared || is_value_enum || is_plain_struct) {
             return Ok(None);
         }
@@ -15295,7 +15308,9 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .or_else(|| self.struct_literal_inst_from_fields(object))
         {
-            self.enum_inst_var_types.insert(synth.clone(), inst);
+            self.type_decls
+                .enum_inst_var_types
+                .insert(synth.clone(), inst);
         }
 
         // Drop-track the materialized temp (for a fresh-owned receiver),
@@ -15350,7 +15365,12 @@ impl<'ctx> super::Codegen<'ctx> {
             || matches!(&object.kind, ExprKind::StructLiteral { .. });
         if receiver_is_fresh_owned {
             if is_shared {
-                if let Some(heap_type) = self.shared_types.get(&type_name).map(|i| i.heap_type) {
+                if let Some(heap_type) = self
+                    .type_decls
+                    .shared_types
+                    .get(&type_name)
+                    .map(|i| i.heap_type)
+                {
                     self.track_rc_var(&synth, val.into_pointer_value(), heap_type);
                 }
             } else {
@@ -16000,6 +16020,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Result llvm-type copied out before any `&mut self` enum builder call.
         let result_ty = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .map(|l| l.llvm_type)
@@ -16165,14 +16186,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // Copy out the Result llvm-type and the two Utf8Error variant tags
         // before any `&mut self` call (drops the `enum_layouts` borrow).
         let result_ty = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .map(|l| l.llvm_type)
             .ok_or_else(|| "codegen: Result enum layout missing (codegen bug)".to_string())?;
         let (tag_invalid, tag_incomplete) = {
-            let utf8 = self.enum_layouts.get("Utf8Error").ok_or_else(|| {
-                "codegen: Utf8Error enum layout missing (codegen bug)".to_string()
-            })?;
+            let utf8 = self
+                .type_decls
+                .enum_layouts
+                .get("Utf8Error")
+                .ok_or_else(|| {
+                    "codegen: Utf8Error enum layout missing (codegen bug)".to_string()
+                })?;
             let inv = *utf8.tags.get("InvalidByte").ok_or_else(|| {
                 "codegen: Utf8Error.InvalidByte missing (codegen bug)".to_string()
             })?;
@@ -16316,14 +16342,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // Copy out the Result llvm-type and the two Utf8Error variant tags
         // before any `&mut self` call (drops the `enum_layouts` borrow).
         let result_ty = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .map(|l| l.llvm_type)
             .ok_or_else(|| "codegen: Result enum layout missing (codegen bug)".to_string())?;
         let (tag_invalid, tag_incomplete) = {
-            let utf8 = self.enum_layouts.get("Utf8Error").ok_or_else(|| {
-                "codegen: Utf8Error enum layout missing (codegen bug)".to_string()
-            })?;
+            let utf8 = self
+                .type_decls
+                .enum_layouts
+                .get("Utf8Error")
+                .ok_or_else(|| {
+                    "codegen: Utf8Error enum layout missing (codegen bug)".to_string()
+                })?;
             let inv = *utf8.tags.get("InvalidByte").ok_or_else(|| {
                 "codegen: Utf8Error.InvalidByte missing (codegen bug)".to_string()
             })?;
@@ -16791,6 +16822,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
 
                 let result_ty = self
+                    .type_decls
                     .enum_layouts
                     .get("Result")
                     .map(|l| l.llvm_type)
@@ -17012,10 +17044,12 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::FieldAccess { object, field } => {
                 if let Some(obj_ty) = self.type_name_of_expr(object) {
-                    if let Some(field_names) = self.struct_field_names.get(obj_ty.as_str()) {
+                    if let Some(field_names) =
+                        self.type_decls.struct_field_names.get(obj_ty.as_str())
+                    {
                         if let Some(idx) = field_names.iter().position(|n| n == field) {
                             if let Some(field_ty_names) =
-                                self.struct_field_type_names.get(obj_ty.as_str())
+                                self.type_decls.struct_field_type_names.get(obj_ty.as_str())
                             {
                                 return field_ty_names.get(idx).and_then(|n| n.as_deref())
                                     == Some("Atomic");
@@ -17322,6 +17356,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (Ok=1 / Err=0), payload word 0 = the loaded value.
                 let i64_t = self.context.i64_type();
                 let result_layout = self
+                    .type_decls
                     .enum_layouts
                     .get("Result")
                     .ok_or_else(|| "codegen: Result enum layout not registered".to_string())?;
@@ -17420,6 +17455,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                 })?;
                 let idx = self
+                    .type_decls
                     .struct_field_names
                     .get(&type_name)
                     .and_then(|names| names.iter().position(|n| n == field))
@@ -17671,6 +17707,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some((type_name, info)) = self.shared_type_for_expr(inner) {
                     if !info.is_enum {
                         if let Some(idx) = self
+                            .type_decls
                             .struct_field_names
                             .get(&type_name)
                             .and_then(|names| names.iter().position(|n| n == field))
@@ -17695,6 +17732,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     )
                                 })?;
                             let inner_is_bool = self
+                                .type_decls
                                 .struct_field_type_exprs
                                 .get(&type_name)
                                 .and_then(|fields| fields.get(idx))
@@ -17711,6 +17749,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                 })?;
                 let field_names = self
+                    .type_decls
                     .struct_field_names
                     .get(obj_ty_name.as_str())
                     .cloned()
@@ -17720,13 +17759,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 let idx = field_names.iter().position(|n| n == field).ok_or_else(|| {
                     format!("codegen: struct '{}' has no field '{}'", obj_ty_name, field)
                 })? as u32;
-                let struct_ty = *self.struct_types.get(obj_ty_name.as_str()).ok_or_else(|| {
-                    format!(
-                        "codegen: struct '{}' has no LLVM type (shared structs not \
+                let struct_ty = *self
+                    .type_decls
+                    .struct_types
+                    .get(obj_ty_name.as_str())
+                    .ok_or_else(|| {
+                        format!(
+                            "codegen: struct '{}' has no LLVM type (shared structs not \
                              supported as Atomic field receivers)",
-                        obj_ty_name
-                    )
-                })?;
+                            obj_ty_name
+                        )
+                    })?;
                 let inner_name = if let ExprKind::Identifier(n) = &inner.kind {
                     n.clone()
                 } else {
@@ -17758,6 +17801,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // annotation (declaration syntax requires it), so this
                 // path is exact — no missing-info fallback needed.
                 let inner_is_bool = self
+                    .type_decls
                     .struct_field_type_exprs
                     .get(obj_ty_name.as_str())
                     .and_then(|fields| fields.get(idx as usize))
@@ -17820,8 +17864,9 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::FieldAccess { object, field } => {
                 let base_ptr = self.ptr_place_addr(object)?;
                 let obj_ty = self.place_chain_type_name(object)?;
-                let st = *self.struct_types.get(obj_ty.as_str())?;
+                let st = *self.type_decls.struct_types.get(obj_ty.as_str())?;
                 let idx = self
+                    .type_decls
                     .struct_field_names
                     .get(obj_ty.as_str())?
                     .iter()

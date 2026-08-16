@@ -1717,6 +1717,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Look up the Result enum layout (widened to {i64*5} by
         // `seed_builtin_enum_layouts`).
         let result_ty = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("Result layout seeded before Json.parse dispatch")

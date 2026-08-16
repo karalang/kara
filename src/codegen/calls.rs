@@ -346,7 +346,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // impl-block dispatch path resolves `Type.method`.
         if let TypeKind::Path(path) = &elem_te.kind {
             if let Some(seg) = path.segments.first() {
-                if self.struct_types.contains_key(seg.as_str()) {
+                if self.type_decls.struct_types.contains_key(seg.as_str()) {
                     self.record_var_type_name(synth.clone(), seg.clone());
                 }
             }
@@ -467,7 +467,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (e.g. `karac_clone_String` dereferencing a bad
                 // `{ptr, len, cap}` triple). Bug from the helper-fn
                 // Json kata gap surfaced 2026-05-22.
-                let is_shared = self.shared_types.contains_key(&type_name);
+                let is_shared = self.type_decls.shared_types.contains_key(&type_name);
                 let is_ref_param = self.ref_params.contains_key(outer_name.as_str());
                 let recv_ptr = if is_shared {
                     // Shared receiver: the heap pointer is whatever
@@ -636,7 +636,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // heap-pointer handle; load it to get the receiver-pointer
                 // the field GEP indexes into. For plain-struct elements,
                 // the element pointer itself IS the receiver pointer.
-                let is_shared = self.shared_types.contains_key(&elem_type_name);
+                let is_shared = self.type_decls.shared_types.contains_key(&elem_type_name);
                 let recv_ptr = if is_shared {
                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
                     self.builder
@@ -659,6 +659,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // Look up the field's declaration-order index and full TypeExpr.
         let field_idx = match self
+            .type_decls
             .struct_field_names
             .get(&type_name)
             .and_then(|names| names.iter().position(|n| n == field))
@@ -667,6 +668,7 @@ impl<'ctx> super::Codegen<'ctx> {
             None => return Ok(None),
         };
         let field_te = match self
+            .type_decls
             .struct_field_type_exprs
             .get(&type_name)
             .and_then(|tes| tes.get(field_idx).cloned())
@@ -689,7 +691,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // refcount slot using the heap_type. Plain: GEP directly into
         // the receiver-pointer at idx using the value struct_type.
         let (field_ptr, field_ll_ty) = if is_shared_handle {
-            let info = match self.shared_types.get(&type_name).cloned() {
+            let info = match self.type_decls.shared_types.get(&type_name).cloned() {
                 Some(i) if !i.is_enum => i,
                 _ => return Ok(None),
             };
@@ -714,7 +716,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                 })?;
             (fp, fty)
-        } else if let Some(base_st) = self.struct_types.get(&type_name).copied() {
+        } else if let Some(base_st) = self.type_decls.struct_types.get(&type_name).copied() {
             // B-2026-07-15-17: for a GENERIC struct instantiation the field GEP
             // must use the per-monomorph struct type — the base `struct_types`
             // entry erases every generic-param field to i64 (1 word), so a
@@ -916,8 +918,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // impl-block dispatch path resolves `Type.method`.
         if let TypeKind::Path(path) = &elem_te.kind {
             if let Some(seg) = path.segments.first() {
-                if self.struct_types.contains_key(seg.as_str())
-                    || self.shared_types.contains_key(seg.as_str())
+                if self.type_decls.struct_types.contains_key(seg.as_str())
+                    || self.type_decls.shared_types.contains_key(seg.as_str())
                 {
                     self.record_var_type_name(synth.clone(), seg.clone());
                 }
@@ -1379,7 +1381,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.register_var_from_type_expr(&synth, &val_te);
         if let TypeKind::Path(path) = &val_te.kind {
             if let Some(seg) = path.segments.first() {
-                if self.struct_types.contains_key(seg.as_str()) {
+                if self.type_decls.struct_types.contains_key(seg.as_str()) {
                     self.record_var_type_name(synth.clone(), seg.clone());
                 }
             }
@@ -2668,6 +2670,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     let result_ty = self
+                        .type_decls
                         .enum_layouts
                         .get("Result")
                         .map(|l| l.llvm_type)

@@ -912,7 +912,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let result_slot_struct_ty: Option<StructType<'ctx>> = if result_slots.is_empty() {
             None
         } else {
-            self.enum_layouts.get("Result").map(|l| l.llvm_type)
+            self.type_decls
+                .enum_layouts
+                .get("Result")
+                .map(|l| l.llvm_type)
         };
         let result_slots_alloca: PointerValue<'ctx> = if let Some(rty) = result_slot_struct_ty {
             let arr_ty = rty.array_type(result_slots.len() as u32);
@@ -1160,6 +1163,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // arm). Reused for the slots, the output Vec elements, and the
         // trampoline's indirect-call return type.
         let result_ty = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .ok_or_else(|| "collect_all_vec: Result enum layout missing".to_string())?
@@ -1455,6 +1459,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let n = args.len();
 
         let result_ty = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .ok_or_else(|| "collect_all: Result enum layout missing".to_string())?
@@ -1947,8 +1952,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 }) && !self.ref_params.contains_key(var_name);
                 if is_shared_rc {
                     if let Some(type_name) = saved_var_types.get(var_name) {
-                        if let Some(heap_type) =
-                            self.shared_types.get(type_name).map(|i| i.heap_type)
+                        if let Some(heap_type) = self
+                            .type_decls
+                            .shared_types
+                            .get(type_name)
+                            .map(|i| i.heap_type)
                         {
                             self.emit_arc_inc(heap_type, field_val.into_pointer_value());
                             self.track_rc_var(var_name, alloca, heap_type);

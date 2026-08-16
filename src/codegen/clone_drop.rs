@@ -141,13 +141,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // through to the shallow primitive clone for shared (RC) types
                 // and layout-block structs (handled / unsupported elsewhere).
                 if let Some(name) = head {
-                    if self.struct_types.contains_key(name) {
+                    if self.type_decls.struct_types.contains_key(name) {
                         if let Some(f) = self.emit_struct_clone_fn(name) {
                             self.drop_rc.clone_fn_cache.insert(type_name, f);
                             return f;
                         }
                     }
-                    if self.enum_layouts.contains_key(name) {
+                    if self.type_decls.enum_layouts.contains_key(name) {
                         if let Some(f) = self.emit_enum_clone_fn(name) {
                             self.drop_rc.clone_fn_cache.insert(type_name, f);
                             return f;
@@ -189,7 +189,8 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> FunctionValue<'ctx> {
         if let TypeKind::Path(p) = &te.kind {
             if let Some(name) = p.segments.first().map(String::as_str) {
-                if let Some(heap_type) = self.shared_types.get(name).map(|i| i.heap_type) {
+                if let Some(heap_type) = self.type_decls.shared_types.get(name).map(|i| i.heap_type)
+                {
                     let type_name = Self::display_mangle_te(te);
                     return self.emit_shared_handle_clone_fn(&type_name, heap_type);
                 }
@@ -339,7 +340,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !payload_owns_heap {
             return None;
         }
-        let option_ty = self.enum_layouts.get("Option")?.llvm_type;
+        let option_ty = self.type_decls.enum_layouts.get("Option")?.llvm_type;
 
         let type_name = Self::display_mangle_te(opt_te);
         let fn_name = format!("karac_clone_{type_name}");
@@ -402,7 +403,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.result_field_direct_vecstr_halves_ok(res_te) {
             return None;
         }
-        let result_ty = self.enum_layouts.get("Result")?.llvm_type;
+        let result_ty = self.type_decls.enum_layouts.get("Result")?.llvm_type;
 
         let type_name = Self::display_mangle_te(res_te);
         let fn_name = format!("karac_clone_{type_name}");
@@ -942,7 +943,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         struct_name: &str,
     ) -> Option<FunctionValue<'ctx>> {
-        if self.shared_types.contains_key(struct_name) {
+        if self.type_decls.shared_types.contains_key(struct_name) {
             return None;
         }
         let type_name = format!("struct_{struct_name}");
@@ -954,8 +955,12 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.clone_fn_cache.insert(type_name, f);
             return Some(f);
         }
-        let struct_ty = *self.struct_types.get(struct_name)?;
-        let field_tes = self.struct_field_type_exprs.get(struct_name)?.clone();
+        let struct_ty = *self.type_decls.struct_types.get(struct_name)?;
+        let field_tes = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)?
+            .clone();
         // Plain field-ordered struct only: a layout-block / SoA struct whose
         // physical field count differs from its logical field list can't be
         // walked field-for-field against the source TypeExprs.
@@ -1021,7 +1026,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// shared enum (RC) or an enum whose every variant is heap-free (the shallow
     /// copy is already a complete clone).
     pub(super) fn emit_enum_clone_fn(&mut self, enum_name: &str) -> Option<FunctionValue<'ctx>> {
-        let layout = self.enum_layouts.get(enum_name)?.clone();
+        let layout = self.type_decls.enum_layouts.get(enum_name)?.clone();
         if layout.is_shared {
             return None; // shared enums use the RC machinery
         }
@@ -1954,8 +1959,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if let TypeKind::Path(p) = &te.kind {
             if let [single] = p.segments.as_slice() {
                 if p.generic_args.is_none()
-                    && !self.shared_types.contains_key(single.as_str())
-                    && self.struct_types.contains_key(single.as_str())
+                    && !self.type_decls.shared_types.contains_key(single.as_str())
+                    && self.type_decls.struct_types.contains_key(single.as_str())
                     && self
                         .program_snapshot
                         .as_deref()
@@ -2251,7 +2256,7 @@ impl<'ctx> super::Codegen<'ctx> {
         err_te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
         let (result_ty, ok_tag, err_tag) = {
-            let layout = self.enum_layouts.get("Result")?;
+            let layout = self.type_decls.enum_layouts.get("Result")?;
             (
                 layout.llvm_type,
                 layout.tags.get("Ok").copied().unwrap_or(0),
@@ -2447,7 +2452,7 @@ impl<'ctx> super::Codegen<'ctx> {
         payload_te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
         let (option_ty, some_tag) = {
-            let layout = self.enum_layouts.get("Option")?;
+            let layout = self.type_decls.enum_layouts.get("Option")?;
             (
                 layout.llvm_type,
                 layout.tags.get("Some").copied().unwrap_or(1),

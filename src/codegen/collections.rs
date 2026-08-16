@@ -953,9 +953,10 @@ impl<'ctx> super::Codegen<'ctx> {
                  for other `Ord` element types."
             )
         };
-        if self.shared_types.contains_key(elem_name)
-            || !self.struct_types.contains_key(elem_name)
+        if self.type_decls.shared_types.contains_key(elem_name)
+            || !self.type_decls.struct_types.contains_key(elem_name)
             || self
+                .type_decls
                 .struct_generic_params
                 .get(elem_name)
                 .is_some_and(|ps| !ps.is_empty())
@@ -963,6 +964,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err(unsupported());
         }
         let field_tes = self
+            .type_decls
             .struct_field_type_exprs
             .get(elem_name)
             .cloned()
@@ -991,7 +993,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Err(unsupported());
             }
         }
-        let st_ty = *self.struct_types.get(elem_name).ok_or_else(unsupported)?;
+        let st_ty = *self
+            .type_decls
+            .struct_types
+            .get(elem_name)
+            .ok_or_else(unsupported)?;
 
         let ctx = self.context;
         let i32_t = ctx.i32_type();
@@ -1231,6 +1237,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let te = self
+            .type_decls
             .enum_inst_type_exprs
             .get(&(span.offset, span.length))?
             .clone();
@@ -1586,7 +1593,7 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Path(p) => p
                 .segments
                 .last()
-                .is_some_and(|s| self.shared_types.contains_key(s.as_str())),
+                .is_some_and(|s| self.type_decls.shared_types.contains_key(s.as_str())),
             _ => false,
         });
         if val_is_zero_bits && !elem_is_shared {
@@ -2727,7 +2734,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let te = self.map_receiver_value_type_expr(map_recv)?;
         let is_shared = matches!(&te.kind,
             TypeKind::Path(p)
-                if p.segments.last().is_some_and(|s| self.shared_types.contains_key(s.as_str())));
+                if p.segments.last().is_some_and(|s| self.type_decls.shared_types.contains_key(s.as_str())));
         if is_shared {
             return None;
         }
@@ -3046,7 +3053,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // double-freed at scope exit — the field-rooted leg of the
                 // non-Copy index-swap fix (B-2026-07-11-32).
                 let struct_name = self.type_name_of_expr(recv)?;
-                let field_names = self.struct_field_names.get(struct_name.as_str())?;
+                let field_names = self
+                    .type_decls
+                    .struct_field_names
+                    .get(struct_name.as_str())?;
                 let idx = field_names.iter().position(|n| n == field)?;
                 let field_te = self
                     .struct_field_type_exprs(struct_name.as_str())?
@@ -3079,7 +3089,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if let TypeKind::Path(p) = &inst.kind {
                 if p.segments.last().map(String::as_str) == Some(struct_name) {
                     if let (Some(params), Some(args)) = (
-                        self.struct_generic_params.get(struct_name),
+                        self.type_decls.struct_generic_params.get(struct_name),
                         p.generic_args.as_ref(),
                     ) {
                         let subst: std::collections::HashMap<String, TypeExpr> = params
@@ -3374,8 +3384,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(mut sname) = ep.segments.last().cloned() else {
             return Ok(val);
         };
-        if !self.struct_types.contains_key(sname.as_str())
-            || self.shared_types.contains_key(sname.as_str())
+        if !self.type_decls.struct_types.contains_key(sname.as_str())
+            || self.type_decls.shared_types.contains_key(sname.as_str())
         {
             return Ok(val);
         }
@@ -3387,11 +3397,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // exactly as they are.
         for hop in hops {
             let Some(next) = self
+                .type_decls
                 .struct_field_names
                 .get(sname.as_str())
                 .and_then(|names| names.iter().position(|n| n == hop))
                 .and_then(|i| {
-                    self.struct_field_type_exprs
+                    self.type_decls
+                        .struct_field_type_exprs
                         .get(sname.as_str())
                         .and_then(|tes| tes.get(i))
                 })
@@ -3402,14 +3414,15 @@ impl<'ctx> super::Codegen<'ctx> {
             else {
                 return Ok(val);
             };
-            if !self.struct_types.contains_key(next.as_str())
-                || self.shared_types.contains_key(next.as_str())
+            if !self.type_decls.struct_types.contains_key(next.as_str())
+                || self.type_decls.shared_types.contains_key(next.as_str())
             {
                 return Ok(val);
             }
             sname = next;
         }
         let Some(idx) = self
+            .type_decls
             .struct_field_names
             .get(sname.as_str())
             .and_then(|names| names.iter().position(|n| n == field))
@@ -3417,6 +3430,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(val);
         };
         let Some(fte) = self
+            .type_decls
             .struct_field_type_exprs
             .get(sname.as_str())
             .and_then(|tes| tes.get(idx))
@@ -3525,10 +3539,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(sname) = self.type_name_of_expr(object) else {
             return Ok(val);
         };
-        if !self.shared_types.contains_key(sname.as_str()) {
+        if !self.type_decls.shared_types.contains_key(sname.as_str()) {
             return Ok(val);
         }
         let Some(idx) = self
+            .type_decls
             .struct_field_names
             .get(sname.as_str())
             .and_then(|names| names.iter().position(|n| n == field))
@@ -3536,6 +3551,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(val);
         };
         let Some(fte) = self
+            .type_decls
             .struct_field_type_exprs
             .get(sname.as_str())
             .and_then(|tes| tes.get(idx))
@@ -3630,6 +3646,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok((val, false));
         };
         let Some(fidx) = self
+            .type_decls
             .struct_field_names
             .get(obj_ty.as_str())
             .and_then(|ns| ns.iter().position(|n| n == field))
@@ -3637,6 +3654,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok((val, false));
         };
         let Some(field_te) = self
+            .type_decls
             .struct_field_type_exprs
             .get(obj_ty.as_str())
             .and_then(|tes| tes.get(fidx))
@@ -4014,6 +4032,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let elem_struct_ty = *self
+            .type_decls
             .struct_types
             .get(&soa.struct_name)
             .ok_or_else(|| format!("Unknown SoA element struct '{}'", soa.struct_name))?;
@@ -4138,6 +4157,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // pointer sits after all hot groups) and the field's position WITHIN that
         // group's sub-struct.
         let dst_idx = self
+            .type_decls
             .struct_field_names
             .get(&soa.struct_name)
             .and_then(|names| names.iter().position(|n| n == field))

@@ -1192,7 +1192,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let TypeKind::Path(p) = &te.kind {
             if let Some(seg) = p.segments.last() {
-                if let Some(field_tes) = self.struct_field_type_exprs.get(seg) {
+                if let Some(field_tes) = self.type_decls.struct_field_type_exprs.get(seg) {
                     return !field_tes.is_empty()
                         && field_tes.len() <= 3
                         && field_tes.iter().all(Self::is_scalar_word_display_field);
@@ -1335,7 +1335,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // and expr-driven; this path is the buffer-append, by-pointer
                 // form needed for nested/recursive field rendering).
                 if let Some(seg) = p.segments.last() {
-                    if self.enum_layouts.contains_key(seg) {
+                    if self.type_decls.enum_layouts.contains_key(seg) {
                         return self.emit_enum_display_fn(seg);
                     }
                     // Total-order float wrappers render as their INNER float
@@ -1356,7 +1356,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // matching the interpreter (B-2026-07-08-18). Without this a
                     // struct-typed field fell through to `emit_display_fn_for_type`
                     // and panicked ("type_name … not yet supported").
-                    if self.struct_field_names.contains_key(seg) {
+                    if self.type_decls.struct_field_names.contains_key(seg) {
                         return self.emit_struct_debug_display_fn(seg);
                     }
                 }
@@ -1538,7 +1538,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn display_field_struct_name(&self, te: &crate::ast::TypeExpr) -> Option<String> {
         if let crate::ast::TypeKind::Path(p) = &te.kind {
             if let Some(seg) = p.segments.last() {
-                if self.struct_field_names.contains_key(seg) {
+                if self.type_decls.struct_field_names.contains_key(seg) {
                     return Some(seg.clone());
                 }
             }
@@ -1581,7 +1581,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         | "bool"
                         | "char"
                         | "String"
-                ) || self.enum_unit_variants.contains_key(seg.as_str());
+                ) || self
+                    .type_decls
+                    .enum_unit_variants
+                    .contains_key(seg.as_str());
             }
         }
         false
@@ -1596,11 +1599,13 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<Vec<crate::ast::ParsedInterpolationPart>, String> {
         use crate::ast::ParsedInterpolationPart as P;
         let field_names = self
+            .type_decls
             .struct_field_names
             .get(type_name)
             .cloned()
             .ok_or_else(|| format!("Display: unknown struct '{type_name}'"))?;
         let field_tes = self
+            .type_decls
             .struct_field_type_exprs
             .get(type_name)
             .cloned()
@@ -1744,7 +1749,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .var_types
                 .var_type_names
                 .get(n.as_str())
-                .filter(|tn| self.struct_field_names.contains_key(tn.as_str()))
+                .filter(|tn| self.type_decls.struct_field_names.contains_key(tn.as_str()))
                 .cloned(),
             // `self` receiver — registered under the name "self" in
             // `var_type_names`. Recognising it here lets a struct
@@ -1758,12 +1763,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 .var_types
                 .var_type_names
                 .get("self")
-                .filter(|tn| self.struct_field_names.contains_key(tn.as_str()))
+                .filter(|tn| self.type_decls.struct_field_names.contains_key(tn.as_str()))
                 .cloned(),
             ExprKind::FieldAccess { object, field } => {
                 let outer = self.expr_user_struct_name(object)?;
-                let tes = self.struct_field_type_exprs.get(&outer)?;
-                let names = self.struct_field_names.get(&outer)?;
+                let tes = self.type_decls.struct_field_type_exprs.get(&outer)?;
+                let names = self.type_decls.struct_field_names.get(&outer)?;
                 let idx = names.iter().position(|f| f == field)?;
                 self.display_field_struct_name(tes.get(idx)?)
             }
@@ -1780,23 +1785,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 .var_types
                 .var_type_names
                 .get(n.as_str())
-                .filter(|tn| self.enum_unit_variants.contains_key(tn.as_str()))
+                .filter(|tn| self.type_decls.enum_unit_variants.contains_key(tn.as_str()))
                 .cloned(),
             // `self` receiver — see the note in `expr_user_struct_name`.
             ExprKind::SelfValue => self
                 .var_types
                 .var_type_names
                 .get("self")
-                .filter(|tn| self.enum_unit_variants.contains_key(tn.as_str()))
+                .filter(|tn| self.type_decls.enum_unit_variants.contains_key(tn.as_str()))
                 .cloned(),
             ExprKind::FieldAccess { object, field } => {
                 let outer = self.expr_user_struct_name(object)?;
-                let tes = self.struct_field_type_exprs.get(&outer)?;
-                let names = self.struct_field_names.get(&outer)?;
+                let tes = self.type_decls.struct_field_type_exprs.get(&outer)?;
+                let names = self.type_decls.struct_field_names.get(&outer)?;
                 let idx = names.iter().position(|f| f == field)?;
                 if let crate::ast::TypeKind::Path(p) = &tes.get(idx)?.kind {
                     if let Some(seg) = p.segments.last() {
-                        if self.enum_unit_variants.contains_key(seg) {
+                        if self.type_decls.enum_unit_variants.contains_key(seg) {
                             return Some(seg.clone());
                         }
                     }
@@ -1817,6 +1822,7 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
     ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
         let variants = self
+            .type_decls
             .enum_unit_variants
             .get(enum_name)
             .cloned()
@@ -1843,6 +1849,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut acc: Option<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>)> = None;
         for vname in &variants {
             let tagval = *self
+                .type_decls
                 .enum_layouts
                 .get(enum_name)
                 .and_then(|l| l.tags.get(vname))
@@ -1942,6 +1949,7 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .unwrap_or_default();
         let layout = self
+            .type_decls
             .enum_layouts
             .get(enum_name)
             .expect("emit_enum_display_fn: enum has no layout");
@@ -2122,15 +2130,18 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let struct_ty = *self
+            .type_decls
             .struct_types
             .get(struct_name)
             .expect("emit_struct_debug_display_fn: struct type registered");
         let field_names = self
+            .type_decls
             .struct_field_names
             .get(struct_name)
             .cloned()
             .unwrap_or_default();
         let field_tes = self
+            .type_decls
             .struct_field_type_exprs
             .get(struct_name)
             .cloned()
@@ -2203,6 +2214,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
         let layout = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .expect("emit_option_display_te: Option layout seeded");
@@ -2307,6 +2319,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
         let layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("emit_result_display_te: Result layout seeded");
@@ -2402,8 +2415,8 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => self.var_types.var_type_names.get("self").cloned(),
             ExprKind::FieldAccess { object, field } => {
                 let outer = self.expr_user_struct_name(object)?;
-                let tes = self.struct_field_type_exprs.get(&outer)?;
-                let names = self.struct_field_names.get(&outer)?;
+                let tes = self.type_decls.struct_field_type_exprs.get(&outer)?;
+                let names = self.type_decls.struct_field_names.get(&outer)?;
                 let idx = names.iter().position(|f| f == field)?;
                 if let crate::ast::TypeKind::Path(p) = &tes.get(idx)?.kind {
                     p.segments.last().cloned()
@@ -2413,8 +2426,8 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => None,
         }?;
-        if self.enum_layouts.contains_key(&tn)
-            && (!self.seeded_enum_names.contains(&tn)
+        if self.type_decls.enum_layouts.contains_key(&tn)
+            && (!self.type_decls.seeded_enum_names.contains(&tn)
                 || self.display.baked_display_enum_names.contains(&tn))
             && tn != "Option"
             && tn != "Result"

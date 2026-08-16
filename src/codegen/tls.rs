@@ -128,6 +128,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_ty = ctx.i64_type();
 
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("Result layout seeded by seed_builtin_enum_layouts");
@@ -637,6 +638,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let errno_phi_val = errno_phi.as_basic_value().into_int_value();
 
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("Result layout seeded");
@@ -647,6 +649,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("Result.Err tag seeded");
         let ok_tag = *result_layout.tags.get("Ok").expect("Result.Ok tag seeded");
         let tls_err_layout = self
+            .type_decls
             .enum_layouts
             .get("TlsError")
             .expect("TlsError layout seeded");
@@ -747,7 +750,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// LLVM struct type for `TlsListener` — `{ i64 fd, ptr config }`.
-    /// Built inline rather than read from `self.struct_types` because
+    /// Built inline rather than read from `self.type_decls.struct_types` because
     /// stdlib structs aren't registered there (same convention as
     /// `lower_tcp_listener_bind` for the `{ i64 }` shape). Used by
     /// `lower_tls_listener_bind_tls`, `extract_fd_and_config_from_tls_listener`,
@@ -894,6 +897,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let label_prefix = if is_write { "tls.write" } else { "tls.read" };
 
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("Result layout seeded by seed_builtin_enum_layouts");
@@ -905,6 +909,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("Result.Err tag seeded");
 
         let tls_err_layout = self
+            .type_decls
             .enum_layouts
             .get("TlsError")
             .expect("TlsError layout seeded by seed_builtin_enum_layouts");

@@ -146,6 +146,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // module init with a 4-payload-word shape, so the IoError
         // value (also 4 words including its tag) packs in directly.
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .ok_or_else(|| "Result layout not registered before File codegen".to_string())?;
@@ -648,6 +649,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
 
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .ok_or_else(|| "Result layout not registered before File codegen".to_string())?;

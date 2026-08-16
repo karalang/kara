@@ -235,7 +235,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // OWNING clone (copy + retain). The plain dispatcher would copy the
         // pointer without retaining — an uncounted alias whose two drops
         // over-release (B-2026-07-28-11's shape).
-        if self.shared_types.contains_key(&head) {
+        if self.type_decls.shared_types.contains_key(&head) {
             let f = self.emit_owning_clone_fn_for_type_expr(&te);
             return Some((te, f));
         }
@@ -269,11 +269,11 @@ impl<'ctx> super::Codegen<'ctx> {
             let f = self.emit_primitive_clone_fn(&mangled, &te);
             return Some((te, f));
         }
-        if self.struct_types.contains_key(&head) {
+        if self.type_decls.struct_types.contains_key(&head) {
             let f = self.emit_struct_clone_fn(&head)?;
             return Some((te, f));
         }
-        if self.enum_layouts.contains_key(&head) {
+        if self.type_decls.enum_layouts.contains_key(&head) {
             if let Some(f) = self.emit_enum_clone_fn(&head) {
                 return Some((te, f));
             }
@@ -321,7 +321,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 span: span_zero.clone(),
             }
         };
-        if let Some(te) = self.enum_inst_var_types.get(name) {
+        if let Some(te) = self.type_decls.enum_inst_var_types.get(name) {
             if let TypeKind::Path(p) = &te.kind {
                 let head = p.segments.first().map(String::as_str).unwrap_or("");
                 if head != "Option" || p.generic_args.is_some() {
@@ -334,9 +334,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let payload = self.var_types.var_option_payload_te.get(name)?.clone();
             return Some(mk_path("Option", vec![payload]));
         }
-        if self.shared_types.contains_key(type_name)
-            || self.struct_types.contains_key(type_name)
-            || self.enum_layouts.contains_key(type_name)
+        if self.type_decls.shared_types.contains_key(type_name)
+            || self.type_decls.struct_types.contains_key(type_name)
+            || self.type_decls.enum_layouts.contains_key(type_name)
         {
             return Some(mk_path(type_name, Vec::new()));
         }

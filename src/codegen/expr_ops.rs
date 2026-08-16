@@ -455,7 +455,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Mirrors the `Identifier(name)`-bare path that
             // `try_unit_enum_variant` handles elsewhere, but scoped to
             // the `EnumName.Variant` form.
-            if let Some(layout) = self.enum_layouts.get(name) {
+            if let Some(layout) = self.type_decls.enum_layouts.get(name) {
                 if layout.tags.contains_key(field)
                     && layout.field_counts.get(field).copied().unwrap_or(0) == 0
                 {
@@ -492,6 +492,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // upgraded, not read raw.
         if let Some((type_name, info)) = self.weak_receiver_type(object) {
             if let Some(idx) = self
+                .type_decls
                 .struct_field_names
                 .get(&type_name)
                 .and_then(|ns| ns.iter().position(|n| n == field))
@@ -538,7 +539,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     if let TypeKind::Path(path) = &elem_te.kind {
                         if let Some(seg) = path.segments.first() {
-                            if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
+                            if let Some(info) =
+                                self.type_decls.shared_types.get(seg.as_str()).cloned()
+                            {
                                 if !info.is_enum {
                                     let outer_name = outer_name.clone();
                                     let (elem_ptr, _) = if self
@@ -563,7 +566,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .build_load(ptr_ty, elem_ptr, "idx.shared.read")
                                         .unwrap()
                                         .into_pointer_value();
-                                    if let Some(names) = self.struct_field_names.get(seg) {
+                                    if let Some(names) = self.type_decls.struct_field_names.get(seg)
+                                    {
                                         if let Some(idx) = names.iter().position(|n| n == field) {
                                             // Route the heap-field offset through
                                             // `shared_gep_layout` (base 1 headed,
@@ -639,9 +643,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.var_types.array_elem_type_exprs.contains_key(n.as_str()));
             if !matches!(inner.kind, ExprKind::Identifier(_)) || array_root {
                 if let Some(type_name) = self.type_name_of_expr(object) {
-                    if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
+                    if let Some(info) = self
+                        .type_decls
+                        .shared_types
+                        .get(type_name.as_str())
+                        .cloned()
+                    {
                         if !info.is_enum {
                             if let Some(idx) = self
+                                .type_decls
                                 .struct_field_names
                                 .get(&type_name)
                                 .and_then(|names| names.iter().position(|n| n == field))
@@ -689,7 +699,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Identifier(soa_var) = &inner.kind {
                 if let Some(soa) = self.active_soa_layout(soa_var.as_str()) {
-                    if let Some(names) = self.struct_field_names.get(&soa.struct_name) {
+                    if let Some(names) = self.type_decls.struct_field_names.get(&soa.struct_name) {
                         if let Some(fidx) = names.iter().position(|n| n == field) {
                             let soa_var = soa_var.clone();
                             let elem = self
@@ -740,10 +750,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         if let TypeKind::Path(path) = &elem_te.kind {
                             if let Some(seg) = path.segments.first() {
-                                if self.struct_types.contains_key(seg.as_str())
-                                    && !self.shared_types.contains_key(seg.as_str())
+                                if self.type_decls.struct_types.contains_key(seg.as_str())
+                                    && !self.type_decls.shared_types.contains_key(seg.as_str())
                                 {
-                                    if let Some(names) = self.struct_field_names.get(seg).cloned() {
+                                    if let Some(names) =
+                                        self.type_decls.struct_field_names.get(seg).cloned()
+                                    {
                                         if let Some(fidx) = names.iter().position(|n| n == field) {
                                             let outer_name = outer_name.clone();
                                             let elem = self
@@ -786,10 +798,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     if let TypeKind::Path(path) = &elem_te.kind {
                         if let Some(seg) = path.segments.last() {
-                            if self.struct_types.contains_key(seg.as_str())
-                                && !self.shared_types.contains_key(seg.as_str())
+                            if self.type_decls.struct_types.contains_key(seg.as_str())
+                                && !self.type_decls.shared_types.contains_key(seg.as_str())
                             {
-                                if let Some(names) = self.struct_field_names.get(seg).cloned() {
+                                if let Some(names) =
+                                    self.type_decls.struct_field_names.get(seg).cloned()
+                                {
                                     if let Some(fidx) = names.iter().position(|n| n == field) {
                                         let elem = self.compile_expr(object)?;
                                         if elem.is_struct_value() {
@@ -823,7 +837,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // static return type names a known shared struct.
         if let Some((type_name, info)) = self.shared_type_for_call_like(object) {
             if !info.is_enum {
-                if let Some(names) = self.struct_field_names.get(&type_name).cloned() {
+                if let Some(names) = self.type_decls.struct_field_names.get(&type_name).cloned() {
                     if let Some(idx) = names.iter().position(|n| n == field) {
                         let ptr = self.compile_expr(object)?.into_pointer_value();
                         // Fields start at heap index 1 (index 0 is refcount).
@@ -868,6 +882,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // *is* the alias source's transfer of one
                         // owned ref into the field-access result.
                         if let Some(field_te) = self
+                            .type_decls
                             .struct_field_type_exprs
                             .get(&type_name)
                             .and_then(|v| v.get(idx))
@@ -905,7 +920,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some((type_name, info)) = self.shared_type_for_expr(object) {
             if !info.is_enum {
                 let ptr = self.compile_expr(object)?.into_pointer_value();
-                if let Some(names) = self.struct_field_names.get(&type_name) {
+                if let Some(names) = self.type_decls.struct_field_names.get(&type_name) {
                     if let Some(idx) = names.iter().position(|n| n == field) {
                         // Fields start at heap index `base` — 1 past
                         // the refcount, or 0 for a phase-D headerless
@@ -1061,8 +1076,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(name) = self.type_name_of_expr(expr) else {
             return;
         };
-        if !self.struct_types.contains_key(name.as_str())
-            || self.shared_types.contains_key(name.as_str())
+        if !self.type_decls.struct_types.contains_key(name.as_str())
+            || self.type_decls.shared_types.contains_key(name.as_str())
         {
             return;
         }
@@ -1092,7 +1107,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if depth > 8 {
             return false;
         }
-        let Some(field_tes) = self.struct_field_type_exprs.get(struct_name) else {
+        let Some(field_tes) = self.type_decls.struct_field_type_exprs.get(struct_name) else {
             return false;
         };
         field_tes.iter().any(|te| match &te.kind {
@@ -1100,7 +1115,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some("Vec") => true,
                 Some(nested) => {
                     nested != struct_name
-                        && self.struct_field_type_exprs.contains_key(nested)
+                        && self.type_decls.struct_field_type_exprs.contains_key(nested)
                         && self.struct_has_vec_field_deep_inner(nested, depth + 1)
                 }
                 None => false,
@@ -1150,8 +1165,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let name = self
             .type_name_of_expr(left)
             .or_else(|| self.type_name_of_expr(right))?;
-        if !self.struct_types.contains_key(name.as_str())
-            || self.shared_types.contains_key(name.as_str())
+        if !self.type_decls.struct_types.contains_key(name.as_str())
+            || self.type_decls.shared_types.contains_key(name.as_str())
             || !self.struct_has_vec_field_deep(&name)
         {
             return None;
@@ -1195,8 +1210,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(name) = self.type_name_of_expr(object) else {
             return;
         };
-        if !self.struct_types.contains_key(name.as_str())
-            || self.shared_types.contains_key(name.as_str())
+        if !self.type_decls.struct_types.contains_key(name.as_str())
+            || self.type_decls.shared_types.contains_key(name.as_str())
         {
             return;
         }
@@ -1301,8 +1316,9 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return None,
         };
         let type_name = self.var_types.var_type_names.get(&var_name)?.clone();
-        let storage_ty = self.union_types.get(&type_name).copied()?;
+        let storage_ty = self.type_decls.union_types.get(&type_name).copied()?;
         let field_ty = self
+            .type_decls
             .union_field_types
             .get(&type_name)
             .and_then(|fs| fs.iter().find(|(n, _)| n == field))
@@ -1365,10 +1381,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(struct_name) = self.var_types.var_type_names.get(rname).cloned() else {
             return Ok(false);
         };
-        let Some(st) = self.struct_types.get(&struct_name).copied() else {
+        let Some(st) = self.type_decls.struct_types.get(&struct_name).copied() else {
             return Ok(false);
         };
         let Some(idx) = self
+            .type_decls
             .struct_field_names
             .get(&struct_name)
             .and_then(|ns| ns.iter().position(|n| n == field))
@@ -1459,7 +1476,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Option[T]`). Drives the weak store/read/drop codegen paths.
     /// `docs/spikes/weak-refs.md` (B-2026-07-19-8).
     pub(super) fn struct_field_is_weak(&self, struct_name: &str, field_idx: usize) -> bool {
-        self.struct_field_type_exprs
+        self.type_decls
+            .struct_field_type_exprs
             .get(struct_name)
             .and_then(|tes| tes.get(field_idx))
             .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
@@ -1528,7 +1546,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some((type_name, _)) = self.weak_receiver_type(object) else {
             return false;
         };
-        self.struct_field_names
+        self.type_decls
+            .struct_field_names
             .get(&type_name)
             .and_then(|ns| ns.iter().position(|n| n == field))
             .is_some_and(|idx| self.struct_field_is_weak(&type_name, idx))
@@ -1562,11 +1581,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let sname = self.var_types.var_type_names.get(obj_name)?.clone();
                 let idx = self
+                    .type_decls
                     .struct_field_names
                     .get(&sname)?
                     .iter()
                     .position(|n| n == field)?;
-                let fte = self.struct_field_type_exprs.get(&sname)?.get(idx)?;
+                let fte = self
+                    .type_decls
+                    .struct_field_type_exprs
+                    .get(&sname)?
+                    .get(idx)?;
                 super::helpers::vec_inner_type_expr(fte)
             }
             _ => None,
@@ -1588,7 +1612,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let elem_te = self.var_types.var_elem_type_exprs.get(outer.as_str())?;
                 if let TypeKind::Path(p) = &elem_te.kind {
                     let seg = p.segments.first()?;
-                    let info = self.shared_types.get(seg.as_str())?;
+                    let info = self.type_decls.shared_types.get(seg.as_str())?;
                     if !info.is_enum {
                         return Some((seg.clone(), info.clone()));
                     }
@@ -1736,7 +1760,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     if let TypeKind::Path(path) = &elem_te.kind {
                         if let Some(seg) = path.segments.first() {
-                            if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
+                            if let Some(info) =
+                                self.type_decls.shared_types.get(seg.as_str()).cloned()
+                            {
                                 if !info.is_enum {
                                     let outer_name = outer_name.clone();
                                     let (elem_ptr, _) = if self
@@ -1760,7 +1786,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .build_load(ptr_ty, elem_ptr, "idx.shared.ptr")
                                         .unwrap()
                                         .into_pointer_value();
-                                    if let Some(names) = self.struct_field_names.get(seg) {
+                                    if let Some(names) = self.type_decls.struct_field_names.get(seg)
+                                    {
                                         if let Some(idx) = names.iter().position(|n| n == field) {
                                             // B-2026-07-19-?: use `shared_gep_layout`
                                             // for the (gep_ty, base) instead of a
@@ -1802,6 +1829,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                             // free). Non-Option-shared fields fall
                                             // through to the plain store below.
                                             if let Some(field_te) = self
+                                                .type_decls
                                                 .struct_field_type_exprs
                                                 .get(seg)
                                                 .and_then(|v| v.get(idx))
@@ -1872,9 +1900,15 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::Index { object: inner, .. } = &object.kind {
             if !matches!(inner.kind, ExprKind::Identifier(_)) {
                 if let Some(type_name) = self.type_name_of_expr(object) {
-                    if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
+                    if let Some(info) = self
+                        .type_decls
+                        .shared_types
+                        .get(type_name.as_str())
+                        .cloned()
+                    {
                         if !info.is_enum {
                             if let Some(idx) = self
+                                .type_decls
                                 .struct_field_names
                                 .get(&type_name)
                                 .and_then(|names| names.iter().position(|n| n == field))
@@ -1951,15 +1985,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `shared_gep_layout` — the same funnel the indexed-shared
                 // branch uses, keeping the header shift in one place.
                 let layout = match self
+                    .type_decls
                     .shared_types
                     .get(obj_ty.as_str())
                     .filter(|i| !i.is_enum)
                     .map(|i| i.heap_type)
                 {
                     Some(heap_type) => Some(self.shared_gep_layout(&obj_ty, heap_type)),
-                    None => self.struct_types.get(obj_ty.as_str()).map(|&st| (st, 0)),
+                    None => self
+                        .type_decls
+                        .struct_types
+                        .get(obj_ty.as_str())
+                        .map(|&st| (st, 0)),
                 };
                 let idx_opt = self
+                    .type_decls
                     .struct_field_names
                     .get(obj_ty.as_str())
                     .and_then(|names| names.iter().position(|n| n == field));
@@ -1978,10 +2018,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // (B-2026-07-28-8's class), not an unconditional drop
                     // that would free an aliasing RHS's node.
                     let shared_parent = self
+                        .type_decls
                         .shared_types
                         .get(obj_ty.as_str())
                         .is_some_and(|i| !i.is_enum);
                     let optshared_field = self
+                        .type_decls
                         .struct_field_type_exprs
                         .get(obj_ty.as_str())
                         .and_then(|tes| tes.get(idx))
@@ -2047,7 +2089,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(var_name) = var_name_owned.as_deref() {
             // Shared type: store directly into the heap object via GEP.
             if let Some(type_name) = self.var_types.var_type_names.get(var_name).cloned() {
-                if let Some(info) = self.shared_types.get(&type_name).cloned() {
+                if let Some(info) = self.type_decls.shared_types.get(&type_name).cloned() {
                     if !info.is_enum {
                         if self.variables.contains_key(var_name) {
                             // Heap pointer via `compile_expr` so a `ref self`
@@ -2058,7 +2100,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             // wouldn't persist. Matches the read path; an owned
                             // local / constructor binding still loads once.
                             let ptr = self.compile_expr(object)?.into_pointer_value();
-                            if let Some(names) = self.struct_field_names.get(&type_name) {
+                            if let Some(names) = self.type_decls.struct_field_names.get(&type_name)
+                            {
                                 if let Some(idx) = names.iter().position(|n| n == field) {
                                     // Phase-D layout: headerless members
                                     // GEP the twin at base 0. Only
@@ -2103,6 +2146,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // non-Option-shared fields, which
                                     // fall through to the plain store.
                                     if let Some(field_te) = self
+                                        .type_decls
                                         .struct_field_type_exprs
                                         .get(&type_name)
                                         .and_then(|v| v.get(idx))
@@ -2358,10 +2402,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // A shared receiver has its own dispatch upstream; only plain structs
         // reach this fall-through, but check so a future reordering cannot
         // double-handle one.
-        if self.shared_types.contains_key(&type_name) {
+        if self.type_decls.shared_types.contains_key(&type_name) {
             return false;
         }
         let Some(field_te) = self
+            .type_decls
             .struct_field_type_exprs
             .get(&type_name)
             .and_then(|v| v.get(idx as usize))
@@ -2449,6 +2494,7 @@ impl<'ctx> super::Codegen<'ctx> {
         field_ptr: PointerValue<'ctx>,
     ) {
         let Some(field_te) = self
+            .type_decls
             .struct_field_type_exprs
             .get(type_name)
             .and_then(|tes| tes.get(idx))
@@ -2497,6 +2543,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let Some(field_te) = self
+            .type_decls
             .struct_field_type_exprs
             .get(&type_name)
             .and_then(|tes| tes.get(idx as usize))
@@ -2535,11 +2582,13 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn plain_field_type_expr(&self, object: &Expr, field: &str) -> Option<TypeExpr> {
         let type_name = self.type_name_of_expr(object)?;
         let idx = self
+            .type_decls
             .struct_field_names
             .get(&type_name)?
             .iter()
             .position(|n| n == field)?;
         let field_te = self
+            .type_decls
             .struct_field_type_exprs
             .get(&type_name)?
             .get(idx)?
@@ -2568,7 +2617,12 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> PointerValue<'ctx> {
         let is_shared = self
             .place_chain_type_name(expr)
-            .and_then(|n| self.shared_types.get(n.as_str()).map(|i| !i.is_enum))
+            .and_then(|n| {
+                self.type_decls
+                    .shared_types
+                    .get(n.as_str())
+                    .map(|i| !i.is_enum)
+            })
             .unwrap_or(false);
         if !is_shared {
             return slot;
@@ -2652,15 +2706,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (two when the type is weak-targeted), so the field index has
                 // to be biased or the GEP lands on the header.
                 let (st, base) = match self
+                    .type_decls
                     .shared_types
                     .get(obj_ty.as_str())
                     .filter(|i| !i.is_enum)
                     .map(|i| i.heap_type)
                 {
                     Some(heap_type) => self.shared_gep_layout(&obj_ty, heap_type),
-                    None => (*self.struct_types.get(obj_ty.as_str())?, 0),
+                    None => (*self.type_decls.struct_types.get(obj_ty.as_str())?, 0),
                 };
                 let idx = self
+                    .type_decls
                     .struct_field_names
                     .get(obj_ty.as_str())?
                     .iter()
@@ -2937,12 +2993,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// handle rather than an inline aggregate (B-2026-07-28-6). `None` for every
     /// other field shape, so callers fall through to their in-place path.
     fn shared_field_type_name(&self, type_name: &str, idx: usize) -> Option<String> {
-        let te = self.struct_field_type_exprs.get(type_name)?.get(idx)?;
+        let te = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(type_name)?
+            .get(idx)?;
         let TypeKind::Path(path) = &te.kind else {
             return None;
         };
         let seg = path.segments.last()?;
-        match self.shared_types.get(seg.as_str()) {
+        match self.type_decls.shared_types.get(seg.as_str()) {
             Some(info) if !info.is_enum => Some(seg.clone()),
             _ => None,
         }
@@ -2977,6 +3037,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let some_tag = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .and_then(|l| l.tags.get("Some").copied())
@@ -3061,10 +3122,11 @@ impl<'ctx> super::Codegen<'ctx> {
         rhs_is_fresh: bool,
         field_name: &str,
     ) {
-        let option_ty = self.enum_layouts["Option"].llvm_type;
+        let option_ty = self.type_decls.enum_layouts["Option"].llvm_type;
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let some_tag = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .and_then(|l| l.tags.get("Some").copied())
@@ -3273,6 +3335,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         let some_tag = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .and_then(|l| l.tags.get("Some").copied())
@@ -3443,6 +3506,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // niche layout has no tag — `null == None` is the only guard needed).
         if let Some(tag) = tag {
             let some_tag = self
+                .type_decls
                 .enum_layouts
                 .get("Option")
                 .and_then(|l| l.tags.get("Some").copied())
@@ -3500,9 +3564,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// ref-param argument). design.md Feature 4 Part 3; B-2026-06-07-5.
     pub(super) fn field_access_ref_inner(&self, object: &Expr, field: &str) -> Option<TypeExpr> {
         let struct_name = self.type_name_of_expr(object)?;
-        let names = self.struct_field_names.get(struct_name.as_str())?;
+        let names = self
+            .type_decls
+            .struct_field_names
+            .get(struct_name.as_str())?;
         let idx = names.iter().position(|n| n == field)?;
         let te = self
+            .type_decls
             .struct_field_type_exprs
             .get(struct_name.as_str())?
             .get(idx)?;
@@ -3519,7 +3587,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // inner FieldAccess to recover `o.inner`'s declared type from
         // `struct_field_type_names`. See `type_name_of_expr`.
         if let Some(type_name) = self.type_name_of_expr(object) {
-            if let Some(names) = self.struct_field_names.get(type_name.as_str()) {
+            if let Some(names) = self.type_decls.struct_field_names.get(type_name.as_str()) {
                 if let Some(idx) = names.iter().position(|n| n == field) {
                     return Some(idx as u32);
                 }
@@ -3580,7 +3648,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::StructLiteral { path, .. } => path.last().cloned(),
             ExprKind::FieldAccess { object, field } => {
                 let obj_ty = self.type_name_of_expr(object)?;
-                let field_names = self.struct_field_names.get(obj_ty.as_str())?;
+                let field_names = self.type_decls.struct_field_names.get(obj_ty.as_str())?;
                 let idx = field_names.iter().position(|n| n == field)?;
                 // Generic-mono struct receiver (`e.inner` where `e: Wrap[Pair]`):
                 // the field's DECLARED type is a generic PARAM (`T`), so the
@@ -3599,8 +3667,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(inst_te) = self.enum_inst_type_of_expr(object) {
                     if let TypeKind::Path(p) = &inst_te.kind {
                         if let (Some(params), Some(field_tes), Some(args)) = (
-                            self.struct_generic_params.get(obj_ty.as_str()),
-                            self.struct_field_type_exprs.get(obj_ty.as_str()),
+                            self.type_decls.struct_generic_params.get(obj_ty.as_str()),
+                            self.type_decls.struct_field_type_exprs.get(obj_ty.as_str()),
                             p.generic_args.as_ref(),
                         ) {
                             if !params.is_empty()
@@ -3620,7 +3688,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 );
                                 if let TypeKind::Path(cp) = &concrete.kind {
                                     if let Some(n) = cp.segments.last() {
-                                        if self.struct_field_names.contains_key(n.as_str()) {
+                                        if self
+                                            .type_decls
+                                            .struct_field_names
+                                            .contains_key(n.as_str())
+                                        {
                                             return Some(n.clone());
                                         }
                                     }
@@ -3629,7 +3701,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
-                let field_ty_names = self.struct_field_type_names.get(obj_ty.as_str())?;
+                let field_ty_names = self
+                    .type_decls
+                    .struct_field_type_names
+                    .get(obj_ty.as_str())?;
                 field_ty_names.get(idx).and_then(|n| n.clone())
             }
             // Struct type of a tuple element. #25/#26 (B-2026-06-14-4): a
@@ -3694,11 +3769,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 } => {
                     let obj_ty = self.type_name_of_expr(inner)?;
                     let idx = self
+                        .type_decls
                         .struct_field_names
                         .get(obj_ty.as_str())?
                         .iter()
                         .position(|n| n == field)?;
                     let field_te = self
+                        .type_decls
                         .struct_field_type_exprs
                         .get(obj_ty.as_str())?
                         .get(idx)?;
@@ -3765,8 +3842,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // path.
                 if let ExprKind::Identifier(recv) = &object.kind {
                     if !self.var_types.var_type_names.contains_key(recv.as_str())
-                        && (self.struct_types.contains_key(recv.as_str())
-                            || self.enum_layouts.contains_key(recv.as_str()))
+                        && (self.type_decls.struct_types.contains_key(recv.as_str())
+                            || self.type_decls.enum_layouts.contains_key(recv.as_str()))
                     {
                         return self
                             .fn_sig
@@ -3853,8 +3930,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                         // — it has no fields, and naming it
                                         // here would hand `field_index_for` a
                                         // type it cannot index.
-                                        if self.struct_field_names.contains_key(n.as_str())
-                                            || self.enum_layouts.contains_key(n.as_str())
+                                        if self
+                                            .type_decls
+                                            .struct_field_names
+                                            .contains_key(n.as_str())
+                                            || self.type_decls.enum_layouts.contains_key(n.as_str())
                                         {
                                             return Some(n.clone());
                                         }
@@ -3998,10 +4078,10 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::StructLiteral { path, .. } => {
                 let last = path.last().cloned();
                 if let Some(name) = &last {
-                    if !self.struct_types.contains_key(name.as_str()) {
+                    if !self.type_decls.struct_types.contains_key(name.as_str()) {
                         if path.len() >= 2 {
                             let enum_name = &path[path.len() - 2];
-                            if self.enum_layouts.contains_key(enum_name) {
+                            if self.type_decls.enum_layouts.contains_key(enum_name) {
                                 return Some(enum_name.clone());
                             }
                         } else {
@@ -4013,6 +4093,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // the unqualified routing in `compile_expr`'s
                             // `StructLiteral` dispatch. (B-2026-06-13-12)
                             if let Some((enum_name, _)) = self
+                                .type_decls
                                 .enum_layouts
                                 .iter()
                                 .find(|(_, l)| l.tags.contains_key(name.as_str()))
@@ -4167,8 +4248,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     return false;
                 };
                 let (Some(names), Some(tes)) = (
-                    self.struct_field_names.get(&outer),
-                    self.struct_field_type_exprs.get(&outer),
+                    self.type_decls.struct_field_names.get(&outer),
+                    self.type_decls.struct_field_type_exprs.get(&outer),
                 ) else {
                     return false;
                 };
@@ -4479,8 +4560,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if let Some(ty) = recv_ty {
                     if let (Some(names), Some(tes)) = (
-                        self.struct_field_names.get(ty),
-                        self.struct_field_type_exprs.get(ty),
+                        self.type_decls.struct_field_names.get(ty),
+                        self.type_decls.struct_field_type_exprs.get(ty),
                     ) {
                         if let Some(idx) = names.iter().position(|n| n == field) {
                             if let Some(TypeKind::Path(p)) = tes.get(idx).map(|te| &te.kind) {
@@ -4535,8 +4616,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     };
                     if let Some(ty) = recv_ty {
                         if let (Some(names), Some(tes)) = (
-                            self.struct_field_names.get(ty),
-                            self.struct_field_type_exprs.get(ty),
+                            self.type_decls.struct_field_names.get(ty),
+                            self.type_decls.struct_field_type_exprs.get(ty),
                         ) {
                             if let Some(idx) = names.iter().position(|n| n == field) {
                                 if let Some(TypeKind::Path(p)) = tes.get(idx).map(|te| &te.kind) {
@@ -4974,6 +5055,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         let option_ty = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .ok_or("codegen: Option enum layout not seeded for checked_to_iN")?
@@ -5506,6 +5588,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         let ord_struct_ty = self
+            .type_decls
             .enum_layouts
             .get("Ordering")
             .map(|l| l.llvm_type)
@@ -6295,23 +6378,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 .var_types
                 .var_type_names
                 .get(name)
-                .filter(|n| self.enum_layouts.contains_key(n.as_str()))
+                .filter(|n| self.type_decls.enum_layouts.contains_key(n.as_str()))
                 .cloned(),
             ExprKind::Path { segments, .. } => segments
                 .first()
-                .filter(|s| self.enum_layouts.contains_key(s.as_str()))
+                .filter(|s| self.type_decls.enum_layouts.contains_key(s.as_str()))
                 .cloned(),
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(n) => self.enum_name_for_variant_ctor(n),
                 ExprKind::Path { segments, .. } => segments
                     .first()
-                    .filter(|s| self.enum_layouts.contains_key(s.as_str()))
+                    .filter(|s| self.type_decls.enum_layouts.contains_key(s.as_str()))
                     .cloned(),
                 _ => None,
             },
             ExprKind::StructLiteral { path, .. } if path.len() >= 2 => {
                 let en = &path[path.len() - 2];
-                self.enum_layouts.contains_key(en).then(|| en.clone())
+                self.type_decls
+                    .enum_layouts
+                    .contains_key(en)
+                    .then(|| en.clone())
             }
             _ => None,
         }
@@ -6323,9 +6409,9 @@ impl<'ctx> super::Codegen<'ctx> {
     fn enum_name_for_variant_ctor(&self, variant: &str) -> Option<String> {
         let mut user = None;
         let mut seed = None;
-        for (en, l) in &self.enum_layouts {
+        for (en, l) in &self.type_decls.enum_layouts {
             if l.tags.contains_key(variant) {
-                if self.seeded_enum_names.contains(en) {
+                if self.type_decls.seeded_enum_names.contains(en) {
                     seed.get_or_insert_with(|| en.clone());
                 } else {
                     user.get_or_insert_with(|| en.clone());
@@ -6342,12 +6428,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// args tracked for caller-side drop; pure unit/scalar enums use the
     /// cheaper word-wise path, which is sound after zero-init construction.
     pub(super) fn enum_has_heap_payload(&self, enum_name: &str) -> bool {
-        self.enum_layouts.get(enum_name).is_some_and(|l| {
-            l.field_drop_kinds
-                .values()
-                .flatten()
-                .any(|k| k.is_heap_bearing())
-        })
+        self.type_decls
+            .enum_layouts
+            .get(enum_name)
+            .is_some_and(|l| {
+                l.field_drop_kinds
+                    .values()
+                    .flatten()
+                    .any(|k| k.is_heap_bearing())
+            })
     }
 
     /// Would `emit_enum_drop_switch` emit a fn for `enum_name` — i.e. does its
@@ -6365,12 +6454,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `track_enum_var` for it. Keyed on `!= None`, the same gate
     /// `emit_enum_drop_switch` itself uses, so the two cannot drift.
     pub(super) fn enum_drop_switch_does_work(&self, enum_name: &str) -> bool {
-        self.enum_layouts.get(enum_name).is_some_and(|l| {
-            l.field_drop_kinds
-                .values()
-                .flatten()
-                .any(|k| *k != super::state::EnumDropKind::None)
-        })
+        self.type_decls
+            .enum_layouts
+            .get(enum_name)
+            .is_some_and(|l| {
+                l.field_drop_kinds
+                    .values()
+                    .flatten()
+                    .any(|k| *k != super::state::EnumDropKind::None)
+            })
     }
 
     /// Per-variant `(tag, name, field-type-exprs)` for `enum_name`, scanning the
@@ -6478,7 +6570,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .find_map(|(_, p)| collect(&p.items, enum_name))
             })
             .unwrap_or_default();
-        let layout = self.enum_layouts.get(enum_name);
+        let layout = self.type_decls.enum_layouts.get(enum_name);
         variants
             .into_iter()
             .filter_map(|(name, tys)| {
@@ -6584,7 +6676,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     pub(super) fn enum_inst_type_of_expr(&self, expr: &Expr) -> Option<TypeExpr> {
         if let ExprKind::Identifier(name) = &expr.kind {
-            if let Some(t) = self.enum_inst_var_types.get(name) {
+            if let Some(t) = self.type_decls.enum_inst_var_types.get(name) {
                 return Some(t.clone());
             }
         }
@@ -6626,7 +6718,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&fn_name)?
             .return_type
             .clone()?;
-        let params = self.struct_generic_params.get(recv_ty.as_str())?;
+        let params = self
+            .type_decls
+            .struct_generic_params
+            .get(recv_ty.as_str())?;
         if params.is_empty() {
             return None;
         }
@@ -6653,8 +6748,8 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         let n = cp.segments.last()?;
-        (self.struct_field_names.contains_key(n.as_str())
-            || self.enum_layouts.contains_key(n.as_str()))
+        (self.type_decls.struct_field_names.contains_key(n.as_str())
+            || self.type_decls.enum_layouts.contains_key(n.as_str()))
         .then_some(concrete)
     }
 
@@ -6700,7 +6795,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `enum_inst_type_exprs`), keyed on the now-absolute `(offset, length)`.
     /// See `enum_inst_type_of_expr`.
     pub(super) fn enum_inst_type_from_span(&self, expr: &Expr) -> Option<TypeExpr> {
-        self.enum_inst_type_exprs
+        self.type_decls
+            .enum_inst_type_exprs
             .get(&(expr.span.offset, expr.span.length))
             .cloned()
     }
@@ -6714,7 +6810,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 p.generic_args.as_ref().is_some_and(|a| !a.is_empty())
                     && p.segments
                         .last()
-                        .is_some_and(|s| self.enum_layouts.contains_key(s.as_str()))
+                        .is_some_and(|s| self.type_decls.enum_layouts.contains_key(s.as_str()))
             }
             _ => false,
         }
@@ -6733,9 +6829,11 @@ impl<'ctx> super::Codegen<'ctx> {
         match &te.kind {
             TypeKind::Path(p) => {
                 p.generic_args.as_ref().is_some_and(|a| !a.is_empty())
-                    && p.segments
-                        .last()
-                        .is_some_and(|s| self.struct_generic_params.contains_key(s.as_str()))
+                    && p.segments.last().is_some_and(|s| {
+                        self.type_decls
+                            .struct_generic_params
+                            .contains_key(s.as_str())
+                    })
             }
             _ => false,
         }
@@ -7666,11 +7764,13 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let i64_t = self.context.i64_type();
         let some_tag = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .and_then(|l| l.tags.get("Some").copied())
             .unwrap_or(1);
         let none_tag = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .and_then(|l| l.tags.get("None").copied())
@@ -8448,13 +8548,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the aggregate, so GEPing it as the struct would read past the
                 // 8-byte slot. Same guard, same reason, as the `mut ref`
                 // place-argument arm in `call_dispatch.rs`.
-                if self.shared_types.contains_key(tn.as_str()) {
+                if self.type_decls.shared_types.contains_key(tn.as_str()) {
                     return false;
                 }
-                let Some(st) = self.struct_types.get(tn.as_str()).copied() else {
+                let Some(st) = self.type_decls.struct_types.get(tn.as_str()).copied() else {
                     return false;
                 };
-                self.struct_field_names
+                self.type_decls
+                    .struct_field_names
                     .get(tn.as_str())
                     .and_then(|names| names.iter().position(|n| n == field))
                     .and_then(|idx| st.get_field_type_at_index(idx as u32))
@@ -8484,13 +8585,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// shared struct has no entry in `struct_types`, so the owned test cannot
     /// answer this at all. B-2026-08-06-4.
     fn shared_field_is_vec_header(&self, type_name: &str, field: &str) -> bool {
-        let Some(info) = self.shared_types.get(type_name) else {
+        let Some(info) = self.type_decls.shared_types.get(type_name) else {
             return false;
         };
         if info.is_enum {
             return false;
         }
         let Some(idx) = self
+            .type_decls
             .struct_field_names
             .get(type_name)
             .and_then(|names| names.iter().position(|n| n == field))

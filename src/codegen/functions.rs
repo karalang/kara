@@ -191,7 +191,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(name) = struct_by_value_param_name(rt) else {
             return Ok(Arm64ReturnClass::Direct);
         };
-        if !self.struct_types.contains_key(name.as_str()) {
+        if !self.type_decls.struct_types.contains_key(name.as_str()) {
             return Ok(Arm64ReturnClass::Direct);
         }
         if self.target_abi.target_is_aarch64 {
@@ -329,7 +329,7 @@ impl<'ctx> super::Codegen<'ctx> {
         for (i, p) in func.params.iter().enumerate() {
             if is_export {
                 if let Some(name) = struct_by_value_param_name(&p.ty) {
-                    if self.struct_types.contains_key(name.as_str()) {
+                    if self.type_decls.struct_types.contains_key(name.as_str()) {
                         // Per-target `#[repr(C)]` struct-by-value param ABI. On
                         // AArch64 the full AAPCS classifier applies (HFA / ≤ 16 B
                         // register coercion / larger-than-16 B indirect). On
@@ -752,7 +752,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     u32::from(self.target_abi.sret_struct_returns.contains_key(&func.name));
                 let kind_id = inkwell::attributes::Attribute::get_named_enum_kind_id("byval");
                 for (idx, struct_name) in indirect {
-                    if let Some(&struct_ty) = self.struct_types.get(struct_name.as_str()) {
+                    if let Some(&struct_ty) = self.type_decls.struct_types.get(struct_name.as_str())
+                    {
                         let attr = self
                             .context
                             .create_type_attribute(kind_id, struct_ty.as_any_type_enum());
@@ -945,7 +946,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(head)
             .map(String::as_str)
             .unwrap_or(head.as_str());
-        self.shared_types.contains_key(name)
+        self.type_decls.shared_types.contains_key(name)
     }
 
     /// True when `ty` is an OWNED parameter whose LLVM lowering is a single
@@ -1002,7 +1003,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the `debug_assert` guarding this arm tripped — `karac build` panicking
         // on a program `karac check` accepts. That struct case was reachable on
         // its own, before the enum half of this row existed.
-        if self.user_shadowed_prelude_types.contains(name) {
+        if self.type_decls.user_shadowed_prelude_types.contains(name) {
             return false;
         }
         OWNED_VALUE_PTR_TYPES.contains(&name)
@@ -1049,8 +1050,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 if matches!(name, "Atomic" | "Mutex" | "Weak") {
                     return false;
                 }
-                if self.shared_type_decl_names.contains(name)
-                    || self.shared_types.contains_key(name)
+                if self.type_decls.shared_type_decl_names.contains(name)
+                    || self.type_decls.shared_types.contains_key(name)
                 {
                     return false;
                 }
@@ -1080,7 +1081,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // Known user enum → all variant payloads Freeze (cycle-guarded).
                 let variants = self.enum_variant_field_type_exprs(name);
-                if !variants.is_empty() || self.enum_layouts.contains_key(name) {
+                if !variants.is_empty() || self.type_decls.enum_layouts.contains_key(name) {
                     if visiting.iter().any(|n| n == name) {
                         return true;
                     }
@@ -1346,10 +1347,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // Option[String]` must not resolve a next function's same-named
         // `a: Option[i64]` (which would mis-route a scalar `==` to the heap
         // String comparator). Repopulated below from params and at let sites.
-        self.enum_inst_var_types.clear();
+        self.type_decls.enum_inst_var_types.clear();
         self.var_types.tuple_var_elem_tes.clear();
         self.tuple_moved_elem_bodies.clear();
-        self.struct_moved_field_bodies.clear();
+        self.type_decls.struct_moved_field_bodies.clear();
         self.var_types.optres_var_payload_tes.clear();
         self.mapset.map_val_bodies_tes.clear();
         self.var_types.string_vars.clear();
@@ -1661,14 +1662,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(&func.name)
                     .and_then(|v| v.iter().find(|(idx, _)| *idx == i).map(|(_, n)| n.clone()));
                 let param_val = if let Some(struct_name) = coerced_struct {
-                    let struct_ty = *self.struct_types.get(struct_name.as_str()).unwrap();
+                    let struct_ty = *self
+                        .type_decls
+                        .struct_types
+                        .get(struct_name.as_str())
+                        .unwrap();
                     let tmp = self.create_entry_alloca(fn_val, "kabi.coerce", param_val.get_type());
                     self.builder.build_store(tmp, param_val).unwrap();
                     self.builder
                         .build_load(struct_ty, tmp, "kabi.reload")
                         .unwrap()
                 } else if let Some(struct_name) = indirect_struct {
-                    let struct_ty = *self.struct_types.get(struct_name.as_str()).unwrap();
+                    let struct_ty = *self
+                        .type_decls
+                        .struct_types
+                        .get(struct_name.as_str())
+                        .unwrap();
                     self.builder
                         .build_load(struct_ty, param_val.into_pointer_value(), "kabi.indirect")
                         .unwrap()
@@ -1792,7 +1801,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.is_generic_named_enum_type_expr(te)
                         || self.is_generic_named_struct_type_expr(te)
                     {
-                        self.enum_inst_var_types
+                        self.type_decls
+                            .enum_inst_var_types
                             .insert(param_name.clone(), te.clone());
                     }
                 }
@@ -1845,6 +1855,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `Path(_)`-only guard.
                         if matches!(&param.ty.kind, TypeKind::Path(_))
                             && self
+                                .type_decls
                                 .struct_field_type_names
                                 .get(type_name.as_str())
                                 .is_some_and(|fields| {
@@ -1863,7 +1874,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         // shared-typed `ref T` doesn't take ownership, so no
                         // refcount bump.
                         if matches!(&param.ty.kind, TypeKind::Path(_)) {
-                            if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
+                            if let Some(info) = self
+                                .type_decls
+                                .shared_types
+                                .get(type_name.as_str())
+                                .cloned()
+                            {
                                 let ptr = param_val.into_pointer_value();
                                 self.emit_refcount_inc(&param_name, info.heap_type, ptr);
                                 self.track_rc_var(&param_name, ptr, info.heap_type);
@@ -1884,7 +1900,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         // arm's drop resolves a bare-`T` field through it — a
                         // concrete fn has no active monomorph subst to do that
                         // (B-2026-08-05-33 predicate (a)).
-                        let param_inst = self.enum_inst_var_types.get(&param_name).cloned();
+                        let param_inst = self
+                            .type_decls
+                            .enum_inst_var_types
+                            .get(&param_name)
+                            .cloned();
                         if matches!(&param.ty.kind, TypeKind::Path(_))
                             && self.make_aggregate_param_callee_owned_inst(
                                 type_name, alloca, param_inst,
@@ -2052,7 +2072,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // no rc word to touch. Walk traffic was already
                     // count-free via the C2a family roles.
                     if !self.borrowed_param_dec_skip(&param_name) {
-                        let option_ty = self.enum_layouts["Option"].llvm_type;
+                        let option_ty = self.type_decls.enum_layouts["Option"].llvm_type;
                         self.track_rc_option_var(&param_name, alloca, option_ty, info.heap_type);
                     }
                 }
@@ -2312,7 +2332,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let is_shared_param = if let TypeKind::Path(path) = &param.ty.kind {
                     path.segments
                         .first()
-                        .is_some_and(|n| self.shared_types.contains_key(n.as_str()))
+                        .is_some_and(|n| self.type_decls.shared_types.contains_key(n.as_str()))
                 } else {
                     false
                 };
@@ -2393,7 +2413,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .map(|p| p.drop_method_keys.contains_key(struct_name))
                                 .unwrap_or(false);
                             if has_user_drop
-                                && !self.shared_types.contains_key(struct_name.as_str())
+                                && !self
+                                    .type_decls
+                                    .shared_types
+                                    .contains_key(struct_name.as_str())
                             {
                                 self.track_user_drop_var(struct_name, &param_name, alloca);
                             }

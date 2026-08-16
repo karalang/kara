@@ -168,10 +168,16 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         name: &str,
     ) -> Result<inkwell::types::StructType<'ctx>, String> {
-        let st = self.struct_types.get(name).copied().ok_or_else(|| {
-            format!("codegen: Arena element struct `{name}` is not a known struct type")
-        })?;
+        let st = self
+            .type_decls
+            .struct_types
+            .get(name)
+            .copied()
+            .ok_or_else(|| {
+                format!("codegen: Arena element struct `{name}` is not a known struct type")
+            })?;
         let all_pod = self
+            .type_decls
             .struct_field_type_exprs
             .get(name)
             .map(|fields| {

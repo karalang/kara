@@ -32,6 +32,7 @@ use provider_state::ProviderState;
 use runtime_fns::RuntimeFns;
 use target_abi::TargetAbi;
 use tracing::Tracing;
+use type_decls::TypeDecls;
 use var_types::VarTypes;
 
 use crate::ast::*;
@@ -134,6 +135,7 @@ mod tensor;
 mod test_assert;
 mod tls;
 mod tracing;
+mod type_decls;
 mod types_lowering;
 mod var_types;
 mod vec_method;
@@ -151,7 +153,7 @@ use helpers::{
     impl_target_name, make_generic_impl_method_function, make_impl_method_function,
     method_is_compiler_builtin, method_self_is_value,
 };
-use state::{EnumLayout, LayoutId, SharedTypeInfo, SpawnSiteRecord, VarSlot};
+use state::{EnumLayout, LayoutId, SpawnSiteRecord, VarSlot};
 
 // ── Public API ─────────────────────────────────────────────────
 
@@ -1144,6 +1146,7 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) type_decls: TypeDecls<'ctx>,
     pub(crate) fn_sig: FnSig<'ctx>,
     pub(crate) payload_vars: PayloadVars<'ctx>,
     pub(crate) closure_state: ClosureState<'ctx>,
@@ -1242,20 +1245,6 @@ pub(super) struct Codegen<'ctx> {
     /// `__stderrp` on Apple, `stdout` / `stderr` elsewhere, incl. wasi-libc).
     pub(crate) stdout_global: inkwell::values::GlobalValue<'ctx>,
     pub(crate) stderr_global: inkwell::values::GlobalValue<'ctx>,
-    /// LLVM struct types for Kāra structs (struct name → LLVM type).
-    pub(crate) struct_types: HashMap<String, StructType<'ctx>>,
-    /// Every `shared` / `par` type name the program declares — NAME ONLY, and
-    /// collected before any layout pass runs. Read by `llvm_type_for_name`
-    /// alongside `shared_types`, to cover the window where a shared type's own
-    /// layout is queried while it is being registered. See the comment at that
-    /// read site.
-    pub(crate) shared_type_names: std::collections::HashSet<String>,
-    /// Every generic PARAMETER name the program declares, anywhere. Read only
-    /// by the `KARAC_STRICT_TYPE_LOWERING` lever, to tell "a type with no LLVM
-    /// layout" (what the lever hunts) from "a type parameter with no active
-    /// substitution" (which legitimately reaches the `i64` default all the
-    /// time — `T` alone fires on `hello world` without this).
-    pub(crate) declared_generic_param_names: std::collections::HashSet<String>,
     /// Associated-type bindings from CONCRETE (non-generic) impl blocks,
     /// keyed by `(target_type_name, assoc_type_name)` → the bound `TypeExpr`.
     /// Populated once in `compile_program` from every `impl <Trait> for T {
@@ -1286,91 +1275,12 @@ pub(super) struct Codegen<'ctx> {
     /// (for the per-key emission helpers). Always populated for the
     /// duration of `compile_program`; left `None` outside that scope.
     pub(crate) program_snapshot: Option<Rc<Program>>,
-    /// Field names in declaration order (struct name → field names).
-    pub(crate) struct_field_names: HashMap<String, Vec<String>>,
-    /// Field type-names in declaration order (struct name → per-field
-    /// user-type name, or `None` if the field's declared type isn't a
-    /// path / isn't a known user struct). Used to recover the inner
-    /// type of chained field accesses (`o.inner.name` requires knowing
-    /// the type of `o.inner` to resolve `name`'s field index in
-    /// `compile_field_access` / `field_index_for`).
-    pub(crate) struct_field_type_names: HashMap<String, Vec<Option<String>>>,
-    /// Full per-field `TypeExpr` in declaration order (struct name →
-    /// field TypeExprs). Carries the generic args that
-    /// `struct_field_type_names` discards (`Vec[Node]` vs just `"Vec"`),
-    /// which the field-receiver method dispatch path needs to populate
-    /// the synth's element-type side-tables via
-    /// `register_var_from_type_expr`. Populated alongside
-    /// `struct_field_type_names` in `declare_structs`.
-    pub(crate) struct_field_type_exprs: HashMap<String, Vec<crate::ast::TypeExpr>>,
     /// Names of user struct/enum types whose `karac_cmp_<T>` ordering fn is
     /// mid-emission, so a self-referential field (`S { next: Vec[S] }`) that
     /// recurses back into the same type returns `None` (unorderable — the sort
     /// call site errors loudly) instead of infinitely recursing at compile
     /// time. See `emit_cmp_fn_for_struct` / `emit_cmp_fn_for_enum`.
     pub(crate) cmp_fn_in_progress: std::collections::HashSet<String>,
-    /// User struct/enum type names that opt into ordering — `#[derive(Ord)]` /
-    /// `#[derive(PartialOrd)]` or a user `impl Ord`/`impl PartialOrd`. The
-    /// `karac_cmp_<T>` family (and thus `Vec[T].sort()` + the `<`/`>` operator
-    /// lowering) is emitted ONLY for these; a struct/enum that declares no order
-    /// still errors loudly at the sort site (matching the typechecker's Ord
-    /// gate). Populated in `declare_structs` / enum registration from the def's
-    /// attributes + impl scan.
-    pub(crate) ord_orderable_types: std::collections::HashSet<String>,
-    /// Declared generic-param names of each OWNED (non-shared) struct, recorded
-    /// by `register_struct_metadata`. Empty vec for a non-generic struct. Lets
-    /// the generic-struct monomorphization path (`mono_struct_type`) zip a
-    /// concrete `Named { name, args }` instantiation against the struct's params
-    /// to substitute the field TypeExprs — so `Box[f64]` lays its field out as
-    /// `double`, not the default `i64` (B-2026-07-03-23).
-    pub(crate) struct_generic_params: HashMap<String, Vec<String>>,
-    /// Names of all `shared` / `par` struct AND enum types, recorded by
-    /// `register_struct_metadata` — i.e. BEFORE the `shared_types` heap-layout
-    /// map is populated (that fills in during `declare_enums` / struct LLVM
-    /// build). `enum_drop_kind_for_type_expr` runs inside `declare_enums` and
-    /// must know whether a struct field's type is shared (`struct BinOp {
-    /// left: Expr }`, `Expr` a shared enum) before `shared_types` has the
-    /// `Expr` entry — B-2026-06-14-28. Name-only; the heap layout still comes
-    /// from `shared_types` at emit time, once populated.
-    pub(crate) shared_type_decl_names: std::collections::HashSet<String>,
-    /// FFI union storage types (union name → LLVM struct type used as
-    /// the storage blob). Phase 5 slice 4. The storage struct is sized
-    /// to `max(field_sizes)` and aligned to `max(field_aligns)` per the
-    /// `#[repr(C)] union Foo { ... }` lowering rule: its single LLVM
-    /// field is the union-field with the largest alignment (tie-break
-    /// preferring the largest size), followed by a `[k x i8]` padding
-    /// tail when that field's size is smaller than the full union size.
-    /// Populated by `declare_unions` after `declare_structs`. Read by
-    /// `llvm_type_for_name` (so `size_of[Foo]` / `align_of[Foo]` work
-    /// for free) and by the union-literal / union-field-access codegen
-    /// in `compile_struct_init` / `compile_field_access`.
-    pub(crate) union_types: HashMap<String, inkwell::types::StructType<'ctx>>,
-    /// Per-union field declarations in source order (union name →
-    /// (field_name, field_llvm_type)). Used by union-literal codegen
-    /// to look up the destination LLVM type when storing through the
-    /// alloca, and by union-field-access codegen to bitcast the read
-    /// pointer to the field's LLVM type before loading. Populated
-    /// alongside `union_types`.
-    pub(crate) union_field_types: HashMap<String, Vec<(String, BasicTypeEnum<'ctx>)>>,
-    /// Enum layouts for tagged-union codegen (enum name → layout).
-    pub(crate) enum_layouts: HashMap<String, EnumLayout<'ctx>>,
-    /// All-unit (no payload), non-shared user enums → variant names in tag
-    /// order. Drives codegen `Display` for enums (subtask 5): such an enum
-    /// renders as the bare variant name, selected on the tag. Payload-bearing
-    /// enums are absent (their Display codegen is a tracked follow-on).
-    pub(crate) enum_unit_variants: HashMap<String, Vec<String>>,
-    /// Names of enums seeded by `seed_builtin_enum_layouts` (`Option`,
-    /// `Result`, `Json`, `TcpError`, …) — used by the variant-name →
-    /// enum-name disambiguation in `try_compile_enum_variant` /
-    /// `infer_enum_from_value` to prefer user-declared enums when a
-    /// variant name appears in both. Without this set, HashMap iteration
-    /// order non-deterministically picks a seeded layout for a
-    /// user-defined variant with the same name (e.g. `MyIoErr.Other`
-    /// vs `TcpError.Other`), producing a wrong-shape value at the
-    /// constructor site and emitting `unreachable` for downstream
-    /// dispatch — surfaced 2026-05-25 by the codegen suite's
-    /// intermittent hang investigation.
-    pub(crate) seeded_enum_names: HashSet<String>,
     /// Per-layout-monomorphization slice 3 — the active *return* layout of the
     /// monomorph currently being compiled (`Aos` outside a return-SoA mono).
     /// Saved/restored around the mono body like `layout_subst`; read by
@@ -1462,9 +1372,6 @@ pub(super) struct Codegen<'ctx> {
     /// so a stale entry can never disarm an unrelated statement's temp).
     pub(crate) freshtemp_field_access_slot:
         Option<(PointerValue<'ctx>, String, String, (usize, usize))>,
-    // ── Shared types (RC) ─────────────────────────────────────────
-    /// Shared type metadata (struct/enum name → heap layout info).
-    pub(crate) shared_types: HashMap<String, SharedTypeInfo<'ctx>>,
     /// Per-function scoped-alias metadata for slice parameters (alias-metadata
     /// slice 4). Keyed by param binding name → the `!alias.scope` / `!noalias`
     /// nodes attached to the element load/store in `compile_slice_index` /
@@ -1916,33 +1823,11 @@ pub(super) struct Codegen<'ctx> {
     /// instead of returning the address; references are absent and take the
     /// pass-through path.
     pub(crate) raw_pointer_pointee_types: HashMap<(usize, usize), TypeExpr>,
-    /// Fully-instantiated surface `TypeExpr` per *generic* `Named`
-    /// instantiation expression (`Option[String]`, `Result[i64, AllocError]`,
-    /// generic user enums) — populated from `Program.enum_inst_type_exprs`
-    /// (set by the lowering pass from `TypeCheckResult.expr_types`). Keyed by
-    /// the expression's `(span.offset, span.length)`. `compile_enum_eq` uses
-    /// it to recover the concrete type argument a generic enum's variant
-    /// payload was instantiated with (the `[String]` that `var_type_names`'
-    /// bare `"Option"` loses), so a `Some(String)` payload compares by content
-    /// rather than by pointer word. A missing entry degrades to the word-wise
-    /// path (sound for scalar/unit enums), never a miscompile.
-    pub(crate) enum_inst_type_exprs: HashMap<(usize, usize), TypeExpr>,
     /// Arg-less (concrete, non-generic) `Named` type per expression span — the
     /// complement of `enum_inst_type_exprs`. Consumed ONLY by
     /// `reconstruct_question_ok_payload` to rebuild a multi-word concrete
     /// enum/struct `?`-Ok payload the generic-only table drops (B-2026-07-11-7).
     pub(crate) concrete_named_type_exprs: HashMap<(usize, usize), TypeExpr>,
-    /// Instantiated generic-enum type per *local variable / parameter* name
-    /// (`opt` → `Option[String]`). Populated during codegen traversal at let
-    /// and parameter binding sites (cleared per function, like
-    /// `var_type_names`), so heap-payload enum `==` (`compile_enum_eq`) can
-    /// resolve a variable operand's type argument by **name** — collision-free,
-    /// unlike `enum_inst_type_exprs`, whose span keys collide across f-string
-    /// interpolations (every interp expr is re-parsed under a fixed-length
-    /// `fn __interp__() { … }` wrapper). The span-keyed table remains the source
-    /// at the reliable, absolute-spanned binding sites; this name map is the
-    /// reliable lookup at use sites.
-    pub(crate) enum_inst_var_types: HashMap<String, TypeExpr>,
     /// Tuple ELEMENT indices moved out of a let-bound tuple (`let x = t.0`),
     /// per variable. The element's body now belongs to the destination, so the
     /// tuple's `__karac_dropelems_tuple_*` walk must skip it — without the mask
@@ -1951,12 +1836,6 @@ pub(super) struct Codegen<'ctx> {
     /// across move-outs so `let a = t.0; let b = t.1;` masks both. Cleared per
     /// function alongside `tuple_var_elem_tes` (B-2026-08-03-3).
     pub(crate) tuple_moved_elem_bodies: HashMap<String, std::collections::HashSet<u32>>,
-    /// Struct FIELD indices moved out of a let-bound struct (`let x = h.o`),
-    /// per variable — the field-index sibling of `tuple_moved_elem_bodies`. The
-    /// field's body belongs to the destination, so the struct's
-    /// `__karac_dropbodies_*` walk is re-registered with it masked. Cleared per
-    /// function alongside that map (B-2026-08-03-8).
-    pub(crate) struct_moved_field_bodies: HashMap<String, std::collections::HashSet<usize>>,
     /// Top-level `const NAME: T = value` declarations, populated by
     /// `compile_program` from `Item::ConstDecl` items before any function
     /// body is compiled. Key: const name. Value: the const's value
@@ -2186,33 +2065,6 @@ pub(super) struct Codegen<'ctx> {
     /// `llvm.experimental.noalias.scope.decl` in THIS function's loop
     /// preheader and are only sound within it.
     pub(crate) tabulate_alias_scopes: Option<TabulateAliasScopes<'ctx>>,
-    /// B-2026-08-02-7 / B-2026-08-02-13 — prelude type names a user program
-    /// re-declared, shadowing the stdlib type of the same name.
-    ///
-    /// Stdlib and user types share ONE FLAT NAMESPACE (`prelude::PRELUDE_TYPES`
-    /// is injected unqualified) and every backend dispatches on the bare
-    /// string, so a user `struct Response` / `HttpError` / `Match` silently
-    /// takes over that type's codegen identity. The consequences measured so
-    /// far span two subsystems and two failure modes: a user `Response` or
-    /// `HttpError` makes the HTTP client double-free a `String` field, and a
-    /// user `Match` crashes codegen outright on the regex path.
-    ///
-    /// Only shadowing by a struct that OWNS HEAP is dangerous today — the
-    /// damage is done by the user type's drop glue running over a builtin
-    /// value — but the set records every shadow, because the layout confusion
-    /// is not limited to drops and a scalar-only shadow becoming heap-owning
-    /// is a one-word edit.
-    ///
-    /// Declaring these names stays legal: `Response` is the documented
-    /// `Server.serve` handler-return type, so every serving program has one.
-    /// The set is consulted only where a BUILTIN PATH would consume the
-    /// shadowed type, so a program that never touches that path is unaffected
-    /// (`examples/shortener` declares `Response` and never calls `Client`).
-    ///
-    /// The real fix is module-qualified stdlib types (`http.Response` as a
-    /// distinct type); until then this converts silent corruption into an
-    /// actionable message. Tracked as B-2026-08-02-13.
-    pub(crate) user_shadowed_prelude_types: std::collections::HashSet<String>,
     /// True while `declare_stdlib_program` is walking a baked `STDLIB_PROGRAMS`
     /// tree rather than the user's. Those `StructDef`s are parsed straight from
     /// stdlib source and never had `stdlib_origin` flipped (only the
@@ -5936,9 +5788,27 @@ impl<'ctx> Codegen<'ctx> {
             current_fn: None,
             stdout_global,
             stderr_global,
-            struct_types: HashMap::new(),
-            shared_type_names: std::collections::HashSet::new(),
-            declared_generic_param_names: std::collections::HashSet::new(),
+            type_decls: TypeDecls {
+                struct_types: HashMap::new(),
+                shared_type_names: std::collections::HashSet::new(),
+                declared_generic_param_names: std::collections::HashSet::new(),
+                struct_field_names: HashMap::new(),
+                struct_field_type_names: HashMap::new(),
+                struct_field_type_exprs: HashMap::new(),
+                ord_orderable_types: std::collections::HashSet::new(),
+                struct_generic_params: HashMap::new(),
+                shared_type_decl_names: std::collections::HashSet::new(),
+                union_types: HashMap::new(),
+                union_field_types: HashMap::new(),
+                enum_layouts: HashMap::new(),
+                enum_unit_variants: HashMap::new(),
+                seeded_enum_names: HashSet::new(),
+                shared_types: HashMap::new(),
+                enum_inst_type_exprs: HashMap::new(),
+                enum_inst_var_types: HashMap::new(),
+                struct_moved_field_bodies: HashMap::new(),
+                user_shadowed_prelude_types: std::collections::HashSet::new(),
+            },
             assoc_type_bindings: HashMap::new(),
             conc: ConcState {
                 state_struct_types: HashMap::new(),
@@ -5966,18 +5836,7 @@ impl<'ctx> Codegen<'ctx> {
                 coro_spawn_slot: None,
             },
             program_snapshot: None,
-            struct_field_names: HashMap::new(),
-            struct_field_type_names: HashMap::new(),
-            struct_field_type_exprs: HashMap::new(),
             cmp_fn_in_progress: std::collections::HashSet::new(),
-            ord_orderable_types: std::collections::HashSet::new(),
-            struct_generic_params: HashMap::new(),
-            shared_type_decl_names: std::collections::HashSet::new(),
-            union_types: HashMap::new(),
-            union_field_types: HashMap::new(),
-            enum_layouts: HashMap::new(),
-            enum_unit_variants: HashMap::new(),
-            seeded_enum_names: HashSet::new(),
             display: Display {
                 baked_display_enum_names: HashSet::new(),
                 display_option_result_types: HashMap::new(),
@@ -6084,7 +5943,6 @@ impl<'ctx> Codegen<'ctx> {
             last_fstr_acc: None,
             block_tail_shared_transfer: false,
             freshtemp_field_access_slot: None,
-            shared_types: HashMap::new(),
             bce: BceState {
                 len_alias: HashMap::new(),
                 asserted_index_bounds: Vec::new(),
@@ -6207,11 +6065,8 @@ impl<'ctx> Codegen<'ctx> {
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),
             raw_pointer_pointee_types: HashMap::new(),
-            enum_inst_type_exprs: HashMap::new(),
             concrete_named_type_exprs: HashMap::new(),
-            enum_inst_var_types: HashMap::new(),
             tuple_moved_elem_bodies: HashMap::new(),
-            struct_moved_field_bodies: HashMap::new(),
             consts: HashMap::new(),
             module_bindings: HashMap::new(),
             map_set_module_inits: Vec::new(),
@@ -6251,7 +6106,6 @@ impl<'ctx> Codegen<'ctx> {
                 provider_vtables: HashMap::new(),
                 provider_frame_ty,
             },
-            user_shadowed_prelude_types: std::collections::HashSet::new(),
             declaring_stdlib_program: false,
             uam_consume_sites: std::collections::HashSet::new(),
             uam_copied_sites: std::collections::HashSet::new(),
@@ -6768,6 +6622,7 @@ impl<'ctx> Codegen<'ctx> {
         // place the base shift is expressed. Everything that routes field GEPs
         // through this funnel picks it up for free. (`docs/spikes/weak-refs.md`.)
         if self
+            .type_decls
             .shared_types
             .get(type_name)
             .is_some_and(|i| i.has_weak_header)
@@ -7452,7 +7307,7 @@ impl<'ctx> Codegen<'ctx> {
         // consults this to dispatch struct-typed keys (e.g.
         // `sort_by_key(|item| item)` where `item: MyStruct`) to a
         // field-aware lex cascade that picks the right per-field
-        // comparator via `self.struct_field_type_names[struct_name]`.
+        // comparator via `self.type_decls.struct_field_type_names[struct_name]`.
         self.expr_struct_type_names = program.expr_struct_type_names.clone();
         // Sibling map for spans whose struct type has a user `impl Ord`.
         // `emit_sort_by_key_inline_thunk` consults it before the derive
@@ -7474,7 +7329,7 @@ impl<'ctx> Codegen<'ctx> {
         // by span; `compile_enum_eq` consults it to recover the concrete type
         // argument a generic heap-payload enum's variant was instantiated
         // with, so `Some(String)` compares by content not pointer word.
-        self.enum_inst_type_exprs = program.enum_inst_type_exprs.clone();
+        self.type_decls.enum_inst_type_exprs = program.enum_inst_type_exprs.clone();
         self.module_binding_types = program.module_binding_types.clone();
         self.concrete_named_type_exprs = program.concrete_named_type_exprs.clone();
 
@@ -8847,7 +8702,10 @@ impl<'ctx> Codegen<'ctx> {
                     &mut self.raw_pointer_pointee_types,
                     &mut t_raw_pointer_pointee_types,
                 );
-                std::mem::swap(&mut self.enum_inst_type_exprs, &mut t_enum_inst_type_exprs);
+                std::mem::swap(
+                    &mut self.type_decls.enum_inst_type_exprs,
+                    &mut t_enum_inst_type_exprs,
+                );
                 std::mem::swap(&mut self.call_effect_subs, &mut t_call_effect_subs);
                 std::mem::swap(
                     &mut self.method_unwrap_inner_types,

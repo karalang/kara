@@ -615,6 +615,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("Result layout seeded");
@@ -625,6 +626,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get("Err")
             .expect("Result.Err tag seeded");
         let tcp_err_layout = self
+            .type_decls
             .enum_layouts
             .get("TcpError")
             .expect("TcpError layout seeded");
@@ -913,6 +915,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let errno_phi = self.builder.build_phi(i64_ty, "tcp.wa.errno.phi").unwrap();
         errno_phi.add_incoming(&[(&errno.as_basic_value_enum(), err_check_end_bb)]);
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("Result layout seeded");
@@ -923,6 +926,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("Result.Err tag seeded");
         let ok_tag = *result_layout.tags.get("Ok").expect("Result.Ok tag seeded");
         let tcp_err_layout = self
+            .type_decls
             .enum_layouts
             .get("TcpError")
             .expect("TcpError layout seeded");
@@ -1075,6 +1079,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let label_prefix = if is_write { "tcp.write" } else { "tcp.read" };
 
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("Result layout seeded by seed_builtin_enum_layouts");
@@ -1086,6 +1091,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("Result.Err tag seeded");
 
         let tcp_err_layout = self
+            .type_decls
             .enum_layouts
             .get("TcpError")
             .expect("TcpError layout seeded by seed_builtin_enum_layouts");
@@ -1272,6 +1278,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         let i64_ty = self.context.i64_type();
         let err_layout = self
+            .type_decls
             .enum_layouts
             .get(err_enum_name)
             .unwrap_or_else(|| panic!("{err_enum_name} layout seeded"));
@@ -1279,7 +1286,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .tags
             .get(default_variant_name)
             .unwrap_or_else(|| panic!("{err_enum_name}.{default_variant_name} tag seeded"));
-        // Copy the named-cause tags out so the `self.enum_layouts` borrow
+        // Copy the named-cause tags out so the `self.type_decls.enum_layouts` borrow
         // ends before the builder calls below.
         let named = [
             (
@@ -1346,6 +1353,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_ty = ctx.i64_type();
 
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("Result layout seeded by seed_builtin_enum_layouts");

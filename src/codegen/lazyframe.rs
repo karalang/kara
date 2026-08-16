@@ -169,10 +169,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// layout (`declarations.rs` seeds all three names; the literal
     /// fallback is structurally identical, so mixing is safe).
     fn lazy_struct_type(&self, name: &str) -> inkwell::types::StructType<'ctx> {
-        self.struct_types.get(name).copied().unwrap_or_else(|| {
-            self.context
-                .struct_type(&[self.context.i64_type().into()], false)
-        })
+        self.type_decls
+            .struct_types
+            .get(name)
+            .copied()
+            .unwrap_or_else(|| {
+                self.context
+                    .struct_type(&[self.context.i64_type().into()], false)
+            })
     }
 
     /// Extract the runtime handle pointer from a compiled Lazy value

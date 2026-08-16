@@ -83,7 +83,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// a `release` argument records `PooledConnection[T]`). `None` when no
     /// instantiation was recorded (e.g. a hand-rolled `Pool { handle_id }`).
     fn pool_elem_te_at(&self, span: &crate::token::Span) -> Option<TypeExpr> {
-        let te = self.enum_inst_type_exprs.get(&(span.offset, span.length))?;
+        let te = self
+            .type_decls
+            .enum_inst_type_exprs
+            .get(&(span.offset, span.length))?;
         Self::peel_pool_elem_te(te)
     }
 

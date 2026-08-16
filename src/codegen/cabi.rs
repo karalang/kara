@@ -138,12 +138,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut plans: Vec<Plan<'ctx>> = Vec::new();
         for (i, p) in e.params.iter().enumerate() {
             if p.ty.is_record() {
-                let st = *self.struct_types.get(&p.ty.kara_ty).ok_or_else(|| {
-                    format!(
-                        "wasm export trampoline: struct `{}` (param of `{}`) has no layout",
-                        p.ty.kara_ty, e.name
-                    )
-                })?;
+                let st = *self
+                    .type_decls
+                    .struct_types
+                    .get(&p.ty.kara_ty)
+                    .ok_or_else(|| {
+                        format!(
+                            "wasm export trampoline: struct `{}` (param of `{}`) has no layout",
+                            p.ty.kara_ty, e.name
+                        )
+                    })?;
                 let n = st.count_fields() as usize;
                 for fi in 0..n {
                     canon_params.push(st.get_field_type_at_index(fi as u32).unwrap().into());
@@ -281,12 +285,16 @@ impl<'ctx> super::Codegen<'ctx> {
 
         if ret_is_record {
             let ret = e.ret.as_ref().unwrap();
-            let struct_ty = *self.struct_types.get(&ret.kara_ty).ok_or_else(|| {
-                format!(
-                    "wasm export trampoline: struct `{}` (return of `{}`) has no layout",
-                    ret.kara_ty, e.name
-                )
-            })?;
+            let struct_ty = *self
+                .type_decls
+                .struct_types
+                .get(&ret.kara_ty)
+                .ok_or_else(|| {
+                    format!(
+                        "wasm export trampoline: struct `{}` (return of `{}`) has no layout",
+                        ret.kara_ty, e.name
+                    )
+                })?;
             // Alignment-correct static return area (an `[N x i8]` global is
             // align-1 by default, which traps as "return pointer not
             // aligned"). The canonical ABI reads it right after the call

@@ -1130,6 +1130,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .copied()
             .ok_or_else(|| format!("Response var '{var_name}' not bound"))?;
         let resp_ty = self
+            .type_decls
             .struct_types
             .get("Response")
             .copied()
@@ -1449,7 +1450,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<(), String> {
         let Some(hit) = names
             .iter()
-            .find(|n| self.user_shadowed_prelude_types.contains(**n))
+            .find(|n| self.type_decls.user_shadowed_prelude_types.contains(**n))
         else {
             return Ok(());
         };
@@ -1684,6 +1685,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Build the Result[Response, HttpError] aggregate.
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("Result layout registered before Client.{get,post} dispatch");
@@ -1864,6 +1866,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `struct_types` by `seed_builtin_struct_types`. Layout =
         // `{ i64, { ptr, i64, i64 } }`.
         let resp_ty = self
+            .type_decls
             .struct_types
             .get("Response")
             .copied()
@@ -1918,6 +1921,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .copied()
             .ok_or_else(|| format!("Response var '{var_name}' not bound"))?;
         let resp_ty = self
+            .type_decls
             .struct_types
             .get("Response")
             .copied()
@@ -1989,6 +1993,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .copied()
             .ok_or_else(|| format!("HttpError var '{var_name}' not bound"))?;
         let err_ty = self
+            .type_decls
             .struct_types
             .get("HttpError")
             .copied()
@@ -2102,6 +2107,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Pack the handle into `RequestBuilder { handle: i64 }`.
         let rb_ty = self
+            .type_decls
             .struct_types
             .get("RequestBuilder")
             .copied()
@@ -2139,6 +2145,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .copied()
             .ok_or_else(|| format!("RequestBuilder var '{var_name}' not bound"))?;
         let rb_ty = self
+            .type_decls
             .struct_types
             .get("RequestBuilder")
             .copied()
@@ -2292,6 +2299,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_ty = ctx.i64_type();
         let ptr_ty = ctx.ptr_type(AddressSpace::default());
         let rb_ty = self
+            .type_decls
             .struct_types
             .get("RequestBuilder")
             .copied()
@@ -2371,6 +2379,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
 
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .expect("Result layout registered before RequestBuilder.send dispatch");

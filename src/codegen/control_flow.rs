@@ -729,7 +729,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => 0,
         };
         self.pattern_state.pattern_binding_scrutinee_is_shared_enum = en
-            .and_then(|n| self.shared_types.get(&n).cloned())
+            .and_then(|n| self.type_decls.shared_types.get(&n).cloned())
             .is_some_and(|i| i.is_enum);
         saved
     }
@@ -876,7 +876,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// instantiation there), then the fn-return / `pop`-family derivation for
     /// the calls whose span the table misses.
     pub(super) fn optres_scrutinee_type_expr(&self, e: &Expr) -> Option<crate::ast::TypeExpr> {
-        self.enum_inst_type_exprs
+        self.type_decls
+            .enum_inst_type_exprs
             .get(&(e.span.offset, e.span.length))
             .cloned()
             .or_else(|| self.untyped_let_boxed_enum_te(e))
@@ -1575,6 +1576,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !matches!(&args[0].value.kind, ExprKind::Identifier(_)) {
             let sp = &args[0].value.span;
             let vec_te = self
+                .type_decls
                 .enum_inst_type_exprs
                 .get(&(sp.offset, sp.length))
                 .cloned()

@@ -549,9 +549,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             .or_else(|| self.enum_name_of_expr(left))
                             .or_else(|| self.enum_name_of_expr(right))
                         {
-                            if (self.struct_field_type_exprs.contains_key(&name)
-                                && !self.shared_types.contains_key(&name))
-                                || self.enum_layouts.contains_key(&name)
+                            if (self.type_decls.struct_field_type_exprs.contains_key(&name)
+                                && !self.type_decls.shared_types.contains_key(&name))
+                                || self.type_decls.enum_layouts.contains_key(&name)
                             {
                                 if let Some(r) =
                                     self.compile_ordered_user_cmp(op, &name, lhs, rhs)?
@@ -1236,11 +1236,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // it's a struct literal.
                 let enum_variant = if path.len() >= 2 {
                     let enum_name = &path[path.len() - 2];
-                    self.enum_layouts
+                    self.type_decls
+                        .enum_layouts
                         .get(enum_name)
                         .filter(|l| l.tags.contains_key(name))
                         .map(|_| enum_name.clone())
-                } else if !self.struct_types.contains_key(name) {
+                } else if !self.type_decls.struct_types.contains_key(name) {
                     // Unqualified struct-variant construction `Variant { ... }`:
                     // the single-segment path carries only the bare variant
                     // name. When it doesn't name a struct, find the enum whose
@@ -1249,7 +1250,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // unique match — variant names are globally unique once the
                     // resolver has bound them). Mirrors the typechecker's
                     // `unqualified_enum_struct_variant` routing.
-                    self.enum_layouts
+                    self.type_decls
+                        .enum_layouts
                         .iter()
                         .find(|(_, l)| l.tags.contains_key(name))
                         .map(|(enum_name, _)| enum_name.clone())
@@ -1329,7 +1331,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the same heap-fill path the explicit `Vec[v; n]` form takes,
                 // coercing the fill value to the recorded element width.
                 let vec_elem_te = if type_name.is_none() {
-                    self.enum_inst_type_exprs
+                    self.type_decls
+                        .enum_inst_type_exprs
                         .get(&(expr.span.offset, expr.span.length))
                         .cloned()
                         .as_ref()
@@ -1504,6 +1507,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut total_offset: u64 = 0;
         for segment_name in field_path {
             let struct_ty = self
+                .type_decls
                 .struct_types
                 .get(&current_struct_name)
                 .copied()
@@ -1514,6 +1518,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                 })?;
             let field_names = self
+                .type_decls
                 .struct_field_names
                 .get(&current_struct_name)
                 .ok_or_else(|| {
@@ -1544,6 +1549,7 @@ impl<'ctx> super::Codegen<'ctx> {
             total_offset += segment_offset;
             // Chase the field's type for the next segment.
             let field_type_names = self
+                .type_decls
                 .struct_field_type_names
                 .get(&current_struct_name)
                 .cloned();
@@ -1617,11 +1623,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if segments.len() == 2 {
             let type_name = &segments[0];
             let variant_name = &segments[1];
-            if let Some(layout) = self.enum_layouts.get(type_name).cloned() {
+            if let Some(layout) = self.type_decls.enum_layouts.get(type_name).cloned() {
                 if let Some(&tag) = layout.tags.get(variant_name) {
                     if layout.field_counts.get(variant_name).copied().unwrap_or(0) == 0 {
                         let i64_t = self.context.i64_type();
-                        if let Some(info) = self.shared_types.get(type_name).cloned() {
+                        if let Some(info) = self.type_decls.shared_types.get(type_name).cloned() {
                             let ptr = self.emit_rc_alloc(info.heap_type);
                             let tag_ptr = self
                                 .builder
@@ -2129,7 +2135,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             } else if self.string_typed_exprs.contains(&key) {
                 self.vec_struct_type().into()
-            } else if let Some(te) = self.enum_inst_type_exprs.get(&key).cloned() {
+            } else if let Some(te) = self.type_decls.enum_inst_type_exprs.get(&key).cloned() {
                 // Defensive: if the `Result`/`Option` wrapper itself were recorded
                 // here, its enum aggregate must not be rebuilt from 3 payload words.
                 // (Superseded for well-typed programs by the dedicated table above;
@@ -2515,7 +2521,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // variant's bytes are initialized), then load the storage type
         // back so callers receive an SSA `StructValue` of the union's
         // storage shape ready for the let-stmt's alloca-and-store path.
-        if let Some(&storage_ty) = self.union_types.get(name) {
+        if let Some(&storage_ty) = self.type_decls.union_types.get(name) {
             return self.compile_union_init(name, storage_ty, fields);
         }
         // Total-order float wrapper literal — `F64 { value: x }` and friends.
@@ -2535,7 +2541,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // phase-D headerless layout applies to this (fn, type), in
         // which case the rc word is omitted entirely (no header slot,
         // no rc=1 store) and field GEPs use the twin type at base 0.
-        if let Some(info) = self.shared_types.get(name).cloned() {
+        if let Some(info) = self.type_decls.shared_types.get(name).cloned() {
             if !info.is_enum {
                 let (gep_ty, base) = self.shared_gep_layout(name, info.heap_type);
                 let ptr = if base == 0 {
@@ -2559,6 +2565,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // field built its handle at bare-`T` value size (i64),
                         // truncating every inserted value and leaking its heap.
                         let field_te = self
+                            .type_decls
                             .struct_field_type_exprs
                             .get(name)
                             .and_then(|tes| tes.get(idx))
@@ -2616,6 +2623,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // helper is a no-op unless both the value is a tuple literal
                     // and the field is declared a tuple.
                     let field_te = self
+                        .type_decls
                         .struct_field_type_exprs
                         .get(name)
                         .and_then(|tes| tes.get(idx))
@@ -2657,7 +2665,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Resolve the field's inner shared heap type if this is
                     // an `Option[shared T]` field (niche-opt or conventional).
                     let opt_inner_heap = niche_inner.or_else(|| {
-                        self.struct_field_type_exprs
+                        self.type_decls
+                            .struct_field_type_exprs
                             .get(name)
                             .and_then(|tes| tes.get(idx))
                             .cloned()
@@ -2800,7 +2809,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // per-instantiation mono type (`Box[f64]` → `{double}`) so a non-i64
         // field is stored at its real width; else the pre-built (all-i64
         // default) type (B-2026-07-03-23).
-        if let Some(st) = mono_ty.or_else(|| self.struct_types.get(name).copied()) {
+        if let Some(st) = mono_ty.or_else(|| self.type_decls.struct_types.get(name).copied()) {
             let mut agg = st.get_undef();
             for (idx, field_init) in fields.iter().enumerate() {
                 // Borrowed-struct `ref` field (design.md Feature 4 Part 3):
@@ -2815,6 +2824,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // below already relies on), so `idx` indexes the declared
                 // field types.
                 let is_ref_field = self
+                    .type_decls
                     .struct_field_type_exprs
                     .get(name)
                     .and_then(|tes| tes.get(idx))
@@ -2843,6 +2853,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Resolve through the literal's subst first
                     // (B-2026-08-02-17) — see the shared-branch sibling above.
                     let field_te = self
+                        .type_decls
                         .struct_field_type_exprs
                         .get(name)
                         .and_then(|tes| tes.get(idx))
@@ -2872,6 +2883,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // ("Invalid InsertValueInst operands", `{ i8, i32 }` into a
                 // `{ i64, i64 }` slot).
                 let tuple_field_te = self
+                    .type_decls
                     .struct_field_type_exprs
                     .get(name)
                     .and_then(|tes| tes.get(idx))
@@ -2898,6 +2910,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // into a 4×i64 aggregate (invalid IR — the pre-existing niche
                 // panic the selfhost parser oracles were silently skipping on).
                 let is_opt_shared = self
+                    .type_decls
                     .struct_field_type_exprs
                     .get(name)
                     .and_then(|tes| tes.get(idx))
@@ -2928,6 +2941,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // already own their ref — skipped via `rhs_yields_fresh_ref`;
                 // a literal `None` has no inner to count.
                 let opt_inner_heap = self
+                    .type_decls
                     .struct_field_type_exprs
                     .get(name)
                     .and_then(|tes| tes.get(idx))
@@ -3074,6 +3088,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // doesn't silently miscompile a slipped-through invariant.
         let field_init = &fields[0];
         let field_ll_ty: Option<BasicTypeEnum<'ctx>> = self
+            .type_decls
             .union_field_types
             .get(name)
             .and_then(|fs| fs.iter().find(|(n, _)| n == &field_init.name))
@@ -3654,6 +3669,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let has_cold = soa.cold_group.is_some();
         let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
         let elem_struct_ty = *self
+            .type_decls
             .struct_types
             .get(&soa.struct_name)
             .ok_or_else(|| format!("SoA element struct '{}' missing", soa.struct_name))?;
@@ -4304,7 +4320,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 // Merge: build Option struct via phi on tag + payload words.
                 self.builder.position_at_end(merge_bb);
-                let option_ty = self.enum_layouts["Option"].llvm_type;
+                let option_ty = self.type_decls.enum_layouts["Option"].llvm_type;
                 let tag_phi = self.builder.build_phi(i64_t, "soa.pop.opt.tag").unwrap();
                 tag_phi.add_incoming(&[(&zero, empty_bb), (&one, some_end_bb)]);
                 let mut word_phis: Vec<inkwell::values::PhiValue<'ctx>> =
@@ -4412,6 +4428,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> inkwell::values::StructValue<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let elem_struct_ty = *self
+            .type_decls
             .struct_types
             .get(&soa.struct_name)
             .expect("SoA element struct missing in struct_types");

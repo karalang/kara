@@ -2233,7 +2233,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(te) = self.var_types.var_elem_type_exprs.get(var_name).cloned() {
                     if let TypeKind::Path(p) = &te.kind {
                         if let Some(seg) = p.segments.last() {
-                            if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
+                            if let Some(info) =
+                                self.type_decls.shared_types.get(seg.as_str()).cloned()
+                            {
                                 let ptr = elem_val.into_pointer_value();
                                 self.emit_refcount_inc("map.get", info.heap_type, ptr);
                             }
@@ -2349,7 +2351,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap();
                         if let TypeKind::Path(p) = &v_te.kind {
                             if let Some(seg) = p.segments.last() {
-                                if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
+                                if let Some(info) =
+                                    self.type_decls.shared_types.get(seg.as_str()).cloned()
+                                {
                                     self.emit_refcount_inc(
                                         "map.getor",
                                         info.heap_type,

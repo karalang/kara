@@ -1122,11 +1122,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
 
         let option_ty = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .map(|l| l.llvm_type)
             .ok_or_else(|| "Column.from_iter_nullable: Option enum layout missing".to_string())?;
         let some_tag = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .and_then(|l| l.tags.get("Some").copied())
@@ -1581,11 +1583,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .column_load_field(control, 1, "col.iter.bm")
             .into_pointer_value();
         let option_ty = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .map(|l| l.llvm_type)
             .ok_or_else(|| "Column.iter: Option enum layout missing".to_string())?;
         let some_tag = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .and_then(|l| l.tags.get("Some").copied())

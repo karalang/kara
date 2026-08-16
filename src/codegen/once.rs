@@ -175,6 +175,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Branch on won == 1. Result layout: Ok tag 1, Err tag 0.
         let result_ty = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .ok_or_else(|| "Result layout not registered before OnceLock codegen".to_string())?

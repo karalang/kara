@@ -116,7 +116,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Field index of `name` in struct `type_name`, per the
     /// declaration-order `struct_field_names` side table.
     fn process_field_index(&self, type_name: &str, name: &str) -> Result<u32, String> {
-        self.struct_field_names
+        self.type_decls
+            .struct_field_names
             .get(type_name)
             .and_then(|fields| fields.iter().position(|f| f == name))
             .map(|i| i as u32)
@@ -326,6 +327,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_z_extend(is_some, i64_ty, "proc.take.tag")
             .unwrap();
         let opt_layout = self
+            .type_decls
             .enum_layouts
             .get("Option")
             .ok_or_else(|| "Option layout not registered before process codegen".to_string())?;
@@ -437,6 +439,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let i64_ty = self.context.i64_type();
         let result_layout = self
+            .type_decls
             .enum_layouts
             .get("Result")
             .ok_or_else(|| "Result layout not registered before process codegen".to_string())?;
