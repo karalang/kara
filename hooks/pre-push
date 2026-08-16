@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Pre-push gate: run the bug-ledger integrity lint before every push, so a
+# malformed docs/bug-ledger.jsonl is caught locally instead of reddening the
+# required `Lint` CI job on main. The recurring offender is a stale PRE-REBASE
+# fix SHA: a row's `fix` is filled in with a commit SHA that a later rebase
+# changes, leaving the ledger citing a SHA that no longer resolves.
+#
+# Enable per-clone (core.hooksPath is not set by `git clone`):
+#     scripts/install-hooks.sh          # or: git config core.hooksPath hooks
+# Bypass a single push when you deliberately need to:
+#     git push --no-verify
+#
+# COVERAGE CAVEAT — this is the whole reason these SHAs slip through: the
+# fix-SHA resolvability check (bug-lint rule 6) can only run on a FULL clone.
+# On a shallow clone git cannot resolve historical SHAs, so the lint SKIPS that
+# rule (printing "shallow clone — skipped fix-SHA resolvability check") and a
+# dangling pre-rebase SHA sails past. Since that is exactly what this hook
+# exists to catch, keep the working clone un-shallow:  git fetch --unshallow
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+lint="$repo_root/scripts/bug-lint.sh"
+
+if [ ! -x "$lint" ]; then
+    echo "pre-push: $lint not found or not executable — skipping bug-ledger lint" >&2
+    exit 0
+fi
+
+if "$lint"; then
+    exit 0
+fi
+
+echo >&2
+echo "pre-push: bug-ledger lint failed — push blocked." >&2
+echo "  Fix the error(s) above in docs/bug-ledger.jsonl (a dangling fix SHA is" >&2
+echo "  usually a pre-rebase SHA — cite the post-rebase commit instead), then" >&2
+echo "  regenerate the rollup:  python3 scripts/bug-curve.py --inject docs/bug-ledger.md" >&2
+echo "  Or bypass this one push with:  git push --no-verify" >&2
+exit 1

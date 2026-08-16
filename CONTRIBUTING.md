@@ -27,6 +27,8 @@ cd kara
 cargo build                  # compiler, no LLVM backend
 cargo test                   # front-end tests: lexer, parser, resolver,
                              # typechecker, effects, ownership, interpreter
+
+scripts/install-hooks.sh     # enable the pre-push bug-ledger lint (once)
 ```
 
 That is enough for front-end work. For codegen you additionally need LLVM 18
@@ -208,6 +210,34 @@ diff that hides the real change. After any ledger edit, check
 `git diff --numstat docs/bug-ledger.jsonl` shows the number of lines you
 actually meant to touch.
 
+### The pre-push hook
+
+`scripts/bug-lint.sh` also runs in CI as the required `Lint` job, so a
+malformed ledger reddens `main`. The most common way that happens: a row's
+`fix` cites a commit SHA that a later `git rebase` changed, so the ledger
+points at a **pre-rebase SHA that no longer resolves**. The lint's fix-SHA
+check catches it — but only on a full clone, so it slips past a shallow local
+checkout and only fails in CI.
+
+To catch it before the push, `hooks/pre-push` runs the lint and blocks a push
+that fails it. `git clone` does not enable repo hooks, so opt in once per
+clone:
+
+```bash
+scripts/install-hooks.sh          # sets core.hooksPath to hooks/
+git push --no-verify              # bypass the gate for one push, when needed
+```
+
+Two caveats worth knowing:
+
+- **It needs a full clone.** The fix-SHA resolvability check skips on a
+  shallow clone (git cannot resolve historical SHAs) — which is exactly the
+  blind spot that lets a dangling SHA through. Run `git fetch --unshallow` so
+  the gate actually fires.
+- **The real cure is upstream of the hook:** allocate the `fix` SHA *after*
+  the rebase that finalizes the commit, not before the push. The hook is the
+  backstop for when that slips.
+
 ## Pull requests
 
 - Branch off `main`. Keep the change focused; unrelated cleanup belongs in
@@ -235,6 +265,7 @@ see the Contribution note at the end of [README.md](README.md).
 | `runtime/` | the C-ABI runtime linked into compiled binaries |
 | `tests/` | integration tests, one file per phase |
 | `examples/` | end-to-end `.kara` programs |
+| `hooks/` | git hooks (enable with `scripts/install-hooks.sh`) |
 | `lsp/` | the language server |
 | `docs/design.md` | the language spec (authoritative) |
 | `docs/roadmap.md` | the implementation plan |
