@@ -71,11 +71,12 @@ CI/structural gaps — none systemic.
   `expr_method_call.rs:362` region (~1,490), `contextual_scalar_collection_type`
   (`exprs.rs:203`, ~1,230), `parse_prefix` (~846). Their frame sizes also
   compound item 1.
-- [ ] **8. Tests — focused coverage for `desugar.rs`** (1,741 lines; every
-  pipeline run crosses it via `desugar_program`) **and `par_cost.rs`** (1,635;
-  drives auto-par decisions — a documented divergence surface). Runners-up
-  with zero unit tests and no dedicated integration file: `ownership_oracle.rs`
-  (1,344), `effect_graph.rs` (1,033).
+- [x] **8. Tests — focused coverage for `desugar.rs` and `par_cost.rs`.**
+  DONE (for the two named modules) — tests/desugar.rs (5 tests pinning the
+  pass's output contracts) + a par_cost unit-test module (7 tests, one gate
+  per test). Runners-up still open, lower priority: `ownership_oracle.rs`
+  (1,344 lines), `effect_graph.rs` (1,033) — split to follow-up work rather
+  than blocking this doc's deletion.
 - [ ] **9. Perf hygiene (longer-term).** (a) ~~Derive `Copy` on `Span`~~
   DONE — `7ef4e843`: derived + clippy `clone_on_copy` machine-fix sweep,
   ~2,500 clones deleted across 150 files; full E2E green (2,999/0). (b) ~~Effect inference body clones~~ DONE — body tables are now
