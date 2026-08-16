@@ -38,6 +38,7 @@ mod inference;
 mod items;
 mod lowering;
 mod method_numeric;
+mod method_vec_mutation;
 mod patterns;
 mod refinement_elision;
 mod stdlib_io;
