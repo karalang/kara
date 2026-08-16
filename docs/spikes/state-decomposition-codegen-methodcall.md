@@ -1,6 +1,6 @@
 # Spike: state decomposition — `Codegen` (439 fields) and `infer_method_call` (5.9k lines)
 
-**Status:** 🚧 **IN PROGRESS — Phase 1 eleven slices landed (`infer_method_call` 5,873 → 1,346 lines, -77%); Phase 2 queued behind the open codegen bugs.** This doc is the live coordination point for the refactor: the cluster map below is measured (not guessed), and the status table at the bottom is updated as slices land. **Other agents: read § Coordination protocol before editing `src/codegen.rs` or `src/typechecker/expr_method_call.rs`.**
+**Status:** 🚧 **IN PROGRESS — Phase 1 twelve slices landed (`infer_method_call` 5,873 → 828 lines, -86%); Phase 2 queued behind the open codegen bugs.** This doc is the live coordination point for the refactor: the cluster map below is measured (not guessed), and the status table at the bottom is updated as slices land. **Other agents: read § Coordination protocol before editing `src/codegen.rs` or `src/typechecker/expr_method_call.rs`.**
 
 *Origin: project-review item 6 ("schedule state-level decomposition of Codegen — not as a launch item, but before any MLIR/backend-swap ambition is taken seriously; same treatment for `infer_method_call`"). Owner decided 2026-08-15 to start now rather than defer, on the reasoning in § Why now.*
 
@@ -146,7 +146,8 @@ for fp in files:
 | 1 | slice 9 — **sequence mutation + slice views** (`method_sequence_mutation.rs`): the comparator sorts, `retain`, `dedup`, `split_off`; plus `as_slice`/`as_slice_mut` and `as_ptr`/`as_mut_ptr` as a second entry point | **landed** — 332 lines moved; 2,156 → 1,838 | 2026-08-16 |
 | 1 | slice 10 — **path + raw-pointer receivers** (`method_identifier_receiver.rs` 2nd entry point, `method_pointer.rs`): concrete-type UFCS `TypeName[Args].method(..)`, and the raw-pointer instance-method surface | **landed** — 309 lines moved; 1,838 → 1,542 | 2026-08-16 |
 | 1 | slice 11 — **nominal-receiver tail** (`method_nominal_tail.rs`): distinct-type `.raw()` + no-deref rule, `cmp`, `to_string` (String / `Display` struct / all-unit `Display` enum), tuple receivers — the last built-in guards before user-`impl` dispatch | **landed** — 206 lines moved; 1,542 → 1,346 | 2026-08-16 |
-| 1 | slice 12+ — remaining families (string, map/set, `Vector[T, N]` SIMD, fresh-temp receiver recording, `Array[T, N]` surface) | in progress | — |
+| 1 | slice 12 — **fresh-temp receiver recording** (`method_temp_receiver.rs`) + **`Vector[T, N]` SIMD** (`method_simd.rs`): the span-keyed `temp_recv_*` side tables codegen reads to reconstruct a temporary receiver's shape, and the portable-SIMD instance surface | **landed** — 536 lines moved; 1,346 → 828 | 2026-08-16 |
+| 1 | slice 13+ — residual (string, map/set, `Array[T, N]`, and the receiver-normalization preamble) | in progress | — |
 | 2 | cluster 1 `RuntimeFns` | not started | — |
 | 2 | clusters 2–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
