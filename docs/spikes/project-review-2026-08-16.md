@@ -23,27 +23,23 @@ CI/structural gaps — none systemic.
 
 ## Burn-down (ranked)
 
-- [ ] **1. HIGH — parser recursion guard.** `parse_expr_bp_with_ctx`
-  (`src/parser/exprs.rs:84`) → `parse_prefix` (`src/parser/exprs.rs:479`)
-  recurse with no depth limit; `karac check` on ~300 nested parens aborts with
-  `fatal runtime error: stack overflow` (reproduced, debug build). The
-  fat-stack mitigation (`src/lib.rs:563`, `run_on_interp_thread`) covers only
-  the interpreter. Fix: depth counter (or `stacker::maybe_grow`) at the
-  `parse_expr` entry emitting a structured diagnostic; **file the ledger row
-  when starting this item** (class `crash`, surface `parse`). Machine-generated
-  Kāra (Mend loop) is exactly the input that can hit this.
-- [ ] **2. MED — runtime null guards in `env_set`/`env_var`.**
-  `runtime/src/lib.rs:921` and `:1093` pass the canonical empty-string
-  `{null, 0, 0}` to `slice::from_raw_parts` (requires non-null even for
-  len 0 — library UB; Miri/hardening trap). Rest of crate guards with
-  `is_null()` (`lib.rs:4259` et al.). While there: write the crate-level
-  null-handling rule — the defensive (channel.rs, most string fns) vs
-  trust-codegen (map.rs module contract) split is documented per-module but
-  has no single crate rule, which is the crack this slipped through.
-- [ ] **3. CI — add `--all-targets` to the base clippy job** (`ci.yml:122`).
-  Non-LLVM cfg(test) lint surface is currently enforced only by the
-  `continue-on-error` drift canary; diverges from the CLAUDE.md local gate.
-  One-token fix.
+- [x] **1. HIGH — parser recursion guard.** DONE — `ea042102` (ledger row
+  B-2026-08-16-4): shared depth counter at the three descent entries
+  (`parse_expr_bp_with_ctx` / `parse_type` / `parse_pattern`), ceiling 128,
+  spanned E0001 at the limit; regression tests pin all three surfaces plus
+  below-limit acceptance. Residual option (not scheduled): `stacker::maybe_grow`
+  at the entries would decouple acceptance from debug frame-size drift.
+- [x] **2. MED — runtime null guards in `env_set`/`env_var`.** DONE —
+  `a26de4bc` (ledger row B-2026-08-16-5): both entries normalize null → ""
+  with the `json_make_string` guard shape; `# Safety` contracts name the
+  null-empty form. Same commit also cleared BOTH low-priority channel.rs
+  notes below (poison-tolerant locks + `deliver` debug_assert). The
+  crate-level null rule write-up (defensive vs trust-codegen — the
+  per-module split the bug slipped between) remains open — see the ledger
+  row's WHY IT EXISTED for the analysis.
+- [x] **3. CI — add `--all-targets` to the base clippy job.** DONE —
+  `534faf21`; verified clean locally with the full
+  `cargo clippy --all --all-targets -- -D warnings` gate.
 - [ ] **4. E2E harness — close the archive-ABSENT vacuous hole.** Stale
   archive now panics (B-2026-07-28-1), but a *missing* archive still
   green-skips ~1,560 tolerant `if let Some(out)` sites in `tests/codegen.rs`
@@ -86,14 +82,9 @@ CI/structural gaps — none systemic.
 
 ## Low / no-action notes (recorded so they aren't re-found)
 
-- `runtime/src/channel.rs:234–433`: six `.lock().unwrap()` sites off the
-  poison-tolerant convention (89 sites elsewhere use
-  `unwrap_or_else(|p| p.into_inner())`). Unreachable in release
-  (panic=abort); live only under `cargo test`. Fold into item 2's pass.
-- `runtime/src/channel.rs:160–166` (`deliver`): no
-  `debug_assert!(blob.len() >= elem_size)` cross-check against a codegen
-  elem-size mismatch (heap over-read if codegen ever bugs). Free assert; fold
-  into item 2's pass.
+- ~~`runtime/src/channel.rs`: six poison-intolerant `.lock().unwrap()` sites;
+  missing `deliver` blob-length debug_assert~~ — both landed with item 2
+  (`a26de4bc`).
 - Frontend panic discipline is otherwise excellent: ~20 real unwrap/expect
   sites in ~90k lines, all locally guarded; resolver fully clean; 10
   TODO/FIXME markers repo-wide.

@@ -101,8 +101,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 72 | 1 |
 | false-positive | 68 | 0 |
 | diagnostics | 60 | 0 |
-| crash | 47 | 0 |
-| soundness | 46 | 0 |
+| crash | 48 | 0 |
+| soundness | 47 | 0 |
 | other | 32 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -117,14 +117,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 47 | 0 |
 | other | 43 | 0 |
 | cli | 30 | 0 |
-| runtime | 21 | 0 |
+| runtime | 22 | 0 |
 | resolver | 19 | 0 |
-| parser | 16 | 0 |
+| parser | 17 | 0 |
 | effect | 5 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1241 surfaced · 1 open · 1226 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1243 surfaced · 1 open · 1228 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1241 surfaced
 
 </details>
 
-### Fixed (1226)
+### Fixed (1228)
 
-<details><summary>1226 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1228 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9564,6 +9564,8 @@ covers the bare literal, the explicit `Vec[a, b]` prefix form, the Map and
 repeat literals, the 5-element nested shape, and the `a.len() + b.len()`
 control; confirmed FAILING on the parent commit and passing with the fix. |
 | B-2026-08-16-2 | other | medium | `shared_ownership_matrix` CANNOT PASS ON macOS: 84529948 added an LSAN_OPTIONS env without the macOS guard ASAN_OPTIONS already had, so every cell ab… | FIXED by e953aae0. Guarded `LSAN_OPTIONS` on macOS the way `ASAN_OPTIONS` already was, and made the frontier ratchet Linux-only — both are needed, since the first change alone makes every cell read `Clean` and the assert then fails on every expected-`Leak` cell. Safety and value-correctness assertions still run everywhere and the grid still reports `0 skipped` on macOS, so use-after-free / double-free coverage is unchanged there. |
+| B-2026-08-16-4 | parser | high | Parser had NO recursion-depth limit: ~210 nested `(` crashed `karac check` with a stack-overflow abort (exit 134) instead of a diagnostic | FIXED by ea042102. One shared recursion counter (`Parser::recursion_depth`, ceiling `MAX_RECURSION_DEPTH = 128`) claimed at the three mutually-recursive descent entries — `parse_expr_bp_with_ctx`, `parse_type`, `parse_pattern` — via enter/exit wrappers; at the ceiling the parser emits a single spanned E0001 ("nesting too deep") and unwinds instead of overflowing. Verified: expr/type/pattern at 500 and 5000 nesting levels all diagnose cleanly via `karac check`; a 120-deep legal program still passes the full check pipeline and runs. Regression tests in tests/parser.rs pin all three surfaces plus the below-limit acceptance. |
+| B-2026-08-16-5 | runtime | medium | `env_set`/`env_var` fed the canonical empty Kāra String's null pointer to `slice::from_raw_parts` — library UB (benign today, a Miri/hardening trap) | FIXED by a26de4bc. `karac_runtime_env_set` and `karac_runtime_env_var` now normalize a null name/value pointer to the empty slice before `from_raw_parts` (same guard shape as `karac_runtime_json_make_string`), and their `# Safety` contracts name the `{null, 0}` empty form. Same commit aligns channel.rs's six production `.lock().unwrap()` sites + condvar wait to the crate-wide poison-tolerant `unwrap_or_else(|p| p.into_inner())` convention, and adds a `debug_assert!(blob.len() >= elem_size)` in `deliver()` so a codegen elem-size mismatch would assert instead of heap-over-reading. Unit test `env_var_null_name_is_not_present_not_ub` pins the null-name path; native + both wasm clippy legs clean. |
 
 </details>
 
