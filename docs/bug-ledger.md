@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 253 | 0 |
+| miscompile | 254 | 1 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 122 | 0 |
@@ -101,8 +101,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 72 | 1 |
 | false-positive | 68 | 0 |
 | diagnostics | 60 | 0 |
+| soundness | 48 | 1 |
 | crash | 48 | 0 |
-| soundness | 47 | 0 |
 | other | 32 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 895 | 1 |
-| typecheck | 174 | 0 |
+| codegen | 896 | 2 |
+| typecheck | 175 | 1 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
 | autopar | 47 | 0 |
@@ -124,13 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1243 surfaced · 1 open · 1228 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1245 surfaced · 3 open · 1228 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-3 | 2026-08-16 | codegen | low | Shuffled `sort_by` is still ~1.80x driftsort after B-2026-08-15-30 routed it to the partition; the one measured lead is the scatter kernel's shape | mono sort_by lowering (emit_sort_partition_body) |
+| B-2026-08-16-6 | 2026-08-16 | typecheck | high | A function whose body produces NO VALUE passes `karac check` despite a declared non-Unit return type: `fn f() -> String { }` is accepted, the interpreter hands back `()` (so `f"[{f()}]"` prints `[()]` for a String-typed call), and the AOT binary prints nothing. Holds for `String`, `i64`, a user struct, a `ref`-parameter signature, and a body with a statement but no tail expression. | the function-body return check -- a declared return type is never reconciled against the body's tail type when the body yields Unit. |
+| B-2026-08-16-7 | 2026-08-16 | codegen | high | A struct FIELD moved into a binding (`let cur = e.doc;`) and then passed as a `mut ref` ARGUMENT (`apply(mut e.doc, ..)`) loses the field's heap contents on both compiled backends: the Vec's LENGTH survives but its Strings read back EMPTY. The interpreter is correct. Deleting only the `let cur = e.doc;` line makes it agree. | the `UseAfterMove` defensive copy for a moved struct FIELD whose place is later passed as `mut ref`. B-2026-08-15-10 fixed the garbage-String leg of this family for non-`main` functions; this reproduces IN `main` and yields empty rather than garbage, so it may be a distinct leg. |
 
 ### Wontfix (4)
 
