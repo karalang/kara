@@ -38,8 +38,10 @@ compile-time measurements, not opportunistically.
 - `stacker::maybe_grow` at the parser's three descent entries would decouple
   input-nesting acceptance from debug frame-size drift entirely (currently a
   fixed 128 ceiling sized to an 8 MiB stack — B-2026-08-16-4's SIZING NOTE).
-- `collect_function_info` (`src/effectchecker.rs`) still deep-clones
-  `program.items` once per run, and `check_call_site_subtyping`'s owned walk
-  still clones each body out of the `Rc<Function>` tables (9b's remainders).
+- ~~Whole-program `program.items.clone()` walks~~ DONE — all 19 sites across
+  resolver/typechecker/effectchecker/ownership/interpreter converted to
+  `&[Item]` reborrows (the `&'a Program` field is `Copy`, so the clones were
+  never needed). Remaining from 9b: `check_call_site_subtyping`'s owned walk
+  still clones each body out of the `Rc<Function>` tables.
 - Focused tests for `ownership_oracle.rs` (1,344 lines) and `effect_graph.rs`
   (1,033) — the review-item-8 runners-up; `desugar` and `par_cost` are done.
