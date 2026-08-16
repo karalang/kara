@@ -11,8 +11,10 @@ no urgency signal — pick items up as touched-anyway work or dedicated slices.
 The extraction pattern that tamed typechecker/ (43 files), interpreter/ (40)
 and ownership/ (13) has not reached:
 
-- `src/cli.rs` — 14.5k lines; `src/cli/` holds only 3 files (args, explain,
-  help). The largest file in the repo and the least-structured.
+- ~~`src/cli.rs` — 14.5k lines~~ DONE — eight command submodules extracted
+  (fix_cmds, test_cmd, maintenance_cmds, pkg_cmds, diag_json, query_cmd,
+  run_check_cmds, build_cmds); driver at 2,016 lines (Pipeline, dispatch,
+  text diagnostics, args surface).
 - ~~`src/concurrency.rs` — 7.5k lines, no submodule dir at all~~ DONE —
   eight submodules extracted over two slices (predicates, reduction_shapes,
   var_extract, reads, effects_collect, conflicts, reductions, hazards);
