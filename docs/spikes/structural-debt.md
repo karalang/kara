@@ -43,5 +43,7 @@ compile-time measurements, not opportunistically.
   `&[Item]` reborrows (the `&'a Program` field is `Copy`, so the clones were
   never needed). Remaining from 9b: `check_call_site_subtyping`'s owned walk
   still clones each body out of the `Rc<Function>` tables.
-- Focused tests for `ownership_oracle.rs` (1,344 lines) and `effect_graph.rs`
-  (1,033) — the review-item-8 runners-up; `desugar` and `par_cost` are done.
+- ~~Focused tests for the item-8 runners-up~~ DONE — tests/effect_graph.rs
+  pins the Cartographer envelope contracts (5 tests); and the review's claim
+  about `ownership_oracle.rs` was WRONG — it already has 19 unit tests in
+  `src/ownership_oracle/tests.rs` (a submodule file the review scan missed).
