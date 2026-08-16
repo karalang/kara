@@ -1322,6 +1322,27 @@ fn expr_is_unroll_cheap_free(e: &Expr) -> bool {
         ExprKind::FieldAccess { object, .. } => expr_is_unroll_cheap_free(object),
         ExprKind::Cast { expr, .. } => expr_is_unroll_cheap_free(expr),
         // Only the operator-to-trait-method lowering, never a real call.
+        //
+        // B-2026-08-15-31 — ADMITTING FREE-FUNCTION CALLS AND EARLY `return`
+        // WAS TRIED AND MEASURED, AND IT DOES NOT PAY. Both look like safe
+        // widenings on paper: #134's measured 40% loss is really its `push` (a
+        // METHOD call on a heap container, a different `ExprKind` that keeps
+        // failing this check either way), and a `return` is just a branch to
+        // the epilogue. Screened over all 278 corpus program-rows on retired
+        // instructions (kara-katas `scripts/unroll-screen.py`):
+        //
+        //   calls + return   11 rows improved >1%, SEVEN regressed >1%
+        //                    (#165 +5.4%, #22 +3.5%), corpus median unmoved
+        //                    at 1.362, and the count of rows where kara leads
+        //                    `clang -O3` unchanged at 22.
+        //   return alone     one row improved (#17, 2.3%), two regressed
+        //                    (#22 +1.5%, #85 +1.7%).
+        //
+        // A wash that buys regressions is not worth the widened surface, so the
+        // gate stays as it was. #134 itself never moved (4.378B -> 4.384B
+        // instructions), which does show the ORIGINAL rationale was attributed
+        // to the wrong construct — but being right about the reason does not
+        // make the widening pay.
         ExprKind::Call { callee, args } => {
             if let ExprKind::Path { segments, .. } = &callee.kind {
                 if segments.len() == 2 && is_scalar_op_method(&segments[1]) {
@@ -1544,6 +1565,25 @@ impl<'ctx> super::Codegen<'ctx> {
         // through, so a k=32 reduction got no hint, unrolled 4x, and kept a
         // data-dependent branch per element where rustc/clang unroll it whole
         // and branchlessly (measured 2.0x on kata #265's DP once hinted).
+        // A CONVERGING two-pointer guard (`while lo <= hi` with lo++/hi--) is
+        // deliberately NOT accepted here, and the reason is measured rather
+        // than assumed — B-2026-08-15-31. That shape is kata #246's scan and
+        // the obvious candidate to admit, since `clang -O3` fully unrolls the
+        // identical C loop and the unroll is worth 1.35x there. Hinting it does
+        // not work: LLVM takes the metadata and REFUSES, emitting
+        //
+        //     loop not unrolled: the optimizer was unable to perform the
+        //     requested transformation
+        //
+        // twice per build on #246 — user-visible warnings for zero benefit.
+        // It is not an inlining artifact: a converging loop written directly in
+        // `main` with `lo = 0` / `hi = 31` as literal constants is refused the
+        // same way, so LLVM cannot establish the trip count for the two-
+        // induction-variable exit condition as karac emits it, whatever the
+        // initialisers. Closing that gap needs karac to CANONICALISE the
+        // converging loop into a single counted induction variable before the
+        // unroller sees it, which is an IR change, not a hint. Until then,
+        // attaching a hint LLVM provably declines is just noise.
         let Some((var, bound)) = guard_upper_bounded_counter(cond).or_else(|| {
             let (v, bound_name) = guard_upper_bounded_counter_named(cond)?;
             Some((v, *self.int_const_locals.get(&bound_name)?))
