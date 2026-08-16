@@ -138,18 +138,16 @@ pub(crate) fn starts_upper(s: &str) -> bool {
 /// Phase-11 embedded/hardware tracker and design.md § FFI.
 const RESERVED_FFI_ABIS: &[&str] = &["stdcall", "fastcall", "win64", "sysv64"];
 
-/// Maximum shared nesting depth for expressions, types, and patterns. Sized
-/// for the stack the product actually parses on — the CLI / JIT-runner MAIN
-/// thread (8 MiB): one level of the expression descent costs ~38 KiB of stack
-/// in a debug build (measured: the unguarded parser overflowed 8 MiB at ~210
-/// levels), so 128 levels ≈ 4.9 MiB worst-case with headroom to spare, while
-/// still being far deeper than any human- or machine-written program nests.
-/// The ceiling is NOT sized for Rust's default 2 MiB spawned threads — a
-/// debug build overflows those at ~24 levels, no useful ceiling fits — so an
-/// embedder driving `karac::parse` from its own small thread must size that
-/// thread's stack (the regression tests in `tests/parser.rs` parse on a
-/// 32 MiB thread for exactly this reason). See [`Parser::enter_recursion`]
-/// for the guard itself. B-2026-08-16-4.
+/// Maximum shared nesting depth for expressions, types, and patterns — the
+/// SEMANTIC ceiling: far deeper than any human- or machine-written program
+/// nests, so hitting it means pathological input, not a real program.
+/// Overflow safety no longer depends on it: the three descent entries wrap
+/// their recursion in `stacker::maybe_grow` (512 KiB red zone, 16 MiB
+/// chunks — one level costs ≤~85 KiB in a debug build), so parsing survives
+/// any thread size, including Rust's default 2 MiB spawned threads that a
+/// debug build used to overflow at ~24 levels. The regression tests in
+/// `tests/parser.rs` pin both halves: the diagnostic at the ceiling, and a
+/// clean 100-deep parse on a 512 KiB thread. B-2026-08-16-4.
 pub(crate) const MAX_RECURSION_DEPTH: usize = 128;
 
 pub struct Parser {

@@ -13677,3 +13677,24 @@ fn nesting_below_the_limit_parses_clean() {
     let errors = parse_errors_on_big_stack(src);
     assert!(errors.is_empty(), "expected clean parse, got: {errors:?}");
 }
+
+/// With `stacker::maybe_grow` at the descent entries, parsing near the
+/// ceiling succeeds even on a TINY (512 KiB) thread — the parser grows its
+/// own stack instead of requiring the embedder to size one. (Before the
+/// stacker guard this depth needed ≥8 MiB.)
+#[test]
+fn near_ceiling_nesting_parses_on_a_tiny_thread() {
+    let n = 100;
+    let src = format!(
+        "fn main() {{ let x = {}1{}; }}",
+        "(".repeat(n),
+        ")".repeat(n)
+    );
+    let errors = std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || karac::parse(&src).errors)
+        .expect("spawn parse thread")
+        .join()
+        .expect("parse thread panicked");
+    assert!(errors.is_empty(), "expected clean parse, got: {errors:?}");
+}

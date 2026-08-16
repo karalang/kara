@@ -27,7 +27,9 @@ impl super::Parser {
         if !self.enter_recursion() {
             return None;
         }
-        let result = self.parse_pattern_inner();
+        // Red-zone stack growth — see parse_expr_bp_with_ctx for sizing.
+        let result =
+            stacker::maybe_grow(512 * 1024, 16 * 1024 * 1024, || self.parse_pattern_inner());
         self.exit_recursion();
         result
     }

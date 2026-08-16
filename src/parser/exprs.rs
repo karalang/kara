@@ -88,7 +88,15 @@ impl super::Parser {
         if !self.enter_recursion() {
             return None;
         }
-        let result = self.parse_expr_bp_with_ctx_inner(min_bp, stmt_ctx);
+        // Grow the stack when the red zone is near (same pattern as the
+        // interpreter's eval site, and stacker is already a direct dep for
+        // it): one nesting level costs ≤~85 KiB in a debug build, so a
+        // 512 KiB red zone at every guarded entry leaves a wide margin, and
+        // parsing survives small embedder threads without the caller sizing
+        // its stack. MAX_RECURSION_DEPTH stays as the semantic ceiling.
+        let result = stacker::maybe_grow(512 * 1024, 16 * 1024 * 1024, || {
+            self.parse_expr_bp_with_ctx_inner(min_bp, stmt_ctx)
+        });
         self.exit_recursion();
         result
     }
