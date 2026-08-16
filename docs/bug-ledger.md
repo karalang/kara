@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 113 | 0 |
 | missing-feature | 96 | 0 |
 | perf | 73 | 1 |
-| false-positive | 69 | 0 |
+| false-positive | 70 | 0 |
 | diagnostics | 60 | 0 |
 | soundness | 48 | 1 |
 | crash | 48 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
 | autopar | 47 | 0 |
-| other | 44 | 0 |
+| other | 45 | 0 |
 | cli | 30 | 0 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1247 surfaced · 3 open · 1230 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1248 surfaced · 3 open · 1231 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -147,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1247 surfaced
 
 </details>
 
-### Fixed (1230)
+### Fixed (1231)
 
-<details><summary>1230 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1231 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9570,6 +9570,7 @@ control; confirmed FAILING on the parent commit and passing with the fix. |
 | B-2026-08-16-4 | parser | high | Parser had NO recursion-depth limit: ~210 nested `(` crashed `karac check` with a stack-overflow abort (exit 134) instead of a diagnostic | FIXED by ea042102. One shared recursion counter (`Parser::recursion_depth`, ceiling `MAX_RECURSION_DEPTH = 128`) claimed at the three mutually-recursive descent entries — `parse_expr_bp_with_ctx`, `parse_type`, `parse_pattern` — via enter/exit wrappers; at the ceiling the parser emits a single spanned E0001 ("nesting too deep") and unwinds instead of overflowing. Verified: expr/type/pattern at 500 and 5000 nesting levels all diagnose cleanly via `karac check`; a 120-deep legal program still passes the full check pipeline and runs. Regression tests in tests/parser.rs pin all three surfaces plus the below-limit acceptance. |
 | B-2026-08-16-5 | runtime | medium | `env_set`/`env_var` fed the canonical empty Kāra String's null pointer to `slice::from_raw_parts` — library UB (benign today, a Miri/hardening trap) | FIXED by a26de4bc. `karac_runtime_env_set` and `karac_runtime_env_var` now normalize a null name/value pointer to the empty slice before `from_raw_parts` (same guard shape as `karac_runtime_json_make_string`), and their `# Safety` contracts name the `{null, 0}` empty form. Same commit aligns channel.rs's six production `.lock().unwrap()` sites + condvar wait to the crate-wide poison-tolerant `unwrap_or_else(|p| p.into_inner())` convention, and adds a `debug_assert!(blob.len() >= elem_size)` in `deliver()` so a codegen elem-size mismatch would assert instead of heap-over-reading. Unit test `env_var_null_name_is_not_present_not_ub` pins the null-name path; native + both wasm clippy legs clean. |
 | B-2026-08-16-8 | other | medium | memory_sanitizer's four link-skip sites bypassed `link_or_skip` — the B-2026-07-28-1 stale-archive panic never protected the ASan/LSan suite | FIXED by 220070be. All four hand-rolled link-skip sites in tests/memory_sanitizer.rs now route the linker result through `common::link_or_skip`, picking up both discriminations: undefined-symbol (stale archive) panics with the rebuild recipe, and `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` (added in the same commit, set by CI's seven archive-building jobs) forbids the remaining soft-skip outright. Verified empirically with archives hidden: default mode green-skips, gated mode fails with the actionable message; smoke test green with archives restored. |
+| B-2026-08-16-10 | other | medium | CI never built the regex/arrow opt-in archives, so the 8 Regex / Arrow-IPC codegen E2E tests (and memory_sanitizer's regex fixtures) green-skipped in… | FIXED by c92476aa. The six gated jobs (codegen-e2e ×3, memory-sanitizer ×3) now build lean → regex → arrow → full in the CLAUDE.md archive order; bench-gate stays lean → full (no regex/arrow fixtures). Verified locally with all four archives present: full codegen E2E 2,999 passed / 0 failed under KARAC_REQUIRE_RUNTIME_ARCHIVE=1 — the first run anywhere in which the 8 regex/arrow E2E tests provably executed under the gate. |
 
 </details>
 
