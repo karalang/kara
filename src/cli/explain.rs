@@ -1000,7 +1000,9 @@ mod tests {
     }
 
     /// Every numeric `(phase, code)` pair the emitter actually mints,
-    /// read out of `src/cli.rs`'s own `match err.kind` arms.
+    /// read out of the diagnostic emitter's own `match err.kind` arms
+    /// (`src/cli/diag_json.rs` since the cli extraction; before that,
+    /// `src/cli.rs` itself — the scan moved with the arms).
     ///
     /// Scanning the source is deliberate. `ResolveErrorKind` /
     /// `TypeErrorKind` cannot be enumerated at runtime, so any
@@ -1011,7 +1013,7 @@ mod tests {
     /// That is exactly what happened before B-2026-07-27-14 was fixed
     /// (`CODE_TABLE` stopped at E0240, hiding four of the eight).
     fn emitted_codes() -> Vec<(&'static str, &'static str)> {
-        let src = include_str!("../cli.rs");
+        let src = include_str!("diag_json.rs");
         let mut out = Vec::new();
         for line in src.lines() {
             let line = line.trim();
