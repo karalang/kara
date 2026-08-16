@@ -176,9 +176,18 @@ mod shared_ownership_matrix_tests {
             // `LSAN_OPTIONS=detect_leaks=0`.
             let out = Command::new(&exe)
                 .env("ASAN_OPTIONS", opts)
+                // The macOS arm above applies HERE TOO, and leaving it off is
+                // what broke this test on macOS in 84529948. Apple-clang ASAN
+                // ships no LSan, and asking for it anyway does not degrade
+                // gracefully — it aborts before `main` with "detect_leaks is
+                // not supported on this platform". Because `LSAN_OPTIONS` takes
+                // precedence (the very reason it is set), guarding only
+                // `ASAN_OPTIONS` leaves the request live: every cell's leaks-on
+                // run failed for a reason unrelated to the program, every cell
+                // classified `Leak`, and the frontier assert fired on all 33.
                 .env(
                     "LSAN_OPTIONS",
-                    if detect_leaks {
+                    if detect_leaks && !cfg!(target_os = "macos") {
                         "detect_leaks=1"
                     } else {
                         "detect_leaks=0"
@@ -501,11 +510,33 @@ mod shared_ownership_matrix_tests {
         );
         // 3. Frontier regression — a Clean→Leak flip is a regression; a
         //    Leak→Clean flip means a residual closed (update the table).
-        assert!(
-            frontier_diffs.is_empty(),
-            "frontier changed (update FLOWS.expected + add a focused \
-             memory_sanitizer test if a residual closed):\n  {}",
-            frontier_diffs.join("\n  ")
-        );
+        //
+        //    LINUX ONLY, and for the same reason the detector control above is:
+        //    without LSan there is no Leak/Clean axis to ratchet. Off Linux
+        //    every cell necessarily reads `Clean` (both runs are now identical),
+        //    so asserting here would compare a non-measurement against a table
+        //    recording real leaks and fail on every expected-`Leak` cell. The
+        //    two assertions above still run everywhere and lose nothing by it:
+        //    both read the leaks-OFF run, which needs no LSan, so macOS keeps
+        //    full use-after-free / double-free / value-corruption coverage.
+        //
+        //    Do NOT "fix" a diff here by relaxing `FLOWS.expected` to match an
+        //    all-`Clean` or all-`Leak` grid — that writes a dead detector's
+        //    output into the ratchet as if it were the frontier, which is
+        //    exactly what B-2026-08-06-34 added the control to prevent.
+        if cfg!(target_os = "linux") {
+            assert!(
+                frontier_diffs.is_empty(),
+                "frontier changed (update FLOWS.expected + add a focused \
+                 memory_sanitizer test if a residual closed):\n  {}",
+                frontier_diffs.join("\n  ")
+            );
+        } else {
+            eprintln!(
+                "shared_ownership_matrix: Leak/Clean not measured (no LSan off \
+                 Linux) — frontier ratchet skipped; safety + value assertions \
+                 still enforced. CI `memory-sanitizer` is the leak gate."
+            );
+        }
     }
 }
