@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 122 | 0 |
-| codegen-gap | 113 | 1 |
+| codegen-gap | 113 | 0 |
 | missing-feature | 96 | 0 |
 | perf | 71 | 1 |
 | false-positive | 67 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 894 | 2 |
+| codegen | 894 | 1 |
 | typecheck | 174 | 0 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
-| autopar | 47 | 1 |
+| autopar | 47 | 0 |
 | other | 42 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1239 surfaced · 2 open · 1223 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1239 surfaced · 1 open · 1224 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-30 | 2026-08-15 | codegen | medium | The shuffled-uniform `sort_by` residual closed as `wontfix` in B-2026-08-11-28 at ~1.6x Rust is MATERIALLY LARGER on the canonical Apple-silicon host: 3.70x on kata #252 and 2.04x on kata #253, measured on M5 Pro with 50a50e8 IN the compiler. The disposition was reached entirely on a shared x86 cloud container, and `wontfix` was argued from a residual roughly half this size. Not a regression of 50a50e8 -- that fix is present and the ordered-input win it bought is not in question -- but the remaining gap is bigger than the number the wontfix was decided against, so the disposition deserves re-deciding on this host rather than inheriting. | mono sort_by lowering (natural-run merge sort, 50a50e8) -- shuffled-uniform residual, on arm64 |
-| B-2026-08-16-1 | 2026-08-16 | autopar+codegen | high | AUTO-PAR FORKS TWO INDEPENDENT `let`s AND THEN CODEGEN CANNOT SEE THEIR BINDINGS: two locals initialized from calls returning a heap collection, gathered into a collection literal `[a, b]`, fail the DEFAULT build with `codegen failed: Undefined variable 'a'`. The same program compiles and runs under `KARAC_AUTO_PAR=0` and under `--interp`. | The auto-par fork lowering's handling of a parallel group's `let` bindings in the CONTINUATION. The group is formed correctly (`--concurrency-report` shows both statements grouped, `reason: no data or effect dependencies`); what breaks is that a later collection literal referencing the forked bindings cannot resolve them. Only the collection-literal consumer is affected — `.len()` arithmetic, `push(a)`, and tuples all resolve fine. |
 
 ### Wontfix (4)
 
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1239 surfaced
 
 </details>
 
-### Fixed (1223)
+### Fixed (1224)
 
-<details><summary>1223 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1224 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9498,6 +9497,71 @@ coverage.
 Gates: full `--features llvm` sweep of all 98 targets, 12570 tests, 0 failures;
 clippy `--all --all-targets` and fmt clean; run/build/auto-par output identical
 on every fixture (these are warnings, so all four programs compile and run). |
+| B-2026-08-16-1 | autopar+codegen | high | AUTO-PAR FORKS TWO INDEPENDENT `let`s AND THEN CODEGEN CANNOT SEE THEIR BINDINGS: two locals initialized from calls returning a heap collection, gath… | ROOT CAUSE: `refs_in_expr` (src/codegen/closures.rs) — the walker that decides
+which names are read OUTSIDE an auto-par group, and therefore which bindings
+need a return slot across the join — had an arm for `ExprKind::ArrayLiteral`
+but NONE for `ExprKind::PrefixCollectionLiteral`, and ended in a `_ => {}`
+wildcard that swallowed it silently.
+
+A bare `[a, b]` checked against a `Vec`-typed annotation is NORMALIZED to
+`PrefixCollectionLiteral{type_name:"Vec"}` before codegen runs. So the ordinary
+`let c: Vec[Vec[i64]] = [a, b]` never matched the ArrayLiteral arm: `a` and `b`
+never entered the outside-reads set, `compute_return_slots_checked` produced
+ZERO slots (`defined ∩ refs` was empty), the bindings stayed branch-local
+allocas, and the parent body had nothing to load — "Undefined variable 'a'".
+
+Instrumented proof, failing vs. working program, same group [0,1]:
+    [a, b]              DBG group_indices=[0,1] refs=["c","println"]      slots=[]
+    a.len() + b.len()   DBG group_indices=[0,1] refs=["a","b","println"]  slots=["a","b"]
+
+THE REPORT'S BOUNDING EXPERIMENTS WERE RIGHT ABOUT THE SYMPTOM AND WRONG ABOUT
+THE MECHANISM, which matters because they point a fix at the wrong place. The
+row reads as "it takes all three: fork + heap element + collection literal",
+with scalars and tuples as controls that isolate the heap element. They do not:
+`--concurrency-report` shows the scalar and tuple programs form NO parallel
+group at all, so they never reach the walker. Heap-ness was never a condition —
+it is only what earns the `allocates(Heap)` effect that makes two calls worth
+forking. The single real condition is the third one: consumption by a
+collection literal. The honest control is `a.len() + b.len()`, which forks
+identically and works because a Binary/MethodCall chain was always covered.
+
+FIX (two parts):
+1. Added the missing arms — `PrefixCollectionLiteral` (the bug), plus
+   `RepeatLiteral` and `MapLiteral`, which were missing the same way, plus
+   `StructLiteral`'s `spread` (unreachable today: the parser accepts spread,
+   the typechecker rejects it, design.md does not spec it — kept correct ahead
+   of the language per the arm-group's own stated policy).
+2. Replaced the `_ => {}` wildcard with an EXPLICIT leaf list, making the match
+   exhaustive. This walker fails OPEN: a missed name gets no slot and becomes a
+   build failure, while an EXTRA name is free (slots are `defined ∩ refs`, so a
+   name no group statement binds is simply filtered out). With the asymmetry
+   entirely one-directional, a wildcard is the wrong default — a new ExprKind
+   must break the build rather than silently read as "mentions nothing". This
+   is the fail-closed discipline `bce_length_pin::block_all` already documents.
+   It paid immediately: making the match exhaustive surfaced two more variants
+   (`PipePlaceholder`, `Error`) the audit had missed.
+
+A SECOND COPY OF THE WALKER HAD THE SAME GAP.
+`src/ownership/par_capture_classify.rs` carries a free-function twin of this
+walker, and its module doc states the contract outright: the capture set it
+produces "MUST match the codegen path's free-variable collection ... any
+divergence between the two is a bug." It was missing the same three literal
+arms, so a `shared` binding captured ONLY inside a collection literal in a
+`par {}` block was invisible to the classifier, defaulted to `Copy`, and its
+branch got no rc_inc — the exact latent miscompile that module exists to close.
+Auditing the pair turned up nine further recursing arms the copy had drifted
+without (`Question`, `Pipe`, `NilCoalesce`, `OptionalChain`, `Lock`, `WhileLet`,
+`LabeledBlock`, `Comptime`, `Providers`), each the same defect for its own form.
+Both walkers are now exhaustive and handle an identical 55-variant set, so the
+contract is enforced by the compiler instead of by a comment.
+
+VERIFIED on the 6-line repro and on kata 277's 5-element shape: `karac build`
+(default auto-par), `karac run` (JIT), `karac run --interp`, and
+`KARAC_AUTO_PAR=0 karac build` now all agree. Regression test
+`test_e2e_autopar_joined_binding_in_collection_literal` (tests/par_codegen.rs)
+covers the bare literal, the explicit `Vec[a, b]` prefix form, the Map and
+repeat literals, the 5-element nested shape, and the `a.len() + b.len()`
+control; confirmed FAILING on the parent commit and passing with the fix. |
 
 </details>
 
