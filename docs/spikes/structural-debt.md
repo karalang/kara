@@ -20,9 +20,12 @@ and ownership/ (13) has not reached:
   var_extract, reads, effects_collect, conflicts, reductions, hazards);
   driver at 2,203 lines (types, entry, analyze_stmt, grouping). Comparable
   to the other extracted phases now.
-- `src/codegen/method_call.rs` — regrew to 20.7k lines *after* extraction;
-  needs a second-level split (peers: `stmts.rs` 13.8k, `vec_method.rs` 12.7k,
-  `runtime.rs` 12.2k, `control_flow_match.rs` 10.5k).
+- ~~`src/codegen/method_call.rs` — 20.7k lines~~ DONE — second-level split
+  into method_call_iter (6.5k, the iterator-fusion surface), method_call_ffi,
+  method_call_sync, method_call_vector; driver at 9.4k (compile_method_call
+  dispatch + adjacent helpers). Peers still oversized when touched:
+  `stmts.rs` 13.8k, `vec_method.rs` 12.7k, `runtime.rs` 12.2k,
+  `control_flow_match.rs` 10.5k — same recipe applies.
 
 Related, break up as touched: the 800–1,750-line dispatch bodies —
 `infer_expr_inner` (`src/typechecker/exprs.rs`, ~1,750 lines),
