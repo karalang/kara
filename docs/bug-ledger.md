@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 122 | 0 |
 | codegen-gap | 113 | 0 |
 | missing-feature | 96 | 0 |
-| perf | 72 | 1 |
+| perf | 73 | 1 |
 | false-positive | 69 | 0 |
 | diagnostics | 60 | 0 |
 | soundness | 48 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 896 | 2 |
+| codegen | 897 | 2 |
 | typecheck | 175 | 1 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1246 surfaced · 3 open · 1229 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1247 surfaced · 3 open · 1230 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-16-3 | 2026-08-16 | codegen | low | Shuffled `sort_by` is still ~1.80x driftsort after B-2026-08-15-30 routed it to the partition; the one measured lead is the scatter kernel's shape | mono sort_by lowering (emit_sort_partition_body) |
 | B-2026-08-16-6 | 2026-08-16 | typecheck | high | A function whose body produces NO VALUE passes `karac check` despite a declared non-Unit return type: `fn f() -> String { }` is accepted, the interpreter hands back `()` (so `f"[{f()}]"` prints `[()]` for a String-typed call), and the AOT binary prints nothing. Holds for `String`, `i64`, a user struct, a `ref`-parameter signature, and a body with a statement but no tail expression. | the function-body return check -- a declared return type is never reconciled against the body's tail type when the body yields Unit. |
 | B-2026-08-16-7 | 2026-08-16 | codegen | high | A struct FIELD moved into a binding (`let cur = e.doc;`) and then passed as a `mut ref` ARGUMENT (`apply(mut e.doc, ..)`) loses the field's heap contents on both compiled backends: the Vec's LENGTH survives but its Strings read back EMPTY. The interpreter is correct. Deleting only the `let cur = e.doc;` line makes it agree. | the `UseAfterMove` defensive copy for a moved struct FIELD whose place is later passed as `mut ref`. B-2026-08-15-10 fixed the garbage-String leg of this family for non-`main` functions; this reproduces IN `main` and yields empty rather than garbage, so it may be a distinct leg. |
+| B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.61x driftsort after the insertion leaf; the partition TREE is now the larger half and the leaf split needs re-measuring | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 
 ### Wontfix (4)
 
@@ -147,9 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1246 surfaced
 
 </details>
 
-### Fixed (1229)
+### Fixed (1230)
 
-<details><summary>1229 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1230 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9566,6 +9566,7 @@ covers the bare literal, the explicit `Vec[a, b]` prefix form, the Map and
 repeat literals, the 5-element nested shape, and the `a.len() + b.len()`
 control; confirmed FAILING on the parent commit and passing with the fix. |
 | B-2026-08-16-2 | other | medium | `shared_ownership_matrix` CANNOT PASS ON macOS: 84529948 added an LSAN_OPTIONS env without the macOS guard ASAN_OPTIONS already had, so every cell ab… | FIXED by e953aae0. Guarded `LSAN_OPTIONS` on macOS the way `ASAN_OPTIONS` already was, and made the frontier ratchet Linux-only — both are needed, since the first change alone makes every cell read `Clean` and the assert then fails on every expected-`Leak` cell. Safety and value-correctness assertions still run everywhere and the grid still reports `0 skipped` on macOS, so use-after-free / double-free coverage is unchanged there. |
+| B-2026-08-16-3 | codegen | low | Shuffled `sort_by` is still ~1.80x driftsort after B-2026-08-15-30 routed it to the partition; the one measured lead is the scatter kernel's shape | FIXED by 012645a5. The row's own re-aimed lead, acted on: the partition's short leaves now go to a dedicated stable insertion sort instead of back to the natural-run merge. Isolated shuffled sort 352.3M -> 313.2M cycles (0.889x), gap to driftsort 1.81x -> 1.61x; katas #252 0.882x and #253 0.930x with byte-identical output. Structured patterns flat (reverse 0.989x, few-unique 0.996x, sawtooth 0.996x, nearly-sorted 1.005x; `sorted` reads 1.018x but never takes the partition path, so that is placement on a 3.9M baseline). Both element widths win too — scalar i64 0.858x, 32-byte 4-tuple 0.925x — which mattered because width has flipped the sign on this path before. Every figure is same-commit, both arms from one karac via the new `KARAC_SORT_LEAF=merge|insertion` lever, with checksum agreement asserted on every pair. Stability holds by the strictly-greater shift, same argument as phase 1's insertion padding; 462-case sweep 0 violations with its poison control still failing, plus a new E2E driving the unstructured arm. SPAN re-swept and deliberately left at 64: the merge leaf's tight U is gone and an insertion leaf is flat 8..64. What this row got RIGHT and what it got WRONG is worth keeping: the kernel lead it was filed on was wrong (measured dead, step 2), and the leaf lead it was re-aimed at was right and worth 0.89x. The remainder is B-2026-08-16-9. |
 | B-2026-08-16-4 | parser | high | Parser had NO recursion-depth limit: ~210 nested `(` crashed `karac check` with a stack-overflow abort (exit 134) instead of a diagnostic | FIXED by ea042102. One shared recursion counter (`Parser::recursion_depth`, ceiling `MAX_RECURSION_DEPTH = 128`) claimed at the three mutually-recursive descent entries — `parse_expr_bp_with_ctx`, `parse_type`, `parse_pattern` — via enter/exit wrappers; at the ceiling the parser emits a single spanned E0001 ("nesting too deep") and unwinds instead of overflowing. Verified: expr/type/pattern at 500 and 5000 nesting levels all diagnose cleanly via `karac check`; a 120-deep legal program still passes the full check pipeline and runs. Regression tests in tests/parser.rs pin all three surfaces plus the below-limit acceptance. |
 | B-2026-08-16-5 | runtime | medium | `env_set`/`env_var` fed the canonical empty Kāra String's null pointer to `slice::from_raw_parts` — library UB (benign today, a Miri/hardening trap) | FIXED by a26de4bc. `karac_runtime_env_set` and `karac_runtime_env_var` now normalize a null name/value pointer to the empty slice before `from_raw_parts` (same guard shape as `karac_runtime_json_make_string`), and their `# Safety` contracts name the `{null, 0}` empty form. Same commit aligns channel.rs's six production `.lock().unwrap()` sites + condvar wait to the crate-wide poison-tolerant `unwrap_or_else(|p| p.into_inner())` convention, and adds a `debug_assert!(blob.len() >= elem_size)` in `deliver()` so a codegen elem-size mismatch would assert instead of heap-over-reading. Unit test `env_var_null_name_is_not_present_not_ub` pins the null-name path; native + both wasm clippy legs clean. |
 | B-2026-08-16-8 | other | medium | memory_sanitizer's four link-skip sites bypassed `link_or_skip` — the B-2026-07-28-1 stale-archive panic never protected the ASan/LSan suite | FIXED by 220070be. All four hand-rolled link-skip sites in tests/memory_sanitizer.rs now route the linker result through `common::link_or_skip`, picking up both discriminations: undefined-symbol (stale archive) panics with the rebuild recipe, and `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` (added in the same commit, set by CI's seven archive-building jobs) forbids the remaining soft-skip outright. Verified empirically with archives hidden: default mode green-skips, gated mode fails with the actionable message; smoke test green with archives restored. |
