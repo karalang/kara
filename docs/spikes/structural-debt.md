@@ -41,8 +41,9 @@ compile-time measurements, not opportunistically.
 - ~~Whole-program `program.items.clone()` walks~~ DONE — all 19 sites across
   resolver/typechecker/effectchecker/ownership/interpreter converted to
   `&[Item]` reborrows (the `&'a Program` field is `Copy`, so the clones were
-  never needed). Remaining from 9b: `check_call_site_subtyping`'s owned walk
-  still clones each body out of the `Rc<Function>` tables.
+  never needed). 9b is now fully closed: `check_call_site_subtyping`'s
+  walk was converted to by-reference too — zero body clones remain in the
+  effectchecker.
 - ~~Focused tests for the item-8 runners-up~~ DONE — tests/effect_graph.rs
   pins the Cartographer envelope contracts (5 tests); and the review's claim
   about `ownership_oracle.rs` was WRONG — it already has 19 unit tests in
