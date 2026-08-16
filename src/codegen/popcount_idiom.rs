@@ -420,7 +420,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .drop_rc
                 .rc_fallback_heap_types
                 .contains_key(name.as_str())
-                || self.ref_params.contains_key(name.as_str())
+                || self.borrow_vars.ref_params.contains_key(name.as_str())
             {
                 return Ok(false);
             }

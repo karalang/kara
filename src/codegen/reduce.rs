@@ -1606,7 +1606,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let alias_read_vecs: Vec<String> = if tabulate_elem_size.is_some() {
             runtime_captures
                 .iter()
-                .filter(|n| !self.ref_params.contains_key(n.as_str()))
+                .filter(|n| !self.borrow_vars.ref_params.contains_key(n.as_str()))
                 .filter(|n| {
                     self.variables
                         .get(n.as_str())
@@ -3068,7 +3068,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // The accumulator must be a direct owned local — a `ref`/`mut ref`
         // param's slot holds a POINTER to the caller's Vec, and the header
         // GEPs below would silently address the pointer cell instead.
-        if self.ref_params.contains_key(&acc) {
+        if self.borrow_vars.ref_params.contains_key(&acc) {
             return Ok(None);
         }
         let elem_ty = self.vec_elem_type_for_var(&acc);
@@ -3248,7 +3248,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let captures = self.collect_reduction_captures(&shape.body, &acc, &shape.loop_var);
         let read_vecs: Vec<String> = captures
             .into_iter()
-            .filter(|n| !self.ref_params.contains_key(n.as_str()))
+            .filter(|n| !self.borrow_vars.ref_params.contains_key(n.as_str()))
             .filter(|n| {
                 self.variables
                     .get(n.as_str())

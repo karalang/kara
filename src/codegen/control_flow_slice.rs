@@ -71,7 +71,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // length check took the wrong branch (`match (v: ref Vec[i64]) {
             // [] => …, [a,b] => … }` silently mis-dispatched — B-2026-07-14-13).
             // A by-value/`let` binding's slot already IS the struct.
-            let base_ptr = if self.ref_params.contains_key(name.as_str()) {
+            let base_ptr = if self.borrow_vars.ref_params.contains_key(name.as_str()) {
                 self.builder
                     .build_load(ptr_ty, slot.ptr, "sp.ref.deref")
                     .unwrap()

@@ -1050,7 +1050,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(&elem) = self.var_types.vec_elem_types.get(name.as_str()) {
             return Some(elem);
         }
-        if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(name.as_str()) {
+        if let Some(&BasicTypeEnum::ArrayType(at)) = self.borrow_vars.ref_params.get(name.as_str())
+        {
             return Some(at.get_element_type());
         }
         None
@@ -2133,7 +2134,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// balance).
     pub(super) fn mark_for_loop_borrow_if_heap(&mut self, name: &str, elem_te: &TypeExpr) {
         if self.var_types.vec_elem_types.contains_key(name) {
-            self.for_loop_borrow_vars.insert(name.to_string());
+            self.borrow_vars
+                .for_loop_borrow_vars
+                .insert(name.to_string());
             return;
         }
         if let TypeKind::Path(pp) = &elem_te.kind {
@@ -2167,7 +2170,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 && !self.type_decls.shared_types.contains_key(head)
                 && for_loop_copy_supported
             {
-                self.for_loop_owned_agg_vars.insert(name.to_string());
+                self.borrow_vars
+                    .for_loop_owned_agg_vars
+                    .insert(name.to_string());
                 return;
             }
             // B-2026-07-05-2: a BARE non-shared user-ENUM element (`Vec[MyEnum]`),
@@ -2190,7 +2195,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             .values()
                             .any(|ks| ks.iter().any(|k| k.is_heap_bearing()));
                     if heap_bearing {
-                        self.for_loop_owned_agg_vars.insert(name.to_string());
+                        self.borrow_vars
+                            .for_loop_owned_agg_vars
+                            .insert(name.to_string());
                         return;
                     }
                 }
@@ -2213,7 +2220,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => false,
             };
             if armed {
-                self.for_loop_borrow_vars.insert(name.to_string());
+                self.borrow_vars
+                    .for_loop_borrow_vars
+                    .insert(name.to_string());
             }
         }
     }

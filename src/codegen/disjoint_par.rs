@@ -292,8 +292,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Restricted to signature params: `ref_params` also carries pattern
         // shims and `entry().or_insert()` slot pointers whose storage story is
         // their own machinery's, not this one's.
-        if self.signature_ref_params.contains(name) {
-            if let Some(inner) = self.ref_params.get(name) {
+        if self.borrow_vars.signature_ref_params.contains(name) {
+            if let Some(inner) = self.borrow_vars.ref_params.get(name) {
                 if self.llvm_ty_is_vec_struct(*inner)
                     || matches!(inner, BasicTypeEnum::ArrayType(_))
                 {

@@ -3317,7 +3317,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         match Self::place_root_ident(value) {
-            Some(root) if self.owned_struct_params.contains(root) => return,
+            Some(root) if self.borrow_vars.owned_struct_params.contains(root) => return,
             Some(_) => {}
             None => return,
         }
@@ -3428,7 +3428,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         match Self::place_root_ident(value) {
-            Some(root) if self.owned_struct_params.contains(root) => return,
+            Some(root) if self.borrow_vars.owned_struct_params.contains(root) => return,
             Some(_) => {}
             None => return,
         }

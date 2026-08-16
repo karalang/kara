@@ -68,8 +68,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // caller's storage.
         let scrut_ref_ptr: Option<(PointerValue<'ctx>, StructType<'ctx>)> =
             if let ExprKind::Identifier(name) = &scrutinee.kind {
-                if self.ref_params.contains_key(name) {
-                    let pointee = *self.ref_params.get(name).unwrap();
+                if self.borrow_vars.ref_params.contains_key(name) {
+                    let pointee = *self.borrow_vars.ref_params.get(name).unwrap();
                     if let BasicTypeEnum::StructType(st) = pointee {
                         self.get_data_ptr(name).map(|p| (p, st))
                     } else {
@@ -1369,9 +1369,12 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => n.as_str(),
             _ => return false,
         };
-        self.ref_params.contains_key(name)
-            || self.for_loop_borrow_vars.contains(name)
-            || self.borrow_accessor_let_payload.contains_key(name)
+        self.borrow_vars.ref_params.contains_key(name)
+            || self.borrow_vars.for_loop_borrow_vars.contains(name)
+            || self
+                .borrow_vars
+                .borrow_accessor_let_payload
+                .contains_key(name)
     }
 
     /// True when the scrutinee is a **bare identifier naming a param already in
@@ -1448,7 +1451,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // dest is a Vec) already makes a non-struct payload (`Fu(i)`) inert.
         for n in names {
             if self.variables.contains_key(n.as_str()) {
-                self.borrowed_agg_payload_struct_vars.insert(n);
+                self.borrow_vars.borrowed_agg_payload_struct_vars.insert(n);
             }
         }
     }
@@ -1518,7 +1521,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return false;
         };
-        if !self.for_loop_owned_agg_vars.contains(name.as_str()) {
+        if !self
+            .borrow_vars
+            .for_loop_owned_agg_vars
+            .contains(name.as_str())
+        {
             return false;
         }
         self.no_arm_payload_escapes(arms)
@@ -1935,7 +1942,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return (val, false);
         };
-        if !self.for_loop_owned_agg_vars.contains(name.as_str()) {
+        if !self
+            .borrow_vars
+            .for_loop_owned_agg_vars
+            .contains(name.as_str())
+        {
             return (val, false);
         }
         // Only an ESCAPING payload needs the independent buffer; a read-only
@@ -2065,7 +2076,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return (val, false);
         };
         // The loop-element leg owns its own population.
-        if self.for_loop_owned_agg_vars.contains(name.as_str()) {
+        if self
+            .borrow_vars
+            .for_loop_owned_agg_vars
+            .contains(name.as_str())
+        {
             return (val, false);
         }
         // ESCAPING bindings only — the read-only case is the borrow path above.
@@ -2229,7 +2244,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return (val, false),
             }
         };
-        if !self.signature_ref_params.contains(root) {
+        if !self.borrow_vars.signature_ref_params.contains(root) {
             return (val, false);
         }
         if !escapes {
@@ -2329,7 +2344,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return (val, None),
             }
         };
-        if !self.signature_ref_params.contains(root) {
+        if !self.borrow_vars.signature_ref_params.contains(root) {
             return (val, None);
         }
         if !escapes {
@@ -2433,7 +2448,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return (val, None),
             }
         };
-        if !self.signature_ref_params.contains(root) {
+        if !self.borrow_vars.signature_ref_params.contains(root) {
             return (val, None);
         }
         if !escapes {
@@ -2922,7 +2937,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return (val, None),
             }
         };
-        if !self.signature_ref_params.contains(root) {
+        if !self.borrow_vars.signature_ref_params.contains(root) {
             return (val, None);
         }
         if !escapes {
@@ -3015,7 +3030,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return val,
             }
         };
-        if !self.signature_ref_params.contains(root) {
+        if !self.borrow_vars.signature_ref_params.contains(root) {
             return val;
         }
         let Some(leaf) = self.place_chain_type_name(value) else {
@@ -3156,7 +3171,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return (val, None),
             }
         };
-        if !self.signature_ref_params.contains(root) {
+        if !self.borrow_vars.signature_ref_params.contains(root) {
             return (val, None);
         }
         if !escapes {
@@ -4311,7 +4326,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // `enum_inst_type_exprs` (which keys on the get-CALL span, not the
         // identifier use). B-2026-07-09-13.
         let te = if let ExprKind::Identifier(name) = &scrutinee.kind {
-            self.borrow_accessor_let_payload.get(name)?.clone()
+            self.borrow_vars
+                .borrow_accessor_let_payload
+                .get(name)?
+                .clone()
         } else {
             if !self.scrutinee_is_borrow_call(scrutinee) {
                 return None;
@@ -6910,13 +6928,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // loads the slot explicitly (`mem_place_ptr_and_value`'s ref-param
             // arm is the model).
             ExprKind::Identifier(name) => {
-                if self.ref_params.contains_key(name.as_str()) {
+                if self.borrow_vars.ref_params.contains_key(name.as_str()) {
                     return None;
                 }
                 self.variables.get(name.as_str()).map(|s| s.ptr)
             }
             ExprKind::SelfValue => {
-                if self.ref_params.contains_key("self") {
+                if self.borrow_vars.ref_params.contains_key("self") {
                     return None;
                 }
                 self.variables.get("self").map(|s| s.ptr)
@@ -7145,7 +7163,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         match Self::place_root_ident(value) {
-            Some(root) if self.owned_struct_params.contains(root) => return,
+            Some(root) if self.borrow_vars.owned_struct_params.contains(root) => return,
             Some(_) => {}
             None => return,
         }
@@ -7305,7 +7323,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self".to_string(),
             _ => return,
         };
-        if self.owned_struct_params.contains(obj.as_str()) {
+        if self.borrow_vars.owned_struct_params.contains(obj.as_str()) {
             return;
         }
         let Some(fidx) = self

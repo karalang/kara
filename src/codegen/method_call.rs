@@ -4937,7 +4937,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 // Ref Array methods — ref_params has the inner type
-                if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(name.as_str()) {
+                if let Some(&BasicTypeEnum::ArrayType(at)) =
+                    self.borrow_vars.ref_params.get(name.as_str())
+                {
                     if method == "len" {
                         return Ok(self
                             .context
@@ -6745,8 +6747,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // String/Vec locals are likewise handled earlier (via the
         // string/var-type paths); the `== vec_ty` struct guard makes a
         // non-`{ptr,len,cap}` borrow (`ref i64`) fall through safely.
-        let borrow_local_recv =
-            matches!(&object.kind, ExprKind::Identifier(n) if self.ref_params.contains_key(n));
+        let borrow_local_recv = matches!(&object.kind, ExprKind::Identifier(n) if self.borrow_vars.ref_params.contains_key(n));
 
         // `<iter-chain>.count()` — the element-count terminal on a fused
         // iterator chain (B-2026-07-11-19). Placed BEFORE the `len`/`count`
@@ -14939,7 +14940,9 @@ impl<'ctx> super::Codegen<'ctx> {
             is_tensor = true;
         } else {
             let inner_llvm = self.llvm_type_for_type_expr(&inner_te);
-            self.ref_params.insert(synth.clone(), inner_llvm);
+            self.borrow_vars
+                .ref_params
+                .insert(synth.clone(), inner_llvm);
             if let TypeKind::Path(p) = &inner_te.kind {
                 if let Some(seg) = p.segments.first() {
                     self.var_types
@@ -14978,7 +14981,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.vec_elem_types.remove(&synth);
         self.var_types.var_elem_type_exprs.remove(&synth);
         self.var_types.string_vars.remove(&synth);
-        self.ref_params.remove(&synth);
+        self.borrow_vars.ref_params.remove(&synth);
         if is_tensor {
             self.accel.tensor_var_infos.remove(&synth);
         }
@@ -17452,7 +17455,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // A `ref`/`mut ref Mutex[T]` parameter: the alloca holds a
                 // pointer TO the aggregate, and the pointee `{ lockflag, value }`
                 // struct type is recorded in `ref_params`. Load through the ref.
-                if let Some(&BasicTypeEnum::StructType(st)) = self.ref_params.get(name) {
+                if let Some(&BasicTypeEnum::StructType(st)) = self.borrow_vars.ref_params.get(name)
+                {
                     if st.count_fields() == 2 {
                         let agg_ptr = self
                             .builder
@@ -17710,7 +17714,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // a run-vs-build divergence with no `par` involved
                 // (B-2026-07-18-30). `ref_params[name]` is the atomic's VALUE
                 // type (the peeled inner), which is the correct `elem_ty`.
-                if let Some(&inner_ty) = self.ref_params.get(name.as_str()) {
+                if let Some(&inner_ty) = self.borrow_vars.ref_params.get(name.as_str()) {
                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
                     let storage_ptr = self
                         .builder

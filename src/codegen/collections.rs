@@ -2044,7 +2044,7 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
     ) -> Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)> {
         let slot = self.variables.get(name)?;
-        let arr_ty = self.ref_params.get(name).copied()?;
+        let arr_ty = self.borrow_vars.ref_params.get(name).copied()?;
         if !matches!(arr_ty, BasicTypeEnum::ArrayType(_)) {
             return None;
         }
@@ -3532,8 +3532,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // `ref` param binding, `ref` param return), each clean before and after
         // once this gate is in place.
         let borrowed_receiver = match &object.kind {
-            ExprKind::Identifier(n) => self.ref_params.contains_key(n.as_str()),
-            ExprKind::SelfValue => self.ref_params.contains_key("self"),
+            ExprKind::Identifier(n) => self.borrow_vars.ref_params.contains_key(n.as_str()),
+            ExprKind::SelfValue => self.borrow_vars.ref_params.contains_key("self"),
             _ => false,
         };
         if borrowed_receiver {
@@ -4026,7 +4026,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // GEPing the group/len fields. A by-value/`let` SoA binding's slot
         // already IS the struct. This deref is what lets SoA cross a function
         // boundary (the callee operates on the caller's existing SoA layout).
-        let soa_struct_ptr = if self.ref_params.contains_key(name) {
+        let soa_struct_ptr = if self.borrow_vars.ref_params.contains_key(name) {
             self.builder
                 .build_load(ptr_ty, slot.ptr, "soa.ref.deref")
                 .unwrap()
@@ -4197,7 +4197,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `ref`/`mut ref` SoA param: the slot holds a POINTER to the caller's
         // SoA struct, so deref once before GEPing group/len (same as the read
         // path — this is what lets a field store cross a function boundary).
-        let soa_struct_ptr = if self.ref_params.contains_key(soa_name) {
+        let soa_struct_ptr = if self.borrow_vars.ref_params.contains_key(soa_name) {
             self.builder
                 .build_load(ptr_ty, slot.ptr, "soa.ref.deref")
                 .unwrap()
@@ -4348,7 +4348,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `ref`/`mut ref` SoA param: the slot holds a POINTER to the caller's
         // SoA struct — deref once before GEPing group/len (same boundary-crossing
         // deref as the field-store and read paths).
-        let soa_struct_ptr = if self.ref_params.contains_key(soa_name) {
+        let soa_struct_ptr = if self.borrow_vars.ref_params.contains_key(soa_name) {
             self.builder
                 .build_load(ptr_ty, slot.ptr, "soa.ref.deref")
                 .unwrap()

@@ -1473,7 +1473,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // n.next;` in the LeetCode #2 recursive variant) strands
         // the old ref and over-decrements at scope exit, freeing
         // an aliased chain mid-recursion.
-        self.var_option_shared_heap
+        self.borrow_vars
+            .var_option_shared_heap
             .insert(name.to_string(), heap_type);
         // Resolve the Some-tag from the seeded Option layout. Defaults
         // to 1 if (impossibly) the table is missing — matches the
@@ -4739,9 +4740,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // shared-enum-payload view. The first of those is also exactly what the
         // disarm sites gate on (`!owned_struct_params.contains(obj)`), so the
         // copy and the disarm skip stay defined over the same roots.
-        if self.owned_struct_params.contains(obj_name.as_str())
-            || self.for_loop_owned_agg_vars.contains(obj_name.as_str())
+        if self
+            .borrow_vars
+            .owned_struct_params
+            .contains(obj_name.as_str())
             || self
+                .borrow_vars
+                .for_loop_owned_agg_vars
+                .contains(obj_name.as_str())
+            || self
+                .borrow_vars
                 .borrowed_agg_payload_struct_vars
                 .contains(obj_name.as_str())
             || self
@@ -4873,9 +4881,16 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self".to_string(),
             _ => return false,
         };
-        if self.owned_struct_params.contains(obj_name.as_str())
-            || self.for_loop_owned_agg_vars.contains(obj_name.as_str())
+        if self
+            .borrow_vars
+            .owned_struct_params
+            .contains(obj_name.as_str())
             || self
+                .borrow_vars
+                .for_loop_owned_agg_vars
+                .contains(obj_name.as_str())
+            || self
+                .borrow_vars
                 .borrowed_agg_payload_struct_vars
                 .contains(obj_name.as_str())
             || self
@@ -5010,9 +5025,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // Roots that already receive an independent buffer elsewhere are
         // excluded, or the two copies stack and the first one leaks — the same
         // four sets the field arm dispatches on.
-        if self.owned_struct_params.contains(obj_name.as_str())
-            || self.for_loop_owned_agg_vars.contains(obj_name.as_str())
+        if self
+            .borrow_vars
+            .owned_struct_params
+            .contains(obj_name.as_str())
             || self
+                .borrow_vars
+                .for_loop_owned_agg_vars
+                .contains(obj_name.as_str())
+            || self
+                .borrow_vars
                 .borrowed_agg_payload_struct_vars
                 .contains(obj_name.as_str())
             || self
@@ -5159,8 +5181,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // without it the sink and the source container's drain freed
                 // the same buffer (the field-move-out arm of the
                 // B-2026-08-01-24 class).
-                if self.ref_params.contains_key(&recv_name)
-                    || self.for_loop_owned_agg_vars.contains(recv_name.as_str())
+                if self.borrow_vars.ref_params.contains_key(&recv_name)
+                    || self
+                        .borrow_vars
+                        .for_loop_owned_agg_vars
+                        .contains(recv_name.as_str())
                 {
                     if let Some(struct_name) = self.inferred_receiver_type(object) {
                         let field_te = self
@@ -5297,7 +5322,9 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => n.clone(),
             _ => return val,
         };
-        if !self.owned_vecstr_params.contains(&name) && !self.for_loop_borrow_vars.contains(&name) {
+        if !self.borrow_vars.owned_vecstr_params.contains(&name)
+            && !self.borrow_vars.for_loop_borrow_vars.contains(&name)
+        {
             return val;
         }
         let elem_ty = match self.var_types.vec_elem_types.get(&name) {

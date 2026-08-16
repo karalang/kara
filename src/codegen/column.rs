@@ -484,7 +484,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(ptr_ty, slot.ptr, &format!("{}.col", name))
             .unwrap()
             .into_pointer_value();
-        if self.ref_params.contains_key(name) {
+        if self.borrow_vars.ref_params.contains_key(name) {
             return Ok(self
                 .builder
                 .build_load(ptr_ty, first, &format!("{}.col.deref", name))

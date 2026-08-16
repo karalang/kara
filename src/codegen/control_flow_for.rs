@@ -50,7 +50,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     return true;
                 }
             }
-            if matches!(self.ref_params.get(n), Some(BasicTypeEnum::ArrayType(_))) {
+            if matches!(
+                self.borrow_vars.ref_params.get(n),
+                Some(BasicTypeEnum::ArrayType(_))
+            ) {
                 return true;
             }
         }
@@ -677,7 +680,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.compile_for_array_var(label, pattern, slot.ptr, at, body);
                     }
                     // Ref array
-                    if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(name.as_str())
+                    if let Some(&BasicTypeEnum::ArrayType(at)) =
+                        self.borrow_vars.ref_params.get(name.as_str())
                     {
                         let arr_ptr = self.get_data_ptr(name).unwrap();
                         return self.compile_for_array_var(label, pattern, arr_ptr, at, body);
@@ -2074,7 +2078,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: ptr_ty.into(),
             },
         );
-        let saved_slot_tag = self.entry_slot_ref_vars.insert(elem_name.clone(), elem_ty);
+        let saved_slot_tag = self
+            .borrow_vars
+            .entry_slot_ref_vars
+            .insert(elem_name.clone(), elem_ty);
 
         let cond_bb = self.context.append_basic_block(fn_val, "form.cond");
         let body_bb = self.context.append_basic_block(fn_val, "form.body");
@@ -2144,10 +2151,10 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         match saved_slot_tag {
             Some(t) => {
-                self.entry_slot_ref_vars.insert(elem_name, t);
+                self.borrow_vars.entry_slot_ref_vars.insert(elem_name, t);
             }
             None => {
-                self.entry_slot_ref_vars.remove(&elem_name);
+                self.borrow_vars.entry_slot_ref_vars.remove(&elem_name);
             }
         }
         Ok(self.context.i64_type().const_int(0, false).into())

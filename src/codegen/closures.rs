@@ -3063,7 +3063,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // body's tail-return defensive copy (`maybe_defensive_copy_param_arg`)
         // and the capture defensive-copy (which key off `owned_vecstr_params`)
         // see the CLOSURE's params during the body compile, not the outer fn's.
-        let saved_owned_vecstr_params = std::mem::take(&mut self.owned_vecstr_params);
+        let saved_owned_vecstr_params = std::mem::take(&mut self.borrow_vars.owned_vecstr_params);
         // Isolate the borrowed-alias set (B-2026-07-18-42). A closure that
         // captures a whole heap Vec/String and RETURNS it (or otherwise
         // retaining-consumes it) must hand back an INDEPENDENT buffer, because in
@@ -3092,7 +3092,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // independent buffer while the env / source keeps its own. Taken +
         // restored so the outer fn / sibling closures don't inherit these names;
         // inserted at the capture-unpack step below.
-        let saved_for_loop_borrow_vars = std::mem::take(&mut self.for_loop_borrow_vars);
+        let saved_for_loop_borrow_vars = std::mem::take(&mut self.borrow_vars.for_loop_borrow_vars);
         // The borrow-mode registries for the closure's PARAMS (step 7b below
         // inserts a `ref T` / `mut ref T` param into both). Taken + restored
         // for the same reason as `variables` above: a param name is scoped to
@@ -3116,8 +3116,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // un-deref every captured borrow. Cloning changes nothing during the
         // body compile and drops only the param entries on the way out, which
         // is the whole defect.
-        let saved_ref_params = self.ref_params.clone();
-        let saved_signature_ref_params = self.signature_ref_params.clone();
+        let saved_ref_params = self.borrow_vars.ref_params.clone();
+        let saved_signature_ref_params = self.borrow_vars.signature_ref_params.clone();
 
         // 7. Build the closure body.
         self.current_fn = Some(closure_fn);
@@ -3216,7 +3216,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `maybe_defensive_copy_param_arg`'s own gate); a disjoint
                 // sub-field/struct capture is naturally excluded.
                 if !is_heap_env && self.var_types.vec_elem_types.contains_key(root_name) {
-                    self.for_loop_borrow_vars.insert(root_name.clone());
+                    self.borrow_vars
+                        .for_loop_borrow_vars
+                        .insert(root_name.clone());
                 }
                 // B-2026-07-18-46: a whole heap-bearing STRUCT/ENUM capture (not
                 // a Vec/String — those took the borrow-alias path above) records
@@ -3274,7 +3276,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // by the return value. Mark it borrowed so the consume sites
                 // deep-copy. (mutref captures already `continue`d above.)
                 if self.var_types.vec_elem_types.contains_key(var_name) {
-                    self.for_loop_borrow_vars.insert(var_name.clone());
+                    self.borrow_vars
+                        .for_loop_borrow_vars
+                        .insert(var_name.clone());
                 }
                 // B-2026-07-18-46: a whole heap-bearing STRUCT/ENUM capture — the
                 // aggregate sibling of the Vec/String borrow-alias above.
@@ -3366,8 +3370,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if let Some(inner_ty) = self.inner_type_of_ref(&te) {
                     if !borrows_a_handle {
-                        self.ref_params.insert(param_name.clone(), inner_ty);
-                        self.signature_ref_params.insert(param_name.clone());
+                        self.borrow_vars
+                            .ref_params
+                            .insert(param_name.clone(), inner_ty);
+                        self.borrow_vars
+                            .signature_ref_params
+                            .insert(param_name.clone());
                     }
                 }
                 match &te.kind {
@@ -3388,7 +3396,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_))
             );
             if !is_borrow_param && self.var_types.vec_elem_types.contains_key(&param_name) {
-                self.owned_vecstr_params.insert(param_name.clone());
+                self.borrow_vars
+                    .owned_vecstr_params
+                    .insert(param_name.clone());
             }
         }
 
@@ -3490,19 +3500,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // (the capture defensive-copy at env-build time keys off the OUTER fn's
         // `owned_vecstr_params` to decide whether a captured Vec/String is a
         // caller-retained param — B-2026-06-22-2).
-        self.owned_vecstr_params = saved_owned_vecstr_params;
+        self.borrow_vars.owned_vecstr_params = saved_owned_vecstr_params;
         // Restore the borrowed-alias set (B-2026-07-18-42): the captured-heap
         // borrow marks are scoped to this closure's body compile only, so the
         // outer fn / sibling closures don't inherit them. Restored BEFORE the
         // env is built below (env-build reads `owned_vecstr_params`, not this
         // set, but keep the restore grouped with the other body-scoped state).
-        self.for_loop_borrow_vars = saved_for_loop_borrow_vars;
+        self.borrow_vars.for_loop_borrow_vars = saved_for_loop_borrow_vars;
         // Drop this closure's param borrow marks (B-2026-08-08-30). Grouped
         // with the other body-scoped restores above; see the save site for why
         // leaving them behind miscompiles the outer fn's next same-named
         // binding rather than merely panicking.
-        self.ref_params = saved_ref_params;
-        self.signature_ref_params = saved_signature_ref_params;
+        self.borrow_vars.ref_params = saved_ref_params;
+        self.borrow_vars.signature_ref_params = saved_signature_ref_params;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -3598,7 +3608,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // copy — matches the env-drop's outer-only free; the heap-capture
                 // gate keeps nested `Vec[heap]` elements out, so no element aliasing.
                 if is_heap_env
-                    && self.owned_vecstr_params.contains(var_name)
+                    && self.borrow_vars.owned_vecstr_params.contains(var_name)
                     && matches!(slot.ty, BasicTypeEnum::StructType(held) if held == self.vec_struct_type())
                 {
                     if let Some(elem_ty) = self.var_types.vec_elem_types.get(var_name).copied() {
@@ -3921,7 +3931,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// holds a plain pointer — a `shared` handle — where taking the slot's
     /// address would produce a pointer-to-pointer.
     fn ident_arg_needs_address(&self, name: &str) -> bool {
-        if self.ref_params.contains_key(name)
+        if self.borrow_vars.ref_params.contains_key(name)
             || self.drop_rc.rc_fallback_heap_types.contains_key(name)
         {
             return true;
@@ -4118,7 +4128,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // a tail of `|_| outer` declares `T` rather than `ptr`.
                 // B-2026-08-08-30, capture leg — `param_types` above covers the
                 // closure's OWN params, this covers everything it closes over.
-                if let Some(&inner) = self.ref_params.get(name.as_str()) {
+                if let Some(&inner) = self.borrow_vars.ref_params.get(name.as_str()) {
                     return inner;
                 }
                 if let Some(slot) = self.variables.get(name.as_str()) {
@@ -4507,7 +4517,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // projection chain that can't be resolved through
             // `struct_field_names`.
             let force_whole_root = self.is_rc_fallback_binding(&root)
-                || self.ref_params.contains_key(root.as_str())
+                || self.borrow_vars.ref_params.contains_key(root.as_str())
                 || paths.iter().any(|p| {
                     !p.projection.is_empty()
                         && self

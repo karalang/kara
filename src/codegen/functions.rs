@@ -1295,17 +1295,17 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.inline_result_payload_vars.clear();
         self.payload_vars.inline_option_map_payload_vars.clear();
         self.payload_vars.inline_option_agg_payload_vars.clear();
-        self.var_option_shared_heap.clear();
-        self.ref_option_shared_heap.clear();
-        self.ref_params.clear();
-        self.signature_ref_params.clear();
-        self.entry_slot_ref_vars.clear();
+        self.borrow_vars.var_option_shared_heap.clear();
+        self.borrow_vars.ref_option_shared_heap.clear();
+        self.borrow_vars.ref_params.clear();
+        self.borrow_vars.signature_ref_params.clear();
+        self.borrow_vars.entry_slot_ref_vars.clear();
         // Head-index deque slots are per-function (B-2026-07-30-5). Cleared
         // here for the same name-collision reason as `variables`: the table is
         // keyed by bare binding name, so a `queue` in one function must not
         // hand its head alloca to a `queue` in the next.
         self.mapset.deque_head_slots.clear();
-        self.owned_vecstr_params.clear();
+        self.borrow_vars.owned_vecstr_params.clear();
         // Record every (simple-binding) parameter name for the auto-par
         // reduction cost gate's param-bounded-helper check (B-2026-07-23-25).
         // Destructured tuple/struct params are rare and not the target shape.
@@ -1315,12 +1315,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.fn_ctx.current_fn_param_names.insert(n.clone());
             }
         }
-        self.for_loop_borrow_vars.clear();
-        self.borrow_accessor_let_payload.clear();
-        self.for_loop_owned_agg_vars.clear();
-        self.borrowed_agg_payload_struct_vars.clear();
+        self.borrow_vars.for_loop_borrow_vars.clear();
+        self.borrow_vars.borrow_accessor_let_payload.clear();
+        self.borrow_vars.for_loop_owned_agg_vars.clear();
+        self.borrow_vars.borrowed_agg_payload_struct_vars.clear();
         self.accel.gpu_buffer_vars.clear();
-        self.owned_struct_params.clear();
+        self.borrow_vars.owned_struct_params.clear();
         self.payload_vars.param_view_locals.clear();
         self.payload_vars.shared_enum_payload_view_vars.clear();
         self.drop_rc.rc_fallback_heap_types.clear();
@@ -1713,8 +1713,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(alloca, param_val).unwrap();
                 // Track ref params: alloca holds a pointer-to-data.
                 if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
-                    self.ref_params.insert(param_name.clone(), inner_ty);
-                    self.signature_ref_params.insert(param_name.clone());
+                    self.borrow_vars
+                        .ref_params
+                        .insert(param_name.clone(), inner_ty);
+                    self.borrow_vars
+                        .signature_ref_params
+                        .insert(param_name.clone());
                 }
                 // `mut ref Option[shared T]` param: record the inner shared heap
                 // layout so an in-callee reassignment (`prev = Some(n)`) routes
@@ -1725,7 +1729,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // can't be a store target (rejected upstream), so skip it.
                 if let TypeKind::MutRef(inner) = &param.ty.kind {
                     if let Some((_, info)) = self.option_inner_shared_type_for_type_expr(inner) {
-                        self.ref_option_shared_heap
+                        self.borrow_vars
+                            .ref_option_shared_heap
                             .insert(param_name.clone(), info.heap_type);
                     }
                 }
@@ -1818,7 +1823,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
                 ) && self.var_types.vec_elem_types.contains_key(&param_name)
                 {
-                    self.owned_vecstr_params.insert(param_name.clone());
+                    self.borrow_vars
+                        .owned_vecstr_params
+                        .insert(param_name.clone());
                 }
                 // Track the declared type name so field/variant lookups work on this param.
                 // Both owned (`Type`) and ref-wrapped (`ref Type` / `mut ref Type`)
@@ -1867,7 +1874,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     })
                                 })
                         {
-                            self.owned_struct_params.insert(param_name.clone());
+                            self.borrow_vars
+                                .owned_struct_params
+                                .insert(param_name.clone());
                         }
                         // rc_inc for shared-type parameters (caller keeps its
                         // reference). Only fires for owned Path params — a
@@ -1922,7 +1931,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // binding both free the buffer. Retire the band-aid
                             // entry so field move-out routes through the standard
                             // local source-cap suppression.
-                            self.owned_struct_params.remove(&param_name);
+                            self.borrow_vars.owned_struct_params.remove(&param_name);
                         }
                         // B-2026-08-11-30 — OWN BY TRANSFER for the two BUILT-IN
                         // enums. `make_aggregate_param_callee_owned_inst` bails on
@@ -2127,7 +2136,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // exactly the erasure that causes the boxing — so resolve it
                 // through the active monomorph subst first, or the predicate
                 // measures the erased one-word `T` and never reports a box.
-                if !self.ref_params.contains_key(&param_name)
+                if !self.borrow_vars.ref_params.contains_key(&param_name)
                     && self
                         .result_shared_nonescaping_param_names
                         .contains(&param_name)
@@ -2327,7 +2336,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // ownership checker. The param value is boxed in {i64 rc, T} on the heap
                 // so multiple "consumers" each get a copy of T and the heap object is freed
                 // at scope exit when the refcount reaches zero.
-                let is_ref_param = self.ref_params.contains_key(&param_name);
+                let is_ref_param = self.borrow_vars.ref_params.contains_key(&param_name);
                 let is_vec_param = self.var_types.vec_elem_types.contains_key(&param_name);
                 let is_shared_param = if let TypeKind::Path(path) = &param.ty.kind {
                     path.segments

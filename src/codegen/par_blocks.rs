@@ -1949,7 +1949,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     modes.iter().any(|(n, m)| {
                         n == var_name && matches!(m, crate::ownership::ParCaptureMode::SharedRc)
                     })
-                }) && !self.ref_params.contains_key(var_name);
+                }) && !self.borrow_vars.ref_params.contains_key(var_name);
                 if is_shared_rc {
                     if let Some(type_name) = saved_var_types.get(var_name) {
                         if let Some(heap_type) = self

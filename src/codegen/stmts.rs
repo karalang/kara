@@ -646,7 +646,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.fn_ctx.tail_ret_inner = None;
                 Ok(v)
             }
-            ExprKind::Identifier(n) if self.var_option_shared_heap.contains_key(n.as_str()) => {
+            ExprKind::Identifier(n)
+                if self
+                    .borrow_vars
+                    .var_option_shared_heap
+                    .contains_key(n.as_str()) =>
+            {
                 let v = self.compile_expr(expr)?;
                 self.share_option_shared_ref_for_arg(expr);
                 Ok(v)
@@ -2577,15 +2582,15 @@ impl<'ctx> super::Codegen<'ctx> {
             &value.kind,
             ExprKind::FieldAccess { object, .. }
                 if matches!(&object.kind, ExprKind::Identifier(p)
-                    if self.owned_struct_params.contains(p.as_str())
-                        || self.for_loop_owned_agg_vars.contains(p.as_str())
+                    if self.borrow_vars.owned_struct_params.contains(p.as_str())
+                        || self.borrow_vars.for_loop_owned_agg_vars.contains(p.as_str())
                         // B-2026-07-17-20: a Vec field copied out of a match-bound
                         // struct payload that aliases a borrowed / container-owned
                         // enum element (`match it { Fu(f) => { let ps = f.params } }`
                         // over `items: ref Vec[It]`). The container frees the field
                         // buffer; the copy must be independent, like the for-loop
                         // struct-element sibling above.
-                        || self.borrowed_agg_payload_struct_vars.contains(p.as_str()))
+                        || self.borrow_vars.borrowed_agg_payload_struct_vars.contains(p.as_str()))
         );
         // B-2026-07-09-12 clone-on-extract (field-access-move form) — the source is
         // a Vec field of a shared-enum-payload VIEW (`let a = c.args`). Same hazard
@@ -2643,7 +2648,12 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
     ) {
         match &value.kind {
-            ExprKind::Identifier(src) if self.for_loop_owned_agg_vars.contains(src.as_str()) => {
+            ExprKind::Identifier(src)
+                if self
+                    .borrow_vars
+                    .for_loop_owned_agg_vars
+                    .contains(src.as_str()) =>
+            {
                 // B-2026-07-18-2: rc-INC a direct bare-`shared` field during the
                 // whole-move copy (the container drain rc-DECs its element's
                 // handle; the new owner's drop decs the inc'd copy — balanced).
@@ -2679,9 +2689,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // shape is a bare Identifier the arg-lane helper does
                     // not touch.
                     let from_elem = match &field_init.value.kind {
-                        ExprKind::Identifier(a) => {
-                            self.for_loop_owned_agg_vars.contains(a.as_str())
-                        }
+                        ExprKind::Identifier(a) => self
+                            .borrow_vars
+                            .for_loop_owned_agg_vars
+                            .contains(a.as_str()),
                         _ => false,
                     };
                     if !from_elem {
@@ -3366,7 +3377,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ty: ptr_ty.into(),
                             },
                         );
-                        self.entry_slot_ref_vars.insert(var_name.clone(), val_ty);
+                        self.borrow_vars
+                            .entry_slot_ref_vars
+                            .insert(var_name.clone(), val_ty);
                         return Ok(());
                     }
                     if let Some(inner_te) = self.ref_return_inner_for_call(value) {
@@ -3406,7 +3419,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             return Ok(());
                         }
                         let inner_llvm = self.llvm_type_for_type_expr(&inner_te);
-                        self.ref_params.insert(var_name.clone(), inner_llvm);
+                        self.borrow_vars
+                            .ref_params
+                            .insert(var_name.clone(), inner_llvm);
                         // Make use-site dispatch (field access, method calls,
                         // print formatting) see the borrowed value's type.
                         if let TypeKind::Path(p) = &inner_te.kind {
@@ -3515,8 +3530,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // var of the same name, else this binding would be wrongly
                     // defensive-copied at consume sites (leak via the
                     // source-suppress that pairs with the copy).
-                    self.for_loop_borrow_vars.remove(var_name);
-                    self.for_loop_owned_agg_vars.remove(var_name);
+                    self.borrow_vars.for_loop_borrow_vars.remove(var_name);
+                    self.borrow_vars.for_loop_owned_agg_vars.remove(var_name);
                     // `let it = s.chars()` — codegen materializes the
                     // char-iterator as an eager `Vec[char]` snapshot (see the
                     // `chars()` intercept in `compile_method_call`), so register
@@ -4656,7 +4671,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // buffer to copy.
                 let rhs_is_owned_param = matches!(
                     &value.kind,
-                    ExprKind::Identifier(n) if self.owned_vecstr_params.contains(n.as_str())
+                    ExprKind::Identifier(n) if self.borrow_vars.owned_vecstr_params.contains(n.as_str())
                 );
                 // B-2026-07-05-2 sibling (Vec/String leg): a `Vec[String]` /
                 // `Vec[Vec[T]]` for-loop element moved WHOLE into a local
@@ -4674,7 +4689,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let rhs_is_for_loop_borrow_vecstr = matches!(
                     &value.kind,
                     ExprKind::Identifier(n)
-                        if self.for_loop_borrow_vars.contains(n.as_str())
+                        if self.borrow_vars.for_loop_borrow_vars.contains(n.as_str())
                             && self.var_types.vec_elem_types.contains_key(n.as_str())
                 );
                 let rhs_retains_own_copy = rhs_is_owned_param || rhs_is_for_loop_borrow_vecstr;
@@ -4979,8 +4994,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         //     itself already relies on via `struct_name_for_heap_type`.
                         if shared_option_info.is_none() {
                             if let ExprKind::Identifier(rhs_name) = &value.kind {
-                                if let Some(heap_type) =
-                                    self.var_option_shared_heap.get(rhs_name.as_str()).copied()
+                                if let Some(heap_type) = self
+                                    .borrow_vars
+                                    .var_option_shared_heap
+                                    .get(rhs_name.as_str())
+                                    .copied()
                                 {
                                     if let Some(info) = self
                                         .type_decls
@@ -5135,7 +5153,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the inner heap type is known.
                         if shared_option_info.is_some() {
                             if let ExprKind::Identifier(rhs_name) = &value.kind {
-                                if self.var_option_shared_heap.contains_key(rhs_name.as_str()) {
+                                if self
+                                    .borrow_vars
+                                    .var_option_shared_heap
+                                    .contains_key(rhs_name.as_str())
+                                {
                                     option_alias_needs_inner_inc = true;
                                 }
                             }
@@ -6259,7 +6281,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 _ => None,
                             };
                             if let Some(obj) = obj_name {
-                                if !self.owned_struct_params.contains(obj) {
+                                if !self.borrow_vars.owned_struct_params.contains(obj) {
                                     self.suppress_struct_field_move_into_literal(value);
                                     // B-2026-08-03-8 — the bodies half of the
                                     // same move-out; see the fn's doc.
@@ -6549,7 +6571,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             // constructor/call RHS already owns a unique payload
                             // and is left untouched.
                             if let ExprKind::Identifier(src) = &value.kind {
-                                if self.for_loop_owned_agg_vars.contains(src.as_str()) {
+                                if self
+                                    .borrow_vars
+                                    .for_loop_owned_agg_vars
+                                    .contains(src.as_str())
+                                {
                                     if let Some(layout) =
                                         self.type_decls.enum_layouts.get(name.as_str()).cloned()
                                     {
@@ -6617,7 +6643,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 _ => None,
                             };
                             if let Some(obj) = obj_name {
-                                if !self.owned_struct_params.contains(obj) {
+                                if !self.borrow_vars.owned_struct_params.contains(obj) {
                                     self.suppress_struct_field_move_into_literal(value);
                                     // B-2026-08-03-8 — the bodies half of the
                                     // same move-out; see the fn's doc.
@@ -6942,7 +6968,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .get(&(value.span.offset, value.span.length))
                                 .cloned()
                             {
-                                self.borrow_accessor_let_payload
+                                self.borrow_vars
+                                    .borrow_accessor_let_payload
                                     .insert(var_name.clone(), te);
                             }
                         }
@@ -7481,7 +7508,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .var_type_names
                                 .get(source_name)
                                 .is_some_and(|t| matches!(t.as_str(), "Map" | "Set"))
-                                && !self.ref_params.contains_key(source_name)
+                                && !self.borrow_vars.ref_params.contains_key(source_name)
                             {
                                 self.transfer_map_handle_on_rebind(source_name, var_name.as_str());
                             }
@@ -7524,7 +7551,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 _ => None,
                             };
                             if let Some(obj) = obj_name {
-                                if !self.owned_struct_params.contains(obj) {
+                                if !self.borrow_vars.owned_struct_params.contains(obj) {
                                     self.suppress_struct_field_move_into_literal(value);
                                     // B-2026-08-03-8 — the bodies half of the
                                     // same move-out; see the fn's doc.
@@ -7577,7 +7604,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let rhs_is_param_view = matches!(&value.kind,
                                 ExprKind::Identifier(src)
                                     if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
-                                        && !self.ref_params.contains_key(src.as_str()))
+                                        && !self.borrow_vars.ref_params.contains_key(src.as_str()))
                                         || self.payload_vars.param_view_locals.contains(src.as_str()));
                             if rhs_is_param_view {
                                 self.payload_vars
@@ -8207,7 +8234,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             _ => None,
                         };
                         if let Some(obj) = obj_name {
-                            if !self.owned_struct_params.contains(obj) {
+                            if !self.borrow_vars.owned_struct_params.contains(obj) {
                                 self.suppress_struct_field_move_into_literal(value);
                                 self.disarm_struct_field_move_bodies(value);
                             }
@@ -8246,7 +8273,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // below is skipped for this shape.
                 let rhs_is_owned_param = matches!(
                     &value.kind,
-                    ExprKind::Identifier(n) if self.owned_vecstr_params.contains(n.as_str())
+                    ExprKind::Identifier(n) if self.borrow_vars.owned_vecstr_params.contains(n.as_str())
                 );
                 // B-2026-07-11-32: an index-read of a NON-COPY Vec element in
                 // ASSIGNMENT-RHS position (`s = v[i]`, the in-place swap
@@ -8335,7 +8362,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // computed at this point, so freeing here is safe even for
                     // a self-referential RHS (`x = x + "c"` has already built
                     // its fresh buffer from the old one).
-                    if let Some(&inner_ty) = self.ref_params.get(name) {
+                    if let Some(&inner_ty) = self.borrow_vars.ref_params.get(name) {
                         if inner_ty.is_int_type() || inner_ty.is_float_type() {
                             if let Some(ptr) = self.get_data_ptr(name) {
                                 let cval = self.coerce_scalar_to_type(val, inner_ty);
@@ -8498,7 +8525,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // frees the new node before its inc — UAF. Same bug
                     // class as the field-store fix (25442e73); this is
                     // the variable-assign sibling.
-                    if let Some(heap_type) = self.var_option_shared_heap.get(name.as_str()).copied()
+                    if let Some(heap_type) = self
+                        .borrow_vars
+                        .var_option_shared_heap
+                        .get(name.as_str())
+                        .copied()
                     {
                         if let Some(slot) = self.variables.get(name.as_str()).copied() {
                             // Phase-B2 option cursor (`cur = x.next` /
@@ -8529,7 +8560,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // unwrapped as a pointer). `get_data_ptr` loads the borrow
                     // pointer; the shared setter then runs the same ARC
                     // retain/release store THROUGH it (B-2026-07-12-3).
-                    if let Some(heap_type) = self.ref_option_shared_heap.get(name.as_str()).copied()
+                    if let Some(heap_type) = self
+                        .borrow_vars
+                        .ref_option_shared_heap
+                        .get(name.as_str())
+                        .copied()
                     {
                         if let Some(dest_ptr) = self.get_data_ptr(name) {
                             self.emit_option_shared_arc_store(
@@ -9184,7 +9219,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let rhs_is_param_view = matches!(&value.kind,
                         ExprKind::Identifier(src)
                             if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
-                                && !self.ref_params.contains_key(src.as_str()))
+                                && !self.borrow_vars.ref_params.contains_key(src.as_str()))
                                 || self.payload_vars.param_view_locals.contains(src.as_str()));
                     if rhs_is_param_view && (lhs_is_tracked_struct || lhs_is_tracked_value_enum) {
                         self.suppress_user_drop_for_var(name);
@@ -9332,7 +9367,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         let rhs_is_param_view = matches!(&value.kind,
                             ExprKind::Identifier(src)
                                 if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
-                                    && !self.ref_params.contains_key(src.as_str()))
+                                    && !self.borrow_vars.ref_params.contains_key(src.as_str()))
                                     || self.payload_vars.param_view_locals.contains(src.as_str()));
                         if rhs_is_param_view {
                             let base = base.clone();
@@ -9517,7 +9552,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(container) = &object.kind {
                         if let Some(soa) = self.active_soa_layout(container) {
                             if let ExprKind::Identifier(src) = &value.kind {
-                                if !self.ref_params.contains_key(src) {
+                                if !self.borrow_vars.ref_params.contains_key(src) {
                                     if let Some(src_slot) = self.variables.get(src).copied() {
                                         self.zero_struct_move_caps(src_slot.ptr, &soa.struct_name);
                                     }
@@ -9562,7 +9597,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // after the SoA arm above is idempotent for a struct both
                     // reach.
                     if let ExprKind::Identifier(src) = &value.kind {
-                        if !self.ref_params.contains_key(src) {
+                        if !self.borrow_vars.ref_params.contains_key(src) {
                             let elem_struct =
                                 self.vec_index_elem_type_expr(object).and_then(|te| {
                                     let TypeKind::Path(p) = &te.kind else {
@@ -9787,7 +9822,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the borrow pointer; store the binop result THROUGH it
                     // (`get_data_ptr`) rather than into the alloca, so `x += 1`
                     // on a `mut ref i64` updates the caller's value.
-                    if let Some(&inner_ty) = self.ref_params.get(name) {
+                    if let Some(&inner_ty) = self.borrow_vars.ref_params.get(name) {
                         if inner_ty.is_int_type() || inner_ty.is_float_type() {
                             if let Some(ptr) = self.get_data_ptr(name) {
                                 let cval = self.coerce_scalar_to_type(result, inner_ty);
@@ -10374,7 +10409,7 @@ impl<'ctx> super::Codegen<'ctx> {
             && callee_owned_src.is_none()
             && matches!(&value.kind, ExprKind::Identifier(root)
                 if self.payload_vars.shared_enum_payload_view_vars.contains_key(root.as_str())
-                    || self.for_loop_owned_agg_vars.contains(root.as_str()));
+                    || self.borrow_vars.for_loop_owned_agg_vars.contains(root.as_str()));
 
         for (idx, fname) in field_names.iter().enumerate() {
             let Some(field_te) = field_tes.get(idx).cloned() else {
@@ -10548,7 +10583,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let source_owned = fresh
                         || matches!(&value.kind, ExprKind::Identifier(n)
-                            if !self.ref_params.contains_key(n.as_str()));
+                            if !self.borrow_vars.ref_params.contains_key(n.as_str()));
                     if source_owned {
                         if let Some(slot) = self.variables.get(&name).copied() {
                             // B-2026-08-05-7 (leak B): if this field's payload is
@@ -10824,7 +10859,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// whose deep-copy owns the buffer) or an unresolvable source.
     fn finish_place_source_tuple_destructure(&mut self, pats: &[Pattern], value: &Expr) {
         match Self::place_root_ident(value) {
-            Some(root) if self.owned_struct_params.contains(root) => return,
+            Some(root) if self.borrow_vars.owned_struct_params.contains(root) => return,
             Some(_) => {}
             None => return,
         }

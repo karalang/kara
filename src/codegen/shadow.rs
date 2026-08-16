@@ -101,9 +101,9 @@ impl<'ctx> super::Codegen<'ctx> {
             len_alias: self.bce.len_alias.remove(name),
             vec_elem_types: self.var_types.vec_elem_types.remove(name),
             slice_elem_types: self.var_types.slice_elem_types.remove(name),
-            ref_params: self.ref_params.remove(name),
-            signature_ref_params: self.signature_ref_params.remove(name),
-            var_option_shared_heap: self.var_option_shared_heap.remove(name),
+            ref_params: self.borrow_vars.ref_params.remove(name),
+            signature_ref_params: self.borrow_vars.signature_ref_params.remove(name),
+            var_option_shared_heap: self.borrow_vars.var_option_shared_heap.remove(name),
             tensor_var_infos: self.accel.tensor_var_infos.remove(name),
             column_var_infos: self.accel.column_var_infos.remove(name),
             enum_inst_var_types: self.type_decls.enum_inst_var_types.remove(name),
@@ -171,13 +171,15 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_types.slice_elem_types.insert(key.clone(), v);
         }
         if let Some(v) = snap.ref_params {
-            self.ref_params.insert(key.clone(), v);
+            self.borrow_vars.ref_params.insert(key.clone(), v);
         }
         if snap.signature_ref_params {
-            self.signature_ref_params.insert(key.clone());
+            self.borrow_vars.signature_ref_params.insert(key.clone());
         }
         if let Some(v) = snap.var_option_shared_heap {
-            self.var_option_shared_heap.insert(key.clone(), v);
+            self.borrow_vars
+                .var_option_shared_heap
+                .insert(key.clone(), v);
         }
         if let Some(v) = snap.tensor_var_infos {
             self.accel.tensor_var_infos.insert(key.clone(), v);
@@ -335,8 +337,8 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn snapshot_var_env(&self) -> VarEnvSnapshot<'ctx> {
         VarEnvSnapshot {
             variables: self.variables.clone(),
-            owned_vecstr_params: self.owned_vecstr_params.clone(),
-            for_loop_borrow_vars: self.for_loop_borrow_vars.clone(),
+            owned_vecstr_params: self.borrow_vars.owned_vecstr_params.clone(),
+            for_loop_borrow_vars: self.borrow_vars.for_loop_borrow_vars.clone(),
             var_type_names: self.var_types.var_type_names.clone(),
             tuple_var_elem_type_names: self.var_types.tuple_var_elem_type_names.clone(),
             tuple_var_elem_type_exprs: self.var_types.tuple_var_elem_type_exprs.clone(),
@@ -345,9 +347,9 @@ impl<'ctx> super::Codegen<'ctx> {
             len_alias: self.bce.len_alias.clone(),
             vec_elem_types: self.var_types.vec_elem_types.clone(),
             slice_elem_types: self.var_types.slice_elem_types.clone(),
-            ref_params: self.ref_params.clone(),
-            signature_ref_params: self.signature_ref_params.clone(),
-            var_option_shared_heap: self.var_option_shared_heap.clone(),
+            ref_params: self.borrow_vars.ref_params.clone(),
+            signature_ref_params: self.borrow_vars.signature_ref_params.clone(),
+            var_option_shared_heap: self.borrow_vars.var_option_shared_heap.clone(),
             tensor_var_infos: self.accel.tensor_var_infos.clone(),
             column_var_infos: self.accel.column_var_infos.clone(),
             enum_inst_var_types: self.type_decls.enum_inst_var_types.clone(),
@@ -386,8 +388,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`VarEnvSnapshot`] for the cleanup-safety and ordering contract.
     pub(super) fn restore_var_env(&mut self, snap: VarEnvSnapshot<'ctx>) {
         self.variables = snap.variables;
-        self.owned_vecstr_params = snap.owned_vecstr_params;
-        self.for_loop_borrow_vars = snap.for_loop_borrow_vars;
+        self.borrow_vars.owned_vecstr_params = snap.owned_vecstr_params;
+        self.borrow_vars.for_loop_borrow_vars = snap.for_loop_borrow_vars;
         self.var_types.var_type_names = snap.var_type_names;
         self.var_types.tuple_var_elem_type_names = snap.tuple_var_elem_type_names;
         self.var_types.tuple_var_elem_type_exprs = snap.tuple_var_elem_type_exprs;
@@ -396,9 +398,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.bce.len_alias = snap.len_alias;
         self.var_types.vec_elem_types = snap.vec_elem_types;
         self.var_types.slice_elem_types = snap.slice_elem_types;
-        self.ref_params = snap.ref_params;
-        self.signature_ref_params = snap.signature_ref_params;
-        self.var_option_shared_heap = snap.var_option_shared_heap;
+        self.borrow_vars.ref_params = snap.ref_params;
+        self.borrow_vars.signature_ref_params = snap.signature_ref_params;
+        self.borrow_vars.var_option_shared_heap = snap.var_option_shared_heap;
         self.accel.tensor_var_infos = snap.tensor_var_infos;
         self.accel.column_var_infos = snap.column_var_infos;
         self.type_decls.enum_inst_var_types = snap.enum_inst_var_types;

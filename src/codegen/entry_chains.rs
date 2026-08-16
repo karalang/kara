@@ -568,7 +568,7 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             _ => return None,
         };
-        if self.entry_slot_ref_vars.contains_key(name) {
+        if self.borrow_vars.entry_slot_ref_vars.contains_key(name) {
             Some(name.clone())
         } else {
             None
@@ -583,6 +583,7 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
     ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
         let val_ty = *self
+            .borrow_vars
             .entry_slot_ref_vars
             .get(name)
             .ok_or_else(|| format!("entry slot ref '{}' not tagged", name))?;

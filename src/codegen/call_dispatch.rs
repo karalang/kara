@@ -3730,7 +3730,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::Identifier(name) = &expr.kind {
             if let Some(slot) = self.variables.get(name.as_str()) {
                 let (slot_ptr, slot_ty) = (slot.ptr, slot.ty);
-                if let Some(&inner_ty) = self.ref_params.get(name.as_str()) {
+                if let Some(&inner_ty) = self.borrow_vars.ref_params.get(name.as_str()) {
                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
                     let place = self
                         .builder
@@ -3915,7 +3915,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return self.field_chain_place_ptr(expr),
         };
         let slot = self.variables.get(name)?.ptr;
-        if self.ref_params.contains_key(name) {
+        if self.borrow_vars.ref_params.contains_key(name) {
             let ptr_ty = self.context.ptr_type(AddressSpace::default());
             return self
                 .builder
@@ -6072,7 +6072,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(s) => s,
             None => return,
         };
-        if self.ref_params.contains_key(name) {
+        if self.borrow_vars.ref_params.contains_key(name) {
             return;
         }
         let slot = match self.variables.get(name) {
@@ -7322,7 +7322,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `karac_string_clone` and freed in `visit`). Invisible whenever the
             // consume happens to be the param's LAST use — which is why this
             // survived so long.
-            if self.owned_vecstr_params.contains(var_name) {
+            if self.borrow_vars.owned_vecstr_params.contains(var_name) {
                 return;
             }
             let holds_inline = matches!(
@@ -7379,7 +7379,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // caller's frame and owns nothing.
         if let Some(tn) = self.var_types.var_type_names.get(var_name) {
             if matches!(tn.as_str(), "Map" | "Set")
-                && !self.ref_params.contains_key(var_name)
+                && !self.borrow_vars.ref_params.contains_key(var_name)
                 && slot.ty.is_pointer_type()
             {
                 let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
@@ -7911,6 +7911,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn expr_is_ref_heap_borrow(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Identifier(n) => self
+                .borrow_vars
                 .ref_params
                 .get(n)
                 .is_some_and(|inner| *inner == self.vec_struct_type().into()),
@@ -7993,7 +7994,12 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => n.as_str(),
             _ => return,
         };
-        let heap_type = match self.var_option_shared_heap.get(var_name).copied() {
+        let heap_type = match self
+            .borrow_vars
+            .var_option_shared_heap
+            .get(var_name)
+            .copied()
+        {
             Some(t) => t,
             None => return,
         };

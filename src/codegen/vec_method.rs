@@ -48,7 +48,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(src) = &arg.kind else {
             return;
         };
-        if !self.for_loop_owned_agg_vars.contains(src.as_str()) {
+        if !self
+            .borrow_vars
+            .for_loop_owned_agg_vars
+            .contains(src.as_str())
+        {
             return;
         }
         let Some(type_name) = self.var_types.var_type_names.get(src.as_str()).cloned() else {
@@ -78,7 +82,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (B-2026-08-01-29).
     pub(super) fn arg_is_for_loop_struct_elem(&self, arg: &Expr) -> bool {
         matches!(&arg.kind, ExprKind::Identifier(src)
-            if self.for_loop_owned_agg_vars.contains(src.as_str())
+            if self.borrow_vars.for_loop_owned_agg_vars.contains(src.as_str())
                 && self
                     .var_types
                         .var_type_names

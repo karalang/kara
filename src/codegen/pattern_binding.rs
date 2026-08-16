@@ -1214,7 +1214,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             ty: ptr_ty.into(),
                         },
                     );
-                    self.ref_params.insert(name.clone(), inner_ty);
+                    self.borrow_vars.ref_params.insert(name.clone(), inner_ty);
                 }
                 Ok(())
             }
@@ -1690,7 +1690,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: ptr_ty.into(),
             },
         );
-        self.ref_params.insert(name.to_string(), inner_ty);
+        self.borrow_vars
+            .ref_params
+            .insert(name.to_string(), inner_ty);
     }
 
     /// Slice 3b pointer-source twin of `bind_pattern_values`. Walks the

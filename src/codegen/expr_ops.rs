@@ -203,7 +203,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // forwarded — `get_data_ptr` returns the held caller
                 // pointer for a ref param (and the local alloca for an
                 // owned binding, which would dangle: excluded here).
-                if self.ref_params.contains_key(name) {
+                if self.borrow_vars.ref_params.contains_key(name) {
                     self.get_data_ptr(name)
                 } else {
                     None
@@ -212,7 +212,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `ref self` returned directly (`fn this(ref self) -> ref Self`):
             // forward the receiver borrow, same as a ref parameter.
             ExprKind::SelfValue => {
-                if self.ref_params.contains_key("self") {
+                if self.borrow_vars.ref_params.contains_key("self") {
                     self.get_data_ptr("self")
                 } else {
                     None
@@ -226,7 +226,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     ExprKind::SelfValue => Some("self"),
                     _ => None,
                 }?;
-                if let Some(&BasicTypeEnum::StructType(struct_ty)) = self.ref_params.get(base) {
+                if let Some(&BasicTypeEnum::StructType(struct_ty)) =
+                    self.borrow_vars.ref_params.get(base)
+                {
                     let idx = self.field_index_for(object, field)?;
                     let base_ptr = self.get_data_ptr(base)?;
                     return self
@@ -1331,7 +1333,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // anchor the through-ptr alignment when SSE/ARM hosts care; we
         // suppress the warning here without using it directly.
         let _ = storage_ty;
-        let storage_ptr = if self.ref_params.contains_key(&var_name) {
+        let storage_ptr = if self.borrow_vars.ref_params.contains_key(&var_name) {
             let ptr_ty = self.context.ptr_type(AddressSpace::default());
             self.builder
                 .build_load(ptr_ty, slot.ptr, &format!("{}.ref.ptr", var_name))
@@ -2239,7 +2241,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // bug fixed in this slice. `get_data_ptr` returns the alloca
             // for owned bindings and the dereferenced pointer for ref
             // params, so we use it uniformly when GEP'ing into a struct.
-            if let Some(&BasicTypeEnum::StructType(struct_ty)) = self.ref_params.get(var_name) {
+            if let Some(&BasicTypeEnum::StructType(struct_ty)) =
+                self.borrow_vars.ref_params.get(var_name)
+            {
                 if let Some(idx) = self.field_index_for(object, field) {
                     if let Some(ptr) = self.get_data_ptr(var_name) {
                         // B-2026-07-22-8: drop the OLD heap-owning field value
@@ -2797,7 +2801,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // array-slot binding has a different representation.
             ExprKind::Identifier(v) => {
                 if !self.var_types.vec_elem_types.contains_key(v.as_str())
-                    || self.ref_params.contains_key(v.as_str())
+                    || self.borrow_vars.ref_params.contains_key(v.as_str())
                     || self
                         .variables
                         .get(v.as_str())
@@ -8186,7 +8190,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return true;
         }
         matches!(
-            self.ref_params.get(var.as_str()),
+            self.borrow_vars.ref_params.get(var.as_str()),
             Some(BasicTypeEnum::ArrayType(_))
         )
     }
@@ -8273,7 +8277,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             // Ref parameter: pointer-to-data is in ref_params.
-            if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(var_name.as_str()) {
+            if let Some(&BasicTypeEnum::ArrayType(at)) =
+                self.borrow_vars.ref_params.get(var_name.as_str())
+            {
                 let data = self.get_data_ptr(var_name).unwrap();
                 let len = i64_t.const_int(at.len() as u64, false);
                 return Ok(Some(self.build_slice_header(slice_ty, data, len)));
@@ -8738,9 +8744,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         name
                     ));
                 }
-            } else if self.ref_params.contains_key(name.as_str()) {
+            } else if self.borrow_vars.ref_params.contains_key(name.as_str()) {
                 // Ref-parameter path: pointer to inner data.
-                let inner = *self.ref_params.get(name.as_str()).unwrap();
+                let inner = *self.borrow_vars.ref_params.get(name.as_str()).unwrap();
                 if let BasicTypeEnum::ArrayType(at) = inner {
                     let data = self.get_data_ptr(name).unwrap();
                     (data, i64_t.const_int(at.len() as u64, false))
@@ -8802,7 +8808,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let source_is_array = if let ExprKind::Identifier(name) = &object.kind {
             if let Some(slot) = self.variables.get(name.as_str()) {
                 matches!(slot.ty, BasicTypeEnum::ArrayType(_))
-            } else if let Some(&inner) = self.ref_params.get(name.as_str()) {
+            } else if let Some(&inner) = self.borrow_vars.ref_params.get(name.as_str()) {
                 matches!(inner, BasicTypeEnum::ArrayType(_))
             } else {
                 false
@@ -8816,7 +8822,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let arr_ty = if let ExprKind::Identifier(name) = &object.kind {
                 if let Some(slot) = self.variables.get(name.as_str()).copied() {
                     slot.ty
-                } else if let Some(&inner) = self.ref_params.get(name.as_str()) {
+                } else if let Some(&inner) = self.borrow_vars.ref_params.get(name.as_str()) {
                     inner
                 } else {
                     return Err("range-slice: lost array type".into());

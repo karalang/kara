@@ -470,7 +470,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `{ptr, len, cap}` triple). Bug from the helper-fn
                 // Json kata gap surfaced 2026-05-22.
                 let is_shared = self.type_decls.shared_types.contains_key(&type_name);
-                let is_ref_param = self.ref_params.contains_key(outer_name.as_str());
+                let is_ref_param = self
+                    .borrow_vars
+                    .ref_params
+                    .contains_key(outer_name.as_str());
                 let recv_ptr = if is_shared {
                     // Shared receiver: the heap pointer is whatever
                     // `load_variable` yields — a single load for an owned

@@ -1123,7 +1123,7 @@ impl<'ctx> super::Codegen<'ctx> {
             set_elem_type_names: std::mem::take(&mut self.mapset.set_elem_type_names),
             set_elem_type_exprs: std::mem::take(&mut self.mapset.set_elem_type_exprs),
             atomic_var_inner_is_bool: std::mem::take(&mut self.atomic_var_inner_is_bool),
-            owned_vecstr_params: std::mem::take(&mut self.owned_vecstr_params),
+            owned_vecstr_params: std::mem::take(&mut self.borrow_vars.owned_vecstr_params),
             closure_fn_types: std::mem::take(&mut self.closure_state.closure_fn_types),
         }
     }
@@ -1147,7 +1147,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.set_elem_type_names = saved.set_elem_type_names;
         self.mapset.set_elem_type_exprs = saved.set_elem_type_exprs;
         self.atomic_var_inner_is_bool = saved.atomic_var_inner_is_bool;
-        self.owned_vecstr_params = saved.owned_vecstr_params;
+        self.borrow_vars.owned_vecstr_params = saved.owned_vecstr_params;
         self.closure_state.closure_fn_types = saved.closure_fn_types;
     }
 
@@ -1886,8 +1886,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // param whose binding-site layout is SoA). Swap it out for the mono
             // body and restore below, like `variables` — see the matching note
             // in `ensure_layout_mono_generated`.
-            let saved_ref_params = std::mem::take(&mut self.ref_params);
-            let saved_signature_ref_params = std::mem::take(&mut self.signature_ref_params);
+            let saved_ref_params = std::mem::take(&mut self.borrow_vars.ref_params);
+            let saved_signature_ref_params =
+                std::mem::take(&mut self.borrow_vars.signature_ref_params);
             // Slice 5: per-binding layout carrier — the mono body seeds its own
             // locals at their `let` sites; swap out the caller's map and restore
             // below, parallel to `variables` / `ref_params`.
@@ -1895,7 +1896,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // Same isolation for the entry-slot-ref locals (the two-step
             // `let r = m.entry(k).or_insert(d)` binding tag): a nested mono
             // body must not see/clobber the outer function's tags.
-            let saved_entry_slot_ref_vars = std::mem::take(&mut self.entry_slot_ref_vars);
+            let saved_entry_slot_ref_vars =
+                std::mem::take(&mut self.borrow_vars.entry_slot_ref_vars);
             let saved_soa_return_locals = std::mem::take(&mut self.accel.soa_return_locals);
 
             // Declare then compile the specialization.
@@ -1919,9 +1921,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // Restore state.
             self.accel.soa_return_locals = saved_soa_return_locals;
             self.var_types.binding_layouts = saved_binding_layouts;
-            self.ref_params = saved_ref_params;
-            self.signature_ref_params = saved_signature_ref_params;
-            self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
+            self.borrow_vars.ref_params = saved_ref_params;
+            self.borrow_vars.signature_ref_params = saved_signature_ref_params;
+            self.borrow_vars.entry_slot_ref_vars = saved_entry_slot_ref_vars;
             self.mono_state.layout_subst = saved_layout_subst;
             self.mono_state.const_subst = saved_const_subst;
             self.mono_state.type_subst = saved_subst;
@@ -2507,15 +2509,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // for this mono's own params) and restore the caller's map after —
         // mirroring the `variables` save/restore above. Without this a mono's
         // ref param would mark a same-named caller binding as a borrow.
-        let saved_ref_params = std::mem::take(&mut self.ref_params);
-        let saved_signature_ref_params = std::mem::take(&mut self.signature_ref_params);
+        let saved_ref_params = std::mem::take(&mut self.borrow_vars.ref_params);
+        let saved_signature_ref_params = std::mem::take(&mut self.borrow_vars.signature_ref_params);
         // Slice 5: the mono body seeds its own locals' layouts in
         // `binding_layouts` at their `let` sites. Take the caller's carrier for
         // the duration (the body starts empty, like `variables`) and restore it
         // after, so a mono's local can't leak its SoA-ness back to a same-named
         // caller binding.
         let saved_binding_layouts = std::mem::take(&mut self.var_types.binding_layouts);
-        let saved_entry_slot_ref_vars = std::mem::take(&mut self.entry_slot_ref_vars);
+        let saved_entry_slot_ref_vars = std::mem::take(&mut self.borrow_vars.entry_slot_ref_vars);
         // Returned-local set is per-function; `compile_mono_function` repopulates
         // it from this mono's body. Save/restore so it can't leak across the
         // nested compile (mirrors `binding_layouts`).
@@ -2527,9 +2529,9 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.accel.soa_return_locals = saved_soa_return_locals;
         self.var_types.binding_layouts = saved_binding_layouts;
-        self.ref_params = saved_ref_params;
-        self.signature_ref_params = saved_signature_ref_params;
-        self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
+        self.borrow_vars.ref_params = saved_ref_params;
+        self.borrow_vars.signature_ref_params = saved_signature_ref_params;
+        self.borrow_vars.entry_slot_ref_vars = saved_entry_slot_ref_vars;
         self.return_layout = saved_return_layout;
         self.mono_state.layout_subst = saved_layout_subst;
         self.mono_state.const_subst = saved_const_subst;
@@ -2757,8 +2759,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // `ref Vec[E]` / `ref String` param's collection dispatch derefs
             // correctly inside mono bodies too.
             if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
-                self.ref_params.insert(param_name.clone(), inner_ty);
-                self.signature_ref_params.insert(param_name.clone());
+                self.borrow_vars
+                    .ref_params
+                    .insert(param_name.clone(), inner_ty);
+                self.borrow_vars
+                    .signature_ref_params
+                    .insert(param_name.clone());
             }
             // B-2026-08-05-7 — the monomorph's own copy of the owned-param box
             // drop. This is THE site that matters for the reported shape: the
@@ -2781,7 +2787,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // INLINE inside its caller's, so that field still holds the caller's
             // set and writing to it would corrupt the caller's `Result[shared]`
             // arm.
-            if !self.ref_params.contains_key(&param_name)
+            if !self.borrow_vars.ref_params.contains_key(&param_name)
                 && nonescaping_params.contains(&param_name)
             {
                 let mono_ty = self.subst_monomorph_type_params(&param.ty);
@@ -2968,7 +2974,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
                 ) && self.var_types.vec_elem_types.contains_key(&param_name)
                 {
-                    self.owned_vecstr_params.insert(param_name.clone());
+                    self.borrow_vars
+                        .owned_vecstr_params
+                        .insert(param_name.clone());
                 }
             }
             // B-2026-07-02-11: a `Fn(...)`-typed param is a closure fat

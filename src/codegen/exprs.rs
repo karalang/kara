@@ -693,7 +693,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // slot pointer (`*mut V`), so load the pointer then load V
                     // through it (the two-step entry counter's read side).
                     if let ExprKind::Identifier(name) = &operand.kind {
-                        if self.entry_slot_ref_vars.contains_key(name) {
+                        if self.borrow_vars.entry_slot_ref_vars.contains_key(name) {
                             let (slot_ptr, val_ty) = self.entry_slot_ref_ptr(name)?;
                             let v = self
                                 .builder
@@ -4204,7 +4204,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`push`/`pop`/`remove` through `mut ref`) act on the caller's struct.
         // A by-value/`let` binding's slot already IS the struct. (Same boundary-
         // crossing deref as `compile_soa_index_read`.)
-        let soa_struct_ptr = if self.ref_params.contains_key(var_name) {
+        let soa_struct_ptr = if self.borrow_vars.ref_params.contains_key(var_name) {
             self.builder
                 .build_load(ptr_ty, slot.ptr, "soa.ref.deref")
                 .unwrap()
@@ -4243,7 +4243,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // for a fully-POD element struct. The AoS-push peer of this is
                 // `suppress_source_vec_cleanup_for_arg`.
                 if let ExprKind::Identifier(src) = &args[0].value.kind {
-                    if !self.ref_params.contains_key(src) {
+                    if !self.borrow_vars.ref_params.contains_key(src) {
                         if let Some(src_slot) = self.variables.get(src).copied() {
                             self.zero_struct_move_caps(src_slot.ptr, &soa.struct_name);
                         }
