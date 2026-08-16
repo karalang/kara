@@ -150,6 +150,7 @@ for fp in files:
 | 1 | slice 13 — **named containers** (`method_mapset.rs`): `Map`/`Entry`/`SortedMap`/`SortedSet`/`Set` (type params thread through return types), plus the `Regex`, `CStr`/`CString` and HTTP named types | **landed** — 142 lines moved; 828 → 694 | 2026-08-16 |
 | 1 | **remaining residual** — the receiver-normalization preamble (`obj_ty` → `receiver_for_lookup` / `obj_ty_for_named` / `vec_elem_for_dispatch`), 14 extracted-family call sites, and ~10 small blocks of 9–27 lines each (`spawn`/`join`, refinement, slice, `to_string`, fallible-alloc). No further clean family boundary — the residual is the function's own logic. | judgement call: stop here | — |
 | 2 | cluster 1 **`RuntimeFns`** (`src/codegen/runtime_fns.rs`) | **landed** — 66 fields moved (not 67: `static_init_fn` is a *synthesized* fn, not a declare-once cache, so it stays); 338 call sites across 38 files rewritten to `self.runtime_fns.*`; `Codegen` 439 → 374 fields | 2026-08-16 |
-| 2 | clusters 2–12 | not started | — |
+| 2 | cluster 2 **`TargetAbi`** (`src/codegen/target_abi.rs`) | **landed** — 14 fields (target predicates, `#[repr(C)]` param/return adaptations, niche ABI, headerless layout); the three `current_fn_*` ABI fields correctly deferred to cluster 14 `FnCtx`; `Codegen` 374 → 361 fields | 2026-08-16 |
+| 2 | clusters 3–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
 | 2 | clusters 14–15 (`FnCtx`, `VarTables`) | deferred — decide after 13 | — |

@@ -3329,7 +3329,7 @@ impl<'ctx> super::Codegen<'ctx> {
         cf.get_name()
             .to_str()
             .ok()
-            .and_then(|name| self.fn_niche_abi.get(name))
+            .and_then(|name| self.target_abi.fn_niche_abi.get(name))
             .is_some_and(|abi| abi.ret)
     }
 

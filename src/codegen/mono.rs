@@ -3982,7 +3982,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// two distributions are disjoint (tag-on max 3971 ms < tag-off min 4331
     /// ms over 10 interleaved reps). B-2026-08-06-33 settled this; that is why
     /// this is arch-conditional and not a plain key-type gate, and deleting
-    /// `!self.target_is_aarch64` would cost x86 up to 12%.
+    /// `!self.target_abi.target_is_aarch64` would cost x86 up to 12%.
     ///
     /// kata:170 is the outlier in MAGNITUDE on BOTH architectures, and on both
     /// its INSTRUCTION COUNT points away from the winner — in opposite
@@ -4018,7 +4018,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return forced;
         }
         match key {
-            MapProbeKey::Primitive => !self.target_is_aarch64,
+            MapProbeKey::Primitive => !self.target_abi.target_is_aarch64,
             MapProbeKey::HeapString => true,
         }
     }

@@ -112,7 +112,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // lowering it would read a garbage Vec/String. Such an export is a
         // C-facing surface only.
         if let ExprKind::Identifier(n) = &callee.kind {
-            if self.boxed_export_names.contains(n) {
+            if self.target_abi.boxed_export_names.contains(n) {
                 return Err(format!(
                     "cannot call `{n}` from Kāra code: it is a `pub extern \"C\" fn` whose \
                      aggregate return (`Vec`/`String`) is auto-boxed for the C ABI (returns an \
@@ -128,7 +128,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // non-exported helper). Covers AAPCS on AArch64 (B-2026-07-09-2),
             // SysV MEMORY class on x86-64 (B-2026-07-09-2 Slice 3c), and the
             // Microsoft x64 aggregate rules on Windows (B-2026-07-09-8).
-            if self.abi_adapted_export_names.contains(n) {
+            if self.target_abi.abi_adapted_export_names.contains(n) {
                 return Err(format!(
                     "cannot call `{n}` from Kāra code: it is a `pub extern \"C\" fn` whose \
                      `#[repr(C)]` struct param/return uses the C-boundary ABI (per-target: \
@@ -4127,7 +4127,7 @@ impl<'ctx> super::Codegen<'ctx> {
         callee: &str,
         compiled_args: &mut [BasicMetadataValueEnum<'ctx>],
     ) {
-        let Some(abi) = self.fn_niche_abi.get(callee) else {
+        let Some(abi) = self.target_abi.fn_niche_abi.get(callee) else {
             return;
         };
         let positions: Vec<usize> = abi
@@ -4157,7 +4157,12 @@ impl<'ctx> super::Codegen<'ctx> {
         callee: &str,
         v: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
-        if self.fn_niche_abi.get(callee).is_some_and(|abi| abi.ret) {
+        if self
+            .target_abi
+            .fn_niche_abi
+            .get(callee)
+            .is_some_and(|abi| abi.ret)
+        {
             return self.niche_ptr_to_option_value(v.into_pointer_value(), "call.niche");
         }
         v

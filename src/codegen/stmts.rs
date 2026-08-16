@@ -2026,7 +2026,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // boundary). Size the slot for the unpacked shape — a
                     // ptr-sized slot would silently truncate the 32-byte
                     // store.
-                    if self.fn_niche_abi.get(name).is_some_and(|abi| abi.ret) {
+                    if self
+                        .target_abi
+                        .fn_niche_abi
+                        .get(name)
+                        .is_some_and(|abi| abi.ret)
+                    {
                         return Some(self.enum_layouts["Option"].llvm_type.into());
                     }
                     if let Some(fn_val) = self.module.get_function(name) {

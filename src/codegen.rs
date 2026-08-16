@@ -16,6 +16,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, StructT
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue};
 use inkwell::AddressSpace;
 use runtime_fns::RuntimeFns;
+use target_abi::TargetAbi;
 
 use crate::ast::*;
 use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency};
@@ -96,6 +97,7 @@ mod stmts;
 mod synth;
 mod synth_display;
 mod synth_drop;
+mod target_abi;
 mod task_group;
 mod tcp;
 mod tensor;
@@ -1113,6 +1115,7 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) target_abi: TargetAbi<'ctx>,
     /// Cached declarations of the C / `karac_*` runtime functions this
     /// module calls. Grouped out of `Codegen` as the first Phase-2
     /// decomposition slice — see
@@ -2498,22 +2501,6 @@ pub(super) struct Codegen<'ctx> {
     /// can't supply. The annotated shape reads `T` off the `let`'s `ty`.
     /// docs/spikes/oversized-enum-payload.md §3.
     pub(crate) fn_return_type_exprs: HashMap<String, TypeExpr>,
-    /// Niche-ABI record per function (wip-shared-struct-codegen-followups
-    /// Slice 1). A function whose signature mentions `Option[shared T]`
-    /// in return and/or parameter position is declared with a single
-    /// nullable `ptr` (null = None, non-null = Some) at those positions
-    /// instead of the conventional 4-i64 Option enum struct — closing
-    /// the field-niche/call-ABI asymmetry and skipping the sret
-    /// round-trip on every call. The function *body* still works on the
-    /// conventional 4-word shape: `compile_function` unpacks niche
-    /// params at entry, the return sites pack at `ret`, and
-    /// `compile_call` packs args / unpacks the result, so every other
-    /// codegen path (refcounting, pattern matching, RC-fallback
-    /// analysis) is shape-blind to the ABI. Keyed by LLVM symbol name;
-    /// names absent from the map (impl methods, closures, generic
-    /// monos, coroutine ramps, extern decls) keep the conventional ABI.
-    /// Eligibility is decided once in `declare_function`.
-    pub(crate) fn_niche_abi: HashMap<String, state::NicheAbi>,
     /// Per-binding inner-shared-heap layout for `Option[shared T]`
     /// variables. Populated by `track_rc_option_var` at let-binding
     /// time; read by the `Assign` arm so reassignment of a tracked
@@ -2645,14 +2632,6 @@ pub(super) struct Codegen<'ctx> {
     /// `karac_free_<name>`). Set per function in `compile_function`; read at
     /// the tail- and explicit-`return` sites to box before `ret`.
     pub(crate) current_fn_boxes_return: bool,
-    /// Names of `pub extern "C" fn`s whose aggregate return is C-ABI
-    /// auto-boxed (additive-interop Slice 4 Path B). Their LLVM signature
-    /// returns a `ptr` (the heap box), not the `{data,len,cap}` value a
-    /// Kāra caller's typecheck expects — so a call to one *from Kāra code*
-    /// would read a garbage Vec. Such a boxed export is a C-facing surface;
-    /// `compile_call` rejects an internal call with an actionable error
-    /// (extract the body into a non-exported helper and call that).
-    pub(crate) boxed_export_names: std::collections::HashSet<String>,
     /// Subset of `boxed_export_names` whose box is a Slice-2a tagged-union
     /// `#[repr(C)]` enum (`{ i64 tag, i64 w0 }`), not a `{data,len,cap}` Vec
     /// box. The distinction is load-bearing at destructor-emit time: the
@@ -3677,19 +3656,6 @@ pub(super) struct Codegen<'ctx> {
     /// by the let-site shared/option arms, both Assign arms, and the
     /// dedicated link-store fast path.
     pub(crate) elided_b2_bindings: HashMap<String, HashMap<String, state::B2Binding>>,
-    /// Phase D headerless cluster density: fn key → member type name →
-    /// link user-field index, for clusters whose analysis `headerless`
-    /// flag is set (b2 + dual type-purity gate — see
-    /// `ElidedCluster::headerless`). Within such a fn, every value of
-    /// the member type is provably a cluster member, so the heap
-    /// layout is keyed per `(fn, type)`: allocation drops the 8-byte
-    /// rc header (`emit_headerless_alloc`), and every member-field GEP
-    /// routes through `shared_gep_layout` to pick the headerless twin
-    /// struct type at field base 0 instead of `heap_type` at base one.
-    /// The link index rides along for the lazy niche-shape check in
-    /// `headerless_here` (a non-niche link would make the free-walk's
-    /// RcDec fallback reachable — structurally excluded by demoting).
-    pub(crate) headerless_fns: HashMap<String, HashMap<String, usize>>,
     /// Phase C1c caller adoption: fn key → adopted root binding →
     /// (member type, link user-field index), for clusters whose
     /// analysis `adopted` flag is set. The root is an `Option[shared
@@ -3700,27 +3666,6 @@ pub(super) struct Codegen<'ctx> {
     /// poisons that). Kept separate from `elided_cluster_roots` so the
     /// literal-cluster let-site/transfer paths never see adopted roots.
     pub(crate) adopted_cluster_roots: HashMap<String, HashMap<String, (String, usize)>>,
-    /// Phase C2b: ANALYSIS-side headerless-T candidates — member type →
-    /// (link index, touching fn keys). Reconciled into
-    /// `headerless_types` in `compile_program` once coroutine keys and
-    /// struct layouts exist (a coro toucher or a non-niche link drops
-    /// the type; every consumer keys on the reconciled set, so a drop
-    /// deactivates the whole composition coherently).
-    pub(crate) headerless_type_candidates: HashMap<String, (usize, Vec<String>)>,
-    /// Headerless reshaper fns (bare name / `Type.method`) → the `dummy`
-    /// sentinel binding name. At such a fn's scope exit codegen frees
-    /// `dummy` as a single headerless node (`emit_headerless_reshaper_dummy_free`)
-    /// — it is uniquely owned and NOT part of the returned chain
-    /// (`dummy.<link>`), so it has no other cleanup and cannot double-free
-    /// with the caller's free-walk. EXPERIMENTAL, populated only under
-    /// `KARAC_HEADERLESS_RESHAPER`. See `elision::reshaper_dummy_binding`.
-    pub(crate) headerless_reshaper_dummies: HashMap<String, String>,
-    /// Phase C2b: the FINAL program-wide headerless set. A member type
-    /// in here has no rc word anywhere — `headerless_here` answers true
-    /// in every fn, builders allocate via `emit_headerless_alloc`, the
-    /// borrowed-param exit decs and call-site arg incs are skipped, and
-    /// the arg-sanctioned adopted families activate.
-    pub(crate) headerless_types: HashSet<String>,
     /// Whole-program set of shared types that are the target of any `weak T`
     /// field. Computed in `build_struct_types` by scanning every struct field
     /// for `TypeKind::Weak(inner)`. Members are force-headed (excluded from
@@ -4292,66 +4237,11 @@ pub(super) struct Codegen<'ctx> {
     /// which we want to avoid in the (common) path where no layout
     /// intrinsic is invoked.
     pub(crate) target_data: Option<TargetData>,
-    /// Whether the build target is AArch64 — computed once at construction
-    /// from the native triple (or `KARAC_FORCE_TARGET_ARCH`). Gates the AArch64
-    /// `#[repr(C)]` struct-by-value ABI: HFA / ≤ 16 B register coercion, and the
-    /// larger-than-16 B indirect/`sret` cases (B-2026-07-09-2).
-    pub(crate) target_is_aarch64: bool,
-    /// Whether the build target is x86-64 **System V** (Linux / macOS / BSD)
-    /// — computed once at construction. SysV matches the raw-struct lowering
-    /// for `#[repr(C)]` structs ≤ 16 B (eightbyte register classification, by
-    /// luck), so those need no adaptation. A struct larger than 16 B is MEMORY
-    /// class, which the raw lowering does NOT match — it gets a `byval` param
-    /// / `sret` return (B-2026-07-09-2 Slice 3c). **Windows x64 is a distinct
-    /// gate** (`target_is_windows_x86_64`); this flag is `false` there.
-    pub(crate) target_is_x86_64: bool,
-    /// Whether the build target is **Windows x64** (Microsoft x64) — computed
-    /// once at construction. Distinct from `target_is_x86_64` (SysV): the
-    /// Microsoft x64 aggregate ABI passes 1/2/4/8-byte aggregates in a single
-    /// integer register (coerced to `iN`) and passes everything else by
-    /// reference (plain `ptr`, caller-owned copy) with `sret` for non-POT
-    /// returns — no eightbyte splitting, no HFA, no `byval` (B-2026-07-09-8).
-    /// `false` outside Windows x64.
-    pub(crate) target_is_windows_x86_64: bool,
-    /// Per-function record of `#[repr(C)]` struct params coerced to an AAPCS
-    /// register type on AArch64 (B-2026-07-09-2): fn name → `[(param_index,
-    /// struct_name)]`. The declared LLVM param at `param_index` is the coerced
-    /// type (`[N x i64]` / `[N x fp]` / `i64`); the body prologue reconstructs
-    /// the original struct value from it. Empty on x86-64 (no coercion).
-    pub(crate) arm64_coerced_struct_params: HashMap<String, Vec<(usize, String)>>,
-    /// Per-function record of `#[repr(C)]` struct params passed **indirectly**
-    /// (B-2026-07-09-2 Slice 3a/3c): fn name → `[(param_index, struct_name)]`.
-    /// A struct larger than 16 B crosses the C boundary by pointer on both
-    /// AArch64 (a plain `ptr` to a caller-owned copy) and x86-64 SysV (a `ptr
-    /// byval(%Struct)`), so the declared LLVM param at `param_index` is `ptr`;
-    /// the body prologue loads the struct value back through it. The `byval`
-    /// attribute (x86-64 only) is attached after `add_function`. Distinct from
-    /// `arm64_coerced_struct_params` (register coercion for ≤ 16 B, AArch64).
-    pub(crate) indirect_struct_params: HashMap<String, Vec<(usize, String)>>,
-    /// Exported fn names whose signature adapts a `#[repr(C)]` struct param or
-    /// return to the target C ABI (register coercion, indirect `byval`, or
-    /// `sret`). An internal Kāra call to one would need matching arg/return
-    /// adaptation (not implemented), so `compile_call` rejects it with an
-    /// actionable message — mirroring the boxed-export rejection.
-    pub(crate) abi_adapted_export_names: std::collections::HashSet<String>,
-    /// Per-function AArch64-coerced `#[repr(C)]` struct **return** type
-    /// (B-2026-07-09-2 Slice 2): fn name → the coerced LLVM return type
-    /// (`i64` / `[2 x i64]`). The declared return type is coerced; each return
-    /// site reinterprets the struct value into it. HFA returns are absent (they
-    /// return the raw struct). Empty on x86-64.
-    pub(crate) arm64_coerced_struct_returns: HashMap<String, BasicTypeEnum<'ctx>>,
     /// The current function's AArch64 struct-return coercion type, set at body
     /// entry from `arm64_coerced_struct_returns`. `Some` ⇒ every return site
     /// reinterprets its `#[repr(C)]` struct value into this type before
     /// `ret`. `None` on x86-64 and for non-coerced returns.
     pub(crate) current_fn_arm64_return_coercion: Option<BasicTypeEnum<'ctx>>,
-    /// Per-function `sret` return (B-2026-07-09-2 Slice 3b/3c): fn name → the
-    /// returned `#[repr(C)]` struct's LLVM type. A struct larger than 16 B is
-    /// returned via `sret` on both AArch64 (x8) and x86-64 SysV (rdi): the LLVM
-    /// signature drops the struct return (becomes `void`) and gains a leading
-    /// `ptr sret(%Struct)` param; each return site stores the struct value
-    /// through that pointer and `ret void`s. Empty for register/HFA returns.
-    pub(crate) sret_struct_returns: HashMap<String, inkwell::types::StructType<'ctx>>,
     /// The current function's `sret` result pointer (the leading param), set at
     /// body entry from `sret_struct_returns`. `Some` ⇒ every return site stores
     /// its struct value here and returns `void`; the prologue also shifts every
@@ -8089,7 +7979,25 @@ impl<'ctx> Codegen<'ctx> {
             fn_return_type_exprs: HashMap::new(),
             fn_ref_return_inner: HashMap::new(),
             fn_return_option_inner_shared: HashMap::new(),
-            fn_niche_abi: HashMap::new(),
+            target_abi: TargetAbi {
+                fn_niche_abi: HashMap::new(),
+                boxed_export_names: std::collections::HashSet::new(),
+                headerless_fns: HashMap::new(),
+                headerless_type_candidates: HashMap::new(),
+                headerless_reshaper_dummies: HashMap::new(),
+                headerless_types: HashSet::new(),
+                target_is_aarch64: !crate::target::active_target_is_wasm()
+                    && driver::native_target_is_aarch64(),
+                target_is_x86_64: !crate::target::active_target_is_wasm()
+                    && driver::native_target_is_x86_64(),
+                target_is_windows_x86_64: !crate::target::active_target_is_wasm()
+                    && driver::native_target_is_windows_x86_64(),
+                arm64_coerced_struct_params: HashMap::new(),
+                indirect_struct_params: HashMap::new(),
+                abi_adapted_export_names: std::collections::HashSet::new(),
+                arm64_coerced_struct_returns: HashMap::new(),
+                sret_struct_returns: HashMap::new(),
+            },
             var_option_shared_heap: HashMap::new(),
             ref_option_shared_heap: HashMap::new(),
             tail_ret_inner: None,
@@ -8106,7 +8014,6 @@ impl<'ctx> Codegen<'ctx> {
             main_returns_exitcode: false,
             current_fn_returns_ref: false,
             current_fn_boxes_return: false,
-            boxed_export_names: std::collections::HashSet::new(),
             boxed_enum_export_names: std::collections::HashSet::new(),
             compiling_ref_return_let_rhs: false,
             suppress_shadow_metadata_purge: false,
@@ -8236,11 +8143,7 @@ impl<'ctx> Codegen<'ctx> {
             elided_bindings: HashMap::new(),
             elided_cluster_roots: HashMap::new(),
             elided_b2_bindings: HashMap::new(),
-            headerless_fns: HashMap::new(),
             adopted_cluster_roots: HashMap::new(),
-            headerless_type_candidates: HashMap::new(),
-            headerless_reshaper_dummies: HashMap::new(),
-            headerless_types: HashSet::new(),
             weak_targeted_types: HashSet::new(),
             conditional_adopted_roots: HashMap::new(),
             borrowed_param_skips: HashMap::new(),
@@ -8310,18 +8213,7 @@ impl<'ctx> Codegen<'ctx> {
             map_mono_methods: HashMap::new(),
             display_fn_cache: HashMap::new(),
             target_data: init_target_data,
-            target_is_aarch64: !crate::target::active_target_is_wasm()
-                && driver::native_target_is_aarch64(),
-            target_is_x86_64: !crate::target::active_target_is_wasm()
-                && driver::native_target_is_x86_64(),
-            target_is_windows_x86_64: !crate::target::active_target_is_wasm()
-                && driver::native_target_is_windows_x86_64(),
-            arm64_coerced_struct_params: HashMap::new(),
-            indirect_struct_params: HashMap::new(),
-            abi_adapted_export_names: std::collections::HashSet::new(),
-            arm64_coerced_struct_returns: HashMap::new(),
             current_fn_arm64_return_coercion: None,
-            sret_struct_returns: HashMap::new(),
             current_fn_sret_param: None,
             hot_swap_enabled: false,
             declare_only_fns: std::collections::HashSet::new(),
@@ -8483,7 +8375,8 @@ impl<'ctx> Codegen<'ctx> {
             // Phase D: headerless member layout for this (fn, type).
             for c in clusters {
                 if c.headerless {
-                    self.headerless_fns
+                    self.target_abi
+                        .headerless_fns
                         .entry(fn_name.clone())
                         .or_default()
                         .insert(c.member_type.clone(), c.link_field_index);
@@ -8508,12 +8401,15 @@ impl<'ctx> Codegen<'ctx> {
         // Phase C2b: headerless-T candidates (reconciled in
         // `compile_program` once coro keys + struct layouts exist).
         for (t, v) in &ow.headerless_types {
-            self.headerless_type_candidates.insert(t.clone(), v.clone());
+            self.target_abi
+                .headerless_type_candidates
+                .insert(t.clone(), v.clone());
         }
         // Headerless reshaper fns → dummy sentinel binding (single-node
         // free at scope exit).
         for (fn_key, dummy) in &ow.headerless_reshaper_dummies {
-            self.headerless_reshaper_dummies
+            self.target_abi
+                .headerless_reshaper_dummies
                 .insert(fn_key.clone(), dummy.clone());
         }
     }
@@ -8728,7 +8624,7 @@ impl<'ctx> Codegen<'ctx> {
         self.conditional_adopted_roots
             .get(&self.current_fn_name)
             .and_then(|m| m.get(name))
-            .filter(|(t, _)| self.headerless_types.contains(t))
+            .filter(|(t, _)| self.target_abi.headerless_types.contains(t))
             .cloned()
     }
 
@@ -8739,7 +8635,7 @@ impl<'ctx> Codegen<'ctx> {
     fn borrowed_arg_skip(&self, callee: &str, position: usize) -> bool {
         self.borrowed_param_skips.get(callee).is_some_and(|recs| {
             recs.iter()
-                .any(|(_, pos, t)| *pos == position && self.headerless_types.contains(t))
+                .any(|(_, pos, t)| *pos == position && self.target_abi.headerless_types.contains(t))
         })
         // PROTOTYPE RC-elide-ref: the callee's param at `position` was
         // classified `ref`/borrow by the ownership pass → skip the
@@ -8759,7 +8655,7 @@ impl<'ctx> Codegen<'ctx> {
             .get(&self.current_fn_name)
             .is_some_and(|recs| {
                 recs.iter()
-                    .any(|(n, _, t)| n == param_name && self.headerless_types.contains(t))
+                    .any(|(n, _, t)| n == param_name && self.target_abi.headerless_types.contains(t))
             })
         // PROTOTYPE RC-elide-ref: the current fn's `param_name` was
         // classified `ref`/borrow → skip its exit dec (the caller
@@ -8788,10 +8684,11 @@ impl<'ctx> Codegen<'ctx> {
         // EVERY fn — the reconcile already excluded coroutine touchers
         // and non-niche links, and layout uniformity is the invariant
         // (a per-fn demotion here would mix layouts on one object).
-        if self.headerless_types.contains(type_name) {
+        if self.target_abi.headerless_types.contains(type_name) {
             return true;
         }
         let Some(link_idx) = self
+            .target_abi
             .headerless_fns
             .get(&self.current_fn_name)
             .and_then(|m| m.get(type_name))
@@ -9334,6 +9231,7 @@ impl<'ctx> Codegen<'ctx> {
         // after `declare_structs` (niche tables) and the coro-key
         // population above, before any function body compiles.
         let candidates: Vec<(String, (usize, Vec<String>))> = self
+            .target_abi
             .headerless_type_candidates
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -9353,7 +9251,7 @@ impl<'ctx> Codegen<'ctx> {
             if self.weak_targeted_types.contains(&t) {
                 continue;
             }
-            self.headerless_types.insert(t);
+            self.target_abi.headerless_types.insert(t);
         }
         // Slice 8v Phase 2: snapshot the whole `Program` as `Rc<Program>`
         // so the per-mono state-machine emission path triggered from
@@ -9685,9 +9583,9 @@ impl<'ctx> Codegen<'ctx> {
         for item in &program.items {
             if let Item::Function(f) = item {
                 if crate::cheader::boxed_return_of(f).is_some() {
-                    self.boxed_export_names.insert(f.name.clone());
+                    self.target_abi.boxed_export_names.insert(f.name.clone());
                 } else if crate::cheader::export_return_is_boxed_enum(f, program) {
-                    self.boxed_export_names.insert(f.name.clone());
+                    self.target_abi.boxed_export_names.insert(f.name.clone());
                     self.boxed_enum_export_names.insert(f.name.clone());
                 }
             }

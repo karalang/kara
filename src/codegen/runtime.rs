@@ -7797,7 +7797,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// free-walk. Called AFTER `emit_scope_cleanup`, so the null-out also
     /// neutralizes a stale reload the ordinary cleanup may have left.
     pub(super) fn emit_headerless_reshaper_dummy_free(&mut self, fn_key: &str) {
-        let Some(dummy) = self.headerless_reshaper_dummies.get(fn_key).cloned() else {
+        let Some(dummy) = self
+            .target_abi
+            .headerless_reshaper_dummies
+            .get(fn_key)
+            .cloned()
+        else {
             return;
         };
         let Some(slot) = self.variables.get(&dummy).map(|s| s.ptr) else {
