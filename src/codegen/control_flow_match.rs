@@ -5321,6 +5321,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             }
             RangeBound::Path { segments, .. } if segments.len() == 1 => self
+                .mod_bindings
                 .consts
                 .get(&segments[0])
                 .and_then(crate::codegen::helpers::const_value_from_literal_expr),

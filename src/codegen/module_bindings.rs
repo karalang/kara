@@ -90,7 +90,7 @@ pub(crate) struct ModuleBindingInfo<'ctx> {
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Walk `program.items` and emit one LLVM global per
-    /// `Item::ModuleBinding`. Populates `self.module_bindings` keyed
+    /// `Item::ModuleBinding`. Populates `self.mod_bindings.module_bindings` keyed
     /// by source name. Runs once at the start of `compile_program`,
     /// before function bodies are compiled, so forward references
     /// from any function body resolve.
@@ -116,7 +116,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 global.set_initializer(&ptr_ty.const_null());
                 global.set_constant(false);
                 global.set_linkage(Linkage::Internal);
-                self.module_bindings.insert(
+                self.mod_bindings.module_bindings.insert(
                     b.name.clone(),
                     ModuleBindingInfo {
                         global,
@@ -125,7 +125,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         declared_type: b.ty.clone(),
                     },
                 );
-                self.map_set_module_inits.push((b.name.clone(), is_set));
+                self.mod_bindings
+                    .map_set_module_inits
+                    .push((b.name.clone(), is_set));
                 continue;
             }
             // `let CONFIG: OnceLock[T] = OnceLock.new()` — same placeholder-null-
@@ -140,7 +142,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 global.set_initializer(&ptr_ty.const_null());
                 global.set_constant(false);
                 global.set_linkage(Linkage::Internal);
-                self.module_bindings.insert(
+                self.mod_bindings.module_bindings.insert(
                     b.name.clone(),
                     ModuleBindingInfo {
                         global,
@@ -149,7 +151,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         declared_type: b.ty.clone(),
                     },
                 );
-                self.once_module_inits.push(b.name.clone());
+                self.mod_bindings.once_module_inits.push(b.name.clone());
                 continue;
             }
             let Some((llvm_ty, initializer)) = self.module_binding_init(b) else {
@@ -166,7 +168,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // value expr (`module_binding_types`, never re-inferred in codegen).
                 let ty_expr =
                     b.ty.clone()
-                        .or_else(|| self.module_binding_types.get(&b.name).cloned());
+                        .or_else(|| self.mod_bindings.module_binding_types.get(&b.name).cloned());
                 if let Some(ty_expr) = ty_expr {
                     let placeholder_ty = self.llvm_type_for_type_expr(&ty_expr);
                     if let Some(zero) = basic_zero_const(placeholder_ty) {
@@ -176,7 +178,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // even for an immutable `let` (mirrors the Map/Set path).
                         global.set_constant(false);
                         global.set_linkage(Linkage::Internal);
-                        self.module_bindings.insert(
+                        self.mod_bindings.module_bindings.insert(
                             b.name.clone(),
                             ModuleBindingInfo {
                                 global,
@@ -185,7 +187,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 declared_type: b.ty.clone(),
                             },
                         );
-                        self.computed_module_inits
+                        self.mod_bindings
+                            .computed_module_inits
                             .push((b.name.clone(), b.value.clone()));
                     }
                 }
@@ -199,7 +202,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 global
                     .set_thread_local_mode(Some(inkwell::ThreadLocalMode::GeneralDynamicTLSModel));
             }
-            self.module_bindings.insert(
+            self.mod_bindings.module_bindings.insert(
                 b.name.clone(),
                 ModuleBindingInfo {
                     global,
@@ -216,9 +219,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // type metadata is available; `main`'s entry emits a forward
         // `call` to it (a valid LLVM reference to an internal fn defined
         // later in the same module).
-        if (!self.map_set_module_inits.is_empty()
-            || !self.computed_module_inits.is_empty()
-            || !self.once_module_inits.is_empty())
+        if (!self.mod_bindings.map_set_module_inits.is_empty()
+            || !self.mod_bindings.computed_module_inits.is_empty()
+            || !self.mod_bindings.once_module_inits.is_empty())
             && self.static_init_fn.is_none()
         {
             let void_ty = self.context.void_type();
@@ -246,7 +249,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(init_fn) = self.static_init_fn else {
             return;
         };
-        let inits = self.map_set_module_inits.clone();
+        let inits = self.mod_bindings.map_set_module_inits.clone();
 
         let prev_block = self.builder.get_insert_block();
         let prev_fn = self.current_fn;
@@ -261,6 +264,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // clears these per function and finalize runs after the last
             // body, so re-register explicitly here.
             let declared = self
+                .mod_bindings
                 .module_bindings
                 .get(&name)
                 .and_then(|i| i.declared_type.clone());
@@ -268,6 +272,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.register_var_from_type_expr(&name, &te);
             }
             let global_ptr = self
+                .mod_bindings
                 .module_bindings
                 .get(&name)
                 .map(|i| i.global.as_pointer_value());
@@ -283,9 +288,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // type-agnostic; `T` only matters at the `set`/`get` call sites, where
         // `reseed_module_binding_side_tables` repopulates `once_var_types` per
         // function). Never freed — module-lifetime.
-        let once_inits = self.once_module_inits.clone();
+        let once_inits = self.mod_bindings.once_module_inits.clone();
         for name in once_inits {
             let global_ptr = self
+                .mod_bindings
                 .module_bindings
                 .get(&name)
                 .map(|i| i.global.as_pointer_value());
@@ -312,12 +318,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // Reseed the module-binding side tables once so a referenced binding's
         // user-type / collection metadata is visible (mirrors the per-binding
         // reseed the Map/Set loop does).
-        let computed = self.computed_module_inits.clone();
+        let computed = self.mod_bindings.computed_module_inits.clone();
         if !computed.is_empty() {
             self.reseed_module_binding_side_tables();
         }
         for (name, init) in computed {
             let global_ptr = self
+                .mod_bindings
                 .module_bindings
                 .get(&name)
                 .map(|i| i.global.as_pointer_value());
@@ -345,6 +352,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// before the parameter-registration loop.
     pub(crate) fn reseed_module_binding_side_tables(&mut self) {
         let pairs: Vec<(String, TypeExpr)> = self
+            .mod_bindings
             .module_bindings
             .iter()
             .filter_map(|(n, info)| info.declared_type.as_ref().map(|t| (n.clone(), t.clone())))
@@ -660,7 +668,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let data_global = self.module.add_global(
             arr_ty,
             None,
-            &format!("modbind.str.{}", self.module_bindings.len()),
+            &format!("modbind.str.{}", self.mod_bindings.module_bindings.len()),
         );
         data_global.set_initializer(&data);
         data_global.set_constant(true);
@@ -685,7 +693,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// invoke this from the `compile_expr` Identifier arm before
     /// falling back to `consts` / local-variable lookups.
     pub(crate) fn try_load_module_binding(&self, name: &str) -> Option<BasicValueEnum<'ctx>> {
-        let info = self.module_bindings.get(name)?;
+        let info = self.mod_bindings.module_bindings.get(name)?;
         let loaded = self
             .builder
             .build_load(info.llvm_ty, info.global.as_pointer_value(), "modbind.load")
@@ -702,7 +710,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `constant` global flag, which would surface as a verifier
     /// error rather than a silent corruption.
     pub(crate) fn try_store_module_binding(&self, name: &str, val: BasicValueEnum<'ctx>) -> bool {
-        let Some(info) = self.module_bindings.get(name) else {
+        let Some(info) = self.mod_bindings.module_bindings.get(name) else {
             return false;
         };
         self.builder

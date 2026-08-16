@@ -711,7 +711,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // hold service state (`examples/shortener`), so the miss was
                 // load-bearing.
                 if self.variables.contains_key(name.as_str())
-                    || self.module_bindings.contains_key(name.as_str())
+                    || self
+                        .mod_bindings
+                        .module_bindings
+                        .contains_key(name.as_str())
                 {
                     // String iteration — per Unicode scalar value. Must
                     // come before the `vec_elem_types` arm: String vars

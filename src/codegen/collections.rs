@@ -2500,7 +2500,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 (data_ptr, ref_arr_ty)
             } else if let Some(slot) = self.variables.get(name.as_str()).copied() {
                 (slot.ptr, slot.ty)
-            } else if let Some(info) = self.module_bindings.get(name.as_str()) {
+            } else if let Some(info) = self.mod_bindings.module_bindings.get(name.as_str()) {
                 (info.global.as_pointer_value(), info.llvm_ty)
             } else {
                 return Err(format!("Undefined variable '{}' in index expression", name));

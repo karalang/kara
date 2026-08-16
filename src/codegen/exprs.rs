@@ -342,7 +342,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     Ok(loaded)
                 } else if let Some(ev) = self.try_unit_enum_variant(name) {
                     Ok(ev)
-                } else if let Some(const_value) = self.consts.get(name).cloned() {
+                } else if let Some(const_value) = self.mod_bindings.consts.get(name).cloned() {
                     self.compile_expr(&const_value)
                 } else if self.module.get_function(name).is_some() {
                     // Free fn name as a first-class value → a `{trampoline,
@@ -1610,7 +1610,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // roots so enum-variant / unit-variant paths fall through unchanged.
         if segments.len() >= 2
             && (self.variables.contains_key(&segments[0])
-                || self.module_bindings.contains_key(&segments[0]))
+                || self.mod_bindings.module_bindings.contains_key(&segments[0]))
         {
             let mut obj = Expr {
                 span: span.clone(),

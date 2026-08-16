@@ -4865,7 +4865,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // routing here is uniform with the local-variable case.
         if let ExprKind::Identifier(name) = &object.kind {
             if !self.variables.contains_key(name.as_str())
-                && self.module_bindings.contains_key(name.as_str())
+                && self
+                    .mod_bindings
+                    .module_bindings
+                    .contains_key(name.as_str())
             {
                 if self.var_types.vec_elem_types.contains_key(name.as_str()) {
                     let data_ptr = self.get_data_ptr(name).unwrap();

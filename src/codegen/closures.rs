@@ -2441,8 +2441,8 @@ impl<'ctx> super::Codegen<'ctx> {
     fn name_resolves_to_free_fn(&self, name: &str) -> bool {
         if self.variables.contains_key(name)
             || self.mono_state.const_subst.contains_key(name)
-            || self.consts.contains_key(name)
-            || self.module_bindings.contains_key(name)
+            || self.mod_bindings.consts.contains_key(name)
+            || self.mod_bindings.module_bindings.contains_key(name)
         {
             return false;
         }
