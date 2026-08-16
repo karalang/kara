@@ -9341,10 +9341,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // Declared here, defined after this function's body: the two are
         // mutually recursive, so the declaration has to exist first.
         let qpart_name = format!("__vec_{}_qpart_{}", elem_mangle, id);
+        // Seven params: (data, scratch, lo, hi, in_a, depth, gate). `gate`
+        // carries WHICH probe arm admitted the range, because the two arms want
+        // opposite per-range behaviour (B-2026-08-15-30):
+        //   1  low-cardinality — keep the per-range tie test, so a mixed input
+        //      partitions only the part that pays
+        //   0  unstructured    — the range was admitted BECAUSE its keys are
+        //      spread, so the tie test would reject every range and fall
+        //      straight back to the merge, having paid a counting pass for
+        //      nothing
         let qpart_ty = void_t.fn_type(
             &[
                 ptr_ty.into(),
                 ptr_ty.into(),
+                i64_t.into(),
                 i64_t.into(),
                 i64_t.into(),
                 i64_t.into(),
@@ -9639,9 +9649,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_int_value();
+        // The probe answers with the ARM, not a bool: 0 reject, 1 admitted on
+        // low cardinality, 2 admitted on being unstructured. `gate` is 1 only
+        // for arm 1 — see the qpart declaration for why the arms differ.
         let accept = self
             .builder
             .build_int_compare(inkwell::IntPredicate::NE, probe_r, zero, "pt.accept")
+            .unwrap();
+        let gate_b = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, probe_r, one, "pt.gate.b")
+            .unwrap();
+        let gate_v = self
+            .builder
+            .build_int_z_extend(gate_b, i64_t, "pt.gate")
             .unwrap();
         self.builder
             .build_conditional_branch(accept, pt_go, p1_chk)
@@ -9661,6 +9682,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     len.into(),
                     one.into(),
                     zero.into(),
+                    gate_v.into(),
                 ],
                 "",
             )
@@ -11144,7 +11166,30 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<(), String> {
         /// Ranges at or below this hand off to the merge. Kept at or below the
         /// entry probe's own length floor so a handoff can never re-probe.
-        const SPAN: u64 = 4096;
+        ///
+        /// 4096 until B-2026-08-15-30. It was sized for the low-cardinality arm,
+        /// which bottoms out in a few levels and never reaches a deep leaf, so
+        /// the value did not matter there — measured across 32..4096 on
+        /// few-unique it moves nothing (1.00-1.01x). It matters a great deal on
+        /// the unstructured arm, where every element descends the full
+        /// log2(n/SPAN): a 4096 leaf leaves log2(4096/64) = 6 merge passes
+        /// under every partition, capping the win no matter how cheap a level
+        /// is. Sweep on random, cycles vs the merge baseline:
+        ///
+        ///   SPAN    32     64    128    256    512   1024   4096
+        ///   ratio 0.66x  0.65x  0.66x  0.70x  0.74x  0.81x  0.80x
+        ///
+        /// Flat from 32 to 128, so 64 sits in the middle of the plateau rather
+        /// than on its edge.
+        const SPAN: u64 = 64;
+        // `KARAC_SORT_PART_SPAN` overrides the leaf handoff, the second half of
+        // the B-2026-08-15-30 lever: on high-cardinality input a leaf of 4096
+        // leaves log2(4096/32) = 7 merge passes under every partition, which
+        // caps the reachable win no matter how cheap a level is.
+        let span_v = std::env::var("KARAC_SORT_PART_SPAN")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(SPAN);
         /// Partition levels before forcing the merge. Each level splits into
         /// two strictly smaller non-empty ranges, so this is a backstop, not a
         /// normal exit — but it is what preserves the O(n log n) worst case
@@ -11177,6 +11222,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let hi = qpart_fn.get_nth_param(3).unwrap().into_int_value();
         let in_a = qpart_fn.get_nth_param(4).unwrap().into_int_value();
         let depth = qpart_fn.get_nth_param(5).unwrap().into_int_value();
+        let gate = qpart_fn.get_nth_param(6).unwrap().into_int_value();
 
         let bb = |s: &Self, n: &str| s.context.append_basic_block(qpart_fn, n);
         let entry = bb(self, "entry");
@@ -11249,7 +11295,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_compare(
                 inkwell::IntPredicate::SLE,
                 len,
-                i64_t.const_int(SPAN, false),
+                i64_t.const_int(span_v, false),
                 "q.small",
             )
             .unwrap();
@@ -11495,10 +11541,22 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_mul(neq, i64_t.const_int(GATE, false), "q.neq.s")
             .unwrap();
-        let poor = self
+        // Only the low-cardinality arm applies this test — `gate == 0` means
+        // the range was admitted for being UNSTRUCTURED, where a tie count is
+        // near zero by construction and this would reject every range, fall
+        // back to the merge, and have paid a counting pass for nothing. That
+        // is not hypothetical: forcing the entry probe open while leaving this
+        // gate in place measured 550M vs the merge's 545M on random, which
+        // reads as "the partition does not help" when the partition never ran.
+        let tie_poor = self
             .builder
-            .build_int_compare(inkwell::IntPredicate::SLT, scaled, len, "q.poor")
+            .build_int_compare(inkwell::IntPredicate::SLT, scaled, len, "q.tie.poor")
             .unwrap();
+        let gate_on = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, gate, zero, "q.gate.on")
+            .unwrap();
+        let poor = self.builder.build_and(gate_on, tie_poor, "q.poor").unwrap();
         self.builder
             .build_conditional_branch(poor, leaf, alleq_chk)
             .unwrap();
@@ -11681,6 +11739,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     mid_v.into(),
                     nin.into(),
                     dep_n.into(),
+                    gate.into(),
                 ],
                 "",
             )
@@ -11728,6 +11787,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     hi.into(),
                     nin.into(),
                     dep_n.into(),
+                    gate.into(),
                 ],
                 "",
             )
@@ -11781,6 +11841,27 @@ impl<'ctx> super::Codegen<'ctx> {
         const PROBE_N: u64 = 512;
         const PART_GATE: u64 = 64;
         const ORD_PCT: u64 = 95;
+        /// The UNSTRUCTURED band, in percent of sampled adjacent pairs that are
+        /// ordered. Inside it the merge has no runs to exploit and the
+        /// partition wins; outside it the merge's natural-run pass wins, and by
+        /// a lot. Measured on M5, `(i64,i64)`, n=150k, runs of length R with
+        /// random starts (`qs/merge`, lower is better):
+        ///
+        ///   ord   0.004  0.125  0.25  0.50  0.75  0.875  0.996
+        ///   ratio  3.34   1.05  0.77  0.64  0.78   1.04   3.36
+        ///
+        /// The curve is a V because the partition exploits no structure at all
+        /// — its cost is flat across the whole sweep — while the merge's cost
+        /// peaks exactly at shuffled. So the rule is a BAND around 0.5, not a
+        /// threshold: reverse-sorted input samples at ord ~= 0, and a bare
+        /// `ord < 95%` test would admit it and lose 13x.
+        ///
+        /// Edges are set one measured step inside the crossover (both 0.25 and
+        /// 0.75 are wins at 0.77x / 0.78x; 0.125 and 0.875 are already ties or
+        /// losses). At 512 samples the standard error on ord is ~0.022, so the
+        /// edges sit >3 sigma from a true 0.5.
+        const ORD_BAND_LO: u64 = 25;
+        const ORD_BAND_HI: u64 = 80;
 
         let i64_t = self.context.i64_type();
         let zero = i64_t.const_zero();
@@ -11958,14 +12039,70 @@ impl<'ctx> super::Codegen<'ctx> {
                 "pt.shuffled",
             )
             .unwrap();
-        let accept = self
+        // ARM 1 — low cardinality. Unchanged: few distinct keys resolve in
+        // ~log2(d) partition levels because a range that ties the pivot
+        // throughout is finished, which no number of merge passes can shortcut.
+        let arm_lowcard = self
             .builder
-            .build_and(card_ok, shuffled, "pt.accept")
+            .build_and(card_ok, shuffled, "pt.arm.lowcard")
             .unwrap();
-        let out = self
+
+        // ARM 2 — unstructured. New for B-2026-08-15-30. The old gate admitted
+        // ONLY arm 1, because its cost model priced a partition level at two
+        // merge passes ("two passes per level against the merge's one"). That
+        // prices the two by pass COUNT. Measured per element on M5 they are not
+        // comparable: a merge pass runs at IPC 1.93 — its READ cursor is
+        // data-dependent, so every element sits on a serial
+        // load -> cmp -> cursor -> load chain — against a partition scatter's
+        // IPC 6.83, which reads sequentially and only picks the write
+        // destination. 11.75 vs 2.49 cycles/element. So a level is cheaper than
+        // a pass, and high-cardinality shuffled input wins too: 544M -> 362M,
+        // 1.50x, closing the gap to Rust's driftsort from 2.73x to 1.82x.
+        let ord_lo_ok = self
             .builder
-            .build_int_z_extend(accept, i64_t, "pt.out")
+            .build_int_compare(
+                inkwell::IntPredicate::SGE,
+                ord_scaled,
+                i64_t.const_int(PROBE_N * ORD_BAND_LO, false),
+                "pt.ord.lo",
+            )
             .unwrap();
+        let ord_hi_ok = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SLE,
+                ord_scaled,
+                i64_t.const_int(PROBE_N * ORD_BAND_HI, false),
+                "pt.ord.hi",
+            )
+            .unwrap();
+        let arm_band = self
+            .builder
+            .build_and(ord_lo_ok, ord_hi_ok, "pt.arm.band")
+            .unwrap();
+
+        // Answer with the arm, not a bool — the two want opposite per-range
+        // gating inside qpart. Arm 1 wins the tie when both match, preserving
+        // today's behaviour exactly on low-cardinality input.
+        let two = i64_t.const_int(2, false);
+        let band_v = self
+            .builder
+            .build_select(arm_band, two, zero, "pt.band.v")
+            .unwrap()
+            .into_int_value();
+        let arm = self
+            .builder
+            .build_select(arm_lowcard, one, band_v, "pt.arm")
+            .unwrap()
+            .into_int_value();
+        // `KARAC_SORT_PART=always|never` pins the routing, the A/B lever the
+        // measurements above were taken with. `always` selects arm 2 (gate
+        // off), which is what "run the partition on everything" means.
+        let out = match std::env::var("KARAC_SORT_PART").as_deref() {
+            Ok("always") => two,
+            Ok("never") => zero,
+            _ => arm,
+        };
         self.builder.build_return(Some(&out)).unwrap();
 
         self.fn_ctx.loop_stack = saved_loop_stack;
