@@ -1451,10 +1451,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // qualified `Type.method` name (`make_impl_method_function`), so
             // `fn_return_type_names["FixedRates.new"]` yields `"FixedRates"`.
             ExprKind::Call { callee, .. } => match &callee.kind {
-                ExprKind::Identifier(fn_name) => self.fn_return_type_names.get(fn_name).cloned(),
+                ExprKind::Identifier(fn_name) => {
+                    self.fn_sig.fn_return_type_names.get(fn_name).cloned()
+                }
                 ExprKind::Path { segments, .. } if segments.len() == 2 => {
                     let qualified = format!("{}.{}", segments[0], segments[1]);
-                    self.fn_return_type_names.get(&qualified).cloned()
+                    self.fn_sig.fn_return_type_names.get(&qualified).cloned()
                 }
                 _ => None,
             },
@@ -1464,7 +1466,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::MethodCall { object, method, .. } => {
                 let recv_ty = self.inferred_receiver_type(object)?;
                 let qualified = format!("{}.{}", recv_ty, method);
-                self.fn_return_type_names.get(&qualified).cloned()
+                self.fn_sig.fn_return_type_names.get(&qualified).cloned()
             }
             _ => None,
         }

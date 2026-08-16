@@ -2828,7 +2828,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn ident_read_at_or_after(&self, name: &str, owner: &str, end: usize) -> bool {
         [name, owner]
             .iter()
-            .filter_map(|n| self.fn_body_ident_mention_offsets.get(*n))
+            .filter_map(|n| self.fn_sig.fn_body_ident_mention_offsets.get(*n))
             .flatten()
             .any(|&off| off >= end)
     }
@@ -2864,7 +2864,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let acc: std::cell::RefCell<Acc> = std::cell::RefCell::new(Acc::new());
         crate::codegen::bce_length_pin::block_all(body, |e| walk(e, &acc));
-        self.fn_body_ident_mention_offsets = acc.into_inner();
+        self.fn_sig.fn_body_ident_mention_offsets = acc.into_inner();
     }
 
     /// B-2026-07-21-14 — the RESULT-leaf sibling of

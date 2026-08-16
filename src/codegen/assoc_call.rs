@@ -2952,11 +2952,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let qualified = format!("{}.{}", type_name, method);
         if let Some(fn_val) = self.module.get_function(&qualified) {
             let ref_flags = self
+                .fn_sig
                 .fn_param_ref
                 .get(&qualified)
                 .cloned()
                 .unwrap_or_default();
-            let param_tensor_infos = self.fn_param_tensor_info.get(&qualified).cloned();
+            let param_tensor_infos = self.fn_sig.fn_param_tensor_info.get(&qualified).cloned();
             let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
             for (i, a) in _args.iter().enumerate() {
                 let is_ref = ref_flags.get(i).copied().unwrap_or(false);

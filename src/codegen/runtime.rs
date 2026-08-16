@@ -7618,7 +7618,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned()
             .or_else(|| match &value.kind {
                 ExprKind::Call { callee, .. } => match &callee.kind {
-                    ExprKind::Identifier(f) => self.fn_return_type_exprs.get(f.as_str()).cloned(),
+                    ExprKind::Identifier(f) => {
+                        self.fn_sig.fn_return_type_exprs.get(f.as_str()).cloned()
+                    }
                     _ => None,
                 },
                 _ => None,

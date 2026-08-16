@@ -2639,7 +2639,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(te) = self.var_types.closure_ret_vec_te.get(name) {
                     return Some(te.clone());
                 }
-                let te = self.fn_return_type_exprs.get(name)?;
+                let te = self.fn_sig.fn_return_type_exprs.get(name)?;
                 if matches!(te.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
                     return None;
                 }

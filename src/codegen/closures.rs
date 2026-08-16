@@ -956,7 +956,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let all_positional = args.iter().all(|a| a.label.is_none());
                 if all_positional {
                     if let ExprKind::Identifier(callee_name) = &callee.kind {
-                        if let Some(callee_fn) = self.fn_asts.get(callee_name) {
+                        if let Some(callee_fn) = self.fn_sig.fn_asts.get(callee_name) {
                             return args.iter().enumerate().any(|(i, a)| {
                                 // The arg is borrowed when it is a heap-env BINDING
                                 // (`let f = make()`) or a heap-env CONTAINER OWNER —
@@ -1570,11 +1570,11 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Populate `fns_returning_heap_env` (functions whose return value is a
-    /// heap-env closure) from `self.fn_asts`, before any body compiles. A
+    /// heap-env closure) from `self.fn_sig.fn_asts`, before any body compiles. A
     /// `let f = <call to such a fn>` therefore owns a heap env and is given a
     /// `FreeClosureEnv` cleanup.
     pub(super) fn compute_fns_returning_heap_env(&mut self) {
-        let funcs: Vec<Function> = self.fn_asts.values().cloned().collect();
+        let funcs: Vec<Function> = self.fn_sig.fn_asts.values().cloned().collect();
         let mut set = std::collections::HashSet::new();
         // Seed: a direct capturing-closure-literal tail mints a heap env here.
         for func in &funcs {
@@ -1726,7 +1726,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// heap-env call). A FIXPOINT so a relay-of-aggregate (`let r = build(k); r`)
     /// is recognized once its inner builder is.
     pub(super) fn compute_fns_returning_heap_env_aggregate(&mut self) {
-        let funcs: Vec<Function> = self.fn_asts.values().cloned().collect();
+        let funcs: Vec<Function> = self.fn_sig.fn_asts.values().cloned().collect();
         let mut map: HashMap<String, HashSet<String>> = HashMap::new();
         loop {
             let mut changed = false;
@@ -1919,7 +1919,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// heap-env call, and a tuple/array element can be a heap-env binding). The
     /// tuple/array twin of `compute_fns_returning_heap_env_aggregate`.
     pub(super) fn compute_fns_returning_heap_env_tuple_array(&mut self) {
-        let funcs: Vec<Function> = self.fn_asts.values().cloned().collect();
+        let funcs: Vec<Function> = self.fn_sig.fn_asts.values().cloned().collect();
         loop {
             let mut changed = false;
             for func in &funcs {
@@ -2070,7 +2070,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`let r = build(k); r`) is recognized once its inner builder is. Runs after
     /// the tuple/array fixpoint (a relay can chain through any container builder).
     pub(super) fn compute_fns_returning_heap_env_vec(&mut self) {
-        let funcs: Vec<Function> = self.fn_asts.values().cloned().collect();
+        let funcs: Vec<Function> = self.fn_sig.fn_asts.values().cloned().collect();
         loop {
             let mut changed = false;
             for func in &funcs {
@@ -2373,6 +2373,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // shared `reify_named_fn_value` separately rejects a name shadowed by a
         // higher-precedence binding.)
         let is_fn_param = self
+            .fn_sig
             .fn_asts
             .get(callee)
             .and_then(|f| f.params.get(idx))
@@ -2517,7 +2518,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     params,
                     return_type,
                     ..
-                }) = self.fn_return_type_exprs.get(callee_name).map(|t| &t.kind)
+                }) = self
+                    .fn_sig
+                    .fn_return_type_exprs
+                    .get(callee_name)
+                    .map(|t| &t.kind)
                 {
                     return Some(self.closure_abi_fn_type(params, return_type.as_deref()));
                 }

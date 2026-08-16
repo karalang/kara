@@ -1097,7 +1097,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // free we can't prove safe.
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(n) => !matches!(
-                    self.fn_return_type_exprs.get(n.as_str()).map(|t| &t.kind),
+                    self.fn_sig
+                        .fn_return_type_exprs
+                        .get(n.as_str())
+                        .map(|t| &t.kind),
                     Some(TypeKind::Ref(_) | TypeKind::MutRef(_))
                 ),
                 _ => false,

@@ -2096,8 +2096,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     .module
                     .get_function(key)
                     .expect("coroutine method ramp declared in declare_function");
-                let ref_flags = self.fn_param_ref.get(key).cloned().unwrap_or_default();
+                let ref_flags = self
+                    .fn_sig
+                    .fn_param_ref
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
                 let slice_elems = self
+                    .fn_sig
                     .fn_param_slice_elem
                     .get(key)
                     .cloned()
@@ -2254,8 +2260,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `ref_flags[0]` covers `ref self` / `mut ref self`;
                 // `ref_flags[1..]` covers method args at param indices
                 // 1..K.
-                let ref_flags = self.fn_param_ref.get(key).cloned().unwrap_or_default();
+                let ref_flags = self
+                    .fn_sig
+                    .fn_param_ref
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
                 let slice_elems = self
+                    .fn_sig
                     .fn_param_slice_elem
                     .get(key)
                     .cloned()
@@ -6377,6 +6389,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // field GEP was one indirection off — the owned-`self`
                 // receiver-move segfault (bugs.md entry, 2026-06-05).
                 let first_param_is_ref = self
+                    .fn_sig
                     .fn_param_ref
                     .get(&qualified)
                     .and_then(|flags| flags.first().copied())
@@ -6424,11 +6437,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (both keyed by the qualified `Type.method` name and built
                 // from `func.params`, whose element 0 is the receiver).
                 let ref_flags = self
+                    .fn_sig
                     .fn_param_ref
                     .get(&qualified)
                     .cloned()
                     .unwrap_or_default();
                 let slice_elems = self
+                    .fn_sig
                     .fn_param_slice_elem
                     .get(&qualified)
                     .cloned()

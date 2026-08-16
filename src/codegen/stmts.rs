@@ -1797,15 +1797,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
                             match &value.kind {
                                 ExprKind::Call { callee, .. } => match &callee.kind {
-                                    ExprKind::Identifier(f) => self
-                                        .fn_return_type_exprs
-                                        .get(f.as_str())
-                                        .and_then(|te| match &te.kind {
-                                            crate::ast::TypeKind::Path(p) => {
-                                                p.segments.last().cloned()
-                                            }
-                                            _ => None,
-                                        }),
+                                    ExprKind::Identifier(f) => {
+                                        self.fn_sig.fn_return_type_exprs.get(f.as_str()).and_then(
+                                            |te| match &te.kind {
+                                                crate::ast::TypeKind::Path(p) => {
+                                                    p.segments.last().cloned()
+                                                }
+                                                _ => None,
+                                            },
+                                        )
+                                    }
                                     _ => None,
                                 },
                                 _ => None,
@@ -2494,7 +2495,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn is_borrow_returning_call_expr(&self, e: &Expr) -> bool {
         matches!(&e.kind, ExprKind::Call { callee, .. }
             if matches!(&callee.kind, ExprKind::Identifier(n)
-                if self.fn_ref_return_inner.contains_key(n)))
+                if self.fn_sig.fn_ref_return_inner.contains_key(n)))
     }
 
     /// Public shim for [`Self::ref_return_inner_for_call`], for the
@@ -2507,7 +2508,7 @@ impl<'ctx> super::Codegen<'ctx> {
         match &value.kind {
             ExprKind::Call { callee, .. } => {
                 if let ExprKind::Identifier(name) = &callee.kind {
-                    return self.fn_ref_return_inner.get(name).cloned();
+                    return self.fn_sig.fn_ref_return_inner.get(name).cloned();
                 }
                 None
             }
@@ -2873,7 +2874,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         let info = self.shared_types.get(inner.as_str())?.clone();
                         return Some(Some(info));
                     }
-                    if let Some(inner) = self.fn_return_option_inner_shared.get(c.as_str()) {
+                    if let Some(inner) = self.fn_sig.fn_return_option_inner_shared.get(c.as_str()) {
                         if let Some(info) = self.shared_types.get(inner.as_str()).cloned() {
                             return Some(Some(info));
                         }
@@ -4756,7 +4757,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                     ExprKind::Identifier(fn_name) => Some(fn_name.clone()),
                                     ExprKind::Path { segments, .. } if segments.len() == 2 => {
                                         let direct = format!("{}.{}", segments[0], segments[1]);
-                                        if self.fn_return_option_inner_shared.contains_key(&direct)
+                                        if self
+                                            .fn_sig
+                                            .fn_return_option_inner_shared
+                                            .contains_key(&direct)
                                         {
                                             Some(direct)
                                         } else {
@@ -4775,6 +4779,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             };
                             if let Some(key) = callee_key {
                                 if let Some(inner_name) = self
+                                    .fn_sig
                                     .fn_return_option_inner_shared
                                     .get(key.as_str())
                                     .cloned()
@@ -11038,7 +11043,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // from the ctor's own argument (the same head-name inference,
             // applied one level down).
             ExprKind::Call { callee, args } => match &callee.kind {
-                ExprKind::Identifier(f) => self.fn_return_type_exprs.get(f.as_str()).cloned(),
+                ExprKind::Identifier(f) => {
+                    self.fn_sig.fn_return_type_exprs.get(f.as_str()).cloned()
+                }
                 _ => {
                     let ctor = self.enum_name_of_expr(e)?;
                     if ctor != "Option" && ctor != "Result" {
@@ -11122,7 +11129,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(TypeExpr {
                     kind: TypeKind::Tuple(elems),
                     ..
-                }) = self.fn_return_type_exprs.get(name)
+                }) = self.fn_sig.fn_return_type_exprs.get(name)
                 {
                     return Some(elems.clone());
                 }
@@ -12865,7 +12872,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::Call { callee, .. } = &e.kind {
             if let ExprKind::Identifier(n) = &callee.kind {
                 if self.enum_name_of_expr(e).is_none() && !self.is_borrow_returning_call_expr(e) {
-                    if let Some(te) = self.fn_return_type_exprs.get(n.as_str()) {
+                    if let Some(te) = self.fn_sig.fn_return_type_exprs.get(n.as_str()) {
                         return te.clone();
                     }
                 }
@@ -13046,7 +13053,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 .all(|el| self.discard_tuple_elem_is_fresh_expr(el)),
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
-                ExprKind::Identifier(n) => self.fn_return_type_names.contains_key(n.as_str()),
+                ExprKind::Identifier(n) => {
+                    self.fn_sig.fn_return_type_names.contains_key(n.as_str())
+                }
                 _ => false,
             },
             // A place / unknown shape: safe only when its type is a scalar

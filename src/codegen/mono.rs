@@ -728,7 +728,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ExprKind::Identifier(fname) = &callee.kind else {
                     return None;
                 };
-                let ret = self.fn_return_type_exprs.get(fname.as_str())?;
+                let ret = self.fn_sig.fn_return_type_exprs.get(fname.as_str())?;
                 vec_inner_type_expr(ret)
             }
             _ => None,
@@ -2040,8 +2040,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // `declare_mono_function` against the mangled key (slice
             // 8z extension) so the lookups resolve to per-mono
             // results that honor the active `type_subst`.
-            let ref_flags = self.fn_param_ref.get(&mangled).cloned().unwrap_or_default();
+            let ref_flags = self
+                .fn_sig
+                .fn_param_ref
+                .get(&mangled)
+                .cloned()
+                .unwrap_or_default();
             let slice_elems = self
+                .fn_sig
                 .fn_param_slice_elem
                 .get(&mangled)
                 .cloned()
@@ -2195,7 +2201,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // mono body actually used a `ref Vec[E]` param (B-2026-07-02-11
         // registration made such bodies compile; before it they errored at
         // the first collection-method touch).
-        let ref_flags = self.fn_param_ref.get(&mangled).cloned().unwrap_or_default();
+        let ref_flags = self
+            .fn_sig
+            .fn_param_ref
+            .get(&mangled)
+            .cloned()
+            .unwrap_or_default();
         // B-2026-08-05-37 — the mutate-through subset, for the place-argument
         // arm below. The non-generic direct-call path (call_dispatch.rs) gained
         // the same arm; a generic callee has exactly the same ABI obligation,
@@ -2204,6 +2215,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // performed it — a run/build divergence the mono path introduces on its
         // own.
         let mut_ref_flags = self
+            .fn_sig
             .fn_param_mut_ref
             .get(&mangled)
             .cloned()
@@ -2220,6 +2232,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // was already handled on the state-machine path; this closes the
         // by-value form on the common direct-call path.
         let slice_elems = self
+            .fn_sig
             .fn_param_slice_elem
             .get(&mangled)
             .cloned()
@@ -2602,7 +2615,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|p| matches!(&p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
             .collect();
-        self.fn_param_ref.insert(mangled.to_string(), ref_flags);
+        self.fn_sig
+            .fn_param_ref
+            .insert(mangled.to_string(), ref_flags);
         // B-2026-08-05-37 — the mutate-through subset. Same shape as the
         // non-generic `declare_function`; see `fn_param_mut_ref`.
         let mut_ref_flags: Vec<bool> = func
@@ -2610,14 +2625,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|p| matches!(&p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_)))
             .collect();
-        self.fn_param_mut_ref
+        self.fn_sig
+            .fn_param_mut_ref
             .insert(mangled.to_string(), mut_ref_flags);
         let slice_elems: Vec<Option<BasicTypeEnum<'ctx>>> = func
             .params
             .iter()
             .map(|p| self.extract_slice_elem_type(&p.ty))
             .collect();
-        self.fn_param_slice_elem
+        self.fn_sig
+            .fn_param_slice_elem
             .insert(mangled.to_string(), slice_elems);
 
         let fn_val = self.module.add_function(mangled, fn_type, None);
@@ -3754,7 +3771,8 @@ impl<'ctx> super::Codegen<'ctx> {
             } if segments.len() == 1 => segments[0].as_str(),
             _ => return false,
         };
-        self.fn_asts
+        self.fn_sig
+            .fn_asts
             .get(name)
             .is_some_and(Self::return_is_layout_carrying)
     }

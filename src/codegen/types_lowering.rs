@@ -3092,7 +3092,7 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             _ => return None,
         };
-        let type_name = self.fn_return_type_names.get(&fn_name)?.clone();
+        let type_name = self.fn_sig.fn_return_type_names.get(&fn_name)?.clone();
         let info = self.shared_types.get(&type_name)?.clone();
         Some((type_name, info))
     }
@@ -3469,13 +3469,13 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn current_fn_return_te(&self) -> Option<TypeExpr> {
         let cf = self.current_fn?;
         let name = cf.get_name().to_str().ok()?;
-        self.fn_return_type_exprs.get(name).cloned()
+        self.fn_sig.fn_return_type_exprs.get(name).cloned()
     }
 
     pub(crate) fn current_fn_ret_option_inner_heap(&self) -> Option<StructType<'ctx>> {
         let cf = self.current_fn?;
         let name = cf.get_name().to_str().ok()?;
-        let inner = self.fn_return_option_inner_shared.get(name)?;
+        let inner = self.fn_sig.fn_return_option_inner_shared.get(name)?;
         Some(self.shared_types.get(inner.as_str())?.heap_type)
     }
 
@@ -4035,7 +4035,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &callee.kind else {
             return None;
         };
-        self.fn_return_type_exprs.get(name).cloned()
+        self.fn_sig.fn_return_type_exprs.get(name).cloned()
     }
 
     /// Build the `Option[inner]` `TypeExpr` wrapping `inner`. Used to reconstruct

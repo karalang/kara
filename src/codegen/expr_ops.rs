@@ -3769,6 +3769,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             || self.enum_layouts.contains_key(recv.as_str()))
                     {
                         return self
+                            .fn_sig
                             .fn_return_type_names
                             .get(&format!("{recv}.{method}"))
                             .cloned();
@@ -3776,7 +3777,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let recv_ty = self.type_name_of_expr(object)?;
                 let fn_name = format!("{recv_ty}.{method}");
-                if let Some(n) = self.fn_return_type_names.get(&fn_name) {
+                if let Some(n) = self.fn_sig.fn_return_type_names.get(&fn_name) {
                     return Some(n.clone());
                 }
                 // B-2026-08-09-7 — the WRAPPER-PRESERVING `Option`/`Result`
@@ -3889,8 +3890,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             ExprKind::Call { callee, .. } => match &callee.kind {
-                ExprKind::Identifier(n) => self.fn_return_type_names.get(n.as_str()).cloned(),
+                ExprKind::Identifier(n) => {
+                    self.fn_sig.fn_return_type_names.get(n.as_str()).cloned()
+                }
                 ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                    .fn_sig
                     .fn_return_type_names
                     .get(&format!("{}.{}", segments[0], segments[1]))
                     .cloned(),
@@ -4147,6 +4151,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if let Some(ty) = recv_ty {
                     return self
+                        .fn_sig
                         .fn_return_type_names
                         .get(&format!("{ty}.{method}"))
                         .map(|s| s == "char")
@@ -4187,6 +4192,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Call { callee, .. } => {
                 if let ExprKind::Identifier(n) = &callee.kind {
                     return self
+                        .fn_sig
                         .fn_return_type_names
                         .get(n.as_str())
                         .map(|s| s == "char")
@@ -4272,6 +4278,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Call { callee, .. } => {
                 if let ExprKind::Identifier(n) = &callee.kind {
                     return self
+                        .fn_sig
                         .fn_return_type_names
                         .get(n.as_str())
                         .map(|s| is_uint_name(s.as_str()))
@@ -4425,6 +4432,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if let Some(ty) = recv_ty {
                     return self
+                        .fn_sig
                         .fn_return_type_names
                         .get(&format!("{ty}.{method}"))
                         .map(|s| is_uint_name(s.as_str()))
@@ -6567,7 +6575,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 _ => None,
             };
-            if let Some(te) = key.and_then(|k| self.fn_return_type_exprs.get(&k)) {
+            if let Some(te) = key.and_then(|k| self.fn_sig.fn_return_type_exprs.get(&k)) {
                 return Some(te.clone());
             }
         }
@@ -8301,6 +8309,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ExprKind::Identifier(name) => {
                     !self.is_borrow_returning_call_expr(expr)
                         && self
+                            .fn_sig
                             .fn_return_type_names
                             .get(name.as_str())
                             .is_some_and(|t| is_vec_name(t))

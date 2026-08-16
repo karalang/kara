@@ -80,7 +80,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// monos keep the source name as `current_fn_name`). `None` for
     /// everything else — including closures (v1 limitation, see module doc).
     pub(super) fn declared_lazy_return_of_fn(&self, name: &str) -> Option<&'static str> {
-        if let Some(ret) = self.fn_return_type_names.get(name) {
+        if let Some(ret) = self.fn_sig.fn_return_type_names.get(name) {
             return match ret.as_str() {
                 "LazyFrame" => Some("LazyFrame"),
                 "LazyExpr" => Some("LazyExpr"),

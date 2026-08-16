@@ -5212,7 +5212,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.module
                     .add_function(&symbol_name, fn_type, Some(Linkage::External))
             });
-            self.extern_link_names
+            self.fn_sig
+                .extern_link_names
                 .insert(ext.name.clone(), symbol_name.clone());
             f
         };

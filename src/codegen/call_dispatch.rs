@@ -92,7 +92,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // never reaches here. Caller half of B-2026-06-07-5 (Tier-1.5).
         if !self.compiling_ref_return_let_rhs {
             if let ExprKind::Identifier(n) = &callee.kind {
-                if let Some(inner_te) = self.fn_ref_return_inner.get(n).cloned() {
+                if let Some(inner_te) = self.fn_sig.fn_ref_return_inner.get(n).cloned() {
                     let inner = self.llvm_type_for_type_expr(&inner_te);
                     self.compiling_ref_return_let_rhs = true;
                     let ptr_res = self.compile_call(callee, args, call_span);
@@ -910,8 +910,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .into_pointer_value()
                 }
             };
-            let ref_flags = self.fn_param_ref.get(&name).cloned().unwrap_or_default();
+            let ref_flags = self
+                .fn_sig
+                .fn_param_ref
+                .get(&name)
+                .cloned()
+                .unwrap_or_default();
             let slice_elems = self
+                .fn_sig
                 .fn_param_slice_elem
                 .get(&name)
                 .cloned()
@@ -1001,6 +1007,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // as a branch condition (`if ok` / `if not ok`) failed LLVM
                 // verification (`Branch condition is not 'i1' type!`).
                 let ret_ty = self
+                    .fn_sig
                     .fn_return_type_exprs
                     .get(&name)
                     .map(|te| self.llvm_type_for_type_expr(te));
@@ -1109,8 +1116,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(&name)
                 .copied()
                 .expect("state struct type co-emitted with constructor");
-            let ref_flags = self.fn_param_ref.get(&name).cloned().unwrap_or_default();
+            let ref_flags = self
+                .fn_sig
+                .fn_param_ref
+                .get(&name)
+                .cloned()
+                .unwrap_or_default();
             let slice_elems = self
+                .fn_sig
                 .fn_param_slice_elem
                 .get(&name)
                 .cloned()
@@ -1286,7 +1299,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let return_layout = pending_ret
             .filter(|l| !matches!(l, LayoutId::Aos))
             .filter(|_| {
-                self.fn_asts
+                self.fn_sig
+                    .fn_asts
                     .get(&name)
                     .is_some_and(Self::return_is_layout_carrying)
             })
@@ -1296,12 +1310,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // value param OR a `Vec[E]` return can ever specialize, so skip the AST
         // clone for the common case — most user calls pay only a HashMap lookup
         // plus a param/return scan here.
-        let callee_may_specialize = self.fn_asts.get(&name).is_some_and(|f| {
+        let callee_may_specialize = self.fn_sig.fn_asts.get(&name).is_some_and(|f| {
             f.params.iter().any(Self::param_is_layout_carrying)
                 || Self::return_is_layout_carrying(f)
         });
         if callee_may_specialize {
-            let callee_fn = self.fn_asts[&name].clone();
+            let callee_fn = self.fn_sig.fn_asts[&name].clone();
             let layout_subst = self.compute_call_layout_subst(&callee_fn, args);
             let any_forward = layout_subst.values().any(|l| !matches!(l, LayoutId::Aos));
             let any_backward = !matches!(return_layout, LayoutId::Aos);
@@ -1330,6 +1344,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Kāra name — translate before lookup (no-op for every other call,
         // since the map is empty unless `#[link_name]` is used).
         let lookup_name = self
+            .fn_sig
             .extern_link_names
             .get(&name)
             .cloned()
@@ -1342,13 +1357,20 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
 
-        let ref_flags = self.fn_param_ref.get(&name).cloned().unwrap_or_default();
+        let ref_flags = self
+            .fn_sig
+            .fn_param_ref
+            .get(&name)
+            .cloned()
+            .unwrap_or_default();
         let mut_ref_flags = self
+            .fn_sig
             .fn_param_mut_ref
             .get(&name)
             .cloned()
             .unwrap_or_default();
         let slice_elems = self
+            .fn_sig
             .fn_param_slice_elem
             .get(&name)
             .cloned()
@@ -1651,6 +1673,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // it the unsuffixed f64 literals produce an 8-byte block the f32
                 // callee misreads.
                 let param_tensor = self
+                    .fn_sig
                     .fn_param_tensor_info
                     .get(&name)
                     .and_then(|v| v.get(i).cloned().flatten());
@@ -1700,6 +1723,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `TypeExpr`, and because the AST is what the READ side resolves too
             // — both ends deriving the layout from one source is the point.
             let param_te = self
+                .fn_sig
                 .fn_asts
                 .get(&name)
                 .and_then(|f| f.params.get(i))
@@ -2207,7 +2231,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // against the callee's param types and stops at the shorter) so these
         // already-typed args pass through untouched. Inert unless the callee is
         // `#[track_caller]`, i.e. never for a program without the attribute.
-        if self.track_caller_fns.contains(&lookup_name) {
+        if self.fn_sig.track_caller_fns.contains(&lookup_name) {
             match self.fn_ctx.current_fn_caller_loc {
                 Some((file, line, col)) => {
                     compiled_args.push(file.into());
@@ -2271,6 +2295,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the caller's binding still owns.
     pub(super) fn is_owned_tensor_param(&self, name: &str, i: usize) -> bool {
         let is_tensor = self
+            .fn_sig
             .fn_param_tensor_info
             .get(name)
             .and_then(|v| v.get(i))
@@ -2282,7 +2307,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .copied()
                 .unwrap_or(false)
         };
-        is_tensor && !flagged(&self.fn_param_ref) && !flagged(&self.fn_param_mut_ref)
+        is_tensor && !flagged(&self.fn_sig.fn_param_ref) && !flagged(&self.fn_sig.fn_param_mut_ref)
     }
 
     /// B-2026-08-09-15 — does the callee RETURN something it bound out of
@@ -2313,7 +2338,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .copied()
                 .unwrap_or(false)
         };
-        if flagged(&self.fn_param_ref) || flagged(&self.fn_param_mut_ref) {
+        if flagged(&self.fn_sig.fn_param_ref) || flagged(&self.fn_sig.fn_param_mut_ref) {
             return false;
         }
         let Some(program) = self.program_snapshot.as_deref() else {
@@ -2408,7 +2433,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .copied()
                 .unwrap_or(false)
         };
-        if flagged(&self.fn_param_ref) || flagged(&self.fn_param_mut_ref) {
+        if flagged(&self.fn_sig.fn_param_ref) || flagged(&self.fn_sig.fn_param_mut_ref) {
             return None;
         }
         let program = self.program_snapshot.as_deref()?;
@@ -2514,6 +2539,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let type_name = match &callee.kind {
             ExprKind::Identifier(n) => self
+                .fn_sig
                 .fn_return_type_names
                 .get(n)
                 .cloned()
@@ -2647,7 +2673,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // is forwarding a temp rather than a binding.
                 matches!(&arg.kind, ExprKind::Call { callee, .. }
                     if matches!(&callee.kind, ExprKind::Identifier(n)
-                        if self.fn_return_type_names.contains_key(n)))
+                        if self.fn_sig.fn_return_type_names.contains_key(n)))
                     && self.nested_boxed_owner_source_of(arg).is_none()
             }
             ExprKind::StructLiteral {
@@ -2709,7 +2735,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // A direct call to a real function manufactures its result.
                 matches!(&callee.kind, ExprKind::Identifier(n)
-                    if self.fn_return_type_names.contains_key(n))
+                    if self.fn_sig.fn_return_type_names.contains_key(n))
             }
             // A fresh aggregate is unowned exactly when every initializer is.
             ExprKind::StructLiteral { fields, .. } => fields
@@ -2865,7 +2891,9 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         let ret_ty_name = match &tail.kind {
             ExprKind::Call { callee, .. } => match &callee.kind {
-                ExprKind::Identifier(fn_name) => self.fn_return_type_names.get(fn_name).cloned(),
+                ExprKind::Identifier(fn_name) => {
+                    self.fn_sig.fn_return_type_names.get(fn_name).cloned()
+                }
                 _ => None,
             },
             // B-2026-07-30-11 (user-method discard): `f.make();` /
@@ -2898,7 +2926,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 recv_ty
                     .and_then(|t| {
-                        self.fn_return_type_names
+                        self.fn_sig
+                            .fn_return_type_names
                             .get(&format!("{t}.{method}"))
                             .cloned()
                     })
@@ -3175,7 +3204,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // guard at the call sites already skipped flow-through args.
         if let ExprKind::Call { callee, .. } = &arg.kind {
             if let ExprKind::Identifier(fn_name) = &callee.kind {
-                if let Some(ret_ty_name) = self.fn_return_type_names.get(fn_name).cloned() {
+                if let Some(ret_ty_name) = self.fn_sig.fn_return_type_names.get(fn_name).cloned() {
                     let has_user_drop = self
                         .program_snapshot
                         .as_deref()
@@ -3924,7 +3953,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ExprKind::Identifier(fn_name) = &callee.kind else {
                     return false;
                 };
-                match self.fn_return_type_names.get(fn_name) {
+                match self.fn_sig.fn_return_type_names.get(fn_name) {
                     Some(n) => n.clone(),
                     None => return false,
                 }
@@ -6118,6 +6147,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let tn = match &arg_expr.kind {
                 ExprKind::Call { callee, .. } => match &callee.kind {
                     ExprKind::Identifier(n) => self
+                        .fn_sig
                         .fn_return_type_names
                         .get(n)
                         .cloned()

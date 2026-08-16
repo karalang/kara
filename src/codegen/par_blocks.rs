@@ -2624,7 +2624,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         if let Some(name) = callee {
-            if let Some(false) = self.callee_effectful.get(name) {
+            if let Some(false) = self.fn_sig.callee_effectful.get(name) {
                 return;
             }
         }

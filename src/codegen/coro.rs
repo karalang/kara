@@ -1159,6 +1159,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// as unit.
     pub(super) fn coro_return_basic_type(&self) -> Option<BasicTypeEnum<'ctx>> {
         let te = self
+            .fn_sig
             .fn_return_type_exprs
             .get(&self.fn_ctx.current_fn_name)?;
         Some(self.llvm_type_for_type_expr(te))

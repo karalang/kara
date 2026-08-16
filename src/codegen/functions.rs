@@ -401,7 +401,7 @@ impl<'ctx> super::Codegen<'ctx> {
             param_types.push(ptr_ty.into());
             param_types.push(i32_ty.into());
             param_types.push(i32_ty.into());
-            self.track_caller_fns.insert(func.name.clone());
+            self.fn_sig.track_caller_fns.insert(func.name.clone());
         }
 
         // Niche call ABI for `Option[shared T]` signature positions
@@ -565,7 +565,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|p| matches!(&p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
             .collect();
-        self.fn_param_ref.insert(func.name.clone(), ref_flags);
+        self.fn_sig
+            .fn_param_ref
+            .insert(func.name.clone(), ref_flags);
         // B-2026-08-05-37 — the mutate-through subset, which needs a pointer to
         // the caller's PLACE rather than to a copy. See `fn_param_mut_ref`.
         let mut_ref_flags: Vec<bool> = func
@@ -573,7 +575,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|p| matches!(&p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_)))
             .collect();
-        self.fn_param_mut_ref
+        self.fn_sig
+            .fn_param_mut_ref
             .insert(func.name.clone(), mut_ref_flags);
         // Record per-param `Tensor[T, S]` info so a call site can thread the
         // DECLARED element type into a `Tensor.{from,…}` argument (B-2026-07-18-10;
@@ -592,7 +595,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.tensor_var_info_from_type_expr(bare)
             })
             .collect();
-        self.fn_param_tensor_info
+        self.fn_sig
+            .fn_param_tensor_info
             .insert(func.name.clone(), tensor_infos);
         // Record slice-param element types for call-site coercion.
         let slice_elems: Vec<Option<BasicTypeEnum<'ctx>>> = func
@@ -600,7 +604,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|p| self.extract_slice_elem_type(&p.ty))
             .collect();
-        self.fn_param_slice_elem
+        self.fn_sig
+            .fn_param_slice_elem
             .insert(func.name.clone(), slice_elems);
 
         // Record the return-type name (bare `Path` segment) so call-chain
@@ -611,7 +616,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // Full return TypeExpr — the untyped-let oversized-enum boxing
             // path needs the generic arg of `Option[T]` / `Result[T, E]`,
             // which the bare-segment `fn_return_type_names` below drops.
-            self.fn_return_type_exprs
+            self.fn_sig
+                .fn_return_type_exprs
                 .insert(func.name.clone(), ret_ty.clone());
             // Borrow return (`-> ref T` / `-> mut ref T`): record the
             // inner `T` so the caller binds the call result as a ref-local
@@ -621,13 +627,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // binds an ordinary struct value, not a ref-local.
             if let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &ret_ty.kind {
                 if !self.ref_return_is_value_abi(inner) {
-                    self.fn_ref_return_inner
+                    self.fn_sig
+                        .fn_ref_return_inner
                         .insert(func.name.clone(), (**inner).clone());
                 }
             }
             if let TypeKind::Path(path) = &ret_ty.kind {
                 if let Some(seg) = path.segments.first() {
-                    self.fn_return_type_names
+                    self.fn_sig
+                        .fn_return_type_names
                         .insert(func.name.clone(), seg.clone());
                 }
                 // Record the inner shared name when the return type is
@@ -637,7 +645,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // shape; explicit `let out: Option[T] = ...` reads the
                 // inner directly off the annotation).
                 if let Some((inner_name, _)) = self.option_inner_shared_type_for_type_expr(ret_ty) {
-                    self.fn_return_option_inner_shared
+                    self.fn_sig
+                        .fn_return_option_inner_shared
                         .insert(func.name.clone(), inner_name);
                 }
             }
@@ -1127,7 +1136,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // No user hint — consult the compiler-driven heuristic pass
             // (phase-11 Codegen Optimization). The user always wins, so this
             // only fires when `inline_hint` is absent. Advisory either way.
-            None => match self.heuristic_inline_hints.get(&func.name) {
+            None => match self.fn_sig.heuristic_inline_hints.get(&func.name) {
                 Some(crate::inline_hints::HeuristicHint::Inline) => attrs.push("inlinehint"),
                 Some(crate::inline_hints::HeuristicHint::NoInline) => attrs.push("noinline"),
                 None => {}
@@ -1247,7 +1256,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // appended), capture them. `emit_panic` reads them to report the
         // caller's location, and a nested `#[track_caller]` call forwards them.
         // Reset (to `None`) for every ordinary function.
-        self.fn_ctx.current_fn_caller_loc = if self.track_caller_fns.contains(&func.name) {
+        self.fn_ctx.current_fn_caller_loc = if self.fn_sig.track_caller_fns.contains(&func.name) {
             let base = func.params.len() as u32;
             Some((
                 fn_val.get_nth_param(base).unwrap().into_pointer_value(),

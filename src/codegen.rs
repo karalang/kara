@@ -15,6 +15,7 @@ use contract_state::ContractState;
 use display::Display;
 use drop_rc::DropRc;
 use fn_ctx::FnCtx;
+use fn_sig::FnSig;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -82,6 +83,7 @@ mod expr_ops;
 mod exprs;
 mod file;
 mod fn_ctx;
+mod fn_sig;
 mod functions;
 mod helpers;
 mod http;
@@ -363,7 +365,7 @@ pub fn compile_to_ir_for_repl_cell_with_snapshots(
 ) -> Result<String, String> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_repl_cell");
-    cg.declare_only_fns = declare_only_fns.clone();
+    cg.fn_sig.declare_only_fns = declare_only_fns.clone();
     cg.main_symbol_override = Some(main_symbol.to_string());
     cg.snapshot_capture = snapshot_capture.clone();
     cg.snapshot_replay = snapshot_replay.clone();
@@ -1142,6 +1144,7 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) fn_sig: FnSig<'ctx>,
     pub(crate) payload_vars: PayloadVars<'ctx>,
     pub(crate) closure_state: ClosureState<'ctx>,
     pub(crate) var_types: VarTypes<'ctx>,
@@ -1368,14 +1371,6 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch — surfaced 2026-05-25 by the codegen suite's
     /// intermittent hang investigation.
     pub(crate) seeded_enum_names: HashSet<String>,
-    /// Non-generic top-level function AST nodes keyed by name. Retained so the
-    /// per-layout-monomorphization dispatch (slice 2) can compile an on-demand
-    /// SoA specialization of a plain `Vec[E]`-taking helper at a call site with
-    /// a SoA argument (`docs/spikes/per-layout-monomorphization.md`). The
-    /// non-specialized (all-`Aos`) function is still declared + compiled in the
-    /// normal module pass; this registry feeds only the layout-specialized
-    /// monomorphs.
-    pub(crate) fn_asts: HashMap<String, Function>,
     /// Per-layout-monomorphization slice 3 — the active *return* layout of the
     /// monomorph currently being compiled (`Aos` outside a return-SoA mono).
     /// Saved/restored around the mono body like `layout_subst`; read by
@@ -1594,78 +1589,6 @@ pub(super) struct Codegen<'ctx> {
     /// independent (B-2026-06-10-2). Cleared per-function alongside
     /// `ref_params`.
     pub(crate) owned_struct_params: HashSet<String>,
-    /// Function parameter ref-ness (function name → vec of is_ref per param).
-    pub(crate) fn_param_ref: HashMap<String, Vec<bool>>,
-    /// The `mut ref` / `mut Slice` subset of [`Self::fn_param_ref`] — a
-    /// MUTATE-THROUGH borrow, as opposed to a read-only `ref`.
-    ///
-    /// B-2026-08-05-37: the two need different argument lowering. A read-only
-    /// borrow of a place may be satisfied by a pointer to a shallow copy (the
-    /// callee only reads it), and for most types that is what the rvalue path
-    /// produces. A `mut ref` borrow may NOT: the callee's writes have to land
-    /// in the caller's storage, so the argument must be a pointer to the PLACE.
-    /// Passing a copy makes the mutation silently disappear.
-    pub(crate) fn_param_mut_ref: HashMap<String, Vec<bool>>,
-    /// Per-parameter `Tensor[T, S]` info (function name → vec of `Some(info)`
-    /// for each `(ref) Tensor` param, `None` otherwise). Lets a call site thread
-    /// the DECLARED element type of a tensor param into `pending_let_tensor_info`
-    /// before compiling a `Tensor.{from,zeros,ones,full}` argument — so an
-    /// unsuffixed-literal `Tensor.from([-1.0, 2.0])` bound to a `ref
-    /// Tensor[f32, …]` param lays its data out at the expected element width
-    /// (the argument-position sibling of the let-annotation threading via
-    /// `tensor_var_infos`). B-2026-07-18-9.
-    pub(crate) fn_param_tensor_info:
-        HashMap<String, Vec<Option<crate::codegen::state::TensorVarInfo<'ctx>>>>,
-    /// `unsafe extern` imports that carry `#[link_name("symbol")]`: maps the
-    /// Kāra fn identifier → the foreign symbol it actually binds. The import
-    /// is registered in the LLVM module under the *symbol* name, so call
-    /// sites must translate the Kāra name through this map before
-    /// `module.get_function(...)` (an LLVM function's name *is* its symbol).
-    /// Empty unless a program uses `#[link_name]`; the common case keeps the
-    /// Kāra name and never touches this map. Lets a snake_case Kāra fn bind a
-    /// PascalCase C symbol — the LLVM-C self-hosting binding's requirement
-    /// (`docs/spikes/self-hosting-llvm-c-ffi.md`).
-    pub(crate) extern_link_names: HashMap<String, String>,
-    /// Function parameter slice element type (function name → per-param
-    /// Some(elem_ty) if that param is Slice[T] / mut Slice[T], else None).
-    /// Used at call sites to emit Array → Slice and Vec → Slice coercions.
-    pub(crate) fn_param_slice_elem: HashMap<String, Vec<Option<BasicTypeEnum<'ctx>>>>,
-    /// Function return-type name (function name → user-type name of the
-    /// declared return type, if it is a bare `Path` to a known struct /
-    /// enum). Used by `compile_field_access` to recover the static type
-    /// of a call-chain field-access object (`helper().val`) when the
-    /// callee returns a shared struct — without this, the field path
-    /// falls through to the generic `StructValue` extract and silently
-    /// loads `i64 0`. See bug #8 (call-chain field access on
-    /// shared-struct return).
-    pub(crate) fn_return_type_names: HashMap<String, String>,
-    /// Function-name → inner `TypeExpr` of a borrow return (`-> ref T` /
-    /// `-> mut ref T` ⇒ inner `T`). Lets the caller learn that a call
-    /// result is a borrow so it can bind it as a ref-local (deref on use
-    /// via `ref_params`) rather than treating the returned `ptr` as a
-    /// value — the caller half of B-2026-06-07-5. Populated by
-    /// `declare_function`.
-    pub(crate) fn_ref_return_inner: HashMap<String, TypeExpr>,
-    /// Function-name → inner-shared-name when the function returns
-    /// `Option[shared T]`. Populated by `declare_function` from the
-    /// return type's `Option[T]` generic arg when T is a known shared
-    /// type. Read by the let-stmt handler's `Option[shared T]`
-    /// detection to register an `RcDecOption` cleanup for untyped
-    /// bindings whose RHS is a call (`let out = add_two_numbers(...)`).
-    /// Closes the kata-bench retention gap (2026-05-17) for the
-    /// inferred-annotation shape; the explicit-annotation shape
-    /// (`let out: Option[ListNode] = ...`) reads the inner directly
-    /// off the surface `TypeExpr`.
-    pub(crate) fn_return_option_inner_shared: HashMap<String, String>,
-    /// Function-name → full return `TypeExpr`. Populated by
-    /// `declare_function`. Read by the let-stmt handler's oversized-enum
-    /// boxing path (`boxed_enum_payload_variants`) for an *untyped* let whose
-    /// RHS is a direct call (`let o = make_opt()`): the box drop needs the
-    /// generic arg `T` of `Option[T]` / `Result[T, E]` to decide boxing and
-    /// name the inner struct, which `fn_return_type_names` (bare segment only)
-    /// can't supply. The annotated shape reads `T` off the `let`'s `ty`.
-    /// docs/spikes/oversized-enum-payload.md §3.
-    pub(crate) fn_return_type_exprs: HashMap<String, TypeExpr>,
     /// Per-binding inner-shared-heap layout for `Option[shared T]`
     /// variables. Populated by `track_rc_option_var` at let-binding
     /// time; read by the `Assign` arm so reassignment of a tracked
@@ -1790,15 +1713,6 @@ pub(super) struct Codegen<'ctx> {
     /// an entry as an implicit type annotation so a heap-typed wp-result
     /// binding registers its method-dispatch metadata (B-2026-07-31-20).
     pub(crate) wp_result_types: HashMap<(usize, usize), TypeExpr>,
-    /// Per-callee effectfulness side-table — populated from
-    /// `Program.callee_effectful` (set by the cli pipeline after effectcheck).
-    /// Key: callable's canonical name (free fn `name`, assoc/method
-    /// `Type.method`). Value: `true` iff the callee carries any of
-    /// `reads`/`writes`/`sends`/`receives`. Read by `emit_branch_cancel_check`
-    /// to skip the cooperative cancel atomic load when we can prove the
-    /// callee is non-observably-effectful. Absent callees are treated as
-    /// potentially effectful (fall back to the conservative MVP behavior).
-    pub(crate) callee_effectful: HashMap<String, bool>,
     /// Per-method-call → `Type.method` callee key side-table — populated
     /// from `Program.method_callee_types` (set by the lowering pass from
     /// `TypeCheckResult.expr_types`). Key: `(span.offset, span.length)` of
@@ -1901,13 +1815,6 @@ pub(super) struct Codegen<'ctx> {
     /// `ref_return_inner_types` it survives the parser's chained-call span
     /// aliasing — see the population site (B-2026-07-29-12).
     pub(crate) user_ref_method_inner: std::collections::HashMap<String, TypeExpr>,
-    /// Compiler-driven inline hints (phase-11 Codegen Optimization). Maps a
-    /// concrete user function's name to a heuristic `inlinehint` / `noinline`
-    /// decision, computed once by `crate::inline_hints::compute` before the
-    /// declaration pass and consulted by `emit_codegen_hint_attrs` only when
-    /// the user wrote no explicit `#[inline]` hint (the user always wins).
-    pub(crate) heuristic_inline_hints:
-        std::collections::HashMap<String, crate::inline_hints::HeuristicHint>,
     /// Set of `(span.offset, span.length)` keys for every expression whose
     /// Kāra type is `String`. Populated from `Program.string_typed_exprs`
     /// (which the lowering pass derives from `TypeCheckResult.expr_types`).
@@ -2050,28 +1957,6 @@ pub(super) struct Codegen<'ctx> {
     /// `__karac_dropbodies_*` walk is re-registered with it masked. Cleared per
     /// function alongside that map (B-2026-08-03-8).
     pub(crate) struct_moved_field_bodies: HashMap<String, std::collections::HashSet<usize>>,
-    /// Source OFFSETS of every expression-level mention of each identifier in
-    /// the function body currently being compiled, recorded once at
-    /// `compile_function_body` entry (B-2026-08-08-25 leg 1).
-    ///
-    /// The one consumer is `scrutinee_read_after_match`, which asks the
-    /// liveness question the consuming-arm clone is gated on: is this
-    /// scrutinee local READ AFTER the match that moves its payload out? A
-    /// mention offset at or past the last arm body's end answers yes.
-    ///
-    /// Offsets rather than a bare count because the scrutinee's OWN mention is
-    /// inside the match and must not count as a later read — the distinction
-    /// between `match o { … }` (source dead, keep today's zero-cost transfer)
-    /// and `match o { … } … match o { … }` (source live, needs the clone).
-    ///
-    /// Built from `bce_length_pin::block_all`, whose walk is exhaustive over
-    /// `ExprKind` with no wildcard arm, so a new AST node breaks this at
-    /// compile time instead of silently reading as "not mentioned" — which
-    /// would take the fast path on a live source and dangle it again.
-    /// Over-approximating is safe here (a needless clone costs one `malloc`);
-    /// under-approximating reintroduces the use-after-free, so the walk's
-    /// fail-closed discipline is load-bearing rather than incidental.
-    pub(crate) fn_body_ident_mention_offsets: HashMap<String, Vec<usize>>,
     /// Top-level `const NAME: T = value` declarations, populated by
     /// `compile_program` from `Item::ConstDecl` items before any function
     /// body is compiled. Key: const name. Value: the const's value
@@ -2262,13 +2147,6 @@ pub(super) struct Codegen<'ctx> {
     /// Reset per function, because the hint set is span-keyed and
     /// program-wide while these names are not unique across functions.
     pub(crate) frozen_elem_vec_owners: HashSet<String>,
-    /// `#[track_caller]` slice 4: names of functions declared `#[track_caller]`
-    /// that received the hidden caller-location parameter triple (populated in
-    /// `declare_function`). A call site consults this to decide whether to
-    /// append the `(file, line, col)` caller-location args. Empty for any
-    /// program with no `#[track_caller]` functions, so the whole feature is
-    /// inert by default.
-    pub(crate) track_caller_fns: std::collections::HashSet<String>,
     /// Level 2 crash diagnostics — Part 2: DWARF debug-info state. `Some` only
     /// when `KARAC_DEBUG_INFO` is on AND a source filename is threaded in;
     /// `None` (the default) makes every `di_*` hook a cheap early-return so the
@@ -2398,14 +2276,6 @@ pub(super) struct Codegen<'ctx> {
     /// which we want to avoid in the (common) path where no layout
     /// intrinsic is invoked.
     pub(crate) target_data: Option<TargetData>,
-    /// Slice c-repl.B.4: free-fn names whose bodies should NOT be
-    /// emitted in this module — only the LLVM `declare` (signature
-    /// without body) is emitted, so the JIT resolves calls to these
-    /// names against a previously-installed module in the same
-    /// JITDylib. Used by `karac repl`'s cross-cell amortization
-    /// pipeline so cell N+1 doesn't re-emit cell N's items. Empty
-    /// in every other codegen entry point.
-    pub(crate) declare_only_fns: std::collections::HashSet<String>,
     /// Slice c-repl.B.4: when `Some(name)`, the AST function whose
     /// `func.name == "main"` is registered in LLVM under `name`
     /// instead of the literal `main` symbol. The i32-return
@@ -6143,7 +6013,23 @@ impl<'ctx> Codegen<'ctx> {
                 mono_handle_param_infos: HashMap::new(),
                 mono_payload_binding_type_exprs: HashMap::new(),
             },
-            fn_asts: HashMap::new(),
+            fn_sig: FnSig {
+                fn_asts: HashMap::new(),
+                fn_param_slice_elem: HashMap::new(),
+                fn_param_ref: HashMap::new(),
+                fn_param_mut_ref: HashMap::new(),
+                fn_param_tensor_info: HashMap::new(),
+                extern_link_names: HashMap::new(),
+                fn_return_type_names: HashMap::new(),
+                fn_return_type_exprs: HashMap::new(),
+                fn_ref_return_inner: HashMap::new(),
+                fn_return_option_inner_shared: HashMap::new(),
+                fn_body_ident_mention_offsets: HashMap::new(),
+                callee_effectful: HashMap::new(),
+                heuristic_inline_hints: std::collections::HashMap::new(),
+                track_caller_fns: std::collections::HashSet::new(),
+                declare_only_fns: std::collections::HashSet::new(),
+            },
             return_layout: LayoutId::Aos,
             pending_return_layout: None,
             closure_state: ClosureState {
@@ -6215,7 +6101,6 @@ impl<'ctx> Codegen<'ctx> {
                     != Ok("0"),
             },
             slice_alias_md: HashMap::new(),
-            fn_param_slice_elem: HashMap::new(),
             ref_params: HashMap::new(),
             signature_ref_params: std::collections::HashSet::new(),
             entry_slot_ref_vars: HashMap::new(),
@@ -6226,14 +6111,6 @@ impl<'ctx> Codegen<'ctx> {
             borrowed_agg_payload_struct_vars: HashSet::new(),
             enumerate_index_pattern: None,
             owned_struct_params: HashSet::new(),
-            fn_param_ref: HashMap::new(),
-            fn_param_mut_ref: HashMap::new(),
-            fn_param_tensor_info: HashMap::new(),
-            extern_link_names: HashMap::new(),
-            fn_return_type_names: HashMap::new(),
-            fn_return_type_exprs: HashMap::new(),
-            fn_ref_return_inner: HashMap::new(),
-            fn_return_option_inner_shared: HashMap::new(),
             target_abi: TargetAbi {
                 fn_niche_abi: HashMap::new(),
                 boxed_export_names: std::collections::HashSet::new(),
@@ -6297,12 +6174,10 @@ impl<'ctx> Codegen<'ctx> {
             boxed_enum_export_names: std::collections::HashSet::new(),
             compiling_ref_return_let_rhs: false,
             suppress_shadow_metadata_purge: false,
-            fn_body_ident_mention_offsets: HashMap::new(),
             copy_support_for_loop_shared_mode: false,
             question_conversions: HashMap::new(),
             question_ok_payload_types: HashMap::new(),
             wp_result_types: HashMap::new(),
-            callee_effectful: HashMap::new(),
             method_callee_types: HashMap::new(),
             impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::new(),
             method_impl_dispatch: HashMap::new(),
@@ -6318,7 +6193,6 @@ impl<'ctx> Codegen<'ctx> {
             ref_return_inner_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             user_ref_method_inner: std::collections::HashMap::new(),
-            heuristic_inline_hints: std::collections::HashMap::new(),
             string_typed_exprs: HashSet::new(),
             borrow_vec_typed_exprs: HashSet::new(),
             iterator_typed_exprs: HashSet::new(),
@@ -6363,7 +6237,6 @@ impl<'ctx> Codegen<'ctx> {
             frozen_alias_bindings: HashSet::new(),
             frozen_element_containers: HashSet::new(),
             frozen_elem_vec_owners: HashSet::new(),
-            track_caller_fns: std::collections::HashSet::new(),
             debug_info: None,
             runtime_debug_metadata_enabled: read_runtime_debug_metadata_env(),
             // Env gate OR wasm target — see the field doc-comment
@@ -6384,7 +6257,6 @@ impl<'ctx> Codegen<'ctx> {
             uam_copied_sites: std::collections::HashSet::new(),
             http_shim_cache: HashMap::new(),
             target_data: init_target_data,
-            declare_only_fns: std::collections::HashSet::new(),
             main_symbol_override: None,
             force_external_linkage: false,
             snapshot_capture: HashMap::new(),
@@ -7480,7 +7352,7 @@ impl<'ctx> Codegen<'ctx> {
         for item in &program.items {
             if let Item::Function(f) = item {
                 if f.generic_params.is_none() {
-                    self.fn_asts.insert(f.name.clone(), f.clone());
+                    self.fn_sig.fn_asts.insert(f.name.clone(), f.clone());
                 }
             }
         }
@@ -7530,7 +7402,7 @@ impl<'ctx> Codegen<'ctx> {
         // effect (reads/writes/sends/receives). Read by
         // `emit_branch_cancel_check` to skip the cancel atomic load when the
         // callee is provably non-observable.
-        self.callee_effectful = program.callee_effectful.clone();
+        self.fn_sig.callee_effectful = program.callee_effectful.clone();
 
         // Side-table set by `lowering::lower_program`: each `MethodCall`
         // expression's span maps to the canonical `Type.method` callee key.
@@ -7796,7 +7668,7 @@ impl<'ctx> Codegen<'ctx> {
         // attach a heuristic `inlinehint` / `noinline`. Computed once here (a
         // whole-program size + call-site census) so `emit_codegen_hint_attrs`
         // can consult it during the per-function declaration pass below.
-        self.heuristic_inline_hints = crate::inline_hints::compute(program);
+        self.fn_sig.heuristic_inline_hints = crate::inline_hints::compute(program);
 
         // First pass: register generic functions for on-demand monomorphization;
         // declare concrete (non-generic) functions for forward-call support.
@@ -7831,7 +7703,8 @@ impl<'ctx> Codegen<'ctx> {
                                 .as_ref()
                                 .is_some_and(|gp| gp.params.iter().any(|p| &p.name == seg));
                             if !is_generic_param {
-                                self.fn_return_type_names
+                                self.fn_sig
+                                    .fn_return_type_names
                                     .insert(f.name.clone(), seg.clone());
                             }
                         }
@@ -7842,7 +7715,7 @@ impl<'ctx> Codegen<'ctx> {
                     // (slice 2): a SoA argument at a call site compiles a layout
                     // specialization of this body. The all-`Aos` body is the one
                     // just declared and compiled in the normal pass.
-                    self.fn_asts.insert(f.name.clone(), f.clone());
+                    self.fn_sig.fn_asts.insert(f.name.clone(), f.clone());
                 }
             }
         }
@@ -8135,7 +8008,7 @@ impl<'ctx> Codegen<'ctx> {
                     continue;
                 }
                 if f.generic_params.is_none() {
-                    if self.declare_only_fns.contains(&f.name) {
+                    if self.fn_sig.declare_only_fns.contains(&f.name) {
                         continue;
                     }
                     self.compile_function(f)?;
@@ -8205,7 +8078,7 @@ impl<'ctx> Codegen<'ctx> {
                                 // `FakeClock.now` and trips
                                 // `add_ir_module: Duplicate definition of
                                 // symbol`.
-                                if self.declare_only_fns.contains(&qualified) {
+                                if self.fn_sig.declare_only_fns.contains(&qualified) {
                                     continue;
                                 }
                                 let mut synth =
@@ -8947,7 +8820,7 @@ impl<'ctx> Codegen<'ctx> {
                     &mut t_question_ok_payload_types,
                 );
                 std::mem::swap(&mut self.wp_result_types, &mut t_wp_result_types);
-                std::mem::swap(&mut self.callee_effectful, &mut t_callee_effectful);
+                std::mem::swap(&mut self.fn_sig.callee_effectful, &mut t_callee_effectful);
                 std::mem::swap(&mut self.method_callee_types, &mut t_method_callee_types);
                 std::mem::swap(&mut self.string_typed_exprs, &mut t_string_typed_exprs);
                 std::mem::swap(
@@ -9085,7 +8958,7 @@ impl<'ctx> Codegen<'ctx> {
                                 if !compiled.insert(qualified.clone()) {
                                     continue;
                                 }
-                                if self.declare_only_fns.contains(&qualified) {
+                                if self.fn_sig.declare_only_fns.contains(&qualified) {
                                     continue;
                                 }
                                 let synth =
