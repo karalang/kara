@@ -118,8 +118,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      # `--all-targets` so the cfg(test) surface is linted here too, matching
+      # the CLAUDE.md local gate — without it, test-target-only lints on the
+      # non-llvm build were enforced only by the non-blocking drift canary.
       - name: Clippy
-        run: cargo clippy --all -- -D warnings
+        run: cargo clippy --all --all-targets -- -D warnings
 
       - name: Codegen containment guard
         run: |
