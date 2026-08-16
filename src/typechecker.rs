@@ -43,6 +43,7 @@ mod method_identifier_receiver;
 mod method_iterator_agg;
 mod method_numeric;
 mod method_optres_combinator;
+mod method_pointer;
 mod method_sequence_mutation;
 mod method_user_impl;
 mod method_vec_mutation;

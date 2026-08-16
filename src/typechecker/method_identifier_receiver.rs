@@ -32,8 +32,11 @@ use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
-use super::types::{type_display, Type};
+use super::env::{FunctionSig, ImplInfo};
+use super::inference::substitute_type_params;
+use super::types::{type_display, SubstValue, Type};
 use super::TypeErrorKind;
+use std::collections::HashMap;
 
 impl<'a> super::TypeChecker<'a> {
     /// Type a method call whose receiver is a bare identifier naming a
@@ -479,6 +482,197 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 // Known type but no matching method — fall through so the
                 // existing "method not found" diagnostic fires below.
+            }
+        }
+        None
+    }
+
+    /// Type a concrete-type UFCS call — `TypeName[Args].method(..)`.
+    ///
+    /// The parser disambiguates this to a single-segment
+    /// `Path { generic_args: Some(..) }` receiver; dispatch routes through
+    /// `find_methods_with_args` so impl-level bounds discharge against the
+    /// explicit type-args, then substitutes each impl-level generic param
+    /// with its concrete arg before validating the call arguments.
+    ///
+    /// Returns `None` when the receiver is not such a path, leaving the
+    /// call to later links in the `infer_method_call` chain.
+    pub(super) fn try_path_receiver_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Type> {
+        // The parser disambiguates `TypeName[…].method(` to a single-segment
+        // `Path { generic_args: Some(...) }` object; here we route through
+        // `find_methods_with_args` so impl-level bounds discharge against
+        // the explicit type-args, then substitute each impl-level generic
+        // param with its concrete arg in the sig before validating call args.
+        // (Sub-item 5B of `phase-4-interpreter.md` § method resolution;
+        // canonical entry at `phase-2-parser-ast.md` § "Path expression with
+        // generic args — concrete-type UFCS support".)
+        if let ExprKind::Path {
+            segments,
+            generic_args: Some(generic_args),
+        } = &object.kind
+        {
+            if segments.len() == 1 {
+                let type_name = segments[0].clone();
+                // Concrete-type UFCS at slice 1b widens generic_args to
+                // `Vec<GenericArg>`; the dispatch surface still consumes
+                // type args only — const-arg binding for UFCS calls
+                // lands when slice 3's call-site solver threads the
+                // substitution through. Const-args at this position are
+                // ignored for dispatch but still parsed so the shape
+                // round-trips cleanly.
+                let target_args: Vec<Type> = generic_args
+                    .iter()
+                    .filter_map(|a| match a {
+                        GenericArg::Type(t) => Some(self.lower_type_expr(t, &[])),
+                        GenericArg::Const(_) => None,
+                        // Shape args are ignored for dispatch (Dim/Shape
+                        // kind system lands in Phase 11 Q1).
+                        GenericArg::Shape(_) => None,
+                    })
+                    .collect();
+                self.method_callee_types.insert(
+                    SpanKey::from_span(span),
+                    format!("{}.{}", type_name, method),
+                );
+                let candidates: Vec<(ImplInfo, FunctionSig)> = self
+                    .env
+                    .find_methods_with_args(&type_name, &target_args, method)
+                    .into_iter()
+                    .map(|(imp, sig)| (imp.clone(), sig.clone()))
+                    .collect();
+                // Slice 5C of the method-resolution CR — see
+                // `phase-4-interpreter.md` § method-resolution sub-item 5C.
+                // `find_methods_with_args` already applies the inherent-
+                // beats-trait priority partition + bounds-discharge filter
+                // (slices 1 + 3); a length-≥2 result here means multiple
+                // candidates of the same priority tier survived. The
+                // user must pick a specific UFCS form (`TraitName.method(...)`)
+                // to disambiguate. Mirrors slice 3's receiver-form
+                // `AmbiguousMethod` (E0239) but uses `AmbiguousAssocFn`
+                // (E0233) to match slice 3.5 and slice 5A's framing —
+                // type-prefixed dispatch is the natural disambiguation
+                // form for UFCS.
+                if candidates.len() > 1 {
+                    let receiver_display = if target_args.is_empty() {
+                        type_name.clone()
+                    } else {
+                        format!(
+                            "{}[{}]",
+                            type_name,
+                            target_args
+                                .iter()
+                                .map(type_display)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    };
+                    let candidate_lines: Vec<String> = candidates
+                        .iter()
+                        .map(|(imp, sig)| {
+                            let dispatcher = imp
+                                .trait_name
+                                .clone()
+                                .unwrap_or_else(|| imp.target_type.clone());
+                            let subs: HashMap<String, SubstValue> = imp
+                                .generic_params
+                                .as_ref()
+                                .map(|gp| {
+                                    gp.params
+                                        .iter()
+                                        .zip(target_args.iter())
+                                        .map(|(p, t)| (p.name.clone(), SubstValue::Type(t.clone())))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let params_display = sig
+                                .params
+                                .iter()
+                                .map(|p| type_display(&substitute_type_params(p, &subs)))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let return_display =
+                                type_display(&substitute_type_params(&sig.return_type, &subs));
+                            format!(
+                                "    `{}.{}({})` -> {}",
+                                dispatcher, method, params_display, return_display,
+                            )
+                        })
+                        .collect();
+                    self.type_error(
+                        format!(
+                            "ambiguous method '{}' on `{}`: \
+                             multiple candidates apply. Use UFCS to disambiguate:\n{}",
+                            method,
+                            receiver_display,
+                            candidate_lines.join("\n"),
+                        ),
+                        span.clone(),
+                        TypeErrorKind::AmbiguousAssocFn,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Some(Type::Error);
+                }
+                if let Some((imp, sig)) = candidates.first() {
+                    let subs: HashMap<String, SubstValue> = imp
+                        .generic_params
+                        .as_ref()
+                        .map(|gp| {
+                            gp.params
+                                .iter()
+                                .zip(target_args.iter())
+                                .map(|(p, t)| (p.name.clone(), SubstValue::Type(t.clone())))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let param_types: Vec<Type> = sig
+                        .params
+                        .iter()
+                        .map(|p| substitute_type_params(p, &subs))
+                        .collect();
+                    let return_ty = substitute_type_params(&sig.return_type, &subs);
+                    if args.len() != param_types.len() {
+                        self.type_error(
+                            format!(
+                                "method '{}' expects {} argument(s), found {}",
+                                method,
+                                param_types.len(),
+                                args.len()
+                            ),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                        return Some(return_ty);
+                    }
+                    for (arg, param) in args.iter().zip(param_types.iter()) {
+                        let arg_ty = self.infer_expr(&arg.value);
+                        self.check_assignable(param, &arg_ty, arg.value.span.clone());
+                    }
+                    return Some(return_ty);
+                }
+                // No matching impl-table entry. Built-in types (Vec, Option,
+                // etc.) whose methods dispatch through special-case infer
+                // paths rather than `env.impls` are out of scope for this
+                // slice; falling through to a focused diagnostic.
+                self.type_error(
+                    format!("no method '{}' on `{}[…]`", method, type_name),
+                    span.clone(),
+                    TypeErrorKind::NoMethodFound,
+                );
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                return Some(Type::Error);
             }
         }
         None
