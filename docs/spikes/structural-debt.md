@@ -13,10 +13,11 @@ and ownership/ (13) has not reached:
 
 - `src/cli.rs` — 14.5k lines; `src/cli/` holds only 3 files (args, explain,
   help). The largest file in the repo and the least-structured.
-- ~~`src/concurrency.rs` — 7.5k lines, no submodule dir at all~~ STARTED —
-  first five submodules extracted (predicates, reduction_shapes,
-  var_extract, reads, effects_collect); driver down to 4.8k lines. The
-  remaining ~3.3k-line checker impl body still wants further seams.
+- ~~`src/concurrency.rs` — 7.5k lines, no submodule dir at all~~ DONE —
+  eight submodules extracted over two slices (predicates, reduction_shapes,
+  var_extract, reads, effects_collect, conflicts, reductions, hazards);
+  driver at 2,203 lines (types, entry, analyze_stmt, grouping). Comparable
+  to the other extracted phases now.
 - `src/codegen/method_call.rs` — regrew to 20.7k lines *after* extraction;
   needs a second-level split (peers: `stmts.rs` 13.8k, `vec_method.rs` 12.7k,
   `runtime.rs` 12.2k, `control_flow_match.rs` 10.5k).
