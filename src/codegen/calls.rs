@@ -29,10 +29,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// field-container / indexed-container hoists.
     pub(super) fn unregister_synth_container(&mut self, name: &str) {
         self.variables.remove(name);
-        self.vec_elem_types.remove(name);
-        self.slice_elem_types.remove(name);
-        self.var_elem_type_exprs.remove(name);
-        self.var_type_names.remove(name);
+        self.var_types.vec_elem_types.remove(name);
+        self.var_types.slice_elem_types.remove(name);
+        self.var_types.var_elem_type_exprs.remove(name);
+        self.var_types.var_type_names.remove(name);
         self.mapset.map_key_types.remove(name);
         self.mapset.map_val_types.remove(name);
         self.mapset.map_key_type_names.remove(name);
@@ -255,6 +255,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // type. Without this we can't populate the synth's side tables, so
         // the recursive dispatch would fall through to the silent-`0` arm.
         let elem_te = self
+            .var_types
             .var_elem_type_exprs
             .get(outer_name.as_str())
             // `Array[T, N]` records its element TypeExpr in its OWN table
@@ -270,7 +271,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // Not char-specific: `Array[i64, N]` and `Array[String, N]` failed
             // identically, so every indexed-receiver method on an Array was
             // unreachable, not just the one the row's `char` probe hit.
-            .or_else(|| self.array_elem_type_exprs.get(outer_name.as_str()))
+            .or_else(|| {
+                self.var_types
+                    .array_elem_type_exprs
+                    .get(outer_name.as_str())
+            })
             .cloned()
             .ok_or_else(|| {
                 format!(
@@ -284,9 +289,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // container-shape-specific path. Bounds check goes through
         // `emit_panic` on OOB; the OK BB leaves the builder positioned for
         // the post-elem-ptr work.
-        let (elem_ptr, elem_ll_ty) = if self.vec_elem_types.contains_key(outer_name.as_str()) {
+        let (elem_ptr, elem_ll_ty) = if self
+            .var_types
+            .vec_elem_types
+            .contains_key(outer_name.as_str())
+        {
             self.lower_indexed_elem_ptr_vec(&outer_name, index)?
-        } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
+        } else if self
+            .var_types
+            .slice_elem_types
+            .contains_key(outer_name.as_str())
+        {
             self.lower_indexed_elem_ptr_slice(&outer_name, index)?
         } else if self.mapset.map_val_types.contains_key(outer_name.as_str()) {
             // B-2026-07-25-5: Map outer. `var_elem_type_exprs` is already
@@ -352,10 +365,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // is bookkeeping cleanup so subsequent compilations in the same
         // function don't see stale entries.
         self.variables.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.slice_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
-        self.var_type_names.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
         self.mapset.map_key_types.remove(&synth);
         self.mapset.map_val_types.remove(&synth);
         self.mapset.map_key_type_names.remove(&synth);
@@ -368,10 +381,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // (same registry set as the element synth above), if one was minted.
         if let Some(c) = hoisted_container {
             self.variables.remove(&c);
-            self.vec_elem_types.remove(&c);
-            self.slice_elem_types.remove(&c);
-            self.var_elem_type_exprs.remove(&c);
-            self.var_type_names.remove(&c);
+            self.var_types.vec_elem_types.remove(&c);
+            self.var_types.slice_elem_types.remove(&c);
+            self.var_types.var_elem_type_exprs.remove(&c);
+            self.var_types.var_type_names.remove(&c);
             self.mapset.map_key_types.remove(&c);
             self.mapset.map_val_types.remove(&c);
             self.mapset.map_key_type_names.remove(&c);
@@ -420,7 +433,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // existing fall-through diagnostic.
         let (type_name, receiver_ptr, is_shared_handle) = match &inner.kind {
             ExprKind::Identifier(outer_name) => {
-                let type_name = match self.var_type_names.get(outer_name.as_str()).cloned() {
+                let type_name = match self
+                    .var_types
+                    .var_type_names
+                    .get(outer_name.as_str())
+                    .cloned()
+                {
                     Some(t) => t,
                     None => return Ok(None),
                 };
@@ -547,7 +565,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Recover the element TypeExpr to learn the struct type
                 // name. The container must be a tracked Vec/Slice/Array;
                 // its element-TypeExpr was populated at binding time.
-                let elem_te = match self.var_elem_type_exprs.get(outer_name.as_str()).cloned() {
+                let elem_te = match self
+                    .var_types
+                    .var_elem_type_exprs
+                    .get(outer_name.as_str())
+                    .cloned()
+                {
                     Some(te) => te,
                     None => {
                         if let Some(c) = &hoisted_idx_container {
@@ -577,31 +600,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 // via the same per-container helper the MR-slice
                 // indexed-receiver arm uses. Bounds-check goes through
                 // `emit_panic` on OOB and leaves the builder on the OK BB.
-                let (elem_ptr, _elem_ll_ty) =
-                    if self.vec_elem_types.contains_key(outer_name.as_str()) {
-                        self.lower_indexed_elem_ptr_vec(&outer_name, index)?
-                    } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
-                        self.lower_indexed_elem_ptr_slice(&outer_name, index)?
+                let (elem_ptr, _elem_ll_ty) = if self
+                    .var_types
+                    .vec_elem_types
+                    .contains_key(outer_name.as_str())
+                {
+                    self.lower_indexed_elem_ptr_vec(&outer_name, index)?
+                } else if self
+                    .var_types
+                    .slice_elem_types
+                    .contains_key(outer_name.as_str())
+                {
+                    self.lower_indexed_elem_ptr_slice(&outer_name, index)?
+                } else {
+                    let slot = self
+                        .variables
+                        .get(outer_name.as_str())
+                        .copied()
+                        .ok_or_else(|| {
+                            format!(
+                                "codegen: indexed-field-receiver {} — outer '{}' has no slot",
+                                ctx, outer_name
+                            )
+                        })?;
+                    if let BasicTypeEnum::ArrayType(_) = slot.ty {
+                        self.lower_indexed_elem_ptr_array(slot, index)?
                     } else {
-                        let slot = self
-                            .variables
-                            .get(outer_name.as_str())
-                            .copied()
-                            .ok_or_else(|| {
-                                format!(
-                                    "codegen: indexed-field-receiver {} — outer '{}' has no slot",
-                                    ctx, outer_name
-                                )
-                            })?;
-                        if let BasicTypeEnum::ArrayType(_) = slot.ty {
-                            self.lower_indexed_elem_ptr_array(slot, index)?
-                        } else {
-                            if let Some(c) = &hoisted_idx_container {
-                                self.unregister_synth_container(c);
-                            }
-                            return Ok(None);
+                        if let Some(c) = &hoisted_idx_container {
+                            self.unregister_synth_container(c);
                         }
-                    };
+                        return Ok(None);
+                    }
+                };
                 // For shared-struct elements, the element slot stores the
                 // heap-pointer handle; load it to get the receiver-pointer
                 // the field GEP indexes into. For plain-struct elements,
@@ -902,10 +932,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Clean up synth registrations.
         self.variables.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.slice_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
-        self.var_type_names.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
         self.atomic_var_inner_is_bool.remove(&synth);
         self.mapset.map_key_types.remove(&synth);
         self.mapset.map_val_types.remove(&synth);
@@ -959,6 +989,7 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         };
         let elem_te = self
+            .var_types
             .var_elem_type_exprs
             .get(outer_name.as_str())
             .cloned()
@@ -968,9 +999,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     outer_name
                 )
             })?;
-        let (elem_ptr, elem_ll_ty) = if self.vec_elem_types.contains_key(outer_name.as_str()) {
+        let (elem_ptr, elem_ll_ty) = if self
+            .var_types
+            .vec_elem_types
+            .contains_key(outer_name.as_str())
+        {
             self.lower_indexed_elem_ptr_vec(&outer_name, idx)?
-        } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
+        } else if self
+            .var_types
+            .slice_elem_types
+            .contains_key(outer_name.as_str())
+        {
             self.lower_indexed_elem_ptr_slice(&outer_name, idx)?
         } else {
             let slot = self
@@ -1008,9 +1047,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let result = self.compile_for(label, pattern, &synth_expr, body);
         self.variables.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.slice_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
         result
     }
 
@@ -1063,6 +1102,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Recover the element TypeExpr — needed to populate the synth
         // identifier's vec_elem_types / slice_elem_types registrations.
         let elem_te = self
+            .var_types
             .var_elem_type_exprs
             .get(outer_name.as_str())
             .cloned()
@@ -1074,9 +1114,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
             })?;
         // Lower the inner `outer[i]` to an element pointer + LLVM type.
-        let (elem_ptr, elem_ll_ty) = if self.vec_elem_types.contains_key(outer_name.as_str()) {
+        let (elem_ptr, elem_ll_ty) = if self
+            .var_types
+            .vec_elem_types
+            .contains_key(outer_name.as_str())
+        {
             self.lower_indexed_elem_ptr_vec(&outer_name, inner_idx)?
-        } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
+        } else if self
+            .var_types
+            .slice_elem_types
+            .contains_key(outer_name.as_str())
+        {
             self.lower_indexed_elem_ptr_slice(&outer_name, inner_idx)?
         } else {
             let slot = self
@@ -1132,9 +1180,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let result = self.compile_index(&synth_expr, outer_idx);
         self.variables.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.slice_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
         result
     }
 
@@ -1281,6 +1329,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
         let val_te = self
+            .var_types
             .var_elem_type_exprs
             .get(map_name.as_str())
             .cloned()
@@ -1343,10 +1392,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
 
         self.variables.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.slice_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
-        self.var_type_names.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
         self.mapset.map_key_types.remove(&synth);
         self.mapset.map_val_types.remove(&synth);
         self.mapset.map_key_type_names.remove(&synth);
@@ -1445,12 +1494,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let slice_ty = self.slice_struct_type();
-        let elem_ty = *self.slice_elem_types.get(outer_name).ok_or_else(|| {
-            format!(
-                "Undefined Slice variable '{}' in indexed-receiver lowering",
-                outer_name
-            )
-        })?;
+        let elem_ty = *self
+            .var_types
+            .slice_elem_types
+            .get(outer_name)
+            .ok_or_else(|| {
+                format!(
+                    "Undefined Slice variable '{}' in indexed-receiver lowering",
+                    outer_name
+                )
+            })?;
         let slice_ptr = self.get_data_ptr(outer_name).ok_or_else(|| {
             format!(
                 "Undefined Slice variable '{}' in indexed-receiver lowering",
@@ -1654,7 +1707,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self",
             _ => return None,
         };
-        if let Some(t) = self.var_type_names.get(name) {
+        if let Some(t) = self.var_types.var_type_names.get(name) {
             return Some(t.clone());
         }
         // B-2026-08-13-7 — a slice binding has no `var_type_names` entry:
@@ -1671,7 +1724,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the qualified `Slice.<method>` up in `module` / `generic_fns` and
         // declines when it is absent. A program with no `impl … for Slice[T]`
         // emits no such symbol, so nothing that compiles today changes path.
-        if self.slice_elem_types.contains_key(name) {
+        if self.var_types.slice_elem_types.contains_key(name) {
             return Some("Slice".to_string());
         }
         None
@@ -2579,7 +2632,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let e_is_moved_heap_ident = matches!(
                         &err_arg.value.kind,
                         ExprKind::Identifier(n)
-                            if self.vec_elem_types.contains_key(n.as_str())
+                            if self.var_types.vec_elem_types.contains_key(n.as_str())
                                 && self.variables.get(n.as_str()).is_some_and(|s| matches!(
                                     s.ty,
                                     BasicTypeEnum::StructType(held) if held == self.vec_struct_type()
@@ -2919,7 +2972,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let default_is_moved_heap_ident = matches!(
                 &default_arg.value.kind,
                 ExprKind::Identifier(n)
-                    if self.vec_elem_types.contains_key(n.as_str())
+                    if self.var_types.vec_elem_types.contains_key(n.as_str())
                         && self.variables.get(n.as_str()).is_some_and(|s| matches!(
                             s.ty,
                             BasicTypeEnum::StructType(held) if held == self.vec_struct_type()

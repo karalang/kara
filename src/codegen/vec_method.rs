@@ -51,7 +51,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.for_loop_owned_agg_vars.contains(src.as_str()) {
             return;
         }
-        let Some(type_name) = self.var_type_names.get(src.as_str()).cloned() else {
+        let Some(type_name) = self.var_types.var_type_names.get(src.as_str()).cloned() else {
             return;
         };
         if self.shared_types.contains_key(&type_name) {
@@ -80,7 +80,8 @@ impl<'ctx> super::Codegen<'ctx> {
         matches!(&arg.kind, ExprKind::Identifier(src)
             if self.for_loop_owned_agg_vars.contains(src.as_str())
                 && self
-                    .var_type_names
+                    .var_types
+                        .var_type_names
                     .get(src.as_str())
                     .is_some_and(|t| self.struct_types.contains_key(t.as_str())
                         && !self.shared_types.contains_key(t.as_str())))
@@ -107,7 +108,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(src) = &arg.kind else {
             return;
         };
-        let Some(type_name) = self.var_type_names.get(src.as_str()).cloned() else {
+        let Some(type_name) = self.var_types.var_type_names.get(src.as_str()).cloned() else {
             return;
         };
         if let Some(drop_fn) = self.emit_struct_drop_synthesis(&type_name) {
@@ -341,7 +342,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `None` when the binding has no recorded element type or it isn't a plain
     /// named type.
     pub(super) fn vec_elem_type_name(&self, var_name: &str) -> Option<String> {
-        match self.var_elem_type_exprs.get(var_name).map(|te| &te.kind) {
+        match self
+            .var_types
+            .var_elem_type_exprs
+            .get(var_name)
+            .map(|te| &te.kind)
+        {
             Some(TypeKind::Path(p)) => p.segments.last().cloned(),
             _ => None,
         }
@@ -1675,7 +1681,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // routes to `karac_string_sorted` while a `Vec[T].sorted()` still
             // falls through to the Vec arms / catch-all (same pattern as the
             // `push` String-vs-Vec disambiguation above).
-            "sorted" if self.string_vars.contains(var_name) => {
+            "sorted" if self.var_types.string_vars.contains(var_name) => {
                 let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "ss");
                 let func = self.runtime_fns.karac_string_sorted_fn;
                 Ok(self.build_string_xform_result(
@@ -1702,6 +1708,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     ));
                 }
                 let elem_te = self
+                    .var_types
                     .var_elem_type_exprs
                     .get(var_name)
                     .cloned()
@@ -1786,7 +1793,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // this stays interp-only for now — bail LOUD with the standard
             // pointer instead of the generic dispatch tail (B-2026-07-20-8,
             // Vec leg landed; String leg deferred).
-            "sorted_by" if self.string_vars.contains(var_name) => Err(
+            "sorted_by" if self.var_types.string_vars.contains(var_name) => Err(
                 "`String.sorted_by(cmp)` is not yet supported under `karac build` \
                  (codegen); use `.sorted()` for ascending order, or re-run with \
                  `--interp` (or `KARAC_RUN_JIT=0`)."
@@ -1838,6 +1845,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     ));
                 }
                 let elem_te = self
+                    .var_types
                     .var_elem_type_exprs
                     .get(var_name)
                     .cloned()
@@ -1921,7 +1929,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // path. Gated off String receivers (`string_vars`) so only the
             // Vec[String] form lands here; the typechecker's element gate
             // keeps non-String element vectors out.
-            "join" | "concat" if !self.string_vars.contains(var_name) => {
+            "join" | "concat" if !self.var_types.string_vars.contains(var_name) => {
                 let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "jn");
                 let sep_data = if method == "join" {
                     if args.len() != 1 {
@@ -2361,7 +2369,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // analog of Rust's `String::push`. The encoding shape reuses
             // `emit_codepoint_to_utf8` (already in use by print /
             // f-string lowering, runtime.rs § Codepoint utilities).
-            "push" if self.string_vars.contains(var_name) => {
+            "push" if self.var_types.string_vars.contains(var_name) => {
                 if args.is_empty() {
                     return Err("String.push requires a Char argument".to_string());
                 }
@@ -2636,6 +2644,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // exactly that way — the payloads freed and the control blocks
                 // did not.
                 let weak_elem = self
+                    .var_types
                     .var_elem_type_exprs
                     .get(var_name)
                     .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)));
@@ -4735,7 +4744,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, len_ptr, "efs.cur_len")
                     .unwrap()
                     .into_int_value();
-                let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+                let elem_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
                 let trivial = elem_te
                     .as_ref()
                     .map(is_trivially_copyable_te)
@@ -5092,7 +5101,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, len_ptr, "tefs.cur_len")
                     .unwrap()
                     .into_int_value();
-                let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+                let elem_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
                 let trivial = elem_te
                     .as_ref()
                     .map(is_trivially_copyable_te)
@@ -5481,7 +5490,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // function. Guarded with the same actionable message rather
                 // than left to fail LLVM verification.
                 self.register_iter_body_retarget(&body);
-                let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+                let elem_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
                 let fn_val = self.current_fn.unwrap();
 
                 // Header: data buffer ptr + len.
@@ -5694,7 +5703,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         args.len()
                     ));
                 }
-                let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+                let elem_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
                 let fn_val = self.current_fn.unwrap();
 
                 let data_pp = self
@@ -5883,13 +5892,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // body's named-field access resolves. Tuples
                         // (TypeKind::Tuple) and other shapes pass None;
                         // the .0/.1 numeric-index path doesn't need it.
-                        let elem_type_name: Option<String> = self
-                            .var_elem_type_exprs
-                            .get(var_name)
-                            .and_then(|te| match &te.kind {
-                                TypeKind::Path(p) => p.segments.last().cloned(),
-                                _ => None,
-                            });
+                        let elem_type_name: Option<String> =
+                            self.var_types.var_elem_type_exprs.get(var_name).and_then(
+                                |te| match &te.kind {
+                                    TypeKind::Path(p) => p.segments.last().cloned(),
+                                    _ => None,
+                                },
+                            );
                         // The mono path is a stable O(N log N) merge sort
                         // (B-2026-07-30-2), so it is now the ONLY path for
                         // eligible shapes — no runtime callback, no length
@@ -5954,6 +5963,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // and rationale as the mono dispatch: the inline thunk
                 // re-compiles the body and needs it to resolve `a.field`.
                 let elem_type_name: Option<String> = self
+                    .var_types
                     .var_elem_type_exprs
                     .get(var_name)
                     .and_then(|te| match &te.kind {
@@ -5965,7 +5975,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .kind
                 {
                     ExprKind::Closure { params, body, .. } => {
-                        let elem_te_owned = self.var_elem_type_exprs.get(var_name).cloned();
+                        let elem_te_owned =
+                            self.var_types.var_elem_type_exprs.get(var_name).cloned();
                         self.emit_sort_by_inline_thunk(
                             params,
                             body,
@@ -6139,6 +6150,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else if self.vec_elem_type_name(var_name).as_deref() == Some("String") {
                     self.emit_default_sort_thunk_string()
                 } else if let Some(cmp_fn) = self
+                    .var_types
                     .var_elem_type_exprs
                     .get(var_name)
                     .cloned()
@@ -6287,7 +6299,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !args.is_empty() {
                     return Err(format!("Vec.clear expects 0 arguments, got {}", args.len()));
                 }
-                if let Some(elem_te) = self.var_elem_type_exprs.get(var_name).cloned() {
+                if let Some(elem_te) = self.var_types.var_elem_type_exprs.get(var_name).cloned() {
                     // B-2026-08-03-2 (class 1) — the element's user Drop BODY,
                     // which this arm never ran: it went straight to the memory
                     // drop, so `v.clear()` on a `Vec[Res]` reclaimed the heap
@@ -6371,7 +6383,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 // Drop the [n, cur_len) tail for heap-owning element types
                 // (primitives skip the loop — nothing to free).
-                let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+                let elem_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
                 if let Some(elem_te) = elem_te {
                     if !is_trivially_copyable_te(&elem_te) {
                         let elem_drop = self.emit_drop_fn_for_type_expr(&elem_te);
@@ -6561,15 +6573,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `var_elem_type_exprs`; canonical first segment is
                         // the struct name for path-typed struct elements;
                         // tuple / generic / etc. fall back to `None`.
-                        let elem_type_name: Option<String> = self
-                            .var_elem_type_exprs
-                            .get(var_name)
-                            .and_then(|te| match &te.kind {
-                                TypeKind::Path(p) => p.segments.last().cloned(),
-                                _ => None,
-                            });
+                        let elem_type_name: Option<String> =
+                            self.var_types.var_elem_type_exprs.get(var_name).and_then(
+                                |te| match &te.kind {
+                                    TypeKind::Path(p) => p.segments.last().cloned(),
+                                    _ => None,
+                                },
+                            );
                         {
-                            let elem_te_owned = self.var_elem_type_exprs.get(var_name).cloned();
+                            let elem_te_owned =
+                                self.var_types.var_elem_type_exprs.get(var_name).cloned();
                             self.emit_sort_by_key_inline_thunk(
                                 params,
                                 body.as_ref(),
@@ -6689,7 +6702,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // longer than the haystack never enters the loop — both match
             // Rust's `str::contains` (and the interpreter's
             // `method_call_seq.rs` arm). Surfaced by B-2026-06-10-1.
-            "contains" if self.string_vars.contains(var_name) => {
+            "contains" if self.var_types.string_vars.contains(var_name) => {
                 if args.is_empty() {
                     return Err("String.contains requires a substring argument".to_string());
                 }
@@ -8222,7 +8235,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
@@ -8263,7 +8276,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     },
                 );
                 if let Some(type_name) = saved_var_types.get(var_name) {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(var_name.clone(), type_name.clone());
                 }
             }
@@ -8289,7 +8303,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // to both compiles below (first and second body recompile);
         // saved_var_types is restored when the thunk emitter returns.
         if let Some(name) = elem_type_name {
-            self.var_type_names
+            self.var_types
+                .var_type_names
                 .insert(param_name.clone(), name.to_string());
         }
         // B-2026-08-10-13 — `sort_by_key` has the same gap as `sort_by` and is
@@ -8665,12 +8680,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // 11. Restore outer state.
         // B-2026-08-10-13 — drop the key param's container registrations; the
         // name is thunk-local and must not shadow an enclosing binding.
-        self.vec_elem_types.remove(&param_name);
-        self.slice_elem_types.remove(&param_name);
-        self.var_elem_type_exprs.remove(&param_name);
+        self.var_types.vec_elem_types.remove(&param_name);
+        self.var_types.slice_elem_types.remove(&param_name);
+        self.var_types.var_elem_type_exprs.remove(&param_name);
         self.mono_state.type_subst = saved_subst;
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
@@ -8936,7 +8951,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
@@ -8977,7 +8992,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     },
                 );
                 if let Some(type_name) = saved_var_types.get(var_name) {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(var_name.clone(), type_name.clone());
                 }
             }
@@ -9062,13 +9078,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 PatternKind::Binding(n) => n.clone(),
                 _ => format!("_cp{}", i),
             };
-            self.vec_elem_types.remove(&n);
-            self.slice_elem_types.remove(&n);
-            self.var_elem_type_exprs.remove(&n);
+            self.var_types.vec_elem_types.remove(&n);
+            self.var_types.slice_elem_types.remove(&n);
+            self.var_types.var_elem_type_exprs.remove(&n);
         }
         self.mono_state.type_subst = saved_subst;
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
@@ -9327,7 +9343,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
@@ -11023,7 +11039,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Restore outer state.
         self.mono_state.type_subst = saved_subst;
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
@@ -11118,7 +11134,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
@@ -11692,7 +11708,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(None).unwrap();
 
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
@@ -11743,7 +11759,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
@@ -11923,7 +11939,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(Some(&out)).unwrap();
 
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;

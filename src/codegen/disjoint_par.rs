@@ -265,7 +265,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // Slice params/locals register their element type; their LLVM shape is
         // the 2-field `{ptr, i64}` struct.
-        if self.slice_elem_types.contains_key(name) && matches!(ty, BasicTypeEnum::StructType(_)) {
+        if self.var_types.slice_elem_types.contains_key(name)
+            && matches!(ty, BasicTypeEnum::StructType(_))
+        {
             return true;
         }
         // B-2026-08-05-13 — a `mut ref Vec[T]` / `mut ref String` PARAMETER.
@@ -422,7 +424,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
@@ -501,7 +503,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
                 if let Some(type_name) = saved_var_types.get(var_name) {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(var_name.clone(), type_name.clone());
                 }
             }
@@ -520,7 +523,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 },
             );
             if let Some(type_name) = saved_var_types.get(var_name) {
-                self.var_type_names
+                self.var_types
+                    .var_type_names
                     .insert(var_name.clone(), type_name.clone());
             }
         }
@@ -623,7 +627,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {

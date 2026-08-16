@@ -153,7 +153,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the borrowed `result` for a drop and double-free its heap
                     // fields. The saved/removed entry is restored below
                     // alongside the `variables` slot.
-                    let prev_type_name = self.var_type_names.remove(param);
+                    let prev_type_name = self.var_types.var_type_names.remove(param);
                     if let Some(crate::ast::TypeKind::Path(p)) = self
                         .contract_state
                         .current_contract_result_type
@@ -180,10 +180,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 match prev_type_name {
                     Some(tn) => {
-                        self.var_type_names.insert(param, tn);
+                        self.var_types.var_type_names.insert(param, tn);
                     }
                     None => {
-                        self.var_type_names.remove(&param);
+                        self.var_types.var_type_names.remove(&param);
                     }
                 }
             }
@@ -265,7 +265,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         ty: rv.get_type(),
                     },
                 );
-                let prev_ty = self.var_type_names.insert("self".to_string(), type_name);
+                let prev_ty = self
+                    .var_types
+                    .var_type_names
+                    .insert("self".to_string(), type_name);
                 Some((prev_var, prev_ty))
             }
             _ => None,
@@ -284,10 +287,10 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             match prev_ty {
                 Some(t) => {
-                    self.var_type_names.insert("self".to_string(), t);
+                    self.var_types.var_type_names.insert("self".to_string(), t);
                 }
                 None => {
-                    self.var_type_names.remove("self");
+                    self.var_types.var_type_names.remove("self");
                 }
             }
         }

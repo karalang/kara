@@ -40,7 +40,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if let ExprKind::Identifier(name) = &inner.kind {
             let n = name.as_str();
-            if self.vec_elem_types.contains_key(n) || self.slice_elem_types.contains_key(n) {
+            if self.var_types.vec_elem_types.contains_key(n)
+                || self.var_types.slice_elem_types.contains_key(n)
+            {
                 return true;
             }
             if let Some(slot) = self.variables.get(n) {
@@ -451,7 +453,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (extracts ptr/len from the var's struct slot, lets
                 // any per-var tracking state stay in scope).
                 if let ExprKind::Identifier(name) = &object.kind {
-                    if self.string_vars.contains(name.as_str()) {
+                    if self.var_types.string_vars.contains(name.as_str()) {
                         return self.compile_for_string_chars(label, pattern, name, body);
                     }
                 }
@@ -714,15 +716,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // buffer), but `for c in s` iterates chars (i32), not
                     // bytes (i8). `string_vars` is the disambiguator.
                     // Design pin: design.md § Character type (line 2299).
-                    if self.string_vars.contains(name.as_str()) {
+                    if self.var_types.string_vars.contains(name.as_str()) {
                         return self.compile_for_string_chars(label, pattern, name, body);
                     }
                     // Vec iteration (owned or ref)
-                    if self.vec_elem_types.contains_key(name.as_str()) {
+                    if self.var_types.vec_elem_types.contains_key(name.as_str()) {
                         return self.compile_for_vec_var(label, pattern, name, body);
                     }
                     // Slice iteration: `{ptr, len}` struct alloca.
-                    if self.slice_elem_types.contains_key(name.as_str()) {
+                    if self.var_types.slice_elem_types.contains_key(name.as_str()) {
                         return self.compile_for_slice_var(label, pattern, name, body);
                     }
                     // Map iteration: for (k, v) in map { }
@@ -747,13 +749,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // machinery frees it at function exit, so the loop must not.
             // S6c blanket-Vec.
             ExprKind::SelfValue => {
-                if self.string_vars.contains("self") {
+                if self.var_types.string_vars.contains("self") {
                     return self.compile_for_string_chars(label, pattern, "self", body);
                 }
-                if self.vec_elem_types.contains_key("self") {
+                if self.var_types.vec_elem_types.contains_key("self") {
                     return self.compile_for_vec_var(label, pattern, "self", body);
                 }
-                if self.slice_elem_types.contains_key("self") {
+                if self.var_types.slice_elem_types.contains_key("self") {
                     return self.compile_for_slice_var(label, pattern, "self", body);
                 }
                 if self.mapset.map_key_types.contains_key("self") {
@@ -865,9 +867,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     if method == "iter_mut" && im_args.is_empty() {
                         if let ExprKind::Identifier(recv_name) = &im_recv.kind {
                             let recv_name = recv_name.clone();
-                            if self.vec_elem_types.contains_key(recv_name.as_str())
+                            if self
+                                .var_types
+                                .vec_elem_types
+                                .contains_key(recv_name.as_str())
                                 && matches!(&pattern.kind, PatternKind::Binding(_))
                                 && self
+                                    .var_types
                                     .var_elem_type_exprs
                                     .get(recv_name.as_str())
                                     .is_some_and(super::vec_method::is_trivially_copyable_te)
@@ -1057,17 +1063,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // route to the tensor-element cleanup; other element types free the
         // buffer (with the existing recursive drop for nested-heap elems).
         let is_tensor_elem = self
+            .var_types
             .var_elem_type_exprs
             .get(synth.as_str())
             .cloned()
             .map(|et| self.tensor_var_info_from_type_expr(&et).is_some())
             .unwrap_or(false);
         let map_elem_drop = self
+            .var_types
             .var_elem_type_exprs
             .get(synth.as_str())
             .cloned()
             .and_then(|et| self.vec_elem_map_drop_for_type_expr(&et));
         let agg_elem_drop = self
+            .var_types
             .var_elem_type_exprs
             .get(synth.as_str())
             .cloned()
@@ -1078,14 +1087,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // `Vec[Map]` / `Vec[Set]` iterable temp: the Vec owns its map
             // elements (Cluster 1) — free each handle on drop.
             self.track_vec_of_maps_var(alloca, map_drop);
-        } else if let (Some(agg_drop), Some(&elem_ty)) =
-            (agg_elem_drop, self.vec_elem_types.get(synth.as_str()))
-        {
+        } else if let (Some(agg_drop), Some(&elem_ty)) = (
+            agg_elem_drop,
+            self.var_types.vec_elem_types.get(synth.as_str()),
+        ) {
             // `Vec[<user struct/enum>]` iterable temp: run each element's own
             // drop fn so enum/heap fields the inline recursion misses are
             // freed (B-2026-06-12-6 cluster 2 gap 2).
             self.track_vec_of_aggs_var(alloca, elem_ty, agg_drop);
-        } else if let Some(&elem_ty) = self.vec_elem_types.get(synth.as_str()) {
+        } else if let Some(&elem_ty) = self.var_types.vec_elem_types.get(synth.as_str()) {
             self.track_vec_var(alloca, Some(elem_ty));
         }
         let synth_expr = Expr {
@@ -1096,9 +1106,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // Drop synth registries (the queued cleanup references the alloca,
         // not the name, so it stays armed).
         self.variables.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.slice_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
         result.map(Some)
     }
 
@@ -1186,8 +1196,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.set_elem_types.remove(&synth);
         self.mapset.set_elem_type_names.remove(&synth);
         self.mapset.set_elem_type_exprs.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
-        self.var_type_names.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
         result.map(Some)
     }
 
@@ -1275,10 +1285,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // Clean up synth registrations so they don't leak across
         // sibling for-loops at the same nesting depth.
         self.variables.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.slice_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
-        self.var_type_names.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
         self.mapset.map_key_types.remove(&synth);
         self.mapset.map_val_types.remove(&synth);
         self.mapset.map_key_type_names.remove(&synth);
@@ -1286,7 +1296,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.set_elem_types.remove(&synth);
         self.mapset.set_elem_type_names.remove(&synth);
         self.mapset.set_elem_type_exprs.remove(&synth);
-        self.string_vars.remove(&synth);
+        self.var_types.string_vars.remove(&synth);
 
         result.map(Some)
     }
@@ -1367,11 +1377,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // Clean up synth registrations so they don't leak across sibling
         // for-loops at the same nesting depth (mirror the field-iter path).
         self.variables.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.slice_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
-        self.var_type_names.remove(&synth);
-        self.string_vars.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
+        self.var_types.string_vars.remove(&synth);
 
         result.map(Some)
     }
@@ -1658,7 +1668,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let slice_ty = self.slice_struct_type();
-        let elem_ty = *self.slice_elem_types.get(var_name).unwrap();
+        let elem_ty = *self.var_types.slice_elem_types.get(var_name).unwrap();
         let slice_ptr = self.get_data_ptr(var_name).unwrap();
 
         let data_pp = self
@@ -2150,7 +2160,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the loud adaptor bail).
     fn peel_iter_to_scalar_vec_ident(&self, e: &Expr) -> Option<String> {
         self.peel_iter_to_vec_ident(e).filter(|n| {
-            self.var_elem_type_exprs
+            self.var_types
+                .var_elem_type_exprs
                 .get(n.as_str())
                 .is_some_and(super::vec_method::is_trivially_copyable_te)
         })
@@ -2174,7 +2185,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(n) = &inner.kind else {
             return None;
         };
-        if self.vec_elem_types.contains_key(n.as_str()) {
+        if self.var_types.vec_elem_types.contains_key(n.as_str()) {
             Some(n.clone())
         } else {
             None
@@ -2947,7 +2958,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // very alloca that analysis's `let` created. The second half is what
         // makes a shadowing binding, a same-named parameter, or a stale
         // entry from another function fall back instead of miscompiling.
-        if self.ascii_const_string_lets.get(var_name) == Some(&str_ptr) {
+        if self.var_types.ascii_const_string_lets.get(var_name) == Some(&str_ptr) {
             return self.compile_for_string_chars_ascii_inner(label, pattern, data, len, body);
         }
         self.compile_for_string_chars_inner(label, pattern, data, len, body)
@@ -3048,7 +3059,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // a glyph rather than the integer codepoint — same rationale as the
         // general chars loop; `bind_pattern` only owns the LLVM-side slot.
         if let PatternKind::Binding(bind_name) = &pattern.kind {
-            self.var_type_names
+            self.var_types
+                .var_type_names
                 .insert(bind_name.clone(), "char".to_string());
         }
         self.compile_loop_body_with_cleanup(body, incr_bb)?;
@@ -3225,7 +3237,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(body_bb);
         self.bind_pattern(pattern, byte_z.into())?;
         if let PatternKind::Binding(bind_name) = &pattern.kind {
-            self.var_type_names
+            self.var_types
+                .var_type_names
                 .insert(bind_name.clone(), "char".to_string());
         }
         self.fn_ctx.loop_stack.push(LoopFrame {
@@ -3275,7 +3288,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.bind_pattern(pattern, cp_val)?;
         if let PatternKind::Binding(bind_name) = &pattern.kind {
-            self.var_type_names
+            self.var_types
+                .var_type_names
                 .insert(bind_name.clone(), "char".to_string());
         }
         self.fn_ctx.loop_stack.push(LoopFrame {
@@ -3468,7 +3482,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // `pattern_binding_types` table either, so the tag has to come
         // from the call site that knows the source-level type.
         if let PatternKind::Binding(bind_name) = &pattern.kind {
-            self.var_type_names
+            self.var_types
+                .var_type_names
                 .insert(bind_name.clone(), "char".to_string());
         }
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
@@ -3589,7 +3604,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Tag the binding as `u8` so downstream rendering / dispatch treats
         // it as an integer byte (not a `char` glyph like the chars loop).
         if let PatternKind::Binding(bind_name) = &pattern.kind {
-            self.var_type_names
+            self.var_types
+                .var_type_names
                 .insert(bind_name.clone(), "u8".to_string());
         }
         self.compile_loop_body_with_cleanup(body, incr_bb)?;
@@ -4415,7 +4431,7 @@ impl<'ctx> super::Codegen<'ctx> {
             cg.mapset.map_key_types.contains_key(n)
                 && !cg.mapset.set_elem_types.contains_key(n)
                 && cg.mapset.map_key_type_exprs.contains_key(n)
-                && cg.var_elem_type_exprs.contains_key(n)
+                && cg.var_types.var_elem_type_exprs.contains_key(n)
         };
         match &expr.kind {
             ExprKind::Identifier(n) => named(self, n.as_str()),
@@ -5453,7 +5469,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(var_name) = self.peel_iter_to_vec_ident(src) else {
             return Ok(None);
         };
-        let Some(elem_te) = self.var_elem_type_exprs.get(var_name.as_str()).cloned() else {
+        let Some(elem_te) = self
+            .var_types
+            .var_elem_type_exprs
+            .get(var_name.as_str())
+            .cloned()
+        else {
             return Ok(None);
         };
         let vec_te = Self::vec_type_expr_from_element(&elem_te);
@@ -5798,7 +5819,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(var_name) = self.peel_iter_to_vec_ident(src) else {
             return Ok(None);
         };
-        let Some(elem_te) = self.var_elem_type_exprs.get(var_name.as_str()).cloned() else {
+        let Some(elem_te) = self
+            .var_types
+            .var_elem_type_exprs
+            .get(var_name.as_str())
+            .cloned()
+        else {
             return Ok(None);
         };
         // Key-shape gate. An IDENTITY key (`|x| x`) compares the elements

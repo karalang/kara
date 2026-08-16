@@ -1295,10 +1295,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // when an explicit hint is already set or no record exists.
             ExprKind::ArrayLiteral(elems) => match self.literal_span_elem_hint(&expr.span) {
                 Some(h) => {
-                    let saved = self.pending_let_elem_type;
-                    self.pending_let_elem_type = Some(h);
+                    let saved = self.var_types.pending_let_elem_type;
+                    self.var_types.pending_let_elem_type = Some(h);
                     let r = self.compile_array_literal(elems);
-                    self.pending_let_elem_type = saved;
+                    self.var_types.pending_let_elem_type = saved;
                     r
                 }
                 None => self.compile_array_literal(elems),
@@ -1306,10 +1306,10 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::PrefixCollectionLiteral { type_name, items } if type_name == "Vec" => {
                 match self.literal_span_elem_hint(&expr.span) {
                     Some(h) => {
-                        let saved = self.pending_let_elem_type;
-                        self.pending_let_elem_type = Some(h);
+                        let saved = self.var_types.pending_let_elem_type;
+                        self.var_types.pending_let_elem_type = Some(h);
                         let r = self.compile_vec_prefix_literal(items);
-                        self.pending_let_elem_type = saved;
+                        self.var_types.pending_let_elem_type = saved;
                         r
                     }
                     None => self.compile_vec_prefix_literal(items),
@@ -3369,7 +3369,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(soa) = self.active_soa_layout(vec_name) {
                     return Some(soa.struct_name);
                 }
-                self.var_elem_type_exprs
+                self.var_types
+                    .var_elem_type_exprs
                     .get(vec_name)
                     .and_then(|te| match &te.kind {
                         crate::ast::TypeKind::Path(p) if p.segments.len() == 1 => {
@@ -3475,8 +3476,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: value.span.clone(),
         };
         let elem_llvm = self.llvm_type_for_type_expr(&elem_te);
-        self.vec_elem_types.insert(var_name.to_string(), elem_llvm);
-        self.var_elem_type_exprs
+        self.var_types
+            .vec_elem_types
+            .insert(var_name.to_string(), elem_llvm);
+        self.var_types
+            .var_elem_type_exprs
             .insert(var_name.to_string(), elem_te);
         self.track_vec_var(alloca, Some(elem_llvm));
         Ok(())

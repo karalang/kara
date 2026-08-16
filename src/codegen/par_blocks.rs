@@ -284,7 +284,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // annotation registered before the par-block fired
                     // (mirrors the auto-par dispatch path).
                     if slot.llvm_ty == vec_st {
-                        self.vec_elem_types
+                        self.var_types
+                            .vec_elem_types
                             .entry(slot.binding_name.clone())
                             .or_insert_with(|| self.context.i64_type().into());
                         // B-2026-07-02-4 (explicit-par sibling of the
@@ -295,8 +296,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // Register the same rich element dispatch the
                         // LET site uses (agg/map/tensor element drops,
                         // one-level fast path otherwise).
-                        let elem_ty = self.vec_elem_types.get(slot.binding_name.as_str()).copied();
+                        let elem_ty = self
+                            .var_types
+                            .vec_elem_types
+                            .get(slot.binding_name.as_str())
+                            .copied();
                         let elem_te = self
+                            .var_types
                             .var_elem_type_exprs
                             .get(slot.binding_name.as_str())
                             .cloned();
@@ -745,7 +751,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // it is the only way real cross-thread atomicity/mutual-exclusion holds.
         let par_shared_cell: Vec<bool> = captures
             .iter()
-            .map(|n| Self::is_par_shared_cell_type(self.var_type_names.get(n).map(String::as_str)))
+            .map(|n| {
+                Self::is_par_shared_cell_type(
+                    self.var_types.var_type_names.get(n).map(String::as_str),
+                )
+            })
             .collect();
         let mut env_field_types: Vec<BasicTypeEnum<'ctx>> = captures
             .iter()
@@ -1711,7 +1721,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         // Head-index deque slots (B-2026-07-30-5) are entry-block allocas of
         // the OUTER function; a branch body referencing one would be a
         // cross-function use (module-verifier dominance failure). Taken here —
@@ -1877,7 +1887,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         },
                     );
                     if let Some(type_name) = saved_var_types.get(var_name) {
-                        self.var_type_names
+                        self.var_types
+                            .var_type_names
                             .insert(var_name.clone(), type_name.clone());
                     }
                     continue;
@@ -1895,7 +1906,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // method dispatch can route `var.method()` through the
                 // user impl-block path inside the par branch.
                 if let Some(type_name) = saved_var_types.get(var_name) {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(var_name.clone(), type_name.clone());
                 }
                 // L227 SharedRc path: atomic rc_inc + cleanup registration.
@@ -2581,7 +2593,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.mapset.deque_head_slots = saved_deque_head_slots;
         self.current_fn = saved_fn;

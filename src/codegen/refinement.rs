@@ -96,10 +96,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// registration can't leak into later code in the same function.
     fn unbind_refine_self(&mut self) {
         self.variables.remove(REFINE_SELF);
-        self.var_type_names.remove(REFINE_SELF);
-        self.string_vars.remove(REFINE_SELF);
-        self.vec_elem_types.remove(REFINE_SELF);
-        self.var_elem_type_exprs.remove(REFINE_SELF);
+        self.var_types.var_type_names.remove(REFINE_SELF);
+        self.var_types.string_vars.remove(REFINE_SELF);
+        self.var_types.vec_elem_types.remove(REFINE_SELF);
+        self.var_types.var_elem_type_exprs.remove(REFINE_SELF);
     }
 
     /// Compile the refinement's predicate to an `i1`, with `self` already

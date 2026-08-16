@@ -396,6 +396,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         for name in [&m.source, &m.counter] {
             if self
+                .var_types
                 .var_type_names
                 .get(name.as_str())
                 .is_some_and(|t| is_unsigned_int_name(t.as_str()))
@@ -404,7 +405,8 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         let annotated_signed = [&m.source, &m.counter].iter().all(|n| {
-            self.var_type_names
+            self.var_types
+                .var_type_names
                 .get(n.as_str())
                 .is_some_and(|t| is_signed_int_name(t.as_str()))
         });

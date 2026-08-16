@@ -881,12 +881,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // narrow element width — set the pending hint from the column's
         // element so the literal packs at the width the memcpy below
         // assumes. Scalar elements only (String columns deep-clone).
-        let saved_hint = self.pending_let_elem_type;
+        let saved_hint = self.var_types.pending_let_elem_type;
         if elem.is_int_type() || elem.is_float_type() {
-            self.pending_let_elem_type = Some(elem);
+            self.var_types.pending_let_elem_type = Some(elem);
         }
         let arg_val = self.compile_expr(arg_expr);
-        self.pending_let_elem_type = saved_hint;
+        self.var_types.pending_let_elem_type = saved_hint;
         let arg_val = arg_val?;
 
         // Bare array-literal bindings (`let v = [1, 2, 3];`) compile to an

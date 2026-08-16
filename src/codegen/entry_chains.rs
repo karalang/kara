@@ -69,15 +69,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(name)
                 .cloned()
                 .ok_or_else(|| format!("clone: missing map_key_type_exprs for '{}'", name))?;
-            let v = self.var_elem_type_exprs.get(name).cloned().ok_or_else(|| {
-                format!("clone: missing var_elem_type_exprs (val) for '{}'", name)
-            })?;
+            let v = self
+                .var_types
+                .var_elem_type_exprs
+                .get(name)
+                .cloned()
+                .ok_or_else(|| {
+                    format!("clone: missing var_elem_type_exprs (val) for '{}'", name)
+                })?;
             mk_path("Map", vec![k, v])
-        } else if self.vec_elem_types.contains_key(name) {
+        } else if self.var_types.vec_elem_types.contains_key(name) {
             // Distinguish String from Vec[T]: String registers in
             // `vec_elem_types` (so the str-method dispatch finds it) but
             // skips `var_elem_type_exprs`. Vec[T] populates both.
-            if let Some(elem_te) = self.var_elem_type_exprs.get(name).cloned() {
+            if let Some(elem_te) = self.var_types.var_elem_type_exprs.get(name).cloned() {
                 mk_path("Vec", vec![elem_te])
             } else {
                 mk_path("String", vec![])
@@ -324,9 +329,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        let type_name = self.var_type_names.get(name)?;
+        let type_name = self.var_types.var_type_names.get(name)?;
         if type_name == "Option" {
-            let payload = self.var_option_payload_te.get(name)?.clone();
+            let payload = self.var_types.var_option_payload_te.get(name)?.clone();
             return Some(mk_path("Option", vec![payload]));
         }
         if self.shared_types.contains_key(type_name)

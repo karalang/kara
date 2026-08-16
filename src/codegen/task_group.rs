@@ -273,7 +273,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         // The spawn wrapper is its own top-level function run on a pool worker —
@@ -325,7 +325,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     },
                 );
                 if let Some(type_name) = saved_var_types.get(var_name) {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(var_name.clone(), type_name.clone());
                 }
             }
@@ -513,7 +514,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Restore outer state.
         self.mono_state.type_subst = saved_subst;
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         self.conc.branch_cancel_ptr = saved_cancel;

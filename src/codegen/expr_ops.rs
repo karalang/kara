@@ -41,7 +41,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Taken (not read) so a nested tuple inside an element expression cannot
         // inherit the outer annotation; the per-element re-stage below hands each
         // nested tuple its own.
-        let ann_elems: Option<Vec<TypeExpr>> = match self.pending_let_tuple_te.take() {
+        let ann_elems: Option<Vec<TypeExpr>> = match self.var_types.pending_let_tuple_te.take() {
             Some(te) => match te.kind {
                 // Arity mismatch means the annotation does not describe THIS
                 // tuple (a shape the typechecker would already have rejected);
@@ -92,14 +92,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // be consumed by an unrelated construct downstream.
             if let Some(aes) = &ann_elems {
                 if matches!(aes[idx].kind, TypeKind::Tuple(_)) {
-                    self.pending_let_tuple_te = Some(aes[idx].clone());
+                    self.var_types.pending_let_tuple_te = Some(aes[idx].clone());
                 }
             }
             let v = self.compile_expr(elem_expr)?;
             // Clear whatever survived: the element may not have been a tuple
             // literal at all (a call returning one, say), and a hint left
             // standing would be picked up by the NEXT element.
-            self.pending_let_tuple_te = None;
+            self.var_types.pending_let_tuple_te = None;
             self.suppress_fstr_acc_if_moved_out(elem_expr);
             // (d) B-2026-07-04-3 — a heap element that is a RETAINING source (an
             //     owned String/Vec param, or a `for`-loop element BORROW, which
@@ -530,24 +530,33 @@ impl<'ctx> super::Codegen<'ctx> {
         } = &object.kind
         {
             if let ExprKind::Identifier(outer_name) = &inner.kind {
-                if let Some(elem_te) = self.var_elem_type_exprs.get(outer_name.as_str()).cloned() {
+                if let Some(elem_te) = self
+                    .var_types
+                    .var_elem_type_exprs
+                    .get(outer_name.as_str())
+                    .cloned()
+                {
                     if let TypeKind::Path(path) = &elem_te.kind {
                         if let Some(seg) = path.segments.first() {
                             if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
                                 if !info.is_enum {
                                     let outer_name = outer_name.clone();
-                                    let (elem_ptr, _) =
-                                        if self.vec_elem_types.contains_key(outer_name.as_str()) {
-                                            self.lower_indexed_elem_ptr_vec(&outer_name, index)?
-                                        } else if self
-                                            .slice_elem_types
-                                            .contains_key(outer_name.as_str())
-                                        {
-                                            self.lower_indexed_elem_ptr_slice(&outer_name, index)?
-                                        } else {
-                                            let zero = self.context.i64_type().const_zero();
-                                            return Ok(zero.into());
-                                        };
+                                    let (elem_ptr, _) = if self
+                                        .var_types
+                                        .vec_elem_types
+                                        .contains_key(outer_name.as_str())
+                                    {
+                                        self.lower_indexed_elem_ptr_vec(&outer_name, index)?
+                                    } else if self
+                                        .var_types
+                                        .slice_elem_types
+                                        .contains_key(outer_name.as_str())
+                                    {
+                                        self.lower_indexed_elem_ptr_slice(&outer_name, index)?
+                                    } else {
+                                        let zero = self.context.i64_type().const_zero();
+                                        return Ok(zero.into());
+                                    };
                                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
                                     let heap_ptr = self
                                         .builder
@@ -627,7 +636,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // excluded, so the branch above is byte-identical for every shape it
             // already covered.
             let array_root = matches!(&inner.kind, ExprKind::Identifier(n)
-                if self.array_elem_type_exprs.contains_key(n.as_str()));
+                if self.var_types.array_elem_type_exprs.contains_key(n.as_str()));
             if !matches!(inner.kind, ExprKind::Identifier(_)) || array_root {
                 if let Some(type_name) = self.type_name_of_expr(object) {
                     if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
@@ -718,9 +727,16 @@ impl<'ctx> super::Codegen<'ctx> {
         } = &object.kind
         {
             if let ExprKind::Identifier(outer_name) = &inner.kind {
-                if self.vec_elem_types.contains_key(outer_name.as_str()) {
-                    if let Some(elem_te) =
-                        self.var_elem_type_exprs.get(outer_name.as_str()).cloned()
+                if self
+                    .var_types
+                    .vec_elem_types
+                    .contains_key(outer_name.as_str())
+                {
+                    if let Some(elem_te) = self
+                        .var_types
+                        .var_elem_type_exprs
+                        .get(outer_name.as_str())
+                        .cloned()
                     {
                         if let TypeKind::Path(path) = &elem_te.kind {
                             if let Some(seg) = path.segments.first() {
@@ -762,7 +778,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // element-loading machinery, and the two spellings cannot disagree.
         if let ExprKind::Index { object: inner, .. } = &object.kind {
             if let ExprKind::Identifier(arr_name) = &inner.kind {
-                if let Some(elem_te) = self.array_elem_type_exprs.get(arr_name.as_str()).cloned() {
+                if let Some(elem_te) = self
+                    .var_types
+                    .array_elem_type_exprs
+                    .get(arr_name.as_str())
+                    .cloned()
+                {
                     if let TypeKind::Path(path) = &elem_te.kind {
                         if let Some(seg) = path.segments.last() {
                             if self.struct_types.contains_key(seg.as_str())
@@ -1279,7 +1300,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self".to_string(),
             _ => return None,
         };
-        let type_name = self.var_type_names.get(&var_name)?.clone();
+        let type_name = self.var_types.var_type_names.get(&var_name)?.clone();
         let storage_ty = self.union_types.get(&type_name).copied()?;
         let field_ty = self
             .union_field_types
@@ -1340,7 +1361,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !is_closure_field {
             return Ok(false);
         }
-        let Some(struct_name) = self.var_type_names.get(rname).cloned() else {
+        let Some(struct_name) = self.var_types.var_type_names.get(rname).cloned() else {
             return Ok(false);
         };
         let Some(st) = self.struct_types.get(&struct_name).copied() else {
@@ -1524,7 +1545,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// local.
     pub(super) fn index_receiver_elem_type_expr(&self, object: &Expr) -> Option<TypeExpr> {
         match &object.kind {
-            ExprKind::Identifier(name) => self.var_elem_type_exprs.get(name.as_str()).cloned(),
+            ExprKind::Identifier(name) => self
+                .var_types
+                .var_elem_type_exprs
+                .get(name.as_str())
+                .cloned(),
             ExprKind::FieldAccess {
                 object: inner,
                 field,
@@ -1534,7 +1559,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     ExprKind::SelfValue => "self",
                     _ => return None,
                 };
-                let sname = self.var_type_names.get(obj_name)?.clone();
+                let sname = self.var_types.var_type_names.get(obj_name)?.clone();
                 let idx = self
                     .struct_field_names
                     .get(&sname)?
@@ -1559,7 +1584,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Option<(String, super::state::SharedTypeInfo<'ctx>)> {
         if let ExprKind::Index { object: inner, .. } = &object.kind {
             if let ExprKind::Identifier(outer) = &inner.kind {
-                let elem_te = self.var_elem_type_exprs.get(outer.as_str())?;
+                let elem_te = self.var_types.var_elem_type_exprs.get(outer.as_str())?;
                 if let TypeKind::Path(p) = &elem_te.kind {
                     let seg = p.segments.first()?;
                     let info = self.shared_types.get(seg.as_str())?;
@@ -1594,7 +1619,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Identifier(outer) = &inner.kind {
                 let outer = outer.clone();
-                let (elem_ptr, _) = if self.vec_elem_types.contains_key(outer.as_str()) {
+                let (elem_ptr, _) = if self.var_types.vec_elem_types.contains_key(outer.as_str()) {
                     self.lower_indexed_elem_ptr_vec(&outer, index)?
                 } else {
                     self.lower_indexed_elem_ptr_slice(&outer, index)?
@@ -1702,23 +1727,32 @@ impl<'ctx> super::Codegen<'ctx> {
         } = &object.kind
         {
             if let ExprKind::Identifier(outer_name) = &inner.kind {
-                if let Some(elem_te) = self.var_elem_type_exprs.get(outer_name.as_str()).cloned() {
+                if let Some(elem_te) = self
+                    .var_types
+                    .var_elem_type_exprs
+                    .get(outer_name.as_str())
+                    .cloned()
+                {
                     if let TypeKind::Path(path) = &elem_te.kind {
                         if let Some(seg) = path.segments.first() {
                             if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
                                 if !info.is_enum {
                                     let outer_name = outer_name.clone();
-                                    let (elem_ptr, _) =
-                                        if self.vec_elem_types.contains_key(outer_name.as_str()) {
-                                            self.lower_indexed_elem_ptr_vec(&outer_name, index)?
-                                        } else if self
-                                            .slice_elem_types
-                                            .contains_key(outer_name.as_str())
-                                        {
-                                            self.lower_indexed_elem_ptr_slice(&outer_name, index)?
-                                        } else {
-                                            return Ok(());
-                                        };
+                                    let (elem_ptr, _) = if self
+                                        .var_types
+                                        .vec_elem_types
+                                        .contains_key(outer_name.as_str())
+                                    {
+                                        self.lower_indexed_elem_ptr_vec(&outer_name, index)?
+                                    } else if self
+                                        .var_types
+                                        .slice_elem_types
+                                        .contains_key(outer_name.as_str())
+                                    {
+                                        self.lower_indexed_elem_ptr_slice(&outer_name, index)?
+                                    } else {
+                                        return Ok(());
+                                    };
                                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
                                     let heap_ptr = self
                                         .builder
@@ -2011,7 +2045,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if let Some(var_name) = var_name_owned.as_deref() {
             // Shared type: store directly into the heap object via GEP.
-            if let Some(type_name) = self.var_type_names.get(var_name).cloned() {
+            if let Some(type_name) = self.var_types.var_type_names.get(var_name).cloned() {
                 if let Some(info) = self.shared_types.get(&type_name).cloned() {
                     if !info.is_enum {
                         if self.variables.contains_key(var_name) {
@@ -2316,7 +2350,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> bool {
         let Some(type_name) = self
             .type_name_of_expr(object)
-            .or_else(|| self.var_type_names.get(var_name).cloned())
+            .or_else(|| self.var_types.var_type_names.get(var_name).cloned())
         else {
             return false;
         };
@@ -2457,7 +2491,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         let Some(type_name) = self
             .type_name_of_expr(object)
-            .or_else(|| self.var_type_names.get(var_name).cloned())
+            .or_else(|| self.var_types.var_type_names.get(var_name).cloned())
         else {
             return;
         };
@@ -2705,7 +2739,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `ref`-param root must not be GEP'd (B-2026-07-21-5/-6), and an
             // array-slot binding has a different representation.
             ExprKind::Identifier(v) => {
-                if !self.vec_elem_types.contains_key(v.as_str())
+                if !self.var_types.vec_elem_types.contains_key(v.as_str())
                     || self.ref_params.contains_key(v.as_str())
                     || self
                         .variables
@@ -2781,16 +2815,16 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         );
         self.register_var_from_type_expr(&synth, &field_te);
-        let elem = if self.vec_elem_types.contains_key(synth.as_str()) {
+        let elem = if self.var_types.vec_elem_types.contains_key(synth.as_str()) {
             self.vec_index_elem_ptr(&synth, index).ok()
         } else {
             None
         };
         self.variables.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.slice_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
-        self.var_type_names.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
         self.mapset.map_key_types.remove(&synth);
         self.mapset.map_val_types.remove(&synth);
         self.mapset.map_key_type_names.remove(&synth);
@@ -3502,8 +3536,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// struct literals).
     pub(super) fn type_name_of_expr(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
-            ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()).cloned(),
-            ExprKind::SelfValue => self.var_type_names.get("self").cloned(),
+            ExprKind::Identifier(n) => self.var_types.var_type_names.get(n.as_str()).cloned(),
+            ExprKind::SelfValue => self.var_types.var_type_names.get("self").cloned(),
             // `Stats.min`/`max` → `Option[f64]`, `Stats.argmin`/`argmax` →
             // `Option[i64]` (intercepted in `try_compile_stats_call`). A direct
             // `match Stats.argmin(v) { … }` needs the scrutinee's enum resolved
@@ -3616,6 +3650,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 if let ExprKind::Identifier(t) = &object.kind {
                     return self
+                        .var_types
                         .tuple_var_elem_type_names
                         .get(t.as_str())
                         .and_then(|names| names.get(*index as usize))
@@ -3643,9 +3678,10 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Index { object, .. } => match &object.kind {
                 ExprKind::Identifier(n) => {
                     let te = self
+                        .var_types
                         .var_elem_type_exprs
                         .get(n.as_str())
-                        .or_else(|| self.array_elem_type_exprs.get(n.as_str()));
+                        .or_else(|| self.var_types.array_elem_type_exprs.get(n.as_str()));
                     match te.map(|te| &te.kind) {
                         Some(TypeKind::Path(p)) => p.segments.last().cloned(),
                         _ => None,
@@ -3710,7 +3746,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if method == "get" {
                     if let ExprKind::Identifier(recv) = &object.kind {
                         if let Some(super::arena::ArenaElemKind::Struct(name)) =
-                            self.arena_vars.get(recv.as_str())
+                            self.var_types.arena_vars.get(recv.as_str())
                         {
                             return Some(name.clone());
                         }
@@ -3727,7 +3763,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // so a variable that shadows a type name keeps the variable
                 // path.
                 if let ExprKind::Identifier(recv) = &object.kind {
-                    if !self.var_type_names.contains_key(recv.as_str())
+                    if !self.var_types.var_type_names.contains_key(recv.as_str())
                         && (self.struct_types.contains_key(recv.as_str())
                             || self.enum_layouts.contains_key(recv.as_str()))
                     {
@@ -3883,14 +3919,20 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::MultiStringLit(_)
             | ExprKind::InterpolatedStringLit(_) => true,
             ExprKind::Identifier(n) => {
-                self.string_vars.contains(n.as_str())
+                self.var_types.string_vars.contains(n.as_str())
                     || matches!(
-                        self.var_type_names.get(n.as_str()).map(String::as_str),
+                        self.var_types
+                            .var_type_names
+                            .get(n.as_str())
+                            .map(String::as_str),
                         Some("String") | Some("StringSlice")
                     )
             }
             ExprKind::SelfValue => matches!(
-                self.var_type_names.get("self").map(String::as_str),
+                self.var_types
+                    .var_type_names
+                    .get("self")
+                    .map(String::as_str),
                 Some("String") | Some("StringSlice")
             ),
             // A builtin String→String method chained as a receiver
@@ -3938,7 +3980,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Return the Kāra type name for a compiled expression, if known.
     pub(super) fn type_name_of(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
-            ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()).cloned(),
+            ExprKind::Identifier(n) => self.var_types.var_type_names.get(n.as_str()).cloned(),
             // A plain struct literal names its type via `path.last()`. But
             // enum struct-variant construction `Enum.Variant { .. }` parses
             // as a StructLiteral whose `path.last()` is the VARIANT (not a
@@ -3985,7 +4027,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // shared-struct field-access machinery already relies on.
             ExprKind::Index { object, .. } => {
                 if let ExprKind::Identifier(n) = &object.kind {
-                    if let Some(te) = self.var_elem_type_exprs.get(n.as_str()) {
+                    if let Some(te) = self.var_types.var_elem_type_exprs.get(n.as_str()) {
                         if let TypeKind::Path(p) = &te.kind {
                             return p.segments.last().cloned();
                         }
@@ -4022,6 +4064,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if p.segments.last().map(|s| s == "char").unwrap_or(false)
             ),
             ExprKind::Identifier(n) => self
+                .var_types
                 .var_type_names
                 .get(n.as_str())
                 .map(|s| s == "char")
@@ -4030,7 +4073,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // collection's element TypeExpr is a bare `char` path.
             ExprKind::Index { object, .. } => {
                 if let ExprKind::Identifier(n) = &object.kind {
-                    if let Some(te) = self.var_elem_type_exprs.get(n.as_str()) {
+                    if let Some(te) = self.var_types.var_elem_type_exprs.get(n.as_str()) {
                         if let TypeKind::Path(p) = &te.kind {
                             return p.segments.last().map(|s| s == "char").unwrap_or(false);
                         }
@@ -4097,8 +4140,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 let recv_ty = match &object.kind {
-                    ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
-                    ExprKind::SelfValue => self.var_type_names.get("self"),
+                    ExprKind::Identifier(n) => self.var_types.var_type_names.get(n.as_str()),
+                    ExprKind::SelfValue => self.var_types.var_type_names.get("self"),
                     _ => None,
                 };
                 if let Some(ty) = recv_ty {
@@ -4214,6 +4257,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | crate::token::IntSuffix::U128
             ),
             ExprKind::Identifier(n) => self
+                .var_types
                 .var_type_names
                 .get(n.as_str())
                 .map(|s| is_uint_name(s.as_str()))
@@ -4374,8 +4418,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     return self.expr_is_unsigned_int(object);
                 }
                 let recv_ty = match &object.kind {
-                    ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
-                    ExprKind::SelfValue => self.var_type_names.get("self"),
+                    ExprKind::Identifier(n) => self.var_types.var_type_names.get(n.as_str()),
+                    ExprKind::SelfValue => self.var_types.var_type_names.get("self"),
                     _ => None,
                 };
                 if let Some(ty) = recv_ty {
@@ -4420,8 +4464,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // the signedness (`println(s.b)` for a `u8` field).
             ExprKind::FieldAccess { object, field } => {
                 let recv_ty = match &object.kind {
-                    ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
-                    ExprKind::SelfValue => self.var_type_names.get("self"),
+                    ExprKind::Identifier(n) => self.var_types.var_type_names.get(n.as_str()),
+                    ExprKind::SelfValue => self.var_types.var_type_names.get("self"),
                     _ => None,
                 };
                 if let Some(ty) = recv_ty {
@@ -4445,7 +4489,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `vec_of_u32s[i]` / `array_of_u32s[i]` — check element TypeExpr.
             ExprKind::Index { object, .. } => {
                 if let ExprKind::Identifier(n) = &object.kind {
-                    if let Some(te) = self.var_elem_type_exprs.get(n.as_str()) {
+                    if let Some(te) = self.var_types.var_elem_type_exprs.get(n.as_str()) {
                         if let TypeKind::Path(p) = &te.kind {
                             return p
                                 .segments
@@ -4476,8 +4520,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 } = &object.kind
                 {
                     let recv_ty = match &recv.kind {
-                        ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
-                        ExprKind::SelfValue => self.var_type_names.get("self"),
+                        ExprKind::Identifier(n) => self.var_types.var_type_names.get(n.as_str()),
+                        ExprKind::SelfValue => self.var_types.var_type_names.get("self"),
                         _ => None,
                     };
                     if let Some(ty) = recv_ty {
@@ -6239,6 +6283,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn enum_name_of_expr(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Identifier(name) => self
+                .var_types
                 .var_type_names
                 .get(name)
                 .filter(|n| self.enum_layouts.contains_key(n.as_str()))
@@ -6630,7 +6675,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 return None;
             }
             if let ExprKind::Identifier(name) = &object.kind {
-                if let Some(elem) = self.var_elem_type_exprs.get(name) {
+                if let Some(elem) = self.var_types.var_elem_type_exprs.get(name) {
                     if self.is_generic_named_struct_type_expr(elem)
                         || self.is_generic_named_enum_type_expr(elem)
                     {
@@ -8073,7 +8118,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // what the `ref`-arg fast path in `call_dispatch.rs` uses.
                 let payload = self.get_data_ptr(var_name).unwrap_or(slot.ptr);
                 // Already a slice: load and pass through.
-                if self.slice_elem_types.contains_key(var_name.as_str()) {
+                if self
+                    .var_types
+                    .slice_elem_types
+                    .contains_key(var_name.as_str())
+                {
                     let loaded = self
                         .builder
                         .build_load(slice_ty, payload, "slice.arg")
@@ -8082,7 +8131,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // Owned Vec[T]: the alloca holds the 3-field struct; load
                 // its data-ptr and len fields, rebuild as a 2-field slice.
-                if self.vec_elem_types.contains_key(var_name.as_str()) {
+                if self
+                    .var_types
+                    .vec_elem_types
+                    .contains_key(var_name.as_str())
+                {
                     let vec_ty = self.vec_struct_type();
                     let data_ptr_ptr = self
                         .builder
@@ -8404,7 +8457,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // the element pointer is recomputed from the subscript, and only a
             // side-effect-free one makes that recomputation a no-op.
             ExprKind::Index { object, .. } => match &object.kind {
-                ExprKind::Identifier(v) => self.vec_elem_types.get(v.as_str()).copied(),
+                ExprKind::Identifier(v) => self.var_types.vec_elem_types.get(v.as_str()).copied(),
                 _ => None,
             },
             _ => None,
@@ -8521,7 +8574,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(slot) = self.variables.get(name.as_str()).copied() {
                 if let BasicTypeEnum::ArrayType(at) = slot.ty {
                     (slot.ptr, i64_t.const_int(at.len() as u64, false))
-                } else if self.slice_elem_types.contains_key(name.as_str()) {
+                } else if self.var_types.slice_elem_types.contains_key(name.as_str()) {
                     let data_pp = self
                         .builder
                         .build_struct_gep(slice_ty, slot.ptr, 0, "rs.s.data.pp")
@@ -8541,7 +8594,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into_int_value();
                     (data, len)
-                } else if self.vec_elem_types.contains_key(name.as_str()) {
+                } else if self.var_types.vec_elem_types.contains_key(name.as_str()) {
                     let vec_ty = self.vec_struct_type();
                     let data_pp = self
                         .builder

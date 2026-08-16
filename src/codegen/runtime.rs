@@ -2282,7 +2282,7 @@ impl<'ctx> super::Codegen<'ctx> {
         old_val: BasicValueEnum<'ctx>,
         val_ty: BasicTypeEnum<'ctx>,
     ) {
-        if let Some(vte) = self.var_elem_type_exprs.get(var_name).cloned() {
+        if let Some(vte) = self.var_types.var_elem_type_exprs.get(var_name).cloned() {
             if let Some(drop_fn) = self.map_val_drop_fn_for_type_expr(&vte) {
                 if let Some(fn_val) = self.current_fn {
                     let slot = self.create_entry_alloca(fn_val, "map.old.drop", val_ty);
@@ -4621,7 +4621,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // callee-entry copy performs. A `shared struct` is excluded: it is
         // RC-managed, so a move is an aliasing acquire rather than a transfer
         // and there is no second free to prevent.
-        if let Some(struct_name) = self.var_type_names.get(name).cloned() {
+        if let Some(struct_name) = self.var_types.var_type_names.get(name).cloned() {
             if self.struct_types.contains_key(struct_name.as_str())
                 && !self.shared_types.contains_key(struct_name.as_str())
                 && val.is_struct_value()
@@ -4644,11 +4644,12 @@ impl<'ctx> super::Codegen<'ctx> {
             return val;
         }
         let elem_ty: BasicTypeEnum<'ctx> = self
+            .var_types
             .vec_elem_types
             .get(name)
             .copied()
             .unwrap_or_else(|| self.context.i8_type().into());
-        let elem_te = self.var_elem_type_exprs.get(name).cloned();
+        let elem_te = self.var_types.var_elem_type_exprs.get(name).cloned();
         let copied = self.emit_vecstr_defensive_copy(val, elem_ty, elem_te.as_ref());
         // Record that this site really was copied — the disarm skip keys on
         // this, so the two halves cannot drift apart as the copy widens.
@@ -4713,7 +4714,11 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return None;
         }
-        let sname = self.var_type_names.get(obj_name.as_str())?.clone();
+        let sname = self
+            .var_types
+            .var_type_names
+            .get(obj_name.as_str())?
+            .clone();
         let idx = self
             .struct_field_names
             .get(sname.as_str())?
@@ -4847,7 +4852,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicTypeEnum::StructType(held) = slot.ty else {
             return false;
         };
-        let Some(sname) = self.var_type_names.get(obj_name.as_str()).cloned() else {
+        let Some(sname) = self
+            .var_types
+            .var_type_names
+            .get(obj_name.as_str())
+            .cloned()
+        else {
             return false;
         };
         if self.shared_types.contains_key(sname.as_str()) {
@@ -5028,7 +5038,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn uam_map_or_set_clone_fn(&mut self, name: &str) -> Option<FunctionValue<'ctx>> {
         if let (Some(k_te), Some(v_te)) = (
             self.mapset.map_key_type_exprs.get(name).cloned(),
-            self.var_elem_type_exprs.get(name).cloned(),
+            self.var_types.var_elem_type_exprs.get(name).cloned(),
         ) {
             return Some(self.emit_map_clone_fn(&k_te, &v_te));
         }
@@ -5237,11 +5247,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.owned_vecstr_params.contains(&name) && !self.for_loop_borrow_vars.contains(&name) {
             return val;
         }
-        let elem_ty = match self.vec_elem_types.get(&name) {
+        let elem_ty = match self.var_types.vec_elem_types.get(&name) {
             Some(t) => *t,
             None => return val,
         };
-        let elem_te = self.var_elem_type_exprs.get(&name).cloned();
+        let elem_te = self.var_types.var_elem_type_exprs.get(&name).cloned();
         self.emit_vecstr_defensive_copy(val, elem_ty, elem_te.as_ref())
     }
 
@@ -5765,7 +5775,7 @@ impl<'ctx> super::Codegen<'ctx> {
         ty: Option<&TypeExpr>,
     ) -> Option<String> {
         // (1) Existing var_type_names entry pointing at a known enum.
-        if let Some(n) = self.var_type_names.get(var_name) {
+        if let Some(n) = self.var_types.var_type_names.get(var_name) {
             if self.enum_layouts.contains_key(n) {
                 return Some(n.clone());
             }
@@ -6158,7 +6168,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         ExprKind::Identifier(m)
                             if self.mapset.map_val_types.contains_key(m.as_str()) =>
                         {
-                            self.var_elem_type_exprs.get(m.as_str()).cloned()
+                            self.var_types.var_elem_type_exprs.get(m.as_str()).cloned()
                         }
                         _ => None,
                     }

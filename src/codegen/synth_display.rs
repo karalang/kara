@@ -1741,6 +1741,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn expr_user_struct_name(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Identifier(n) => self
+                .var_types
                 .var_type_names
                 .get(n.as_str())
                 .filter(|tn| self.struct_field_names.contains_key(tn.as_str()))
@@ -1754,6 +1755,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // fixed at return positions, the struct self receiver is safe too
             // (mirrors the enum helpers, B-2026-07-12-15).
             ExprKind::SelfValue => self
+                .var_types
                 .var_type_names
                 .get("self")
                 .filter(|tn| self.struct_field_names.contains_key(tn.as_str()))
@@ -1775,12 +1777,14 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn expr_user_enum_name(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Identifier(n) => self
+                .var_types
                 .var_type_names
                 .get(n.as_str())
                 .filter(|tn| self.enum_unit_variants.contains_key(tn.as_str()))
                 .cloned(),
             // `self` receiver — see the note in `expr_user_struct_name`.
             ExprKind::SelfValue => self
+                .var_types
                 .var_type_names
                 .get("self")
                 .filter(|tn| self.enum_unit_variants.contains_key(tn.as_str()))
@@ -2393,9 +2397,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// coverage (identifier / field access).
     pub(super) fn expr_user_enum_name_any(&self, expr: &Expr) -> Option<String> {
         let tn = match &expr.kind {
-            ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()).cloned(),
+            ExprKind::Identifier(n) => self.var_types.var_type_names.get(n.as_str()).cloned(),
             // `self` receiver — see the note in `expr_user_struct_name`.
-            ExprKind::SelfValue => self.var_type_names.get("self").cloned(),
+            ExprKind::SelfValue => self.var_types.var_type_names.get("self").cloned(),
             ExprKind::FieldAccess { object, field } => {
                 let outer = self.expr_user_struct_name(object)?;
                 let tes = self.struct_field_type_exprs.get(&outer)?;
@@ -2518,16 +2522,18 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // Vec[T] — `vec_elem_types` + `var_elem_type_exprs` (String sets only
         // the former). Checked before Map since Map lacks `vec_elem_types`.
-        if self.vec_elem_types.contains_key(&name) && self.var_elem_type_exprs.contains_key(&name) {
-            let elem_te = self.var_elem_type_exprs[&name].clone();
+        if self.var_types.vec_elem_types.contains_key(&name)
+            && self.var_types.var_elem_type_exprs.contains_key(&name)
+        {
+            let elem_te = self.var_types.var_elem_type_exprs[&name].clone();
             let disp = self.emit_vec_display_fn_te(&elem_te);
             return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
         }
         if self.mapset.map_key_type_exprs.contains_key(&name)
-            && self.var_elem_type_exprs.contains_key(&name)
+            && self.var_types.var_elem_type_exprs.contains_key(&name)
         {
             let k = self.mapset.map_key_type_exprs[&name].clone();
-            let v = self.var_elem_type_exprs[&name].clone();
+            let v = self.var_types.var_elem_type_exprs[&name].clone();
             // B-2026-08-14-35 — `SortedMap` shares `Map`'s registries and its
             // storage, so without this test it rendered through the unsorted
             // fn: `Map`'s prefix over `Map`'s bucket order.
@@ -2550,11 +2556,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-07-08-9: Option[T] / Result[T, E] place-expr Display. The
         // payload TypeExpr(s) were captured by `register_var_from_type_expr`;
         // synthesize a concrete `Some(<T>)`/`None` (or `Ok`/`Err`) renderer.
-        if let Some(payload_te) = self.var_option_payload_te.get(&name).cloned() {
+        if let Some(payload_te) = self.var_types.var_option_payload_te.get(&name).cloned() {
             let disp = self.emit_option_display_te(&payload_te);
             return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
         }
-        if let Some((ok_te, err_te)) = self.var_result_payload_te.get(&name).cloned() {
+        if let Some((ok_te, err_te)) = self.var_types.var_result_payload_te.get(&name).cloned() {
             let disp = self.emit_result_display_te(&ok_te, &err_te);
             return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
         }

@@ -86,6 +86,7 @@ impl<'ctx> super::Codegen<'ctx> {
         recv: &str,
     ) -> Result<(inkwell::types::BasicTypeEnum<'ctx>, u64), String> {
         let te = self
+            .var_types
             .once_var_types
             .get(recv)
             .map(|(te, _)| te.clone())
@@ -306,6 +307,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ));
         }
         let elem_te = self
+            .var_types
             .once_var_types
             .get(recv)
             .map(|(te, _)| te.clone())

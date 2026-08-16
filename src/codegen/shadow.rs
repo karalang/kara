@@ -93,14 +93,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// snapshot can be reinstated with [`Self::restore_var_metadata`].
     pub(super) fn take_var_metadata(&mut self, name: &str) -> VarMetadataSnapshot<'ctx> {
         VarMetadataSnapshot {
-            var_type_names: self.var_type_names.remove(name),
-            tuple_var_elem_type_names: self.tuple_var_elem_type_names.remove(name),
-            tuple_var_elem_type_exprs: self.tuple_var_elem_type_exprs.remove(name),
+            var_type_names: self.var_types.var_type_names.remove(name),
+            tuple_var_elem_type_names: self.var_types.tuple_var_elem_type_names.remove(name),
+            tuple_var_elem_type_exprs: self.var_types.tuple_var_elem_type_exprs.remove(name),
             atomic_var_inner_is_bool: self.atomic_var_inner_is_bool.remove(name),
             closure_fn_types: self.closure_fn_types.remove(name),
             len_alias: self.bce.len_alias.remove(name),
-            vec_elem_types: self.vec_elem_types.remove(name),
-            slice_elem_types: self.slice_elem_types.remove(name),
+            vec_elem_types: self.var_types.vec_elem_types.remove(name),
+            slice_elem_types: self.var_types.slice_elem_types.remove(name),
             ref_params: self.ref_params.remove(name),
             signature_ref_params: self.signature_ref_params.remove(name),
             var_option_shared_heap: self.var_option_shared_heap.remove(name),
@@ -110,13 +110,13 @@ impl<'ctx> super::Codegen<'ctx> {
             map_key_types: self.mapset.map_key_types.remove(name),
             map_val_types: self.mapset.map_val_types.remove(name),
             map_key_type_names: self.mapset.map_key_type_names.remove(name),
-            var_elem_type_exprs: self.var_elem_type_exprs.remove(name),
+            var_elem_type_exprs: self.var_types.var_elem_type_exprs.remove(name),
             map_key_type_exprs: self.mapset.map_key_type_exprs.remove(name),
             set_elem_types: self.mapset.set_elem_types.remove(name),
             set_elem_type_names: self.mapset.set_elem_type_names.remove(name),
             set_elem_type_exprs: self.mapset.set_elem_type_exprs.remove(name),
-            string_vars: self.string_vars.remove(name),
-            cstr_vars: self.cstr_vars.remove(name),
+            string_vars: self.var_types.string_vars.remove(name),
+            cstr_vars: self.var_types.cstr_vars.remove(name),
             inline_option_payload_vars: self.inline_option_payload_vars.remove(name),
             inline_result_payload_vars: self.inline_result_payload_vars.remove(name),
             inline_option_map_payload_vars: self.inline_option_map_payload_vars.remove(name),
@@ -134,13 +134,17 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn restore_var_metadata(&mut self, name: &str, snap: VarMetadataSnapshot<'ctx>) {
         let key = name.to_string();
         if let Some(v) = snap.var_type_names {
-            self.var_type_names.insert(key.clone(), v);
+            self.var_types.var_type_names.insert(key.clone(), v);
         }
         if let Some(v) = snap.tuple_var_elem_type_names {
-            self.tuple_var_elem_type_names.insert(key.clone(), v);
+            self.var_types
+                .tuple_var_elem_type_names
+                .insert(key.clone(), v);
         }
         if let Some(v) = snap.tuple_var_elem_type_exprs {
-            self.tuple_var_elem_type_exprs.insert(key.clone(), v);
+            self.var_types
+                .tuple_var_elem_type_exprs
+                .insert(key.clone(), v);
         }
         if snap.atomic_var_inner_is_bool {
             self.atomic_var_inner_is_bool.insert(key.clone());
@@ -152,10 +156,10 @@ impl<'ctx> super::Codegen<'ctx> {
             self.bce.len_alias.insert(key.clone(), v);
         }
         if let Some(v) = snap.vec_elem_types {
-            self.vec_elem_types.insert(key.clone(), v);
+            self.var_types.vec_elem_types.insert(key.clone(), v);
         }
         if let Some(v) = snap.slice_elem_types {
-            self.slice_elem_types.insert(key.clone(), v);
+            self.var_types.slice_elem_types.insert(key.clone(), v);
         }
         if let Some(v) = snap.ref_params {
             self.ref_params.insert(key.clone(), v);
@@ -185,7 +189,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mapset.map_key_type_names.insert(key.clone(), v);
         }
         if let Some(v) = snap.var_elem_type_exprs {
-            self.var_elem_type_exprs.insert(key.clone(), v);
+            self.var_types.var_elem_type_exprs.insert(key.clone(), v);
         }
         if let Some(v) = snap.map_key_type_exprs {
             self.mapset.map_key_type_exprs.insert(key.clone(), v);
@@ -200,10 +204,10 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mapset.set_elem_type_exprs.insert(key.clone(), v);
         }
         if snap.string_vars {
-            self.string_vars.insert(key.clone());
+            self.var_types.string_vars.insert(key.clone());
         }
         if snap.cstr_vars {
-            self.cstr_vars.insert(key.clone());
+            self.var_types.cstr_vars.insert(key.clone());
         }
         if snap.inline_option_payload_vars {
             self.inline_option_payload_vars.insert(key.clone());
@@ -312,14 +316,14 @@ impl<'ctx> super::Codegen<'ctx> {
             variables: self.variables.clone(),
             owned_vecstr_params: self.owned_vecstr_params.clone(),
             for_loop_borrow_vars: self.for_loop_borrow_vars.clone(),
-            var_type_names: self.var_type_names.clone(),
-            tuple_var_elem_type_names: self.tuple_var_elem_type_names.clone(),
-            tuple_var_elem_type_exprs: self.tuple_var_elem_type_exprs.clone(),
+            var_type_names: self.var_types.var_type_names.clone(),
+            tuple_var_elem_type_names: self.var_types.tuple_var_elem_type_names.clone(),
+            tuple_var_elem_type_exprs: self.var_types.tuple_var_elem_type_exprs.clone(),
             atomic_var_inner_is_bool: self.atomic_var_inner_is_bool.clone(),
             closure_fn_types: self.closure_fn_types.clone(),
             len_alias: self.bce.len_alias.clone(),
-            vec_elem_types: self.vec_elem_types.clone(),
-            slice_elem_types: self.slice_elem_types.clone(),
+            vec_elem_types: self.var_types.vec_elem_types.clone(),
+            slice_elem_types: self.var_types.slice_elem_types.clone(),
             ref_params: self.ref_params.clone(),
             signature_ref_params: self.signature_ref_params.clone(),
             var_option_shared_heap: self.var_option_shared_heap.clone(),
@@ -329,13 +333,13 @@ impl<'ctx> super::Codegen<'ctx> {
             map_key_types: self.mapset.map_key_types.clone(),
             map_val_types: self.mapset.map_val_types.clone(),
             map_key_type_names: self.mapset.map_key_type_names.clone(),
-            var_elem_type_exprs: self.var_elem_type_exprs.clone(),
+            var_elem_type_exprs: self.var_types.var_elem_type_exprs.clone(),
             map_key_type_exprs: self.mapset.map_key_type_exprs.clone(),
             set_elem_types: self.mapset.set_elem_types.clone(),
             set_elem_type_names: self.mapset.set_elem_type_names.clone(),
             set_elem_type_exprs: self.mapset.set_elem_type_exprs.clone(),
-            string_vars: self.string_vars.clone(),
-            cstr_vars: self.cstr_vars.clone(),
+            string_vars: self.var_types.string_vars.clone(),
+            cstr_vars: self.var_types.cstr_vars.clone(),
             inline_option_payload_vars: self.inline_option_payload_vars.clone(),
             inline_result_payload_vars: self.inline_result_payload_vars.clone(),
             inline_option_map_payload_vars: self.inline_option_map_payload_vars.clone(),
@@ -354,14 +358,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.variables = snap.variables;
         self.owned_vecstr_params = snap.owned_vecstr_params;
         self.for_loop_borrow_vars = snap.for_loop_borrow_vars;
-        self.var_type_names = snap.var_type_names;
-        self.tuple_var_elem_type_names = snap.tuple_var_elem_type_names;
-        self.tuple_var_elem_type_exprs = snap.tuple_var_elem_type_exprs;
+        self.var_types.var_type_names = snap.var_type_names;
+        self.var_types.tuple_var_elem_type_names = snap.tuple_var_elem_type_names;
+        self.var_types.tuple_var_elem_type_exprs = snap.tuple_var_elem_type_exprs;
         self.atomic_var_inner_is_bool = snap.atomic_var_inner_is_bool;
         self.closure_fn_types = snap.closure_fn_types;
         self.bce.len_alias = snap.len_alias;
-        self.vec_elem_types = snap.vec_elem_types;
-        self.slice_elem_types = snap.slice_elem_types;
+        self.var_types.vec_elem_types = snap.vec_elem_types;
+        self.var_types.slice_elem_types = snap.slice_elem_types;
         self.ref_params = snap.ref_params;
         self.signature_ref_params = snap.signature_ref_params;
         self.var_option_shared_heap = snap.var_option_shared_heap;
@@ -371,13 +375,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.map_key_types = snap.map_key_types;
         self.mapset.map_val_types = snap.map_val_types;
         self.mapset.map_key_type_names = snap.map_key_type_names;
-        self.var_elem_type_exprs = snap.var_elem_type_exprs;
+        self.var_types.var_elem_type_exprs = snap.var_elem_type_exprs;
         self.mapset.map_key_type_exprs = snap.map_key_type_exprs;
         self.mapset.set_elem_types = snap.set_elem_types;
         self.mapset.set_elem_type_names = snap.set_elem_type_names;
         self.mapset.set_elem_type_exprs = snap.set_elem_type_exprs;
-        self.string_vars = snap.string_vars;
-        self.cstr_vars = snap.cstr_vars;
+        self.var_types.string_vars = snap.string_vars;
+        self.var_types.cstr_vars = snap.cstr_vars;
         self.inline_option_payload_vars = snap.inline_option_payload_vars;
         self.inline_result_payload_vars = snap.inline_result_payload_vars;
         self.inline_option_map_payload_vars = snap.inline_option_map_payload_vars;

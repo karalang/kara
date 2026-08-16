@@ -1194,7 +1194,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.fn_ctx.current_fn_heap_closure_spans.clear();
         // B-2026-08-13-10 — per-function map; a constant local from the
         // previous function must not leak into this one's unroll guard.
-        self.int_const_locals.clear();
+        self.var_types.int_const_locals.clear();
         if let Some(span) = self.func_tail_heap_closure_span(func) {
             self.fn_ctx.current_fn_heap_closure_spans.insert(span);
         }
@@ -1263,11 +1263,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.conc.coro_ctx = None;
         self.conc.coro_park_counter = 0;
         self.variables.clear();
-        self.var_type_names.clear();
+        self.var_types.var_type_names.clear();
         // Per-binding layout carrier (slice 5): function-scoped like
         // `variables`, so a `layout`-named local in one function can't bleed
         // its SoA-ness into a same-named binding in the next.
-        self.binding_layouts.clear();
+        self.var_types.binding_layouts.clear();
         // The base symbol returns AoS (the declared `Vec[E]` lowers to
         // `{ptr,len,cap}`); record its tail-returned local(s) so
         // `seed_binding_site_layout` does NOT name-match them SoA — a returned
@@ -1328,9 +1328,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // (SIGABRT at -O0, miscompiled infinite loop at -O3). `var_type_names`
         // was already cleared above for the same reason; the collection
         // side-tables were simply missing from the list.
-        self.vec_elem_types.clear();
-        self.var_elem_type_exprs.clear();
-        self.closure_ret_vec_te.clear();
+        self.var_types.vec_elem_types.clear();
+        self.var_types.var_elem_type_exprs.clear();
+        self.var_types.closure_ret_vec_te.clear();
         // Name-keyed instantiated-generic-enum types (`Option[String]`, …) for
         // heap-payload `==`. Same per-function-reset rationale as the other
         // name-keyed tables above: a stale entry from one function's `a:
@@ -1338,14 +1338,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // `a: Option[i64]` (which would mis-route a scalar `==` to the heap
         // String comparator). Repopulated below from params and at let sites.
         self.enum_inst_var_types.clear();
-        self.tuple_var_elem_tes.clear();
+        self.var_types.tuple_var_elem_tes.clear();
         self.tuple_moved_elem_bodies.clear();
         self.struct_moved_field_bodies.clear();
-        self.optres_var_payload_tes.clear();
+        self.var_types.optres_var_payload_tes.clear();
         self.mapset.map_val_bodies_tes.clear();
-        self.string_vars.clear();
-        self.ascii_const_string_lets.clear();
-        self.slice_elem_types.clear();
+        self.var_types.string_vars.clear();
+        self.var_types.ascii_const_string_lets.clear();
+        self.var_types.slice_elem_types.clear();
         self.mapset.map_key_types.clear();
         self.mapset.map_val_types.clear();
         self.mapset.map_key_type_names.clear();
@@ -1795,7 +1795,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !matches!(
                     param.ty.kind,
                     TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
-                ) && self.vec_elem_types.contains_key(&param_name)
+                ) && self.var_types.vec_elem_types.contains_key(&param_name)
                 {
                     self.owned_vecstr_params.insert(param_name.clone());
                 }
@@ -2003,7 +2003,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             _ => None,
                         })
                         .collect();
-                    self.tuple_var_elem_type_names
+                    self.var_types
+                        .tuple_var_elem_type_names
                         .insert(param_name.clone(), elem_names);
                     if let BasicTypeEnum::StructType(agg_ty) = param_val.get_type() {
                         self.make_tuple_param_callee_owned(elems, agg_ty, alloca);
@@ -2295,7 +2296,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // so multiple "consumers" each get a copy of T and the heap object is freed
                 // at scope exit when the refcount reaches zero.
                 let is_ref_param = self.ref_params.contains_key(&param_name);
-                let is_vec_param = self.vec_elem_types.contains_key(&param_name);
+                let is_vec_param = self.var_types.vec_elem_types.contains_key(&param_name);
                 let is_shared_param = if let TypeKind::Path(path) = &param.ty.kind {
                     path.segments
                         .first()

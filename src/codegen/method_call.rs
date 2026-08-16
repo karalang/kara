@@ -778,7 +778,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return seen_rev
                         && matches!(
                             &object.kind,
-                            ExprKind::Identifier(n) if self.vec_elem_types.contains_key(n.as_str())
+                            ExprKind::Identifier(n) if self.var_types.vec_elem_types.contains_key(n.as_str())
                         );
                 }
                 _ => return false,
@@ -1026,7 +1026,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // not an identifier, is handled by the chain intercept further below.)
         if method == "collect" && args.is_empty() {
             if let ExprKind::Identifier(name) = &object.kind {
-                if self.vec_elem_types.contains_key(name.as_str()) {
+                if self.var_types.vec_elem_types.contains_key(name.as_str()) {
                     if let Some(v) = self.try_compile_clone(object)? {
                         return Ok(v);
                     }
@@ -1094,10 +1094,11 @@ impl<'ctx> super::Codegen<'ctx> {
             if !crate::fallible_alloc::instance_companion_has_codegen(method) {
                 if let ExprKind::Identifier(name) = &object.kind {
                     let n = name.as_str();
-                    let is_builtin_coll = self.vec_elem_types.contains_key(n)
+                    let is_builtin_coll = self.var_types.vec_elem_types.contains_key(n)
                         || self.mapset.map_key_types.contains_key(n)
                         || self.mapset.set_elem_types.contains_key(n)
                         || self
+                            .var_types
                             .var_type_names
                             .get(n)
                             .is_some_and(|t| t == "String" || t.starts_with("String"));
@@ -4676,7 +4677,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             i64_t.const_int(at.len() as u64, false),
                             at.get_element_type(),
                         ))
-                    } else if let Some(elem) = self.slice_elem_types.get(name.as_str()).copied() {
+                    } else if let Some(elem) =
+                        self.var_types.slice_elem_types.get(name.as_str()).copied()
+                    {
                         let hdr = self
                             .builder
                             .build_load(slice_ty, slot.ptr, "sam.s.hdr")
@@ -4693,7 +4696,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap()
                             .into_int_value();
                         Some((data, len, elem))
-                    } else if let Some(elem) = self.vec_elem_types.get(name.as_str()).copied() {
+                    } else if let Some(elem) =
+                        self.var_types.vec_elem_types.get(name.as_str()).copied()
+                    {
                         let vec_ty = self.vec_struct_type();
                         let data_pp = self
                             .builder
@@ -4789,13 +4794,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         let len = i64_t.const_int(at.len() as u64, false);
                         return Ok(self.build_slice_header(slice_ty, slot.ptr, len));
                     }
-                    if self.slice_elem_types.contains_key(name.as_str()) {
+                    if self.var_types.slice_elem_types.contains_key(name.as_str()) {
                         return Ok(self
                             .builder
                             .build_load(slice_ty, slot.ptr, "as_slice.passthrough")
                             .unwrap());
                     }
-                    if self.vec_elem_types.contains_key(name.as_str()) {
+                    if self.var_types.vec_elem_types.contains_key(name.as_str()) {
                         let ptr_ty = self.context.ptr_type(AddressSpace::default());
                         let vec_ty = self.vec_struct_type();
                         let data_pp = self
@@ -4836,7 +4841,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if !self.variables.contains_key(name.as_str())
                 && self.module_bindings.contains_key(name.as_str())
             {
-                if self.vec_elem_types.contains_key(name.as_str()) {
+                if self.var_types.vec_elem_types.contains_key(name.as_str()) {
                     let data_ptr = self.get_data_ptr(name).unwrap();
                     return self.compile_vec_method(name, data_ptr, method, args);
                 }
@@ -4982,7 +4987,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 // Vec/String methods (owned or ref)
-                if self.vec_elem_types.contains_key(name.as_str()) {
+                if self.var_types.vec_elem_types.contains_key(name.as_str()) {
                     let data_ptr = self.get_data_ptr(name).unwrap();
                     match self.compile_vec_method(name, data_ptr, method, args) {
                         Ok(v) => return Ok(v),
@@ -5025,7 +5030,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // must still reject `v.describe()` rather than
                             // dispatch a Vec to it.
                             let slice_has_user_impl =
-                                self.slice_elem_types.contains_key(name.as_str())
+                                self.var_types.slice_elem_types.contains_key(name.as_str())
                                     && self.user_impl_method_exists(call_span, "Slice", method);
 
                             if !has_user_impl && !slice_has_user_impl {
@@ -5051,7 +5056,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (B-2026-07-02-28). The `xs[i]` index path already routes
                 // through `get_data_ptr` (`compile_slice_index`); this mirrors
                 // it for the method family.
-                if self.slice_elem_types.contains_key(name.as_str()) {
+                if self.var_types.slice_elem_types.contains_key(name.as_str()) {
                     let i64_t = self.context.i64_type();
                     let slice_ty = self.slice_struct_type();
                     let slice_ptr = self.get_data_ptr(name).ok_or_else(|| {
@@ -5100,7 +5105,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 );
                             }
                             let ptr_ty = self.context.ptr_type(AddressSpace::default());
-                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let elem_ty =
+                                *self.var_types.slice_elem_types.get(name.as_str()).unwrap();
                             let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
                             let data_pp = self
                                 .builder
@@ -5136,7 +5142,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                  in codegen"
                                     .to_string()
                             })?;
-                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let elem_ty =
+                                *self.var_types.slice_elem_types.get(name.as_str()).unwrap();
                             let ptr_ty = self.context.ptr_type(AddressSpace::default());
                             let data = {
                                 let p = self
@@ -5188,7 +5195,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 return Err(format!("Slice.{method} requires 1 argument"));
                             }
                             let overlapping = method == "windows";
-                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let elem_ty =
+                                *self.var_types.slice_elem_types.get(name.as_str()).unwrap();
                             let (data, len) = self.slice_data_and_len(slice_ty, slice_ptr, "cw");
                             let n = self.compile_expr(&args[0].value)?;
                             let n = self.coerce_to_i64(n)?;
@@ -5349,8 +5357,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             if !args.is_empty() {
                                 return Err("Slice.to_vec takes no arguments".to_string());
                             }
-                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
-                            let elem_te = self.var_elem_type_exprs.get(name.as_str()).cloned();
+                            let elem_ty =
+                                *self.var_types.slice_elem_types.get(name.as_str()).unwrap();
+                            let elem_te = self
+                                .var_types
+                                .var_elem_type_exprs
+                                .get(name.as_str())
+                                .cloned();
                             let needs_clone = match elem_te.as_ref() {
                                 Some(te) => !super::vec_method::is_trivially_copyable_te(te),
                                 // Same rule as `fill`: with no element
@@ -5458,7 +5471,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             if args.len() != 2 {
                                 return Err("Slice.swap requires 2 arguments".to_string());
                             }
-                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let elem_ty =
+                                *self.var_types.slice_elem_types.get(name.as_str()).unwrap();
                             let ptr_ty = self.context.ptr_type(AddressSpace::default());
                             let (data, len) = self.slice_data_and_len(slice_ty, slice_ptr, "swp");
                             let i = self.compile_expr(&args[0].value)?;
@@ -5536,8 +5550,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             if args.len() != 1 {
                                 return Err("Slice.fill requires 1 argument".to_string());
                             }
-                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
-                            let elem_te = self.var_elem_type_exprs.get(name.as_str()).cloned();
+                            let elem_ty =
+                                *self.var_types.slice_elem_types.get(name.as_str()).unwrap();
+                            let elem_te = self
+                                .var_types
+                                .var_elem_type_exprs
+                                .get(name.as_str())
+                                .cloned();
                             let needs_clone = match elem_te.as_ref() {
                                 Some(te) => !super::vec_method::is_trivially_copyable_te(te),
                                 // No element `TypeExpr` means no way to know
@@ -5705,7 +5724,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         // all.
                         "contains" | "first" | "last" | "get" | "reverse" | "sort" | "sort_by"
                         | "sort_by_key" => {
-                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let elem_ty =
+                                *self.var_types.slice_elem_types.get(name.as_str()).unwrap();
                             let ptr_ty = self.context.ptr_type(AddressSpace::default());
                             let data = {
                                 let p = self
@@ -5747,14 +5767,14 @@ impl<'ctx> super::Codegen<'ctx> {
                             // type under that name for the call and restore
                             // after, so no slice binding is left masquerading as
                             // a Vec for anything downstream.
-                            let saved = self.vec_elem_types.insert(name.clone(), elem_ty);
+                            let saved = self.var_types.vec_elem_types.insert(name.clone(), elem_ty);
                             let out = self.compile_vec_method(name, view, method, args);
                             match saved {
                                 Some(prev) => {
-                                    self.vec_elem_types.insert(name.clone(), prev);
+                                    self.var_types.vec_elem_types.insert(name.clone(), prev);
                                 }
                                 None => {
-                                    self.vec_elem_types.remove(name.as_str());
+                                    self.var_types.vec_elem_types.remove(name.as_str());
                                 }
                             }
                             return out;
@@ -5820,13 +5840,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // a fresh Kāra String per call so the resulting value
                 // outlives the request struct (which the runtime drops
                 // after the handler returns).
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Request")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Request")
                     && (method == "path" || method == "method")
                 {
                     let name = name.clone();
                     return self.compile_request_string_method(&name, method);
                 }
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Request")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Request")
                     && method == "body"
                 {
                     let name = name.clone();
@@ -5837,7 +5857,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `Option[String]` with `Some(value)` on hit, `None` on
                 // miss. Args[0] is the header name (`String`); the
                 // payload's data ptr + len round-trip through the FFI.
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Request")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Request")
                     && method == "header"
                     && args.len() == 1
                 {
@@ -5851,7 +5871,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // line 13). `query()` parameters are percent-decoded
                 // runtime-side; `headers()` keys are hyper-normalized
                 // lowercase.
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Request")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Request")
                     && (method == "headers" || method == "query")
                     && args.is_empty()
                 {
@@ -5870,7 +5890,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `Result[Response, HttpError]` packed into the seeded
                 // 5-word Result enum (`tag, w0=status, w1..w3=body /
                 // err.message`).
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Client")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Client")
                     && (method == "get" || method == "post")
                 {
                     return self.compile_client_http_method(method, args);
@@ -5884,7 +5904,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `volatile_read` / `ptr.const` surface); the interpreter DOES
                 // execute them and rejects — matching the codegen-only posture
                 // of the raw volatile intrinsics.
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "VolatileCell")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "VolatileCell")
                     && matches!(method, "read" | "write")
                 {
                     let name = name.clone();
@@ -5896,7 +5916,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `HTTP_BUILDERS` entry; subsequent `.header(...) /
                 // .body(...) / .timeout(...) / .send()` chain through
                 // the handle-based runtime externs.
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Client")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Client")
                     && method == "request"
                 {
                     return self.compile_client_request_builder(args);
@@ -5907,7 +5927,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (handle stays the same, runtime entry mutates); `.send()`
                 // routes through `compile_request_builder_send` (consumes
                 // the handle and packs the result).
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "RequestBuilder")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "RequestBuilder")
                 {
                     if method == "header" || method == "body" || method == "timeout" {
                         let name = name.clone();
@@ -5933,7 +5953,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // all three route through `compile_response_accessor`; the
                 // binding's surface type (String vs Vec[u8]) comes from the
                 // typechecker, not the cloned aggregate.
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Response")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Response")
                     && matches!(method, "status" | "body" | "bytes")
                     && args.is_empty()
                 {
@@ -5947,7 +5967,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `headers` handle off the Response and calls the runtime
                 // `HTTP_RESPONSE_HEADERS` side-table lookup
                 // (case-insensitive, RFC 7230 §3.2).
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Response")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Response")
                     && method == "header"
                     && args.len() == 1
                 {
@@ -5960,14 +5980,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Routes through `compile_response_pairs`, which reads the
                 // hidden headers handle and drives the runtime count +
                 // key_at/val_at iteration accessors.
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Response")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Response")
                     && method == "headers"
                     && args.is_empty()
                 {
                     let name = name.clone();
                     return self.compile_response_pairs(&name);
                 }
-                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "HttpError")
+                if matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "HttpError")
                     && method == "message"
                     && args.is_empty()
                 {
@@ -5982,7 +6002,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // copies the result into a fresh Kāra String.
                 if method == "stringify"
                     && args.is_empty()
-                    && matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Json")
+                    && matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Json")
                 {
                     let recv_val = self.compile_expr(object)?;
                     return self.compile_json_stringify(recv_val);
@@ -6229,7 +6249,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // have no user impl, so this must intercept before the user-impl lookup
         // below. B-8 OnceLock codegen.
         if let ExprKind::Identifier(recv_name) = &object.kind {
-            if self.once_var_types.contains_key(recv_name.as_str())
+            if self
+                .var_types
+                .once_var_types
+                .contains_key(recv_name.as_str())
                 && matches!(method, "set" | "get" | "is_set" | "get_or_init")
             {
                 return self.compile_once_method(recv_name, method, args);
@@ -6242,7 +6265,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the baked stdlib struct has no user impl, so this must intercept
         // before the user-impl lookup below. Phase-8 Interner codegen.
         if let ExprKind::Identifier(recv_name) = &object.kind {
-            if self.interner_vars.contains(recv_name.as_str())
+            if self.var_types.interner_vars.contains(recv_name.as_str())
                 && matches!(method, "intern" | "resolve" | "len")
             {
                 return self.compile_interner_method(recv_name, method, args);
@@ -6255,7 +6278,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Arena.new()` bind site) — same interception posture as the
         // Interner arm above. Phase-8 Arena codegen.
         if let ExprKind::Identifier(recv_name) = &object.kind {
-            if self.arena_vars.contains_key(recv_name.as_str())
+            if self.var_types.arena_vars.contains_key(recv_name.as_str())
                 && matches!(
                     method,
                     "push" | "get" | "len" | "high_water_mark" | "rewind_to"
@@ -6320,6 +6343,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.impl_method_self_and_borrow_return(&receiver_type, method),
                         Some((crate::ast::SelfParam::Owned, _))
                     ) && self
+                        .var_types
                         .var_type_names
                         .get(recv_name.as_str())
                         .is_some_and(|tn| self.enum_layouts.contains_key(tn.as_str()))
@@ -6884,7 +6908,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ty: rb_ty.into(),
                             },
                         );
-                        self.var_type_names
+                        self.var_types
+                            .var_type_names
                             .insert(synth.clone(), "RequestBuilder".to_string());
                         let synth_expr = Expr {
                             kind: ExprKind::Identifier(synth.clone()),
@@ -6898,7 +6923,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             call_span,
                         );
                         self.variables.remove(&synth);
-                        self.var_type_names.remove(&synth);
+                        self.var_types.var_type_names.remove(&synth);
                         return result;
                     }
                 }
@@ -6942,7 +6967,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             ty: sv_ty.into(),
                         },
                     );
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(synth.clone(), type_name.to_string());
                     let synth_expr = Expr {
                         kind: ExprKind::Identifier(synth.clone()),
@@ -6951,7 +6977,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let result =
                         self.compile_method_call(&synth_expr, method, args, call_span, call_span);
                     self.variables.remove(&synth);
-                    self.var_type_names.remove(&synth);
+                    self.var_types.var_type_names.remove(&synth);
                     return result;
                 }
             }
@@ -7878,10 +7904,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         args_close_span,
                     );
                     self.variables.remove(&synth);
-                    self.vec_elem_types.remove(&synth);
-                    self.slice_elem_types.remove(&synth);
-                    self.var_elem_type_exprs.remove(&synth);
-                    self.var_type_names.remove(&synth);
+                    self.var_types.vec_elem_types.remove(&synth);
+                    self.var_types.slice_elem_types.remove(&synth);
+                    self.var_types.var_elem_type_exprs.remove(&synth);
+                    self.var_types.var_type_names.remove(&synth);
                     self.mapset.map_key_types.remove(&synth);
                     self.mapset.map_val_types.remove(&synth);
                     self.mapset.map_key_type_names.remove(&synth);
@@ -8921,7 +8947,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if let (Some(base), Some(n)) = (iter_base(object.as_ref()), n_lit) {
                     let base_is_named_vec = matches!(&base.kind, ExprKind::Identifier(nm)
-                        if self.var_elem_type_exprs.contains_key(nm.as_str()));
+                        if self.var_types.var_elem_type_exprs.contains_key(nm.as_str()));
                     if base_is_named_vec {
                         let overlapping = method == "windows";
                         if let Some(v) = self.try_compile_chunks_windows_collect(
@@ -14591,7 +14617,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let base_is_named_vec = |cg: &Self, base: &Expr| {
             matches!(&base.kind, ExprKind::Identifier(n)
-                if cg.var_elem_type_exprs.contains_key(n.as_str()))
+                if cg.var_types.var_elem_type_exprs.contains_key(n.as_str()))
         };
         let heap_bases_clone_eligible =
             base_is_named_vec(self, base_a) && base_is_named_vec(self, base_b);
@@ -14867,18 +14893,23 @@ impl<'ctx> super::Codegen<'ctx> {
             self.ref_params.insert(synth.clone(), inner_llvm);
             if let TypeKind::Path(p) = &inner_te.kind {
                 if let Some(seg) = p.segments.first() {
-                    self.var_type_names.insert(synth.clone(), seg.clone());
+                    self.var_types
+                        .var_type_names
+                        .insert(synth.clone(), seg.clone());
                 }
             }
             if let Some(elem_ty) = self.extract_vec_elem_type(&inner_te) {
-                self.vec_elem_types.insert(synth.clone(), elem_ty);
+                self.var_types.vec_elem_types.insert(synth.clone(), elem_ty);
                 if let Some(inner) = super::helpers::vec_inner_type_expr(&inner_te) {
-                    self.var_elem_type_exprs.insert(synth.clone(), inner);
+                    self.var_types
+                        .var_elem_type_exprs
+                        .insert(synth.clone(), inner);
                 }
             } else if self.is_string_type_expr(&inner_te) {
-                self.vec_elem_types
+                self.var_types
+                    .vec_elem_types
                     .insert(synth.clone(), self.context.i8_type().into());
-                self.string_vars.insert(synth.clone());
+                self.var_types.string_vars.insert(synth.clone());
             }
         }
 
@@ -14894,10 +14925,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Dispatch-only registrations; the name is unique per call site.
         self.variables.remove(&synth);
-        self.var_type_names.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
-        self.string_vars.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.string_vars.remove(&synth);
         self.ref_params.remove(&synth);
         if is_tensor {
             self.accel.tensor_var_infos.remove(&synth);
@@ -15033,18 +15064,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: val.get_type(),
             },
         );
-        self.vec_elem_types.insert(synth.clone(), i8t);
-        self.string_vars.insert(synth.clone());
-        self.var_type_names
+        self.var_types.vec_elem_types.insert(synth.clone(), i8t);
+        self.var_types.string_vars.insert(synth.clone());
+        self.var_types
+            .var_type_names
             .insert(synth.clone(), "String".to_string());
 
         let result = self.compile_vec_method(&synth, slot, method, args);
 
         // Drop the dispatch-only registrations (unique synth name).
         self.variables.remove(&synth);
-        self.var_type_names.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.string_vars.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.string_vars.remove(&synth);
 
         // Free the intermediate receiver temp's buffer. When `object` is a
         // fresh owned String — a chained `s.to_uppercase().to_lowercase()`
@@ -15208,7 +15240,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: val.get_type(),
             },
         );
-        self.var_type_names.insert(synth.clone(), type_name.clone());
+        self.var_types
+            .var_type_names
+            .insert(synth.clone(), type_name.clone());
         // B-2026-08-06-12 — the synth local needs the receiver's INSTANTIATION
         // too, not just its base name. Re-entering with an Identifier routes
         // through the generic-method mono arm, and that arm reads
@@ -15358,7 +15392,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Drop the dispatch-only registrations (the queued drop, if any,
         // references the alloca, not the name, so it stays armed).
         self.variables.remove(&synth);
-        self.var_type_names.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
 
         result.map(Some)
     }
@@ -15466,17 +15500,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: recv_val.get_type(),
             },
         );
-        self.vec_elem_types.insert(synth.clone(), elem_llvm);
-        self.var_elem_type_exprs.insert(synth.clone(), elem_te);
-        self.var_type_names.insert(synth.clone(), "Vec".to_string());
+        self.var_types
+            .vec_elem_types
+            .insert(synth.clone(), elem_llvm);
+        self.var_types
+            .var_elem_type_exprs
+            .insert(synth.clone(), elem_te);
+        self.var_types
+            .var_type_names
+            .insert(synth.clone(), "Vec".to_string());
 
         let result = self.compile_vec_method(&synth, slot, method, args);
 
         // Drop the dispatch-only registrations.
         self.variables.remove(&synth);
-        self.vec_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
-        self.var_type_names.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
 
         result.map(Some)
     }
@@ -15613,9 +15653,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: recv_val.get_type(),
             },
         );
-        self.slice_elem_types.insert(synth.clone(), elem_llvm);
+        self.var_types
+            .slice_elem_types
+            .insert(synth.clone(), elem_llvm);
         if let Some(te) = elem_te {
-            self.var_elem_type_exprs.insert(synth.clone(), te);
+            self.var_types.var_elem_type_exprs.insert(synth.clone(), te);
         }
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
@@ -15625,8 +15667,8 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Drop the dispatch-only registrations.
         self.variables.remove(&synth);
-        self.slice_elem_types.remove(&synth);
-        self.var_elem_type_exprs.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
 
         out.map(Some)
     }
@@ -15737,7 +15779,9 @@ impl<'ctx> super::Codegen<'ctx> {
         );
 
         let result = if head == "Set" {
-            self.var_type_names.insert(synth.clone(), "Set".to_string());
+            self.var_types
+                .var_type_names
+                .insert(synth.clone(), "Set".to_string());
             if let Some(elem) = nth(0) {
                 self.mapset
                     .set_elem_types
@@ -15747,7 +15791,9 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mapset.set_elem_types.remove(&synth);
             r
         } else {
-            self.var_type_names.insert(synth.clone(), "Map".to_string());
+            self.var_types
+                .var_type_names
+                .insert(synth.clone(), "Map".to_string());
             if let Some(k) = nth(0) {
                 self.mapset
                     .map_key_types
@@ -15765,7 +15811,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         self.variables.remove(&synth);
-        self.var_type_names.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
 
         result.map(Some)
     }
@@ -16947,7 +16993,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn is_atomic_receiver(&self, object: &Expr) -> bool {
         match &object.kind {
             ExprKind::Identifier(name) => {
-                matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Atomic")
+                matches!(self.var_types.var_type_names.get(name.as_str()), Some(n) if n == "Atomic")
             }
             ExprKind::FieldAccess { object, field } => {
                 if let Some(obj_ty) = self.type_name_of_expr(object) {
@@ -17784,7 +17830,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // by a side-effect-free index — `vec_index_elem_ptr` re-evaluates
                 // the index to recompute the element pointer, and a pure index
                 // makes that re-eval a no-op. Mirrors `field_chain_place_ptr`.
-                if !self.vec_elem_types.contains_key(vec_var.as_str())
+                if !self.var_types.vec_elem_types.contains_key(vec_var.as_str())
                     || !matches!(index.kind, ExprKind::Identifier(_) | ExprKind::Integer(..))
                 {
                     return None;
@@ -20356,6 +20402,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             // Un-layouted `Vec[S]` (GPU-SLIP-4h): default interleaved group.
             let struct_name = self
+                .var_types
                 .var_elem_type_exprs
                 .get(vec_name)
                 .and_then(|te| match &te.kind {

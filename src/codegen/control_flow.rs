@@ -1416,10 +1416,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // Vec[T]: side-table both `vec_elem_types` and `var_elem_type_exprs`
             // are set (the latter is what distinguishes a Vec variable from a
             // String variable, which only sets `vec_elem_types`).
-            if self.vec_elem_types.contains_key(var_name)
-                && self.var_elem_type_exprs.contains_key(var_name)
+            if self.var_types.vec_elem_types.contains_key(var_name)
+                && self.var_types.var_elem_type_exprs.contains_key(var_name)
             {
-                let elem_te = self.var_elem_type_exprs[var_name].clone();
+                let elem_te = self.var_types.var_elem_type_exprs[var_name].clone();
                 let slot = self
                     .variables
                     .get(var_name)
@@ -1432,10 +1432,10 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // Map[K, V]: side-tables hold both K and V `TypeExpr`s.
             if self.mapset.map_key_type_exprs.contains_key(var_name)
-                && self.var_elem_type_exprs.contains_key(var_name)
+                && self.var_types.var_elem_type_exprs.contains_key(var_name)
             {
                 let k_te = self.mapset.map_key_type_exprs[var_name].clone();
-                let v_te = self.var_elem_type_exprs[var_name].clone();
+                let v_te = self.var_types.var_elem_type_exprs[var_name].clone();
                 let slot = self
                     .variables
                     .get(var_name)
@@ -1472,7 +1472,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-07-08-9: Option[T] — synthesize a `Some(<T>)`/`None`
             // renderer from the captured concrete payload type and print it,
             // matching the interpreter (which codegen previously couldn't).
-            if let Some(payload_te) = self.var_option_payload_te.get(var_name).cloned() {
+            if let Some(payload_te) = self.var_types.var_option_payload_te.get(var_name).cloned() {
                 let slot = self
                     .variables
                     .get(var_name)
@@ -1484,7 +1484,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(zero.into());
             }
             // Result[T, E] sibling.
-            if let Some((ok_te, err_te)) = self.var_result_payload_te.get(var_name).cloned() {
+            if let Some((ok_te, err_te)) =
+                self.var_types.var_result_payload_te.get(var_name).cloned()
+            {
                 let slot = self
                     .variables
                     .get(var_name)

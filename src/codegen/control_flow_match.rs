@@ -1619,7 +1619,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         let slot = self.variables.get(scrut_name.as_str())?;
-        let enum_name = self.var_type_names.get(scrut_name.as_str()).cloned()?;
+        let enum_name = self
+            .var_types
+            .var_type_names
+            .get(scrut_name.as_str())
+            .cloned()?;
         let layout = self.enum_layouts.get(enum_name.as_str())?;
         if layout.is_shared {
             return None;
@@ -1812,7 +1816,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .map_or(name.as_str(), |s| s.as_str());
         self.enum_inst_var_types
             .get(owner)
-            .or_else(|| self.optres_var_payload_tes.get(owner))
+            .or_else(|| self.var_types.optres_var_payload_tes.get(owner))
             .cloned()
     }
 
@@ -2067,7 +2071,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(name.as_str()).copied() else {
             return (val, false);
         };
-        let Some(enum_name) = self.var_type_names.get(name.as_str()).cloned() else {
+        let Some(enum_name) = self.var_types.var_type_names.get(name.as_str()).cloned() else {
             return (val, false);
         };
         let Some(layout) = self.enum_layouts.get(&enum_name).cloned() else {
@@ -2595,7 +2599,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(opt_te) = self
             .enum_inst_var_types
             .get(owner.as_str())
-            .or_else(|| self.optres_var_payload_tes.get(owner.as_str()))
+            .or_else(|| self.var_types.optres_var_payload_tes.get(owner.as_str()))
             .cloned()
         else {
             return (val, None);
@@ -2707,7 +2711,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(res_te) = self
             .enum_inst_var_types
             .get(owner.as_str())
-            .or_else(|| self.optres_var_payload_tes.get(owner.as_str()))
+            .or_else(|| self.var_types.optres_var_payload_tes.get(owner.as_str()))
             .cloned()
         else {
             return (val, None);
@@ -6589,7 +6593,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(s) => *s,
             None => return,
         };
-        let enum_name = match self.var_type_names.get(scrut_name) {
+        let enum_name = match self.var_types.var_type_names.get(scrut_name) {
             Some(n) => n.clone(),
             None => return,
         };
@@ -6876,14 +6880,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Same no-op-tail family as B-2026-08-01-35 (field-rooted
                 // container) and B-2026-08-02-15 (impure index) — one more
                 // receiver shape no resolver covered.
-                if self.slice_elem_types.contains_key(vec_var.as_str()) {
+                if self
+                    .var_types
+                    .slice_elem_types
+                    .contains_key(vec_var.as_str())
+                {
                     let vec_var = vec_var.clone();
                     return self
                         .lower_indexed_elem_ptr_slice(&vec_var, index)
                         .ok()
                         .map(|(p, _)| p);
                 }
-                if !self.vec_elem_types.contains_key(vec_var.as_str()) {
+                if !self.var_types.vec_elem_types.contains_key(vec_var.as_str()) {
                     return None;
                 }
                 // Array-slot Vec bindings have a distinct representation —
@@ -6976,9 +6984,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     return None;
                 };
                 let elem = self
+                    .var_types
                     .vec_elem_types
                     .get(v.as_str())
-                    .or_else(|| self.slice_elem_types.get(v.as_str()))?;
+                    .or_else(|| self.var_types.slice_elem_types.get(v.as_str()))?;
                 match elem {
                     BasicTypeEnum::StructType(t) => Some(*t),
                     _ => None,
@@ -7097,6 +7106,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if te_is_empty {
             if let ExprKind::Identifier(src) = &object.kind {
                 if let Some(recorded) = self
+                    .var_types
                     .tuple_var_elem_tes
                     .get(src.as_str())
                     .and_then(|tes| tes.get(*index as usize).cloned())
@@ -7164,6 +7174,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let src = src.clone();
         let Some(te) = self
+            .var_types
             .tuple_var_elem_tes
             .get(src.as_str())
             .cloned()
@@ -7215,6 +7226,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         let Some(fidx) = self
+            .var_types
             .var_type_names
             .get(obj.as_str())
             .and_then(|sn| self.struct_field_names.get(sn.as_str()))
@@ -7233,7 +7245,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// first attempt add an action rather than replace one. The struct's own
     /// `impl Drop` body wrapper is a separate action and stays armed.
     pub(super) fn disarm_struct_field_bodies_at(&mut self, var_name: &str, field_idx: usize) {
-        let Some(struct_name) = self.var_type_names.get(var_name).cloned() else {
+        let Some(struct_name) = self.var_types.var_type_names.get(var_name).cloned() else {
             return;
         };
         let Some(slot) = self.variables.get(var_name).copied() else {
@@ -7271,7 +7283,7 @@ impl<'ctx> super::Codegen<'ctx> {
         index: u32,
         tuple_ty: inkwell::types::StructType<'ctx>,
     ) {
-        let Some(elem_tes) = self.tuple_var_elem_tes.get(var_name).cloned() else {
+        let Some(elem_tes) = self.var_types.tuple_var_elem_tes.get(var_name).cloned() else {
             return;
         };
         let Some(slot) = self.variables.get(var_name).copied() else {
@@ -7301,7 +7313,12 @@ impl<'ctx> super::Codegen<'ctx> {
         match &expr.kind {
             ExprKind::Index { object, .. } => {
                 if let ExprKind::Identifier(v) = &object.kind {
-                    return match self.var_elem_type_exprs.get(v.as_str()).map(|te| &te.kind) {
+                    return match self
+                        .var_types
+                        .var_elem_type_exprs
+                        .get(v.as_str())
+                        .map(|te| &te.kind)
+                    {
                         Some(TypeKind::Path(p)) => p.segments.last().cloned(),
                         _ => None,
                     };
@@ -7356,6 +7373,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 if let ExprKind::Identifier(v) = &object.kind {
                     return self
+                        .var_types
                         .tuple_var_elem_type_names
                         .get(v.as_str())?
                         .get(*index as usize)?
@@ -9362,7 +9380,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(vec_name) = &object.kind else {
             return None;
         };
-        let elem_te = self.var_elem_type_exprs.get(vec_name.as_str())?.clone();
+        let elem_te = self
+            .var_types
+            .var_elem_type_exprs
+            .get(vec_name.as_str())?
+            .clone();
         // The popped element (`Option[shared T]`) IS the box's boxed payload;
         // synthesize its element drop directly.
         self.option_shared_payload_element_drop(&elem_te)

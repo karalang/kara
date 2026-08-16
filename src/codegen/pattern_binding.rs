@@ -457,7 +457,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             // method 'len'"), the VecDeque half of
                             // B-2026-06-10-3.
                             "Vec" | "VecDeque" => {
-                                self.vec_elem_types.insert(name.clone(), elem_llvm);
+                                self.var_types
+                                    .vec_elem_types
+                                    .insert(name.clone(), elem_llvm);
                                 // Also record the ELEMENT TypeExpr, not just its
                                 // LLVM type: iterating the bound collection needs
                                 // only `vec_elem_types` (so a `Vec[i64]` payload
@@ -470,12 +472,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // i64 (`i64 0`) instead of the field — the JSON
                                 // dogfood's `Obj(entries) => for e in entries {
                                 // out.push_str(e.key) }` crash (B-2026-07-11-6).
-                                self.var_elem_type_exprs
+                                self.var_types
+                                    .var_elem_type_exprs
                                     .insert(name.clone(), inner_te.clone());
                                 bound_vec_elem = Some(elem_llvm);
                             }
                             "Slice" => {
-                                self.slice_elem_types.insert(name.clone(), elem_llvm);
+                                self.var_types
+                                    .slice_elem_types
+                                    .insert(name.clone(), elem_llvm);
                             }
                             _ => {}
                         }
@@ -494,7 +499,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // (a borrow, `cap == 0`, nothing to free).
                     if type_name == "String" || type_name == "CString" {
                         let u8_ty: BasicTypeEnum<'ctx> = self.context.i8_type().into();
-                        self.vec_elem_types.insert(name.clone(), u8_ty);
+                        self.var_types.vec_elem_types.insert(name.clone(), u8_ty);
                         bound_vec_elem = Some(u8_ty);
                     }
                     // B-2026-08-05-8 — ALSO register the binding as a string
@@ -523,7 +528,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // through the `CString.<method>` key, so putting it in
                     // `string_vars` would aim dispatch at the wrong table.
                     if type_name == "String" {
-                        self.string_vars.insert(name.clone());
+                        self.var_types.string_vars.insert(name.clone());
                     }
                     // Map[K,V] / Set[T] payload binding — register the
                     // collection dispatch side-tables (map_key_types /
@@ -658,6 +663,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // buffer-free, so no double-free (the source's drain is
                         // suppressed exactly as its buffer-free already is).
                         let agg = self
+                            .var_types
                             .var_elem_type_exprs
                             .get(name.as_str())
                             .cloned()
@@ -710,7 +716,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // intentionally exempt (kept by name): they are NOT copy-supported
                 // (side-table handle), but their move-suppression
                 // (`suppress_source_vec_cleanup_for_arg` → handle-zero) covers them.
-                let bound_type = self.var_type_names.get(name.as_str()).cloned();
+                let bound_type = self.var_types.var_type_names.get(name.as_str()).cloned();
                 if !self.pattern_state.pattern_binding_is_borrow {
                     if let Some(tn) = bound_type.as_deref() {
                         // B-2026-07-09-12 — a user `shared enum` scrutinee whose

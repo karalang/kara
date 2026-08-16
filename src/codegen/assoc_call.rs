@@ -54,9 +54,10 @@ impl<'ctx> super::Codegen<'ctx> {
             match &arg.kind {
                 ExprKind::Identifier(src_name) => {
                     use_coerce = true;
-                    let t = if let Some(&t) = self.slice_elem_types.get(src_name.as_str()) {
+                    let t = if let Some(&t) = self.var_types.slice_elem_types.get(src_name.as_str())
+                    {
                         t
-                    } else if let Some(&t) = self.vec_elem_types.get(src_name.as_str()) {
+                    } else if let Some(&t) = self.var_types.vec_elem_types.get(src_name.as_str()) {
                         t
                     } else if let Some(slot) = self.variables.get(src_name.as_str()).copied() {
                         if let BasicTypeEnum::ArrayType(at) = slot.ty {
@@ -73,7 +74,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             src_name
                         ));
                     };
-                    let te = self.var_elem_type_exprs.get(src_name.as_str()).cloned();
+                    let te = self
+                        .var_types
+                        .var_elem_type_exprs
+                        .get(src_name.as_str())
+                        .cloned();
                     (t, te, src_name.clone())
                 }
                 // Range-slice `arr[a..b]` — a contiguous window of an
@@ -93,9 +98,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .to_string(),
                         );
                     };
-                    let t = if let Some(&t) = self.slice_elem_types.get(outer_name.as_str()) {
+                    let t = if let Some(&t) =
+                        self.var_types.slice_elem_types.get(outer_name.as_str())
+                    {
                         t
-                    } else if let Some(&t) = self.vec_elem_types.get(outer_name.as_str()) {
+                    } else if let Some(&t) = self.var_types.vec_elem_types.get(outer_name.as_str())
+                    {
                         t
                     } else if let Some(slot) = self.variables.get(outer_name.as_str()).copied() {
                         if let BasicTypeEnum::ArrayType(at) = slot.ty {
@@ -112,7 +120,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             outer_name
                         ));
                     };
-                    let te = self.var_elem_type_exprs.get(outer_name.as_str()).cloned();
+                    let te = self
+                        .var_types
+                        .var_elem_type_exprs
+                        .get(outer_name.as_str())
+                        .cloned();
                     (t, te, format!("{outer_name}[..]"))
                 }
                 ExprKind::Index {
@@ -126,6 +138,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         );
                     };
                     let inner_te = self
+                        .var_types
                         .var_elem_type_exprs
                         .get(outer_name.as_str())
                         .and_then(super::helpers::vec_inner_type_expr)
@@ -3094,7 +3107,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args.len()
                 ));
             }
-            let elem_ty = self.pending_let_elem_type.ok_or_else(|| {
+            let elem_ty = self.var_types.pending_let_elem_type.ok_or_else(|| {
                 format!(
                     "{type_name}.with_capacity: element type unknown — requires a \
                      `let v: {type_name}[T] = ...` annotation"
@@ -3208,7 +3221,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args.len()
                 ));
             }
-            let elem_ty = self.pending_let_elem_type.ok_or_else(|| {
+            let elem_ty = self.var_types.pending_let_elem_type.ok_or_else(|| {
                 format!(
                     "{type_name}.try_with_capacity: element type unknown — requires a \
                      `let v: Result[{type_name}[T], AllocError] = ...` (or `let v: {type_name}[T] = ...?`) annotation"
@@ -3361,7 +3374,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Consume the destination element TypeExpr BEFORE compiling the fill
             // argument, so a nested inner `Vec.filled(...)` (compiled as that
             // argument) does not inherit this outer binding's element type.
-            let elem_te = self.pending_let_elem_type_expr.take();
+            let elem_te = self.var_types.pending_let_elem_type_expr.take();
             let n = self.compile_expr(&args[0].value)?.into_int_value();
             let val = self.compile_expr(&args[1].value)?;
             return self.build_vec_filled(n, val, elem_te);

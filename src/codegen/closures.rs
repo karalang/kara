@@ -2741,7 +2741,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_) => true,
                 BasicTypeEnum::StructType(st) if allow_heap && *st == vec_ty => free_vars
                     .get(i)
-                    .and_then(|n| self.vec_elem_types.get(n).copied())
+                    .and_then(|n| self.var_types.vec_elem_types.get(n).copied())
                     .is_some_and(|et| {
                         matches!(et, BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_))
                     }),
@@ -2960,7 +2960,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
@@ -3165,7 +3165,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
                 if let Some(type_name) = &plan.type_name {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(root_name.clone(), type_name.clone());
                 }
                 // B-2026-07-18-42: a stack-env whole-heap capture aliases the
@@ -3174,7 +3175,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Gated on `vec_elem_types` (the Vec/String set — matches
                 // `maybe_defensive_copy_param_arg`'s own gate); a disjoint
                 // sub-field/struct capture is naturally excluded.
-                if !is_heap_env && self.vec_elem_types.contains_key(root_name) {
+                if !is_heap_env && self.var_types.vec_elem_types.contains_key(root_name) {
                     self.for_loop_borrow_vars.insert(root_name.clone());
                 }
                 // B-2026-07-18-46: a whole heap-bearing STRUCT/ENUM capture (not
@@ -3204,7 +3205,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         },
                     );
                     if let Some(type_name) = saved_var_types.get(var_name) {
-                        self.var_type_names
+                        self.var_types
+                            .var_type_names
                             .insert(var_name.clone(), type_name.clone());
                     }
                     continue;
@@ -3222,7 +3224,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // method dispatch inside the closure can route through the
                 // user impl-block path.
                 if let Some(type_name) = saved_var_types.get(var_name) {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(var_name.clone(), type_name.clone());
                 }
                 // B-2026-07-18-42: a whole-heap capture must be deep-copied at a
@@ -3230,7 +3233,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the frame (stack-env alias) or the RC env box (heap-env), never
                 // by the return value. Mark it borrowed so the consume sites
                 // deep-copy. (mutref captures already `continue`d above.)
-                if self.vec_elem_types.contains_key(var_name) {
+                if self.var_types.vec_elem_types.contains_key(var_name) {
                     self.for_loop_borrow_vars.insert(var_name.clone());
                 }
                 // B-2026-07-18-46: a whole heap-bearing STRUCT/ENUM capture — the
@@ -3344,7 +3347,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 cp.ty.as_ref().map(|t| &t.kind),
                 Some(TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_))
             );
-            if !is_borrow_param && self.vec_elem_types.contains_key(&param_name) {
+            if !is_borrow_param && self.var_types.vec_elem_types.contains_key(&param_name) {
                 self.owned_vecstr_params.insert(param_name.clone());
             }
         }
@@ -3435,7 +3438,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // 8. Restore outer state.
         self.mono_state.type_subst = saved_subst;
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
@@ -3558,7 +3561,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     && self.owned_vecstr_params.contains(var_name)
                     && matches!(slot.ty, BasicTypeEnum::StructType(held) if held == self.vec_struct_type())
                 {
-                    if let Some(elem_ty) = self.vec_elem_types.get(var_name).copied() {
+                    if let Some(elem_ty) = self.var_types.vec_elem_types.get(var_name).copied() {
                         val = self.emit_vecstr_defensive_copy(val, elem_ty, None);
                     }
                 }
@@ -3627,10 +3630,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// aggregate (nothing to deep-copy), or an unknown/unnamed capture.
     fn captured_heap_agg_type(&self, name: &str) -> Option<(String, String)> {
         // Vec/String captures take the flat borrow-alias path.
-        if self.vec_elem_types.contains_key(name) {
+        if self.var_types.vec_elem_types.contains_key(name) {
             return None;
         }
-        let tn = self.var_type_names.get(name)?.clone();
+        let tn = self.var_types.var_type_names.get(name)?.clone();
         // Shared (RC) aggregates are co-owned via refcount, not deep-cloned.
         if self.shared_types.contains_key(&tn) {
             return None;
@@ -4448,7 +4451,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         for root in roots_in_order {
             let slot = *self.variables.get(root.as_str())?;
-            let type_name = self.var_type_names.get(root.as_str()).cloned();
+            let type_name = self.var_types.var_type_names.get(root.as_str()).cloned();
             let paths = by_root.get(&root).unwrap();
 
             // Conservative force-whole-root triggers: RC-fallback root

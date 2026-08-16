@@ -3124,7 +3124,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if agg_ty == vec_ty {
             return;
         }
-        let Some(sname) = self.var_type_names.get(s).cloned() else {
+        let Some(sname) = self.var_types.var_type_names.get(s).cloned() else {
             return;
         };
         let Some(idx) = self

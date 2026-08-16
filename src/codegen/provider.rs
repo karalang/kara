@@ -1441,7 +1441,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// fall through and the caller emits a codegen error.
     pub(super) fn infer_provider_type_name(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
-            ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()).cloned(),
+            ExprKind::Identifier(n) => self.var_types.var_type_names.get(n.as_str()).cloned(),
             ExprKind::StructLiteral { path, .. } => path.last().cloned(),
             // Constructor / associated-function / free-fn call returning a
             // provider: the provider's concrete type is the call's return

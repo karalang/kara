@@ -247,6 +247,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // are forced off (the selector returns None for shared V and for
         // values the flag free handles exactly).
         let val_drop_fn = self
+            .var_types
             .var_elem_type_exprs
             .get(var_name)
             .cloned()
@@ -797,7 +798,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // regression-free option without the type.
         self.builder.position_at_end(body_bb);
         let key_te = self.mapset.map_key_type_exprs.get(var_name).cloned();
-        let val_te = self.var_elem_type_exprs.get(var_name).cloned();
+        let val_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
         // Emit (cached) clone fns first — `emit_clone_fn_for_type_expr` may move
         // the builder into the synthesized fn, so re-assert `body_bb` after.
         let key_clone = key_te
@@ -901,7 +902,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(var_name)
             .cloned()
             .ok_or_else(|| format!("SortedMap.{method}: unknown key type for '{var_name}'"))?;
-        let val_te = self.var_elem_type_exprs.get(var_name).cloned();
+        let val_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
 
         // Emit (cached) clone fns before creating blocks — the emitter may move
         // the builder into the synthesized fn.
@@ -1083,7 +1084,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(var_name)
             .cloned()
             .ok_or_else(|| format!("SortedMap.{method}: unknown key type for '{var_name}'"))?;
-        let val_te = self.var_elem_type_exprs.get(var_name).cloned();
+        let val_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
         let key_clone = self.emit_clone_fn_for_type_expr(&key_te);
         let val_clone = val_te
             .as_ref()
@@ -1325,7 +1326,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(var_name)
             .cloned()
             .ok_or_else(|| format!("SortedMap.range: unknown key type for '{var_name}'"))?;
-        let val_te = self.var_elem_type_exprs.get(var_name).cloned();
+        let val_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
         let key_clone = self.emit_clone_fn_for_type_expr(&key_te);
         let val_clone = val_te
             .as_ref()
@@ -1801,6 +1802,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // was. The `Vec[weak T].push` twin computes the same flag in
                 // the same position, for the same reason.
                 let weak_val = self
+                    .var_types
                     .var_elem_type_exprs
                     .get(var_name)
                     .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)));
@@ -2092,6 +2094,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // whatever the frame happened to hold. Weak V only, to leave
                 // every other value type's emitted IR byte-identical.
                 if self
+                    .var_types
                     .var_elem_type_exprs
                     .get(var_name)
                     .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
@@ -2176,6 +2179,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // decides the tag. The store lands after both allocas, so the
                 // entry-block alloca ORDER this arm depends on is unchanged.
                 if self
+                    .var_types
                     .var_elem_type_exprs
                     .get(var_name)
                     .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
@@ -2226,7 +2230,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // calling convention; the caller's per-iter dec
                 // brings the count back to the construction-time
                 // value, leaving the Map's bucket reference intact.
-                if let Some(te) = self.var_elem_type_exprs.get(var_name).cloned() {
+                if let Some(te) = self.var_types.var_elem_type_exprs.get(var_name).cloned() {
                     if let TypeKind::Path(p) = &te.kind {
                         if let Some(seg) = p.segments.last() {
                             if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
@@ -2329,37 +2333,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 // rationale as `get`). A scalar V's clone fn is a plain
                 // load+store. Mirrors the interpreter's `v.clone()`.
                 self.builder.position_at_end(found_bb);
-                let found_val = if let Some(v_te) = self.var_elem_type_exprs.get(var_name).cloned()
-                {
-                    let clone_fn = self.emit_clone_fn_for_type_expr(&v_te);
-                    let dst = self.create_entry_alloca(fn_val, "map.getor.clone", val_ty);
-                    // `emit_clone_fn_*` / `create_entry_alloca` may move the
-                    // builder; re-assert the found block before emitting here.
-                    self.builder.position_at_end(found_bb);
-                    self.builder
-                        .build_call(clone_fn, &[val_slot.into(), dst.into()], "map.getor.clone")
-                        .unwrap();
-                    let fv = self
-                        .builder
-                        .build_load(val_ty, dst, "map.getor.hit")
-                        .unwrap();
-                    if let TypeKind::Path(p) = &v_te.kind {
-                        if let Some(seg) = p.segments.last() {
-                            if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
-                                self.emit_refcount_inc(
-                                    "map.getor",
-                                    info.heap_type,
-                                    fv.into_pointer_value(),
-                                );
+                let found_val =
+                    if let Some(v_te) = self.var_types.var_elem_type_exprs.get(var_name).cloned() {
+                        let clone_fn = self.emit_clone_fn_for_type_expr(&v_te);
+                        let dst = self.create_entry_alloca(fn_val, "map.getor.clone", val_ty);
+                        // `emit_clone_fn_*` / `create_entry_alloca` may move the
+                        // builder; re-assert the found block before emitting here.
+                        self.builder.position_at_end(found_bb);
+                        self.builder
+                            .build_call(clone_fn, &[val_slot.into(), dst.into()], "map.getor.clone")
+                            .unwrap();
+                        let fv = self
+                            .builder
+                            .build_load(val_ty, dst, "map.getor.hit")
+                            .unwrap();
+                        if let TypeKind::Path(p) = &v_te.kind {
+                            if let Some(seg) = p.segments.last() {
+                                if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
+                                    self.emit_refcount_inc(
+                                        "map.getor",
+                                        info.heap_type,
+                                        fv.into_pointer_value(),
+                                    );
+                                }
                             }
                         }
-                    }
-                    fv
-                } else {
-                    self.builder
-                        .build_load(val_ty, val_slot, "map.getor.hit")
-                        .unwrap()
-                };
+                        fv
+                    } else {
+                        self.builder
+                            .build_load(val_ty, val_slot, "map.getor.hit")
+                            .unwrap()
+                    };
                 let found_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
 
@@ -2557,6 +2561,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `{ptr,len,cap}` overlay clears through the per-value drop
                 // fn (the clear sibling of the scope-exit routing).
                 let val_drop_fn = self
+                    .var_types
                     .var_elem_type_exprs
                     .get(var_name)
                     .cloned()

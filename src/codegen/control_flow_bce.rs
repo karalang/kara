@@ -210,8 +210,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 ..
             } if method == "len" && args.is_empty() => {
                 if let ExprKind::Identifier(coll_name) = &object.kind {
-                    if self.vec_elem_types.contains_key(coll_name.as_str())
-                        || self.slice_elem_types.contains_key(coll_name.as_str())
+                    if self
+                        .var_types
+                        .vec_elem_types
+                        .contains_key(coll_name.as_str())
+                        || self
+                            .var_types
+                            .slice_elem_types
+                            .contains_key(coll_name.as_str())
                     {
                         return Some(coll_name.clone());
                     }
@@ -1515,13 +1521,14 @@ impl<'ctx> super::Codegen<'ctx> {
     fn body_touches_heap(&self, body: &Block) -> bool {
         fn walk(cg: &super::Codegen<'_>, e: &Expr) -> bool {
             match &e.kind {
-                ExprKind::Identifier(n) => cg.string_vars.contains(n.as_str()),
+                ExprKind::Identifier(n) => cg.var_types.string_vars.contains(n.as_str()),
                 ExprKind::Index { object, index } => {
                     // A scalar-element Vec read is the shape #265's reduction
                     // needs; anything else (unknown container, aggregate
                     // element) declines.
                     let elem_is_scalar = match &object.kind {
                         ExprKind::Identifier(c) => cg
+                            .var_types
                             .vec_elem_types
                             .get(c.as_str())
                             .is_some_and(|t| t.is_int_type() || t.is_float_type()),
@@ -1617,7 +1624,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Screened with kara-katas `scripts/unroll-screen.py`.
         let Some((var, bound)) = guard_upper_bounded_counter(cond).or_else(|| {
             let (v, bound_name) = guard_upper_bounded_counter_named(cond)?;
-            Some((v, *self.int_const_locals.get(&bound_name)?))
+            Some((v, *self.var_types.int_const_locals.get(&bound_name)?))
         }) else {
             return false;
         };

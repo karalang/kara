@@ -823,7 +823,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
@@ -922,7 +922,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
                 if let Some(type_name) = saved_var_types.get(var_name) {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(var_name.clone(), type_name.clone());
                 }
             }
@@ -950,7 +951,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 },
             );
             if let Some(type_name) = saved_var_types.get(var_name) {
-                self.var_type_names
+                self.var_types
+                    .var_type_names
                     .insert(var_name.clone(), type_name.clone());
             }
         }
@@ -1197,7 +1199,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
@@ -1505,7 +1507,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // writes a variable-width UTF-8 encoding, not a fixed `elem_size`
         // element — the fixed-stride element stores here overrun the buffer
         // (B-2026-07-18-15). Bail to the correct per-push codegen.
-        if self.string_vars.contains(&reduction.accumulator) {
+        if self.var_types.string_vars.contains(&reduction.accumulator) {
             return Ok(None);
         }
         let elem_ty = self.vec_elem_type_for_var(&reduction.accumulator);
@@ -1521,6 +1523,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (use-after-free on read-back). Same semantic oracle as the seq
         // tabulate gate — the scope-exit cleanup's own drop classifier.
         if let Some(elem_te) = self
+            .var_types
             .var_elem_type_exprs
             .get(&reduction.accumulator)
             .cloned()
@@ -2033,11 +2036,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
-        let saved_elem_types = std::mem::take(&mut self.vec_elem_types);
+        let saved_elem_types = std::mem::take(&mut self.var_types.vec_elem_types);
         // The enclosing function may itself be inside a tabulate loop —
         // its alias scopes are declared in THAT function and must not
         // leak into this worker's body.
@@ -2135,11 +2138,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
                 if let Some(type_name) = saved_var_types.get(var_name) {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(var_name.clone(), type_name.clone());
                 }
                 if let Some(et) = saved_elem_types.get(var_name) {
-                    self.vec_elem_types.insert(var_name.clone(), *et);
+                    self.var_types.vec_elem_types.insert(var_name.clone(), *et);
                 }
             }
         }
@@ -2158,7 +2162,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 },
             );
             if let Some(type_name) = saved_var_types.get(var_name) {
-                self.var_type_names
+                self.var_types
+                    .var_type_names
                     .insert(var_name.clone(), type_name.clone());
             }
         }
@@ -2222,7 +2227,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         ty: vec_ty.into(),
                     },
                 );
-                self.vec_elem_types
+                self.var_types
+                    .vec_elem_types
                     .insert(reduction.accumulator.clone(), elem_ty);
                 acc_alloca_partials = Some(acc_alloca);
             }
@@ -2435,11 +2441,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Restore outer state.
         self.tabulate_alias_scopes = saved_tab_md;
-        self.vec_elem_types = saved_elem_types;
+        self.var_types.vec_elem_types = saved_elem_types;
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
@@ -3056,7 +3062,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // String build overran the buffer by ~3 bytes/char (heap
         // buffer-overflow, B-2026-07-18-15). Bail to the normal per-push
         // codegen, which grows correctly for the char encoding.
-        if self.string_vars.contains(&acc) {
+        if self.var_types.string_vars.contains(&acc) {
             return Ok(None);
         }
         // The accumulator must be a direct owned local — a `ref`/`mut ref`
@@ -3081,7 +3087,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // cleanup drain uses, so the gate and the cleanup can never disagree.
         // Scalars, POD structs (the LBM Cell shape), and Option[scalar] all
         // return None here and keep the lowering.
-        if let Some(elem_te) = self.var_elem_type_exprs.get(&acc).cloned() {
+        if let Some(elem_te) = self.var_types.var_elem_type_exprs.get(&acc).cloned() {
             if self.vec_elem_agg_drop_for_type_expr(&elem_te).is_some() {
                 return Ok(None);
             }

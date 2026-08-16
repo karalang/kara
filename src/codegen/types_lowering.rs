@@ -968,7 +968,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ExprKind::Identifier(base) = &object.kind else {
                     return None;
                 };
-                let elem_te = self.var_elem_type_exprs.get(base.as_str())?;
+                let elem_te = self.var_types.var_elem_type_exprs.get(base.as_str())?;
                 let inner = slice_inner_type_expr(elem_te)?;
                 Some(self.llvm_type_for_type_expr(&inner))
             }
@@ -1006,7 +1006,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ExprKind::Identifier(base) = &object.kind else {
                     return None;
                 };
-                self.var_elem_type_exprs.get(base.as_str()).cloned()
+                self.var_types
+                    .var_elem_type_exprs
+                    .get(base.as_str())
+                    .cloned()
             }
             ExprKind::MethodCall { method, .. } if method == "bytes" || method == "as_bytes" => {
                 Some(u8_te(&expr.span))
@@ -1015,7 +1018,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ExprKind::Identifier(base) = &object.kind else {
                     return None;
                 };
-                let elem_te = self.var_elem_type_exprs.get(base.as_str())?;
+                let elem_te = self.var_types.var_elem_type_exprs.get(base.as_str())?;
                 if matches!(&index.kind, ExprKind::Range { .. }) {
                     // `v[a..b]` — a view over the SAME elements.
                     return Some(elem_te.clone());
@@ -1041,10 +1044,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Some(at.get_element_type());
             }
         }
-        if let Some(&elem) = self.slice_elem_types.get(name.as_str()) {
+        if let Some(&elem) = self.var_types.slice_elem_types.get(name.as_str()) {
             return Some(elem);
         }
-        if let Some(&elem) = self.vec_elem_types.get(name.as_str()) {
+        if let Some(&elem) = self.var_types.vec_elem_types.get(name.as_str()) {
             return Some(elem);
         }
         if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(name.as_str()) {
@@ -1515,7 +1518,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if normalized == "DataFrame" {
             self.accel.dataframe_var_infos.insert(var.clone());
         }
-        self.var_type_names.insert(var, normalized);
+        self.var_types.var_type_names.insert(var, normalized);
     }
 
     /// Extract (K, V) LLVM types from a `Map[K, V]` type expression.
@@ -1718,7 +1721,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // it either — Atomic needs an explicit arm. Returns early.
         if let TypeKind::Path(path) = &te.kind {
             if path.segments.last().map(|s| s.as_str()) == Some("Atomic") {
-                self.var_type_names
+                self.var_types
+                    .var_type_names
                     .insert(var_name.to_string(), "Atomic".to_string());
                 // Also track inner-is-bool for the synth-binding case —
                 // `try_compile_field_receiver_method` mints a synth
@@ -1739,7 +1743,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // isn't in `struct_types` (codegen lowers it transparently), so the
             // user-type fallback below wouldn't catch it either.
             if path.segments.last().map(|s| s.as_str()) == Some("VolatileCell") {
-                self.var_type_names
+                self.var_types
+                    .var_type_names
                     .insert(var_name.to_string(), "VolatileCell".to_string());
                 return;
             }
@@ -1754,12 +1759,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if let TypeKind::Path(path) = &te.kind {
             let head = path.segments.last().map(|s| s.as_str());
             if head == Some("OnceLock") || head == Some("OnceCell") {
-                self.var_type_names
+                self.var_types
+                    .var_type_names
                     .insert(var_name.to_string(), head.unwrap().to_string());
                 if let Some(GenericArg::Type(elem)) =
                     path.generic_args.as_ref().and_then(|gargs| gargs.first())
                 {
-                    self.once_var_types.insert(
+                    self.var_types.once_var_types.insert(
                         var_name.to_string(),
                         (elem.clone(), head == Some("OnceLock")),
                     );
@@ -1784,16 +1790,18 @@ impl<'ctx> super::Codegen<'ctx> {
         if let TypeKind::Path(path) = &te.kind {
             let head = path.segments.last().map(|s| s.as_str());
             if head == Some("Interner") {
-                self.var_type_names
+                self.var_types
+                    .var_type_names
                     .insert(var_name.to_string(), "Interner".to_string());
-                self.interner_vars.insert(var_name.to_string());
+                self.var_types.interner_vars.insert(var_name.to_string());
                 return;
             }
             if head == Some("Arena") {
                 if let Some(kind) = super::arena::classify_arena_annotation(te) {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .insert(var_name.to_string(), "Arena".to_string());
-                    self.arena_vars.insert(var_name.to_string(), kind);
+                    self.var_types.arena_vars.insert(var_name.to_string(), kind);
                     return;
                 }
             }
@@ -1830,16 +1838,21 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         if let Some(elem_ty) = self.extract_vec_elem_type(te) {
-            self.vec_elem_types.insert(var_name.to_string(), elem_ty);
+            self.var_types
+                .vec_elem_types
+                .insert(var_name.to_string(), elem_ty);
             if let Some(inner) = vec_inner_type_expr(te) {
-                self.var_elem_type_exprs.insert(var_name.to_string(), inner);
+                self.var_types
+                    .var_elem_type_exprs
+                    .insert(var_name.to_string(), inner);
             }
             return;
         }
         if self.is_string_type_expr(te) {
-            self.vec_elem_types
+            self.var_types
+                .vec_elem_types
                 .insert(var_name.to_string(), self.context.i8_type().into());
-            self.string_vars.insert(var_name.to_string());
+            self.var_types.string_vars.insert(var_name.to_string());
             return;
         }
         // `StringSlice` — a borrowed view sharing String's `{ptr,len,cap}`
@@ -1851,9 +1864,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // borrow means any scope-exit free that fires is `cap > 0`-guarded to
         // a no-op, so no buffer is freed for the view (design.md § StringSlice).
         if Self::is_string_slice_type_expr(te) {
-            self.vec_elem_types
+            self.var_types
+                .vec_elem_types
                 .insert(var_name.to_string(), self.context.i8_type().into());
-            self.string_vars.insert(var_name.to_string());
+            self.var_types.string_vars.insert(var_name.to_string());
             return;
         }
         // `Array[T, N]` — record the element `TypeExpr` only (B-2026-07-30-3),
@@ -1866,13 +1880,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // LLVM type but not its name, and the mono emitted a shared
         // `karac_clone_T` sized to the first instantiation.
         if let Some(inner) = array_inner_type_expr(te) {
-            self.array_elem_type_exprs
+            self.var_types
+                .array_elem_type_exprs
                 .insert(var_name.to_string(), inner);
         }
         if let Some(elem_ty) = self.extract_slice_elem_type(te) {
-            self.slice_elem_types.insert(var_name.to_string(), elem_ty);
+            self.var_types
+                .slice_elem_types
+                .insert(var_name.to_string(), elem_ty);
             if let Some(inner) = slice_inner_type_expr(te) {
-                self.var_elem_type_exprs.insert(var_name.to_string(), inner);
+                self.var_types
+                    .var_elem_type_exprs
+                    .insert(var_name.to_string(), inner);
             }
             return;
         }
@@ -1904,7 +1923,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.mapset
                     .map_key_type_exprs
                     .insert(var_name.to_string(), k_te);
-                self.var_elem_type_exprs.insert(var_name.to_string(), v_te);
+                self.var_types
+                    .var_elem_type_exprs
+                    .insert(var_name.to_string(), v_te);
             }
             return;
         }
@@ -1942,7 +1963,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => None,
                 })
                 .collect();
-            self.tuple_var_elem_type_names
+            self.var_types
+                .tuple_var_elem_type_names
                 .insert(var_name.to_string(), names);
             return;
         }
@@ -1969,7 +1991,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(pte) = Self::option_payload_te(te) {
                         let pte = Self::peel_scalar_ref_display_payload(&pte);
                         if self.is_reconstructable_display_payload(&pte) {
-                            self.var_option_payload_te.insert(var_name.to_string(), pte);
+                            self.var_types
+                                .var_option_payload_te
+                                .insert(var_name.to_string(), pte);
                         }
                     }
                 }
@@ -1980,7 +2004,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         if self.is_reconstructable_display_payload(&ok)
                             && self.is_reconstructable_display_payload(&err)
                         {
-                            self.var_result_payload_te
+                            self.var_types
+                                .var_result_payload_te
                                 .insert(var_name.to_string(), (ok, err));
                         }
                     }
@@ -2064,7 +2089,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn register_for_loop_bindings(&mut self, pattern: &Pattern, source_var: &str) {
         match &pattern.kind {
             PatternKind::Binding(name) => {
-                if let Some(elem_te) = self.var_elem_type_exprs.get(source_var).cloned() {
+                if let Some(elem_te) = self.var_types.var_elem_type_exprs.get(source_var).cloned() {
                     self.register_var_from_type_expr(name, &elem_te);
                     self.mark_for_loop_borrow_if_heap(name, &elem_te);
                 }
@@ -2080,7 +2105,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 if let PatternKind::Binding(v_name) = &pats[1].kind {
-                    if let Some(v_te) = self.var_elem_type_exprs.get(source_var).cloned() {
+                    if let Some(v_te) = self.var_types.var_elem_type_exprs.get(source_var).cloned()
+                    {
                         self.register_var_from_type_expr(v_name, &v_te);
                         self.mark_for_loop_borrow_if_heap(v_name, &v_te);
                     }
@@ -2104,7 +2130,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// and stays unmarked (an unarmed container keeps the old consume+free
     /// balance).
     pub(super) fn mark_for_loop_borrow_if_heap(&mut self, name: &str, elem_te: &TypeExpr) {
-        if self.vec_elem_types.contains_key(name) {
+        if self.var_types.vec_elem_types.contains_key(name) {
             self.for_loop_borrow_vars.insert(name.to_string());
             return;
         }
@@ -2306,6 +2332,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let ExprKind::Identifier(name) = &expr.kind {
             return self
+                .var_types
                 .vec_elem_types
                 .get(name.as_str())
                 .map(|t| t.is_int_type() && t.into_int_type().get_bit_width() == 8)
@@ -2325,7 +2352,8 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Look up the Vec element type for a variable, defaulting to i64.
     pub(super) fn vec_elem_type_for_var(&self, name: &str) -> BasicTypeEnum<'ctx> {
-        self.vec_elem_types
+        self.var_types
+            .vec_elem_types
             .get(name)
             .copied()
             .unwrap_or_else(|| self.context.i64_type().into())
@@ -2949,7 +2977,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
         if let Some(var_name) = var_name {
-            if let Some(type_name) = self.var_type_names.get(var_name) {
+            if let Some(type_name) = self.var_types.var_type_names.get(var_name) {
                 if let Some(info) = self.shared_types.get(type_name.as_str()) {
                     return Some((type_name.clone(), info.clone()));
                 }
@@ -3055,7 +3083,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // cover the common case.
             ExprKind::MethodCall { object, method, .. } => match &object.kind {
                 ExprKind::Identifier(name) => {
-                    let recv_type = self.var_type_names.get(name)?;
+                    let recv_type = self.var_types.var_type_names.get(name)?;
                     format!("{recv_type}.{method}")
                 }
                 _ => return None,
@@ -3077,7 +3105,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// recorded at let-binding registration) — its head segment is the
     /// shared type's surface name, looked up in `shared_types`.
     pub(super) fn map_val_shared_heap_type_for(&self, var_name: &str) -> Option<StructType<'ctx>> {
-        let v_te = self.var_elem_type_exprs.get(var_name)?;
+        let v_te = self.var_types.var_elem_type_exprs.get(var_name)?;
         let head = match &v_te.kind {
             TypeKind::Path(p) => p.segments.first()?.as_str(),
             _ => return None,
@@ -3104,13 +3132,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// control block then outlived the program even after its strong count
     /// reached zero.
     pub(super) fn map_val_weak_for(&self, var_name: &str) -> bool {
-        self.var_elem_type_exprs
+        self.var_types
+            .var_elem_type_exprs
             .get(var_name)
             .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
     }
 
     pub(super) fn map_val_owned_heap_str_vec_for(&self, var_name: &str) -> bool {
-        let Some(v_te) = self.var_elem_type_exprs.get(var_name) else {
+        let Some(v_te) = self.var_types.var_elem_type_exprs.get(var_name) else {
             return false;
         };
         let head = match &v_te.kind {
@@ -3397,15 +3426,15 @@ impl<'ctx> super::Codegen<'ctx> {
         declared: Option<&TypeExpr>,
     ) -> (Option<TypeExpr>, Option<BasicTypeEnum<'ctx>>) {
         let prev = (
-            self.pending_let_tuple_te.take(),
-            self.pending_let_elem_type.take(),
+            self.var_types.pending_let_tuple_te.take(),
+            self.var_types.pending_let_elem_type.take(),
         );
         let (Some(e), Some(te)) = (expr, declared) else {
             return prev;
         };
         match &e.kind {
             crate::ast::ExprKind::Tuple(_) if matches!(te.kind, TypeKind::Tuple(_)) => {
-                self.pending_let_tuple_te = Some(te.clone());
+                self.var_types.pending_let_tuple_te = Some(te.clone());
             }
             crate::ast::ExprKind::ArrayLiteral(_) => {
                 // Scalars only. `literal_pending_elem_hint` filters to
@@ -3414,7 +3443,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(elem_te) = super::helpers::array_inner_type_expr(te) {
                     let elem_ty = self.llvm_type_for_type_expr(&elem_te);
                     if elem_ty.is_int_type() || elem_ty.is_float_type() {
-                        self.pending_let_elem_type = Some(elem_ty);
+                        self.var_types.pending_let_elem_type = Some(elem_ty);
                     }
                 }
             }
@@ -3428,8 +3457,8 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         prev: (Option<TypeExpr>, Option<BasicTypeEnum<'ctx>>),
     ) {
-        self.pending_let_tuple_te = prev.0;
-        self.pending_let_elem_type = prev.1;
+        self.var_types.pending_let_tuple_te = prev.0;
+        self.var_types.pending_let_elem_type = prev.1;
     }
 
     /// The declared return `TypeExpr` of the function currently being compiled.
@@ -3990,7 +4019,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::MethodCall { object, method, .. } = &value.kind {
             if matches!(method.as_str(), "pop" | "pop_back" | "pop_front") {
                 if let ExprKind::Identifier(vec_name) = &object.kind {
-                    if let Some(elem_te) = self.var_elem_type_exprs.get(vec_name.as_str()) {
+                    if let Some(elem_te) = self.var_types.var_elem_type_exprs.get(vec_name.as_str())
+                    {
                         return Some(Self::option_wrapping_type_expr(elem_te));
                     }
                 }

@@ -130,7 +130,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     fn arena_elem_kind(&self, recv: &str) -> Result<ArenaElemKind, String> {
-        match self.arena_vars.get(recv) {
+        match self.var_types.arena_vars.get(recv) {
             Some(ArenaElemKind::Unsupported(what)) => Err(format!(
                 "codegen: Arena element type `{what}` is not lowered at v1 \
                  (supported: i64/f64/bool/String and all-POD structs) — \
@@ -456,7 +456,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .to_string(),
             );
         };
-        let owner = self.arena_checkpoint_owner.get(cp_name.as_str()).cloned();
+        let owner = self
+            .var_types
+            .arena_checkpoint_owner
+            .get(cp_name.as_str())
+            .cloned();
         match owner {
             Some(owner) if owner == recv => {
                 let handle = self.load_arena_handle(recv)?;

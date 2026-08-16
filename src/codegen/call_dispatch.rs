@@ -1364,8 +1364,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`Column.from_vec`, `Vec.filled`, …) never reach this loop and
         // keep the hint — their arg literal legitimately inherits the
         // binding's width.
-        let saved_pending_elem = self.pending_let_elem_type.take();
-        let saved_pending_elem_te = self.pending_let_elem_type_expr.take();
+        let saved_pending_elem = self.var_types.pending_let_elem_type.take();
+        let saved_pending_elem_te = self.var_types.pending_let_elem_type_expr.take();
         let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
         for (i, a) in args.iter().enumerate() {
             // B-2026-06-20-1: a bare named `fn` passed to a `Fn(...)`-typed
@@ -2173,8 +2173,8 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         // Restore the pending-let hint cleared above for the arg loop.
-        self.pending_let_elem_type = saved_pending_elem;
-        self.pending_let_elem_type_expr = saved_pending_elem_te;
+        self.var_types.pending_let_elem_type = saved_pending_elem;
+        self.var_types.pending_let_elem_type_expr = saved_pending_elem_te;
 
         // Niche-ABI arg pack — see `pack_niche_abi_args`. Runs AFTER the
         // arg loop so the refcount bookkeeping above
@@ -2871,7 +2871,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // whose receiver Identifier names a type, not a variable
                     // (same disambiguation as `type_name_of_expr`).
                     ExprKind::Identifier(recv)
-                        if !self.var_type_names.contains_key(recv.as_str())
+                        if !self.var_types.var_type_names.contains_key(recv.as_str())
                             && (self.struct_types.contains_key(recv.as_str())
                                 || self.enum_layouts.contains_key(recv.as_str())) =>
                     {
@@ -2907,12 +2907,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         // Vec/VecDeque receivers only — a Map's `remove`
                         // returns an Option and is already handled.
                         if !matches!(
-                            self.var_type_names.get(recv.as_str()).map(|s| s.as_str()),
+                            self.var_types
+                                .var_type_names
+                                .get(recv.as_str())
+                                .map(|s| s.as_str()),
                             Some("Vec") | Some("VecDeque")
                         ) {
                             return None;
                         }
-                        match &self.var_elem_type_exprs.get(recv.as_str())?.kind {
+                        match &self.var_types.var_elem_type_exprs.get(recv.as_str())?.kind {
                             TypeKind::Path(p) => p.segments.first().cloned(),
                             _ => None,
                         }
@@ -4590,7 +4593,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // The cap-zeroing above suppresses only its buffer half; its
                     // combined StructDrop still rc-DECs the shared children,
                     // double-decing against the box's own rc-drop. Retract it.
-                    if let Some(tn) = self.var_type_names.get(&n).cloned() {
+                    if let Some(tn) = self.var_types.var_type_names.get(&n).cloned() {
                         if self.struct_owns_shared_field(&tn, &mut Vec::new()) {
                             self.suppress_struct_cleanup_for_tail_identifier(&n);
                         }
@@ -5755,7 +5758,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(var) = &arg.kind else {
             return;
         };
-        let Some(type_name) = self.var_type_names.get(var.as_str()).cloned() else {
+        let Some(type_name) = self.var_types.var_type_names.get(var.as_str()).cloned() else {
             return;
         };
         if !self.struct_types.contains_key(type_name.as_str())
@@ -6831,7 +6834,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicTypeEnum::StructType(mut cur_ty) = slot.ty else {
             return;
         };
-        let Some(mut cur_name) = self.var_type_names.get(root).cloned() else {
+        let Some(mut cur_name) = self.var_types.var_type_names.get(root).cloned() else {
             return;
         };
         let mut cur_ptr = slot.ptr;
@@ -7046,7 +7049,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(s) = recv {
                 if let (Some(slot), Some(struct_name)) = (
                     self.variables.get(s).copied(),
-                    self.var_type_names.get(s).cloned(),
+                    self.var_types.var_type_names.get(s).cloned(),
                 ) {
                     if !self.shared_types.contains_key(struct_name.as_str()) {
                         let gep_st = self
@@ -7182,7 +7185,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // segfaults under `-O2`/LLJIT, surfacing as empty output on the JIT
         // execution lane while the AOT oracle stayed green (B-2026-07-07-4).
         // A borrow takes no ownership, so there is nothing to move-null.
-        if self.vec_elem_types.contains_key(var_name) {
+        if self.var_types.vec_elem_types.contains_key(var_name) {
             // B-2026-07-25-1: an OWNED `String`/`Vec` PARAM is caller-retains.
             // The callee never registers a `FreeVecBuffer` for it (that is why
             // it lands in `owned_vecstr_params` instead of `track_vec_var`), and
@@ -7255,7 +7258,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // not-taken path's handle. Gated to a plain pointer slot holding
         // the handle by value; a `ref Map` param's slot points into the
         // caller's frame and owns nothing.
-        if let Some(tn) = self.var_type_names.get(var_name) {
+        if let Some(tn) = self.var_types.var_type_names.get(var_name) {
             if matches!(tn.as_str(), "Map" | "Set")
                 && !self.ref_params.contains_key(var_name)
                 && slot.ty.is_pointer_type()
@@ -7292,7 +7295,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // gets reused as). Closes bug #7 (`Map[K, SharedStruct]`
         // value insert + return) and the sibling cases
         // (`Vec[SharedStruct]`, plain `fn f() -> SharedT { let n = …; n }`).
-        if let Some(type_name) = self.var_type_names.get(var_name).cloned() {
+        if let Some(type_name) = self.var_types.var_type_names.get(var_name).cloned() {
             if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
                 // C1b SomeRoot: `Some(<root>)` at fn tail is the
                 // sanctioned structural transfer — the root queued NO
@@ -7335,7 +7338,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // which is why returning a struct-with-Vec already frees exactly once).
         // Mirrors `suppress_destructured_enum_payload_cleanup_at`'s cap-zeroing,
         // but for a whole-value move where the active variant is a runtime fact.
-        if let Some(type_name) = self.var_type_names.get(var_name).cloned() {
+        if let Some(type_name) = self.var_types.var_type_names.get(var_name).cloned() {
             if let Some(layout) = self.enum_layouts.get(type_name.as_str()).cloned() {
                 if !layout.is_shared {
                     self.zero_enum_payload_caps(slot.ptr, &layout);
@@ -7355,7 +7358,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // through `karac_map_free` to no-op, which would be a separate
         // runtime change (filed under slice δ as the per-field K/V
         // type-info-aware drop work).
-        if let Some(type_name) = self.var_type_names.get(var_name).cloned() {
+        if let Some(type_name) = self.var_types.var_type_names.get(var_name).cloned() {
             if self.struct_types.contains_key(&type_name) {
                 // Recursive move-suppression: zero every transitive heap field's
                 // cap (Vec/String, enum payloads post-#15/#19, nested structs
@@ -7398,6 +7401,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // early arm above).
         if let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty {
             let named = self
+                .var_types
                 .var_type_names
                 .get(var_name)
                 .is_some_and(|n| self.struct_types.contains_key(n.as_str()));
@@ -7440,7 +7444,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // TypeExprs — prefer them (generic args intact: `Vec[i64]` stays
         // `Vec[i64]`, not the erased name "Vec"). Unannotated bindings fall
         // through to the names-derived synthesis below.
-        if let Some(tes) = self.tuple_var_elem_type_exprs.get(var_name) {
+        if let Some(tes) = self.var_types.tuple_var_elem_type_exprs.get(var_name) {
             return Some(tes.clone());
         }
         // B-2026-08-03-3: the let-site's own record (`tuple_binding_elem_tes` —
@@ -7450,7 +7454,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the element has no recorded type NAME. That empty path reads as a
         // no-drop leaf, so `suppress_tuple_index_move_source` silently skipped
         // the move-out neutralization for `let x = t.0`.
-        let names = self.tuple_var_elem_type_names.get(var_name)?;
+        let names = self.var_types.tuple_var_elem_type_names.get(var_name)?;
         Some(
             names
                 .iter()
@@ -7615,7 +7619,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.shared_type_for_expr(object).is_some() {
             return;
         }
-        let Some(type_name) = self.var_type_names.get(obj).cloned() else {
+        let Some(type_name) = self.var_types.var_type_names.get(obj).cloned() else {
             return;
         };
         if self.shared_types.contains_key(type_name.as_str()) {
@@ -7771,7 +7775,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     ExprKind::SelfValue => "self".to_string(),
                     _ => return false,
                 };
-                let Some(type_name) = self.var_type_names.get(&obj_name).cloned() else {
+                let Some(type_name) = self.var_types.var_type_names.get(&obj_name).cloned() else {
                     return false;
                 };
                 let Some(idx) = self
@@ -7994,7 +7998,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &object.kind else {
             return None;
         };
-        let elem_te = self.var_elem_type_exprs.get(name.as_str())?;
+        let elem_te = self.var_types.var_elem_type_exprs.get(name.as_str())?;
         let TypeKind::Path(p) = &elem_te.kind else {
             return None;
         };
@@ -8486,7 +8490,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(vec_var) = &object.kind else {
             return Ok(None);
         };
-        if !self.vec_elem_types.contains_key(vec_var.as_str()) {
+        if !self.var_types.vec_elem_types.contains_key(vec_var.as_str()) {
             return Ok(None);
         }
         // Array-slot Vec bindings have a distinct representation — mirror the

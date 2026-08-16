@@ -80,7 +80,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 slot.ptr
             };
             // Slice[T] source.
-            if let Some(&elem_ty) = self.slice_elem_types.get(name.as_str()) {
+            if let Some(&elem_ty) = self.var_types.slice_elem_types.get(name.as_str()) {
                 let slice_ty = self.slice_struct_type();
                 let data_pp = self
                     .builder
@@ -108,7 +108,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
             }
             // Vec[T] source.
-            if let Some(&elem_ty) = self.vec_elem_types.get(name.as_str()) {
+            if let Some(&elem_ty) = self.var_types.vec_elem_types.get(name.as_str()) {
                 let vec_ty = self.vec_struct_type();
                 let data_pp = self
                     .builder
@@ -294,7 +294,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     ty: slice_ty.into(),
                 },
             );
-            self.slice_elem_types.insert(name.clone(), src.elem_ty);
+            self.var_types
+                .slice_elem_types
+                .insert(name.clone(), src.elem_ty);
         }
         // `mutable` is a typechecker-level concept — codegen layout is
         // identical for read-only and mut slices; ownership tracking is

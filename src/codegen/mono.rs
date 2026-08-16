@@ -296,7 +296,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 "Vec" | "VecDeque" => {
                     if let (Some(pn), Some(&elem)) = (
                         param_at(0),
-                        arg_ident.and_then(|n| self.vec_elem_types.get(n)),
+                        arg_ident.and_then(|n| self.var_types.vec_elem_types.get(n)),
                     ) {
                         subst.entry(pn).or_insert(elem);
                     }
@@ -360,7 +360,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `var_type_names`). `None` for a scalar / struct / handle arg. MUST be
     /// called before the mono's `take_var_side_tables` clears these maps.
     fn arg_collection_head_elem(&self, arg_name: &str) -> Option<(String, Option<TypeExpr>)> {
-        if self.string_vars.contains(arg_name) {
+        if self.var_types.string_vars.contains(arg_name) {
             return Some(("String".to_string(), None));
         }
         // B-2026-08-13-9 — a MAP / SET / SLICE argument, before the Vec arm.
@@ -383,13 +383,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // one-element head, so this returns the FULL container type-expr and the
         // caller inserts it verbatim.
         if let Some(head) = self
+            .var_types
             .var_type_names
             .get(arg_name)
             .filter(|h| matches!(h.as_str(), "Map" | "SortedMap"))
         {
             let (Some(k), Some(v)) = (
                 self.mapset.map_key_type_exprs.get(arg_name),
-                self.var_elem_type_exprs.get(arg_name),
+                self.var_types.var_elem_type_exprs.get(arg_name),
             ) else {
                 return None;
             };
@@ -399,6 +400,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ));
         }
         if let Some(head) = self
+            .var_types
             .var_type_names
             .get(arg_name)
             .filter(|h| matches!(h.as_str(), "Set" | "SortedSet"))
@@ -407,13 +409,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .mapset
                 .set_elem_type_exprs
                 .get(arg_name)
-                .or_else(|| self.var_elem_type_exprs.get(arg_name))?;
+                .or_else(|| self.var_types.var_elem_type_exprs.get(arg_name))?;
             return Some((
                 head.clone(),
                 Some(Self::path_type_expr(head, std::slice::from_ref(elem))),
             ));
         }
-        if self.slice_elem_types.contains_key(arg_name) {
+        if self.var_types.slice_elem_types.contains_key(arg_name) {
             // The element type-expr is recorded only when the binding was
             // registered FROM a declared `Slice[E]`. An INFERRED slice binding
             // (`let sl = v[0..2]`) has none, and records the ELEMENT's name in
@@ -422,11 +424,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // element from that name when the type-expr is absent, so both
             // spellings of a slice binding resolve identically.
             let elem = self
+                .var_types
                 .var_elem_type_exprs
                 .get(arg_name)
                 .cloned()
                 .or_else(|| {
-                    self.var_type_names
+                    self.var_types
+                        .var_type_names
                         .get(arg_name)
                         .map(|n| Self::path_type_expr(n, &[]))
                 })?;
@@ -435,8 +439,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(Self::path_type_expr("Slice", std::slice::from_ref(&elem))),
             ));
         }
-        if let Some(elem) = self.var_elem_type_exprs.get(arg_name) {
+        if let Some(elem) = self.var_types.var_elem_type_exprs.get(arg_name) {
             let head = self
+                .var_types
                 .var_type_names
                 .get(arg_name)
                 .filter(|h| h.as_str() == "Vec" || h.as_str() == "VecDeque")
@@ -536,6 +541,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     match &object.kind {
                         ExprKind::Identifier(base) => self
+                            .var_types
                             .var_elem_type_exprs
                             .get(base.as_str())
                             .map(|elem| Self::path_type_expr("Slice", std::slice::from_ref(elem)))
@@ -707,9 +713,10 @@ impl<'ctx> super::Codegen<'ctx> {
     fn arg_container_elem_type_expr(&self, arg: &Expr) -> Option<TypeExpr> {
         match &arg.kind {
             ExprKind::Identifier(name) => self
+                .var_types
                 .var_elem_type_exprs
                 .get(name.as_str())
-                .or_else(|| self.array_elem_type_exprs.get(name.as_str()))
+                .or_else(|| self.var_types.array_elem_type_exprs.get(name.as_str()))
                 .cloned(),
             // `<vec>.clone()` yields a Vec with the receiver's element type.
             ExprKind::MethodCall { object, method, .. } if method == "clone" => {
@@ -1099,13 +1106,13 @@ impl<'ctx> super::Codegen<'ctx> {
         SavedVarSideTables {
             column_var_infos: std::mem::take(&mut self.accel.column_var_infos),
             dataframe_var_infos: std::mem::take(&mut self.accel.dataframe_var_infos),
-            vec_elem_types: std::mem::take(&mut self.vec_elem_types),
-            var_elem_type_exprs: std::mem::take(&mut self.var_elem_type_exprs),
-            array_elem_type_exprs: std::mem::take(&mut self.array_elem_type_exprs),
-            closure_ret_vec_te: std::mem::take(&mut self.closure_ret_vec_te),
+            vec_elem_types: std::mem::take(&mut self.var_types.vec_elem_types),
+            var_elem_type_exprs: std::mem::take(&mut self.var_types.var_elem_type_exprs),
+            array_elem_type_exprs: std::mem::take(&mut self.var_types.array_elem_type_exprs),
+            closure_ret_vec_te: std::mem::take(&mut self.var_types.closure_ret_vec_te),
             enum_inst_var_types: std::mem::take(&mut self.enum_inst_var_types),
-            string_vars: std::mem::take(&mut self.string_vars),
-            slice_elem_types: std::mem::take(&mut self.slice_elem_types),
+            string_vars: std::mem::take(&mut self.var_types.string_vars),
+            slice_elem_types: std::mem::take(&mut self.var_types.slice_elem_types),
             map_key_types: std::mem::take(&mut self.mapset.map_key_types),
             map_val_types: std::mem::take(&mut self.mapset.map_val_types),
             map_key_type_names: std::mem::take(&mut self.mapset.map_key_type_names),
@@ -1123,13 +1130,13 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn restore_var_side_tables(&mut self, saved: SavedVarSideTables<'ctx>) {
         self.accel.column_var_infos = saved.column_var_infos;
         self.accel.dataframe_var_infos = saved.dataframe_var_infos;
-        self.vec_elem_types = saved.vec_elem_types;
-        self.var_elem_type_exprs = saved.var_elem_type_exprs;
-        self.array_elem_type_exprs = saved.array_elem_type_exprs;
-        self.closure_ret_vec_te = saved.closure_ret_vec_te;
+        self.var_types.vec_elem_types = saved.vec_elem_types;
+        self.var_types.var_elem_type_exprs = saved.var_elem_type_exprs;
+        self.var_types.array_elem_type_exprs = saved.array_elem_type_exprs;
+        self.var_types.closure_ret_vec_te = saved.closure_ret_vec_te;
         self.enum_inst_var_types = saved.enum_inst_var_types;
-        self.string_vars = saved.string_vars;
-        self.slice_elem_types = saved.slice_elem_types;
+        self.var_types.string_vars = saved.string_vars;
+        self.var_types.slice_elem_types = saved.slice_elem_types;
         self.mapset.map_key_types = saved.map_key_types;
         self.mapset.map_val_types = saved.map_val_types;
         self.mapset.map_key_type_names = saved.map_key_type_names;
@@ -1309,12 +1316,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // argument literals pack at their own span-recorded (callee-declared)
         // width, not the let binding's. Mirrors the `compile_call` user-fn
         // arg loop; see `literal_span_elem_hint` for the precedence story.
-        let saved_pending_elem = self.pending_let_elem_type.take();
-        let saved_pending_elem_te = self.pending_let_elem_type_expr.take();
+        let saved_pending_elem = self.var_types.pending_let_elem_type.take();
+        let saved_pending_elem_te = self.var_types.pending_let_elem_type_expr.take();
         let arg_vals: Result<Vec<BasicValueEnum<'ctx>>, String> =
             args.iter().map(|a| self.compile_expr(&a.value)).collect();
-        self.pending_let_elem_type = saved_pending_elem;
-        self.pending_let_elem_type_expr = saved_pending_elem_te;
+        self.var_types.pending_let_elem_type = saved_pending_elem;
+        self.var_types.pending_let_elem_type_expr = saved_pending_elem_te;
         let arg_vals: Vec<BasicValueEnum<'ctx>> = arg_vals?;
 
         // Body walk for B-2026-08-15-9's gate, computed at most once per call
@@ -1737,6 +1744,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
                 transfer_ident.push(match &a.value.kind {
                     ExprKind::Identifier(var) => self
+                        .var_types
                         .var_type_names
                         .get(var.as_str())
                         .cloned()
@@ -1808,7 +1816,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // signature) into the void mono (B-2026-07-11-28).
             let saved_fn_name = std::mem::take(&mut self.fn_ctx.current_fn_name);
             let saved_vars = std::mem::take(&mut self.variables);
-            let saved_var_types = std::mem::take(&mut self.var_type_names);
+            let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
             // The mono body is compiled INLINE, mid-caller — so its tensor
             // param registrations (added by `compile_mono_function`) must not
             // leak into the caller's `tensor_var_infos`, which is keyed by
@@ -1880,7 +1888,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Slice 5: per-binding layout carrier — the mono body seeds its own
             // locals at their `let` sites; swap out the caller's map and restore
             // below, parallel to `variables` / `ref_params`.
-            let saved_binding_layouts = std::mem::take(&mut self.binding_layouts);
+            let saved_binding_layouts = std::mem::take(&mut self.var_types.binding_layouts);
             // Same isolation for the entry-slot-ref locals (the two-step
             // `let r = m.entry(k).or_insert(d)` binding tag): a nested mono
             // body must not see/clobber the outer function's tags.
@@ -1907,7 +1915,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
             // Restore state.
             self.accel.soa_return_locals = saved_soa_return_locals;
-            self.binding_layouts = saved_binding_layouts;
+            self.var_types.binding_layouts = saved_binding_layouts;
             self.ref_params = saved_ref_params;
             self.signature_ref_params = saved_signature_ref_params;
             self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
@@ -1921,7 +1929,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.scope_cleanup_actions = saved_cleanup;
             self.restore_var_side_tables(saved_side_tables);
             self.accel.tensor_var_infos = saved_tensor_infos;
-            self.var_type_names = saved_var_types;
+            self.var_types.var_type_names = saved_var_types;
             self.variables = saved_vars;
             self.current_fn = saved_fn;
             self.fn_ctx.current_fn_name = saved_fn_name;
@@ -2459,7 +2467,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_tensor_infos = std::mem::take(&mut self.accel.tensor_var_infos);
         // Full var-side-table isolation — see `SavedVarSideTables`.
         let saved_side_tables = self.take_var_side_tables();
@@ -2490,7 +2498,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the duration (the body starts empty, like `variables`) and restore it
         // after, so a mono's local can't leak its SoA-ness back to a same-named
         // caller binding.
-        let saved_binding_layouts = std::mem::take(&mut self.binding_layouts);
+        let saved_binding_layouts = std::mem::take(&mut self.var_types.binding_layouts);
         let saved_entry_slot_ref_vars = std::mem::take(&mut self.entry_slot_ref_vars);
         // Returned-local set is per-function; `compile_mono_function` repopulates
         // it from this mono's body. Save/restore so it can't leak across the
@@ -2502,7 +2510,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|_| self.compile_mono_function(func, mangled));
 
         self.accel.soa_return_locals = saved_soa_return_locals;
-        self.binding_layouts = saved_binding_layouts;
+        self.var_types.binding_layouts = saved_binding_layouts;
         self.ref_params = saved_ref_params;
         self.signature_ref_params = saved_signature_ref_params;
         self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
@@ -2517,7 +2525,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.restore_var_side_tables(saved_side_tables);
         self.accel.tensor_var_infos = saved_tensor_infos;
-        self.var_type_names = saved_var_types;
+        self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
@@ -2649,11 +2657,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // the caller saved/restores this around the inline body (B-2026-07-11-28).
         self.fn_ctx.current_fn_name = func.name.clone();
         self.variables.clear();
-        self.var_type_names.clear();
+        self.var_types.var_type_names.clear();
         // Per-binding layout carrier (slice 5): the caller's map was swapped out
         // (`mem::take`) at the mono entry point, so this fresh body starts empty
         // and seeds its own locals; `let`-site registrations land here.
-        self.binding_layouts.clear();
+        self.var_types.binding_layouts.clear();
         // This mono's returned local(s) — so the origin name-match in
         // `seed_binding_site_layout` is suppressed for them (their layout comes
         // from `return_layout` / `layout_subst`, seeded just below). The caller's
@@ -2796,7 +2804,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             .get(type_name)
                             .cloned()
                             .unwrap_or_else(|| type_name.clone());
-                        self.var_type_names.insert(param_name.clone(), concrete);
+                        self.var_types
+                            .var_type_names
+                            .insert(param_name.clone(), concrete);
                     }
                 }
             }
@@ -2844,7 +2854,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.concrete_generic_struct_inst(peeled)
             };
             if matches!(&param.ty.kind, TypeKind::Path(_)) {
-                if let Some(concrete) = self.var_type_names.get(&param_name).cloned() {
+                if let Some(concrete) = self.var_types.var_type_names.get(&param_name).cloned() {
                     self.make_aggregate_param_callee_owned_inst(
                         &concrete,
                         alloca,
@@ -2934,7 +2944,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !matches!(
                     param.ty.kind,
                     TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
-                ) && self.vec_elem_types.contains_key(&param_name)
+                ) && self.var_types.vec_elem_types.contains_key(&param_name)
                 {
                     self.owned_vecstr_params.insert(param_name.clone());
                 }
@@ -3604,7 +3614,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(layout) = self.mono_state.layout_subst.get(binding_name) {
             return layout.clone();
         }
-        if let Some(layout) = self.binding_layouts.get(binding_name) {
+        if let Some(layout) = self.var_types.binding_layouts.get(binding_name) {
             return layout.clone();
         }
         LayoutId::Aos
@@ -3644,7 +3654,8 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         match layout {
             LayoutId::Soa(block) => {
-                self.binding_layouts
+                self.var_types
+                    .binding_layouts
                     .insert(binding_name.to_string(), LayoutId::Soa(block.clone()));
                 self.accel.soa_layouts.get(&block).cloned()
             }
