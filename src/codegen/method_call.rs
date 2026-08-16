@@ -12128,7 +12128,8 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
         if let Some(name) = acc_surface_name {
-            self.pattern_binding_types
+            self.pattern_state
+                .pattern_binding_types
                 .insert((acc_bind_span.offset, acc_bind_span.length), name);
         }
         let elem_name = steps

@@ -4344,6 +4344,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// positions and for why this is a span lookup rather than a flag.
     pub(super) fn branch_value_is_owned(&self, head: &Expr) -> bool {
         !self
+            .pattern_state
             .discarded_branch_spans
             .contains(&crate::resolver::SpanKey::from_span(&head.span))
     }

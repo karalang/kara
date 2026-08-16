@@ -1744,12 +1744,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         head.as_str()
                     };
-                    self.pattern_binding_types
+                    self.pattern_state
+                        .pattern_binding_types
                         .insert(key, canonical.to_string());
                 }
             }
             TypeKind::Tuple(_) => {
-                self.pattern_binding_types.insert(key, "Tuple".to_string());
+                self.pattern_state
+                    .pattern_binding_types
+                    .insert(key, "Tuple".to_string());
             }
             _ => {}
         }
@@ -1757,10 +1760,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .or_else(|| super::helpers::slice_inner_type_expr(te));
         match inner {
             Some(el) => {
-                self.pattern_binding_inner_types.insert(key, el);
+                self.pattern_state
+                    .pattern_binding_inner_types
+                    .insert(key, el);
             }
             None => {
-                self.pattern_binding_inner_types.insert(key, te.clone());
+                self.pattern_state
+                    .pattern_binding_inner_types
+                    .insert(key, te.clone());
             }
         }
     }

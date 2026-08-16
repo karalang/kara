@@ -169,7 +169,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // frees once. Mirrors the `match` path's flag; without it,
         // `for o in v { if let Some(s) = o { … } }` over a
         // `Vec[Option[String]]` double-freed the payload (exit 133).
-        let saved_borrow_flag = self.pattern_binding_is_borrow;
+        let saved_borrow_flag = self.pattern_state.pattern_binding_is_borrow;
         // Slice 3s: `scrutinee_is_borrow_call` was consulted by `match` but
         // NOT here — a read-only `if let Some(x) = m.get(k)` registered an
         // owned track for the aliased payload and double-freed against the
@@ -177,10 +177,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-08-25 (if-let leg): a then-block that only READS the bound
         // payload leaves the source owning it — see
         // `scrutinee_is_readonly_inline_optres_local`.
-        let saved_source_retains = self.pattern_binding_source_retains_inline_payload;
-        self.pattern_binding_source_retains_inline_payload =
+        let saved_source_retains = self
+            .pattern_state
+            .pattern_binding_source_retains_inline_payload;
+        self.pattern_state
+            .pattern_binding_source_retains_inline_payload =
             self.scrutinee_is_readonly_inline_optres_local_block(value, pattern, then_block);
-        self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
+        self.pattern_state.pattern_binding_is_borrow = self.pattern_state.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value)
             // B-2026-08-08-25 leg 3 (if-let leg) — the USER-ENUM classifier.
@@ -189,33 +192,35 @@ impl<'ctx> super::Codegen<'ctx> {
             // the combinator chain's disarm; a user enum rides
             // `field_drop_kinds` and only needs the borrow classification.
             || self.scrutinee_is_readonly_owned_enum_local_block(value, pattern, then_block)
-            || self.pattern_binding_source_retains_inline_payload;
+            || self.pattern_state.pattern_binding_source_retains_inline_payload;
         // B-2026-07-30-11 (if-let leg): record which of this pattern's
         // binding names sit in a VARIANT payload position so
         // `bind_pattern_values` routes a Drop-declaring payload struct to
         // the UserDrop channel — the exact mirror of the match-arm site
         // (`control_flow_match.rs`); without it `if let Full(r) = b { … }`
         // never ran r's body while the same `match` arm did.
-        self.current_variant_payload_bindings.clear();
+        self.pattern_state.current_variant_payload_bindings.clear();
         {
             let mut vp_names: Vec<String> = Vec::new();
             Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
-            self.current_variant_payload_bindings.extend(vp_names);
+            self.pattern_state
+                .current_variant_payload_bindings
+                .extend(vp_names);
         }
         let saved_shape_flags =
             self.set_scrutinee_shape_flags_for_pattern(pattern, value, freshtemp_boxed_slot);
         let bind_res = self.bind_pattern_values(pattern, val);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
-        self.current_variant_payload_bindings.clear();
+        self.pattern_state.current_variant_payload_bindings.clear();
         bind_res?;
         // Slice 3s (B-2026-07-01-12): clone an ESCAPING borrow-mode payload
         // binding — the then-block moving `x` out must own an independent
         // copy (the map retains its stored value).
-        if self.pattern_binding_is_borrow {
+        if self.pattern_state.pattern_binding_is_borrow {
             self.clone_escaping_borrow_payload_binding(value, pattern, Some(&[]), &[then_block])?;
         }
-        let optres_bindings_owned = !self.pattern_binding_is_borrow;
-        self.pattern_binding_is_borrow = saved_borrow_flag;
+        let optres_bindings_owned = !self.pattern_state.pattern_binding_is_borrow;
+        self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         // B-track: zero the caps of moved-in fields so the source EnumDrop
         // (registered above) frees only the *unbound* heap fields, not the ones
         // the pattern's bindings now own. Then-arm only — the else/miss edge
@@ -309,7 +314,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-08-25 — restore after the suppressors above have consulted
         // it and before the then-block compiles, so a nested match inside the
         // block classifies its own scrutinee from a clean slate.
-        self.pattern_binding_source_retains_inline_payload = saved_source_retains;
+        self.pattern_state
+            .pattern_binding_source_retains_inline_payload = saved_source_retains;
         self.tail_ret_inner = tail;
         let mut then_val = self.compile_block(then_block)?;
         let then_terminated = self
@@ -533,39 +539,44 @@ impl<'ctx> super::Codegen<'ctx> {
         // Borrowed identifier scrutinee — see the if-let site (slice 3q).
         // Slice 3s adds the borrow-CALL half (`m.get` scrutinee) + the
         // escaping-payload clone, mirroring if-let.
-        let saved_borrow_flag = self.pattern_binding_is_borrow;
+        let saved_borrow_flag = self.pattern_state.pattern_binding_is_borrow;
         // B-2026-08-08-25 (while-let leg): same caller-retains classifier as
         // the match / if-let sites.
-        let saved_source_retains = self.pattern_binding_source_retains_inline_payload;
-        self.pattern_binding_source_retains_inline_payload =
+        let saved_source_retains = self
+            .pattern_state
+            .pattern_binding_source_retains_inline_payload;
+        self.pattern_state
+            .pattern_binding_source_retains_inline_payload =
             self.scrutinee_is_readonly_inline_optres_local_block(value, pattern, body);
-        self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
+        self.pattern_state.pattern_binding_is_borrow = self.pattern_state.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value)
             // B-2026-08-08-25 leg 3 (while-let leg) — see the if-let site.
             || self.scrutinee_is_readonly_owned_enum_local_block(value, pattern, body)
-            || self.pattern_binding_source_retains_inline_payload;
+            || self.pattern_state.pattern_binding_source_retains_inline_payload;
         // B-2026-07-30-11 (while-let leg): route a Drop-declaring variant
         // payload binding to the UserDrop channel — the match/if-let sites'
         // mirror. The binding lives in the per-iteration body frame, so the
         // body fires once per matched iteration at the binding's NLL end.
-        self.current_variant_payload_bindings.clear();
+        self.pattern_state.current_variant_payload_bindings.clear();
         {
             let mut vp_names: Vec<String> = Vec::new();
             Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
-            self.current_variant_payload_bindings.extend(vp_names);
+            self.pattern_state
+                .current_variant_payload_bindings
+                .extend(vp_names);
         }
         let saved_shape_flags =
             self.set_scrutinee_shape_flags_for_pattern(pattern, value, freshtemp_boxed_slot);
         let bind_res = self.bind_pattern_values(pattern, val);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
-        self.current_variant_payload_bindings.clear();
+        self.pattern_state.current_variant_payload_bindings.clear();
         bind_res?;
-        if self.pattern_binding_is_borrow {
+        if self.pattern_state.pattern_binding_is_borrow {
             self.clone_escaping_borrow_payload_binding(value, pattern, Some(&[]), &[body])?;
         }
-        let optres_bindings_owned = !self.pattern_binding_is_borrow;
-        self.pattern_binding_is_borrow = saved_borrow_flag;
+        let optres_bindings_owned = !self.pattern_state.pattern_binding_is_borrow;
+        self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         } else if optres_bindings_owned {
@@ -625,7 +636,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
         // B-2026-08-08-25 — restore after the suppressors, before the body
         // compiles (see the if-let site).
-        self.pattern_binding_source_retains_inline_payload = saved_source_retains;
+        self.pattern_state
+            .pattern_binding_source_retains_inline_payload = saved_source_retains;
         self.compile_block(body)?;
         let body_has_terminator = self
             .builder
@@ -675,18 +687,22 @@ impl<'ctx> super::Codegen<'ctx> {
         freshtemp_boxed_slot: Option<PointerValue<'ctx>>,
     ) -> ScrutineeShapeFlags<'ctx> {
         let saved = (
-            self.pattern_binding_scrutinee_is_option_result,
-            self.pattern_binding_scrutinee_optres_area,
-            self.pattern_binding_scrutinee_is_shared_enum,
-            self.pattern_binding_scrutinee_is_fresh_owning_temp,
-            self.pattern_binding_scrutinee_is_owned_param,
-            self.pattern_binding_scrutinee_payload_bodies_src,
-            self.pattern_binding_scrutinee_optres_slot,
+            self.pattern_state
+                .pattern_binding_scrutinee_is_option_result,
+            self.pattern_state.pattern_binding_scrutinee_optres_area,
+            self.pattern_state.pattern_binding_scrutinee_is_shared_enum,
+            self.pattern_state
+                .pattern_binding_scrutinee_is_fresh_owning_temp,
+            self.pattern_state.pattern_binding_scrutinee_is_owned_param,
+            self.pattern_state
+                .pattern_binding_scrutinee_payload_bodies_src,
+            self.pattern_state.pattern_binding_scrutinee_optres_slot,
         );
-        self.pattern_binding_scrutinee_is_fresh_owning_temp =
+        self.pattern_state
+            .pattern_binding_scrutinee_is_fresh_owning_temp =
             self.scrutinee_expr_is_owning_fresh_temp(scrutinee);
         // B-2026-08-01-13 — see `compile_match`'s twin derivation.
-        self.pattern_binding_scrutinee_is_owned_param =
+        self.pattern_state.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
         // B-2026-08-02-25 (match-arm leg) + B-2026-08-04-1 (its fresh-temp
         // twin) — see `compile_match`'s twin derivation. Named source first;
@@ -694,23 +710,25 @@ impl<'ctx> super::Codegen<'ctx> {
         // staged `__freshtemp_boxed_scrut` slot. The two are mutually exclusive
         // by construction (a temp has no name), so the order is documentation
         // rather than a tie-break.
-        self.pattern_binding_scrutinee_payload_bodies_src =
+        self.pattern_state
+            .pattern_binding_scrutinee_payload_bodies_src =
             match self.scrutinee_armed_payload_bodies_action(scrutinee) {
                 Some(found) => Some(found),
                 None => self.freshtemp_payload_bodies_action(scrutinee, freshtemp_boxed_slot),
             };
         // B-2026-08-04-2 — see `compile_match`'s twin.
-        self.pattern_binding_scrutinee_optres_slot =
+        self.pattern_state.pattern_binding_scrutinee_optres_slot =
             self.scrutinee_optres_slot(scrutinee, freshtemp_boxed_slot);
         let en = self.variant_pattern_enum_name(pattern);
-        self.pattern_binding_scrutinee_is_option_result =
+        self.pattern_state
+            .pattern_binding_scrutinee_is_option_result =
             matches!(en.as_deref(), Some("Option") | Some("Result"));
-        self.pattern_binding_scrutinee_optres_area = match en.as_deref() {
+        self.pattern_state.pattern_binding_scrutinee_optres_area = match en.as_deref() {
             Some("Option") => 3,
             Some("Result") => 5,
             _ => 0,
         };
-        self.pattern_binding_scrutinee_is_shared_enum = en
+        self.pattern_state.pattern_binding_scrutinee_is_shared_enum = en
             .and_then(|n| self.shared_types.get(&n).cloned())
             .is_some_and(|i| i.is_enum);
         saved
@@ -718,13 +736,16 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Restore the sextuple saved by `set_scrutinee_shape_flags_for_pattern`.
     pub(super) fn restore_scrutinee_shape_flags(&mut self, saved: ScrutineeShapeFlags<'ctx>) {
-        self.pattern_binding_scrutinee_is_option_result = saved.0;
-        self.pattern_binding_scrutinee_optres_area = saved.1;
-        self.pattern_binding_scrutinee_is_shared_enum = saved.2;
-        self.pattern_binding_scrutinee_is_fresh_owning_temp = saved.3;
-        self.pattern_binding_scrutinee_is_owned_param = saved.4;
-        self.pattern_binding_scrutinee_payload_bodies_src = saved.5;
-        self.pattern_binding_scrutinee_optres_slot = saved.6;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_option_result = saved.0;
+        self.pattern_state.pattern_binding_scrutinee_optres_area = saved.1;
+        self.pattern_state.pattern_binding_scrutinee_is_shared_enum = saved.2;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_fresh_owning_temp = saved.3;
+        self.pattern_state.pattern_binding_scrutinee_is_owned_param = saved.4;
+        self.pattern_state
+            .pattern_binding_scrutinee_payload_bodies_src = saved.5;
+        self.pattern_state.pattern_binding_scrutinee_optres_slot = saved.6;
     }
 
     /// B-2026-08-04-2 — the scrutinee's `Option`/`Result` slot: a named
@@ -1026,8 +1047,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Slice 3s adds the borrow-CALL half. A `let…else` binding escapes
         // into the enclosing scope by construction, so the payload clone is
         // unconditional (`escape_exprs = None`) — no arm to analyze.
-        let saved_borrow_flag = self.pattern_binding_is_borrow;
-        self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
+        let saved_borrow_flag = self.pattern_state.pattern_binding_is_borrow;
+        self.pattern_state.pattern_binding_is_borrow = self.pattern_state.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value);
         // B-2026-07-31-45: record variant-payload binding names so a
@@ -1035,23 +1056,25 @@ impl<'ctx> super::Codegen<'ctx> {
         // match/if-let sites' mirror. The binding escapes into the
         // ENCLOSING scope, so its body fires at the binding's own NLL end
         // there, after its last use.
-        self.current_variant_payload_bindings.clear();
+        self.pattern_state.current_variant_payload_bindings.clear();
         {
             let mut vp_names: Vec<String> = Vec::new();
             Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
-            self.current_variant_payload_bindings.extend(vp_names);
+            self.pattern_state
+                .current_variant_payload_bindings
+                .extend(vp_names);
         }
         let saved_shape_flags =
             self.set_scrutinee_shape_flags_for_pattern(pattern, value, freshtemp_boxed_slot);
         let bind_res = self.bind_pattern_values(pattern, val);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
-        self.current_variant_payload_bindings.clear();
+        self.pattern_state.current_variant_payload_bindings.clear();
         bind_res?;
-        if self.pattern_binding_is_borrow {
+        if self.pattern_state.pattern_binding_is_borrow {
             self.clone_escaping_borrow_payload_binding(value, pattern, None, &[])?;
         }
-        let optres_bindings_owned = !self.pattern_binding_is_borrow;
-        self.pattern_binding_is_borrow = saved_borrow_flag;
+        let optres_bindings_owned = !self.pattern_state.pattern_binding_is_borrow;
+        self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         } else if optres_bindings_owned {

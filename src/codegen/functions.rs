@@ -2546,7 +2546,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // away. Per function, for the same reason the set above is: both are
         // span-keyed over THIS body, and carrying either across functions would
         // let one function's spans answer another's questions.
-        self.discarded_branch_spans =
+        self.pattern_state.discarded_branch_spans =
             crate::codegen::borrow_elision::compute_discarded_branch_spans(&func.body);
 
         // B-2026-08-01-33 stage 3c — the frozen-element container NAMES are

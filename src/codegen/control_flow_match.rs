@@ -91,8 +91,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // scrutinee leaves the hint cleared so the resolvers keep their prior
         // user-vs-seed fallback. Saved/restored so a nested match doesn't leak
         // an outer scrutinee's hint inward.
-        let saved_scrut_enum_hint = self.match_scrutinee_enum_hint.take();
-        self.match_scrutinee_enum_hint = self
+        let saved_scrut_enum_hint = self.pattern_state.match_scrutinee_enum_hint.take();
+        self.pattern_state.match_scrutinee_enum_hint = self
             .type_name_of_expr(scrutinee)
             .filter(|n| self.enum_layouts.contains_key(n.as_str()));
         // `match v[i] { V(s) => … }` over a heap-element `Vec` — deep-clone the
@@ -250,12 +250,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // aliases the bucket entry's value words); a duplicate cleanup
         // would double-free against the `karac_map_free_with_val_drop_vec`
         // path at function exit.
-        let saved_borrow_flag = self.pattern_binding_is_borrow;
+        let saved_borrow_flag = self.pattern_state.pattern_binding_is_borrow;
         // B-2026-08-08-25 — a read-only match over a live local that owns an
         // inline Option/Result payload is a BORROW of that payload: the source
         // keeps it, so the arm binding must not register a free and the
         // suppressors below must not disarm the source.
-        let saved_source_retains = self.pattern_binding_source_retains_inline_payload;
+        let saved_source_retains = self
+            .pattern_state
+            .pattern_binding_source_retains_inline_payload;
         let readonly_inline_optres =
             self.scrutinee_is_readonly_inline_optres_local(scrutinee, arms);
         // B-2026-08-08-25 leg 1 — the clone leg keeps the source's payload too,
@@ -265,7 +267,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // arm binding genuinely OWNS the clone and has to register its free,
         // whereas a borrowing one registers nothing. Folding the two together
         // would drop the clone's owner and leak it.
-        self.pattern_binding_source_retains_inline_payload = readonly_inline_optres
+        self.pattern_state
+            .pattern_binding_source_retains_inline_payload = readonly_inline_optres
             || livelocal_option_clone.is_some()
             || livelocal_result_clone.is_some();
         // Publish the classification for the rest of the CHAIN. The flag above
@@ -273,7 +276,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`<src>.map(f).unwrap_or(d)`) runs after the match is compiled and
         // resolves its disarm target back through the map to `<src>` — it needs
         // to know the arm left the payload where it was. B-2026-08-08-25 leg 1.
-        if self.pattern_binding_source_retains_inline_payload {
+        if self
+            .pattern_state
+            .pattern_binding_source_retains_inline_payload
+        {
             if let ExprKind::Identifier(n) = &scrutinee.kind {
                 let owner = self
                     .passthrough_owner_alias
@@ -283,7 +289,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.inline_optres_retained_sources.insert(owner);
             }
         }
-        self.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee)
+        self.pattern_state.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee)
             || self.scrutinee_is_borrowed_binding(scrutinee)
             || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_agg_loop_var(scrutinee, arms)
@@ -294,16 +300,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // proven-non-escaping alias of the caller-kept-alive param), which also
         // clears the post-call release epilogue so tailcallelim can loop-ify the
         // tail recursion.
-        let saved_elidable_param_flag = self.pattern_binding_scrutinee_is_elidable_param;
-        self.pattern_binding_scrutinee_is_elidable_param =
+        let saved_elidable_param_flag = self
+            .pattern_state
+            .pattern_binding_scrutinee_is_elidable_param;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_elidable_param =
             self.scrutinee_is_elidable_param(scrutinee);
         // B-2026-06-13-13 residual A: when the scrutinee is the type-erased
         // `Option`/`Result`, its payload is owned by the dedicated inline/boxed
         // cleanup, not a per-field `EnumDrop` — so the pattern-binding struct
         // track must skip a bound struct payload to avoid double-freeing. Same
         // enum for every arm, so resolved once from any variant arm.
-        let saved_opt_res_flag = self.pattern_binding_scrutinee_is_option_result;
-        self.pattern_binding_scrutinee_is_option_result = arms.iter().any(|a| {
+        let saved_opt_res_flag = self
+            .pattern_state
+            .pattern_binding_scrutinee_is_option_result;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_option_result = arms.iter().any(|a| {
             matches!(
                 self.variant_pattern_enum_name(&a.pattern).as_deref(),
                 Some("Option") | Some("Result")
@@ -314,15 +326,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // payload bodies fire via the bind-site bodies-only walker — a
         // bound scrutinee's arm move already runs the body through the
         // binding-side channel.
-        let saved_fresh_temp_flag = self.pattern_binding_scrutinee_is_fresh_owning_temp;
-        self.pattern_binding_scrutinee_is_fresh_owning_temp =
+        let saved_fresh_temp_flag = self
+            .pattern_state
+            .pattern_binding_scrutinee_is_fresh_owning_temp;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_fresh_owning_temp =
             self.scrutinee_expr_is_owning_fresh_temp(scrutinee);
         // B-2026-07-10-3 — record the seed enum's inline payload-area budget
         // (Option = 3, Result = 5) so `bind_pattern_values` can tell an INLINE
         // struct payload (safe to `track_struct_var`) from a heap-BOXED one
         // (owned by the box drop). Same enum for every arm, resolved once.
-        let saved_optres_area = self.pattern_binding_scrutinee_optres_area;
-        self.pattern_binding_scrutinee_optres_area = arms
+        let saved_optres_area = self.pattern_state.pattern_binding_scrutinee_optres_area;
+        self.pattern_state.pattern_binding_scrutinee_optres_area = arms
             .iter()
             .find_map(
                 |a| match self.variant_pattern_enum_name(&a.pattern).as_deref() {
@@ -337,8 +352,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // the box's inline payload, so its Vec/String buffer must NOT get a
         // per-binding struct value-drop (the box's rc-drop walker owns it).
         // Resolved once from any variant arm (same enum for every arm).
-        let saved_shared_enum_flag = self.pattern_binding_scrutinee_is_shared_enum;
-        self.pattern_binding_scrutinee_is_shared_enum = arms.iter().any(|a| {
+        let saved_shared_enum_flag = self.pattern_state.pattern_binding_scrutinee_is_shared_enum;
+        self.pattern_state.pattern_binding_scrutinee_is_shared_enum = arms.iter().any(|a| {
             self.variant_pattern_enum_name(&a.pattern)
                 .and_then(|n| self.shared_types.get(&n).cloned())
                 .is_some_and(|i| i.is_enum)
@@ -347,8 +362,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // are views of the callee's entry copy; their Drop bodies belong to
         // the caller (caller-retains), so `bind_pattern_values` registers
         // memory only.
-        let saved_owned_param_flag = self.pattern_binding_scrutinee_is_owned_param;
-        self.pattern_binding_scrutinee_is_owned_param =
+        let saved_owned_param_flag = self.pattern_state.pattern_binding_scrutinee_is_owned_param;
+        self.pattern_state.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
         // B-2026-08-02-25 (match-arm leg) — the source binding's payload-bodies
         // walk is armed HERE, before any arm's suppressor runs. A consuming arm
@@ -364,8 +379,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // scope-exit free reads, so it is the right subject for the same
         // reason the named route uses the source's. The two are mutually
         // exclusive by construction.
-        let saved_bodies_src = self.pattern_binding_scrutinee_payload_bodies_src;
-        self.pattern_binding_scrutinee_payload_bodies_src =
+        let saved_bodies_src = self
+            .pattern_state
+            .pattern_binding_scrutinee_payload_bodies_src;
+        self.pattern_state
+            .pattern_binding_scrutinee_payload_bodies_src =
             match self.scrutinee_armed_payload_bodies_action(scrutinee) {
                 Some(found) => Some(found),
                 None => self.freshtemp_payload_bodies_action(scrutinee, freshtemp_boxed_slot),
@@ -375,8 +393,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // payload's heap fields double-free when the binding moves whether or
         // not the payload declares `impl Drop`, so the gate must not require a
         // Drop-derived walker to exist.
-        let saved_optres_slot = self.pattern_binding_scrutinee_optres_slot;
-        self.pattern_binding_scrutinee_optres_slot =
+        let saved_optres_slot = self.pattern_state.pattern_binding_scrutinee_optres_slot;
+        self.pattern_state.pattern_binding_scrutinee_optres_slot =
             self.scrutinee_optres_slot(scrutinee, freshtemp_boxed_slot);
         let fn_val = self.current_fn.unwrap();
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
@@ -502,16 +520,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // call and cleared right after — bare-tuple elements never
                 // enter the set, keeping the tuple-element walk the single
                 // body owner for those.
-                self.current_variant_payload_bindings.clear();
+                self.pattern_state.current_variant_payload_bindings.clear();
                 {
                     let mut vp_names: Vec<String> = Vec::new();
                     Self::collect_variant_payload_binding_names(&arm.pattern, false, &mut vp_names);
-                    self.current_variant_payload_bindings.extend(vp_names);
+                    self.pattern_state
+                        .current_variant_payload_bindings
+                        .extend(vp_names);
                 }
                 // B-2026-08-12-2 — per-ARM, and saved/restored because a nested
                 // `match` inside this body binds through the same field.
-                let saved_arm_borrows = self.pattern_binding_arm_only_borrows;
-                self.pattern_binding_arm_only_borrows = self
+                let saved_arm_borrows = self.pattern_state.pattern_binding_arm_only_borrows;
+                self.pattern_state.pattern_binding_arm_only_borrows = self
                     .arm_only_borrows_inline_result_payload(
                         &arm.pattern,
                         &arm.body,
@@ -524,17 +544,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     false
                 };
                 if handled_via_ptr {
-                    self.pattern_binding_arm_only_borrows = saved_arm_borrows;
+                    self.pattern_state.pattern_binding_arm_only_borrows = saved_arm_borrows;
                 }
                 if !handled_via_ptr {
                     self.bind_pattern_values(&arm.pattern, scrut)?;
-                    self.pattern_binding_arm_only_borrows = saved_arm_borrows;
-                    self.current_variant_payload_bindings.clear();
+                    self.pattern_state.pattern_binding_arm_only_borrows = saved_arm_borrows;
+                    self.pattern_state.current_variant_payload_bindings.clear();
                     // Slice 3s (B-2026-07-01-12): a borrow-mode `Some(x)` bind
                     // over a `Map.get` scrutinee whose arm (guard or body)
                     // MOVES `x` gets a deep clone + owned tracking — the
                     // escaping value must not alias the bucket's storage.
-                    if self.pattern_binding_is_borrow {
+                    if self.pattern_state.pattern_binding_is_borrow {
                         let mut scope: Vec<&Expr> = vec![&arm.body];
                         if let Some(g) = &arm.guard {
                             scope.push(g);
@@ -554,7 +574,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `deep_copy_owned_struct_param_field_move` fires (the enum-payload
                 // sibling of the for-loop struct-element path). Covers both the
                 // ptr-bind and value-bind routes.
-                if self.pattern_binding_is_borrow {
+                if self.pattern_state.pattern_binding_is_borrow {
                     self.register_borrowed_agg_payload_struct_bindings(&arm.pattern);
                 }
             }
@@ -600,7 +620,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `suppress_source_vec_cleanup_for_arg`. Ref-scrutinee
             // matches don't need this — the source isn't owned by the
             // match, no double-free risk.
-            if scrut_ref_ptr.is_none() && !self.pattern_binding_is_borrow {
+            if scrut_ref_ptr.is_none() && !self.pattern_state.pattern_binding_is_borrow {
                 if let Some((alloca, enum_name)) = &freshtemp_enum {
                     // Fresh-temp scrutinee: suppress against the materialized
                     // alloca (no identifier to resolve). The source EnumDrop
@@ -766,7 +786,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // no-ops on the seeded all-None drop-kind layouts, so the
                 // source field stayed armed and the struct drop double-freed
                 // the consumed payload. Zero the source in the binding arm.
-                let optres_bindings_owned = !self.pattern_binding_is_borrow;
+                let optres_bindings_owned = !self.pattern_state.pattern_binding_is_borrow;
                 self.suppress_consumed_place_optres_field_source(
                     scrutinee,
                     &arm.pattern,
@@ -977,17 +997,22 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.builder.position_at_end(merge_bb);
-        self.pattern_binding_is_borrow = saved_borrow_flag;
-        self.pattern_binding_source_retains_inline_payload = saved_source_retains;
-        self.pattern_binding_scrutinee_is_elidable_param = saved_elidable_param_flag;
-        self.pattern_binding_scrutinee_is_option_result = saved_opt_res_flag;
-        self.pattern_binding_scrutinee_optres_area = saved_optres_area;
-        self.pattern_binding_scrutinee_is_shared_enum = saved_shared_enum_flag;
-        self.pattern_binding_scrutinee_is_fresh_owning_temp = saved_fresh_temp_flag;
-        self.pattern_binding_scrutinee_is_owned_param = saved_owned_param_flag;
-        self.pattern_binding_scrutinee_payload_bodies_src = saved_bodies_src;
-        self.pattern_binding_scrutinee_optres_slot = saved_optres_slot;
-        self.match_scrutinee_enum_hint = saved_scrut_enum_hint;
+        self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
+        self.pattern_state
+            .pattern_binding_source_retains_inline_payload = saved_source_retains;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_elidable_param = saved_elidable_param_flag;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_option_result = saved_opt_res_flag;
+        self.pattern_state.pattern_binding_scrutinee_optres_area = saved_optres_area;
+        self.pattern_state.pattern_binding_scrutinee_is_shared_enum = saved_shared_enum_flag;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_fresh_owning_temp = saved_fresh_temp_flag;
+        self.pattern_state.pattern_binding_scrutinee_is_owned_param = saved_owned_param_flag;
+        self.pattern_state
+            .pattern_binding_scrutinee_payload_bodies_src = saved_bodies_src;
+        self.pattern_state.pattern_binding_scrutinee_optres_slot = saved_optres_slot;
+        self.pattern_state.match_scrutinee_enum_hint = saved_scrut_enum_hint;
 
         // Every arm diverged (`return` / `unreachable()` / `todo()` in all of
         // them): no arm branched to `merge_bb`, so it has no predecessors.
@@ -1762,6 +1787,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .all(|p| {
                 matches!(&p.kind, PatternKind::Binding(_))
                     && self
+                        .pattern_state
                         .pattern_binding_types
                         .get(&(p.span.offset, p.span.length))
                         .is_some_and(|t| t == "String" || t == "Vec")
@@ -3769,7 +3795,7 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
         arm_body: &Expr,
     ) {
-        if self.pattern_binding_is_borrow {
+        if self.pattern_state.pattern_binding_is_borrow {
             return;
         }
         let ExprKind::FieldAccess { object, field } = &scrutinee.kind else {
@@ -4077,7 +4103,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // silent wrong value. Recording nothing here leaves every in-frame shape
         // byte-identical and confines the mirror to the cross-call case, where a
         // data write is the ONLY channel to the caller's drop fn.
-        if !self.pattern_binding_scrutinee_is_owned_param {
+        if !self.pattern_state.pattern_binding_scrutinee_is_owned_param {
             self.deboxed_payload_box_ptrs.remove(&slot);
             return;
         }
@@ -4088,7 +4114,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-07-28-17 hands the callee a defensive CLONE instead. That clone
         // is a private non-shared `Option`, so the shape this row measured
         // still reaches the mirror; only the shared original is off limits.
-        if self.pattern_binding_scrutinee_is_shared_enum {
+        if self.pattern_state.pattern_binding_scrutinee_is_shared_enum {
             self.deboxed_payload_box_ptrs.remove(&slot);
             return;
         }
@@ -5377,6 +5403,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the same-named struct. Mirrors the `#39` scrutinee-hint preference
         // the two resolvers apply just above their unqualified scans.
         let hint_claims_it = self
+            .pattern_state
             .match_scrutinee_enum_hint
             .as_deref()
             .and_then(|h| self.enum_layouts.get(h))
@@ -5413,7 +5440,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // enum first, so a name shared with another imported enum (`Float` in
         // both `Token` and `Expr`) binds to the scrutinee's variant, not
         // whichever the unordered map yields first.
-        if let Some(hint) = &self.match_scrutinee_enum_hint {
+        if let Some(hint) = &self.pattern_state.match_scrutinee_enum_hint {
             if let Some(layout) = self.enum_layouts.get(hint) {
                 if layout.tags.contains_key(variant_name) {
                     return Some(hint.clone());
@@ -5474,7 +5501,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // #39 — prefer the match scrutinee's enum for an unqualified variant,
         // so a name shared across enums (`Token.Float` vs `Expr.Float`) resolves
         // to the scrutinee's tag instead of whichever the unordered map yields.
-        if let Some(hint) = &self.match_scrutinee_enum_hint {
+        if let Some(hint) = &self.pattern_state.match_scrutinee_enum_hint {
             if let Some(layout) = self.enum_layouts.get(hint) {
                 if let Some(&tag) = layout.tags.get(variant_name) {
                     return Some((layout.llvm_type, tag));
@@ -5717,7 +5744,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Guarded on the name resolving to a variant AND no
                 // typechecker-recorded binding type, so ordinary bindings
                 // never take this path (B-2026-07-15-5).
-                if !self.pattern_binding_types.contains_key(&key) {
+                if !self.pattern_state.pattern_binding_types.contains_key(&key) {
                     let variant_name = name.rsplit('.').next().unwrap_or(name);
                     if name.contains('.') || self.enum_tag_for_variant(variant_name).is_some() {
                         if let Some(en) = self.variant_pattern_enum_name(pat) {
@@ -5746,10 +5773,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // tuple `TypeExpr` so multi-word payloads reconstitute
                 // as the right-shaped tuple struct.
                 if matches!(
-                    self.pattern_binding_types.get(&key).map(|s| s.as_str()),
+                    self.pattern_state
+                        .pattern_binding_types
+                        .get(&key)
+                        .map(|s| s.as_str()),
                     Some("Tuple")
                 ) {
-                    if let Some(te) = self.pattern_binding_inner_types.get(&key) {
+                    if let Some(te) = self.pattern_state.pattern_binding_inner_types.get(&key) {
                         if let TypeKind::Tuple(elems) = &te.kind {
                             return elems
                                 .iter()
@@ -5770,12 +5800,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // recorded by the typechecker only for owned/borrow generic
                 // struct payload bindings, so this branch never fires for a
                 // String/Vec/scalar binding (handled by the explicit arms).
-                if let Some(te) = self.pattern_binding_inner_types.get(&key) {
+                if let Some(te) = self.pattern_state.pattern_binding_inner_types.get(&key) {
                     if self.is_generic_named_struct_type_expr(te) {
                         return Self::llvm_type_word_count(self.llvm_type_for_type_expr(te)).max(1);
                     }
                 }
-                match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
+                match self
+                    .pattern_state
+                    .pattern_binding_types
+                    .get(&key)
+                    .map(|s| s.as_str())
+                {
                     // VecDeque rides Vec's 3-word `{ptr, len, cap}` layout
                     // (B-2026-06-10-3): without it, a VecDeque enum payload
                     // got the 1-word default → malformed value, crash on use.
@@ -5880,7 +5915,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // variant's payload) — same rule as the TupleVariant arm
                 // above; see the word-count twin for the guard rationale
                 // (B-2026-07-15-5).
-                if !self.pattern_binding_types.contains_key(&key) {
+                if !self.pattern_state.pattern_binding_types.contains_key(&key) {
                     let variant_name = name.rsplit('.').next().unwrap_or(name);
                     if name.contains('.') || self.enum_tag_for_variant(variant_name).is_some() {
                         if let Some(en) = self.variant_pattern_enum_name(pat) {
@@ -5905,10 +5940,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // reconstruction builds a value with the right shape
                 // for downstream `let (a, b) = node` destructure.
                 if matches!(
-                    self.pattern_binding_types.get(&key).map(|s| s.as_str()),
+                    self.pattern_state
+                        .pattern_binding_types
+                        .get(&key)
+                        .map(|s| s.as_str()),
                     Some("Tuple")
                 ) {
-                    if let Some(te) = self.pattern_binding_inner_types.get(&key) {
+                    if let Some(te) = self.pattern_state.pattern_binding_inner_types.get(&key) {
                         if matches!(te.kind, TypeKind::Tuple(_)) {
                             return self.llvm_type_for_type_expr(te);
                         }
@@ -5916,12 +5954,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // Generic user-struct payload binding — the mono aggregate type
                 // (sibling of the word-count arm in `pattern_payload_word_count`).
-                if let Some(te) = self.pattern_binding_inner_types.get(&key) {
+                if let Some(te) = self.pattern_state.pattern_binding_inner_types.get(&key) {
                     if self.is_generic_named_struct_type_expr(te) {
                         return self.llvm_type_for_type_expr(te);
                     }
                 }
-                match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
+                match self
+                    .pattern_state
+                    .pattern_binding_types
+                    .get(&key)
+                    .map(|s| s.as_str())
+                {
                     // `StringSlice` shares `String`'s `{ptr, len, cap}` shape;
                     // `CString` (owning C-string) shares it too.
                     Some("Vec") | Some("VecDeque") | Some("String") | Some("StringSlice")
@@ -6112,7 +6155,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // regardless of word count.
         let binding_is_struct = {
             let key = (sub_pat.span.offset, sub_pat.span.length);
-            self.pattern_binding_types
+            self.pattern_state.pattern_binding_types
                 .get(&key)
                 .map(|n| self.struct_types.contains_key(n.as_str()))
                 .unwrap_or(false)
@@ -6162,7 +6205,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // resolve to a 64-bit or non-`IntType`, so they pass through
             // untouched.
             let key = (sub_pat.span.offset, sub_pat.span.length);
-            if let Some(name) = self.pattern_binding_types.get(&key).cloned() {
+            if let Some(name) = self.pattern_state.pattern_binding_types.get(&key).cloned() {
                 match self.llvm_type_for_name(&name) {
                     BasicTypeEnum::IntType(it) if it.get_bit_width() < 64 => {
                         let narrowed = self
@@ -6208,10 +6251,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // side-table instead of sub-pattern shapes.
         let key = (sub_pat.span.offset, sub_pat.span.length);
         if matches!(
-            self.pattern_binding_types.get(&key).map(|s| s.as_str()),
+            self.pattern_state
+                .pattern_binding_types
+                .get(&key)
+                .map(|s| s.as_str()),
             Some("Tuple")
         ) {
-            if let Some(te) = self.pattern_binding_inner_types.get(&key) {
+            if let Some(te) = self.pattern_state.pattern_binding_inner_types.get(&key) {
                 if let TypeKind::Tuple(elem_tes) = &te.kind {
                     // Slice 3v (leg B): rebuild via the word-correct recursive
                     // helper (#44's `reconstruct_struct_from_words`). The prior
@@ -6237,22 +6283,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // the existing field-by-field rebuild below (incl. the #44 nested
         // sub-field recursion) then produces the correctly-typed aggregate
         // for `bind_pattern_values`' plain-struct destructure arm.
-        let type_name =
-            self.pattern_binding_types
-                .get(&key)
-                .cloned()
-                .or_else(|| match &sub_pat.kind {
-                    PatternKind::Struct { path, .. } => path
-                        .last()
-                        .filter(|n| self.struct_types.contains_key(n.as_str()))
-                        .cloned(),
-                    _ => None,
-                });
+        let type_name = self
+            .pattern_state
+            .pattern_binding_types
+            .get(&key)
+            .cloned()
+            .or_else(|| match &sub_pat.kind {
+                PatternKind::Struct { path, .. } => path
+                    .last()
+                    .filter(|n| self.struct_types.contains_key(n.as_str()))
+                    .cloned(),
+                _ => None,
+            });
         // A generic user-struct payload binding rebuilds into its MONO
         // aggregate (the concrete-arg field layout), NOT the all-`i64` generic
         // base `struct_types[name]` the fallthrough would pick — else the
         // 3-word `String` field collapses into the 1-field base (B-2026-07-12-2).
         let mono_struct_target: Option<BasicTypeEnum<'ctx>> = self
+            .pattern_state
             .pattern_binding_inner_types
             .get(&key)
             .filter(|te| self.is_generic_named_struct_type_expr(te))
@@ -7661,7 +7709,7 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
-        if self.pattern_binding_is_borrow {
+        if self.pattern_state.pattern_binding_is_borrow {
             return;
         }
         let ExprKind::Identifier(name) = &scrutinee.kind else {
@@ -7735,7 +7783,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // so there is nobody to transfer to: disarming the source here would
         // leave the buffer freed at arm exit and the still-live source reading
         // it afterward.
-        if self.pattern_binding_source_retains_inline_payload {
+        if self
+            .pattern_state
+            .pattern_binding_source_retains_inline_payload
+        {
             return;
         }
         let ExprKind::Identifier(name) = &scrutinee.kind else {
@@ -7995,6 +8046,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let whole_tuple_binding = patterns.iter().any(|p| {
             matches!(&p.kind, PatternKind::Binding(_))
                 && self
+                    .pattern_state
                     .pattern_binding_types
                     .get(&(p.span.offset, p.span.length))
                     .is_some_and(|t| t == "Tuple")
@@ -8092,6 +8144,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let binds_a_tuple = patterns.iter().any(|p| {
             matches!(&p.kind, PatternKind::Binding(_))
                 && self
+                    .pattern_state
                     .pattern_binding_types
                     .get(&(p.span.offset, p.span.length))
                     .is_some_and(|t| t == "Tuple")
@@ -8175,7 +8228,10 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         // B-2026-08-08-25 — Result twin of the caller-retains early-return in
         // `suppress_inline_option_payload_cleanup`; same reasoning.
-        if self.pattern_binding_source_retains_inline_payload {
+        if self
+            .pattern_state
+            .pattern_binding_source_retains_inline_payload
+        {
             return;
         }
         let ExprKind::Identifier(name) = &scrutinee.kind else {
@@ -9469,10 +9525,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !scrutinee_is_borrow {
                     let pkey = (payload.span.offset, payload.span.length);
                     if matches!(
-                        self.pattern_binding_types.get(&pkey).map(|s| s.as_str()),
+                        self.pattern_state
+                            .pattern_binding_types
+                            .get(&pkey)
+                            .map(|s| s.as_str()),
                         Some("Tuple")
                     ) {
-                        if let Some(te) = self.pattern_binding_inner_types.get(&pkey).cloned() {
+                        if let Some(te) = self
+                            .pattern_state
+                            .pattern_binding_inner_types
+                            .get(&pkey)
+                            .cloned()
+                        {
                             if let TypeKind::Tuple(elem_tes) = &te.kind {
                                 if let BasicTypeEnum::StructType(agg_ty) =
                                     self.llvm_type_for_type_expr(&te)
@@ -9493,9 +9557,13 @@ impl<'ctx> super::Codegen<'ctx> {
             let inner_struct_name: Option<String> = match &payload.kind {
                 PatternKind::Binding(_) if !scrutinee_is_borrow => {
                     let pkey = (payload.span.offset, payload.span.length);
-                    self.pattern_binding_types.get(&pkey).cloned().filter(|n| {
-                        self.struct_types.contains_key(n) && !self.shared_types.contains_key(n)
-                    })
+                    self.pattern_state
+                        .pattern_binding_types
+                        .get(&pkey)
+                        .cloned()
+                        .filter(|n| {
+                            self.struct_types.contains_key(n) && !self.shared_types.contains_key(n)
+                        })
                 }
                 // B-2026-08-04-3 — a WILDCARD payload binds NOTHING, so the box
                 // is the only owner its interior will ever have and the walk
@@ -9622,7 +9690,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             };
             let key = (sub.span.offset, sub.span.length);
-            if let Some(tn) = self.pattern_binding_types.get(&key) {
+            if let Some(tn) = self.pattern_state.pattern_binding_types.get(&key) {
                 if let Some(info) = self.shared_types.get(tn) {
                     heap_type = Some(info.heap_type);
                     break;
@@ -9790,7 +9858,7 @@ impl<'ctx> super::Codegen<'ctx> {
         patterns.iter().any(|p| {
             if matches!(&p.kind, PatternKind::Binding(_)) {
                 let key = (p.span.offset, p.span.length);
-                if let Some(tn) = self.pattern_binding_types.get(&key) {
+                if let Some(tn) = self.pattern_state.pattern_binding_types.get(&key) {
                     return self.struct_types.contains_key(tn.as_str());
                 }
             }
@@ -9826,7 +9894,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
             return false;
         };
-        if self.pattern_binding_scrutinee_is_shared_enum {
+        if self.pattern_state.pattern_binding_scrutinee_is_shared_enum {
             return false;
         }
         patterns.iter().any(|p| {
@@ -9834,7 +9902,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 return false;
             }
             let key = (p.span.offset, p.span.length);
-            let Some(tn) = self.pattern_binding_types.get(&key) else {
+            let Some(tn) = self.pattern_state.pattern_binding_types.get(&key) else {
                 return false;
             };
             let tn = tn.as_str();
@@ -9848,7 +9916,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.aggregate_param_copy_supported_struct(tn, &mut Vec::new())
                 && self.struct_types.get(tn).is_some_and(|st| {
                     Self::llvm_type_word_count((*st).into())
-                        <= self.pattern_binding_scrutinee_optres_area
+                        <= self.pattern_state.pattern_binding_scrutinee_optres_area
                 })
         })
     }
@@ -9885,7 +9953,7 @@ impl<'ctx> super::Codegen<'ctx> {
         for p in patterns {
             if let PatternKind::Binding(name) = &p.kind {
                 let key = (p.span.offset, p.span.length);
-                if let Some(tn) = self.pattern_binding_types.get(&key) {
+                if let Some(tn) = self.pattern_state.pattern_binding_types.get(&key) {
                     if self.struct_types.contains_key(tn.as_str()) {
                         names.push(name.clone());
                         binding_types.insert(name.clone(), tn.clone());
@@ -9947,7 +10015,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             };
             let key = (p.span.offset, p.span.length);
-            let Some(tn) = self.pattern_binding_types.get(&key) else {
+            let Some(tn) = self.pattern_state.pattern_binding_types.get(&key) else {
                 continue;
             };
             // A non-shared user struct only: a shared handle is refcounted (the

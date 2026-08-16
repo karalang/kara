@@ -3734,7 +3734,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // path above.
                     if !detected {
                         let key = (pattern.span.offset, pattern.span.length);
-                        if let Some(surface) = self.pattern_binding_types.get(&key).cloned() {
+                        if let Some(surface) =
+                            self.pattern_state.pattern_binding_types.get(&key).cloned()
+                        {
                             // A refinement binding (`let n = "x" as Name` where
                             // `type Name = String where …`) dispatches as its
                             // base: normalize so the String/Vec branches below
@@ -3742,8 +3744,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             // method dispatch sees the base (phase-9 step 5a).
                             let surface = self.type_alias_base_name(&surface);
                             if surface == "Vec" || surface == "VecDeque" {
-                                if let Some(elem_te) =
-                                    self.pattern_binding_inner_types.get(&key).cloned()
+                                if let Some(elem_te) = self
+                                    .pattern_state
+                                    .pattern_binding_inner_types
+                                    .get(&key)
+                                    .cloned()
                                 {
                                     let elem_ty = self.llvm_type_for_type_expr(&elem_te);
                                     self.vec_elem_types.insert(var_name.clone(), elem_ty);
@@ -3827,8 +3832,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // which a place source is not — so `mm` stays a
                                 // caller-retains alias and the source/owner is the
                                 // sole freer (no double-free).
-                                if let Some(coll_te) =
-                                    self.pattern_binding_inner_types.get(&key).cloned()
+                                if let Some(coll_te) = self
+                                    .pattern_state
+                                    .pattern_binding_inner_types
+                                    .get(&key)
+                                    .cloned()
                                 {
                                     self.register_var_from_type_expr(var_name, &coll_te);
                                     detected = true;
@@ -3844,8 +3852,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // `register_var_from_type_expr` hits the
                                 // Option/Result arm there which fills
                                 // `var_option_payload_te` / `var_result_payload_te`.
-                                if let Some(full_te) =
-                                    self.pattern_binding_inner_types.get(&key).cloned()
+                                if let Some(full_te) = self
+                                    .pattern_state
+                                    .pattern_binding_inner_types
+                                    .get(&key)
+                                    .cloned()
                                 {
                                     self.register_var_from_type_expr(var_name, &full_te);
                                     detected = true;
@@ -4209,7 +4220,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         // discipline across mutable rebindings.
                         if let PatternKind::Binding(var_name) = &pattern.kind {
                             let key = (pattern.span.offset, pattern.span.length);
-                            if let Some(surface) = self.pattern_binding_types.get(&key) {
+                            if let Some(surface) =
+                                self.pattern_state.pattern_binding_types.get(&key)
+                            {
                                 if self.shared_types.contains_key(surface) {
                                     let _ = var_name;
                                     return Some(surface.clone());
@@ -7707,7 +7720,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let key = (pattern.span.offset, pattern.span.length);
                     if matches!(
-                        self.pattern_binding_types.get(&key).map(String::as_str),
+                        self.pattern_state
+                            .pattern_binding_types
+                            .get(&key)
+                            .map(String::as_str),
                         Some("Sender") | Some("Receiver")
                     ) {
                         self.neutralize_moved_channel_end_slot(rhs_name);
@@ -9757,7 +9773,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // refcount 2 and `clone` increments, so one drop per binding
                 // balances the channel's lifetime to zero.
                 let key = (pattern.span.offset, pattern.span.length);
-                if let Some(surface) = self.pattern_binding_types.get(&key) {
+                if let Some(surface) = self.pattern_state.pattern_binding_types.get(&key) {
                     // `Sender` drop may close the channel (waking blocked
                     // receivers); `Receiver` drop only releases its reference.
                     if surface == "Sender" || surface == "Receiver" {
@@ -9857,7 +9873,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// arm and is already registered by the main handler) is unaffected.
     fn register_pattern_leaf_dispatch(&mut self, name: &str, span: &crate::token::Span) {
         let key = (span.offset, span.length);
-        let Some(type_name) = self.pattern_binding_types.get(&key).cloned() else {
+        let Some(type_name) = self.pattern_state.pattern_binding_types.get(&key).cloned() else {
             return;
         };
         match type_name.as_str() {
@@ -9871,14 +9887,24 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // `VecDeque[T]` shares `Vec[T]`'s storage + dispatch.
             "Vec" | "VecDeque" => {
-                if let Some(inner_te) = self.pattern_binding_inner_types.get(&key).cloned() {
+                if let Some(inner_te) = self
+                    .pattern_state
+                    .pattern_binding_inner_types
+                    .get(&key)
+                    .cloned()
+                {
                     let elem_llvm = self.llvm_type_for_type_expr(&inner_te);
                     self.vec_elem_types.insert(name.to_string(), elem_llvm);
                     self.var_elem_type_exprs.insert(name.to_string(), inner_te);
                 }
             }
             "Slice" => {
-                if let Some(inner_te) = self.pattern_binding_inner_types.get(&key).cloned() {
+                if let Some(inner_te) = self
+                    .pattern_state
+                    .pattern_binding_inner_types
+                    .get(&key)
+                    .cloned()
+                {
                     let elem_llvm = self.llvm_type_for_type_expr(&inner_te);
                     self.slice_elem_types.insert(name.to_string(), elem_llvm);
                     self.var_elem_type_exprs.insert(name.to_string(), inner_te);
@@ -9888,7 +9914,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // through the shared registrar (extracts K/V/elem). No-op when the
             // inner-types table doesn't carry it (the let path may not).
             "Map" | "Set" => {
-                if let Some(full_te) = self.pattern_binding_inner_types.get(&key).cloned() {
+                if let Some(full_te) = self
+                    .pattern_state
+                    .pattern_binding_inner_types
+                    .get(&key)
+                    .cloned()
+                {
                     self.register_var_from_type_expr(name, &full_te);
                 }
             }
