@@ -1584,6 +1584,36 @@ impl<'ctx> super::Codegen<'ctx> {
         // converging loop into a single counted induction variable before the
         // unroller sees it, which is an IR change, not a hint. Until then,
         // attaching a hint LLVM provably declines is just noise.
+        //
+        // THE CANONICALISATION WAS THEN BUILT, AND IT DOES NOT PAY EITHER.
+        // Emitting a synthetic gap counter `d = hi - lo` in the preheader,
+        // stepping it by `-(c1 + c2)` on the back edge and branching on
+        // `d >= 0` does exactly what it promises: the loop becomes countable,
+        // LLVM stops warning, and #246 unrolls for 527.8M -> 401.0M retired
+        // instructions (1.42x behind `clang -O3` becomes 1.08x). Two
+        // measurements killed it anyway.
+        //
+        //   FULL unroll is unbounded on this shape. The canonicalised gap is
+        //   the REAL trip count, so kata #189's `reverse_range(a, lo, hi)` over
+        //   a million-element array unrolls a million times: `karac build` went
+        //   from 0.6 s to over 300 s and was killed. The literal path is immune
+        //   because `UNROLL_FULL_MAX_BOUND` caps it at 32; a converging loop has
+        //   no AST-visible bound to cap, because `hi = len - 1` is opaque until
+        //   inlining — which is the same fact that made the hint necessary.
+        //
+        //   BOUNDED partial unroll (factor 4) fixes the blowup — #189 back to
+        //   0.6 s, #246 still improves to 482.3M — and is a NET REGRESSION over
+        //   the corpus: 10 rows improved >1%, ELEVEN regressed, median
+        //   1.362 -> 1.363, and the count of rows where kara leads `clang -O3`
+        //   fell 22 -> 21. The regressions land on the very shape being
+        //   targeted — #31 next_permutation +15.1%, #60 +13.3%, #189 +7.7% —
+        //   because a 4x unroll of a reverse loop buys a remainder loop and
+        //   code growth and nothing else.
+        //
+        // So the two-pointer scan stays rolled. Anyone reopening this needs a
+        // way to bound the gap at compile time, not another unroll strategy:
+        // all three (hint, full, partial-4) have been measured and none pays.
+        // Screened with kara-katas `scripts/unroll-screen.py`.
         let Some((var, bound)) = guard_upper_bounded_counter(cond).or_else(|| {
             let (v, bound_name) = guard_upper_bounded_counter_named(cond)?;
             Some((v, *self.int_const_locals.get(&bound_name)?))
