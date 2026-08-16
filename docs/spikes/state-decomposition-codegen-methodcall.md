@@ -1,6 +1,6 @@
 # Spike: state decomposition — `Codegen` (439 fields) and `infer_method_call` (5.9k lines)
 
-**Status:** 🚧 **IN PROGRESS — Phase 1 five slices landed (`infer_method_call` 5,873 → 3,591 lines, -39%); Phase 2 queued behind the open codegen bugs.** This doc is the live coordination point for the refactor: the cluster map below is measured (not guessed), and the status table at the bottom is updated as slices land. **Other agents: read § Coordination protocol before editing `src/codegen.rs` or `src/typechecker/expr_method_call.rs`.**
+**Status:** 🚧 **IN PROGRESS — Phase 1 six slices landed (`infer_method_call` 5,873 → 2,957 lines, -50%); Phase 2 queued behind the open codegen bugs.** This doc is the live coordination point for the refactor: the cluster map below is measured (not guessed), and the status table at the bottom is updated as slices land. **Other agents: read § Coordination protocol before editing `src/codegen.rs` or `src/typechecker/expr_method_call.rs`.**
 
 *Origin: project-review item 6 ("schedule state-level decomposition of Codegen — not as a launch item, but before any MLIR/backend-swap ambition is taken seriously; same treatment for `infer_method_call`"). Owner decided 2026-08-15 to start now rather than defer, on the reasoning in § Why now.*
 
@@ -140,7 +140,8 @@ for fp in files:
 | 1 | slice 3 — **Option/Result combinators** (`method_optres_combinator.rs`): closure-free (`ok`/`err`/`or`/`and`/`ok_or`/`flatten`/`take`/`get_or_insert`) + closure-taking (`unwrap_or_else`/`map_or`/`map_or_else`/`map_err`/`and_then`/`or_else`/`filter`) | **landed** — 386 lines moved; 4,668 → 4,291 | 2026-08-16 |
 | 1 | slice 4 — **Column/DataFrame analytics** (`method_column_analytics.rs`): `zip_with`, `argmin`/`argmax`/`sorted`/`argsort`, the `Column` scalar reductions, the `DataFrame` surface | **landed** — 359 lines moved; 4,291 → 3,942 | 2026-08-16 |
 | 1 | slice 5 — **Column element-wise** (`method_column_elementwise.rs`): `iter`/`iter_valid`/`fillna`/`dropna`, `fold`, `map` (+ Option/Result and Tensor broadcast forms) | **landed** — 361 lines moved; 3,942 → 3,591 | 2026-08-16 |
-| 1 | slices 6–10 — remaining families (string, map/set, iterator, slice/pointer conversions, atomics, tuple, module-path + user-impl lookup tail) | in progress | — |
+| 1 | slice 6 — **user-`impl` dispatch tail** (`method_user_impl.rs`): impl-table lookup, candidate collection, bound gating, specialization, and the `no method 'X' on T` diagnostics | **landed** — 639 lines moved; 3,591 → 2,957 | 2026-08-16 |
+| 1 | slices 7–10 — remaining families (string, map/set, iterator, slice/pointer conversions, atomics, tuple, module-path prefixes, fresh-temp receiver recording) | in progress | — |
 | 2 | cluster 1 `RuntimeFns` | not started | — |
 | 2 | clusters 2–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |

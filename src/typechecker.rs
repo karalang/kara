@@ -41,6 +41,7 @@ mod method_column_analytics;
 mod method_column_elementwise;
 mod method_numeric;
 mod method_optres_combinator;
+mod method_user_impl;
 mod method_vec_mutation;
 mod patterns;
 mod refinement_elision;
