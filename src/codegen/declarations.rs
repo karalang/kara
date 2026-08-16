@@ -3740,7 +3740,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let crate::ast::Item::EnumDef(e) = item {
                     if crate::typechecker::extract_derived_traits(&e.attributes).contains("Display")
                     {
-                        self.baked_display_enum_names.insert(e.name.clone());
+                        self.display.baked_display_enum_names.insert(e.name.clone());
                     }
                 }
             }

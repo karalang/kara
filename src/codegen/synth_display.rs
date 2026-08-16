@@ -115,12 +115,14 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         ty: BasicTypeEnum<'ctx>,
     ) -> FunctionValue<'ctx> {
-        if let Some(&f) = self.display_fn_cache.get(type_name) {
+        if let Some(&f) = self.display.display_fn_cache.get(type_name) {
             return f;
         }
         let fn_name = format!("karac_display_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(type_name.to_string(), f);
+            self.display
+                .display_fn_cache
+                .insert(type_name.to_string(), f);
             return f;
         }
 
@@ -137,7 +139,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display_fn_cache
+        self.display
+            .display_fn_cache
             .insert(type_name.to_string(), display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
@@ -488,12 +491,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let key_name = Self::display_mangle_te(key_te);
         let val_name = Self::display_mangle_te(val_te);
         let type_name = format!("Map_{key_name}_{val_name}");
-        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_display_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(type_name, f);
+            self.display.display_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -509,7 +512,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display_fn_cache.insert(type_name, display_fn);
+        self.display.display_fn_cache.insert(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -684,12 +687,12 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_set_display_fn(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
         let elem_name = Self::display_mangle_te(elem_te);
         let type_name = format!("Set_{elem_name}");
-        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_display_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(type_name, f);
+            self.display.display_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -705,7 +708,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display_fn_cache.insert(type_name, display_fn);
+        self.display.display_fn_cache.insert(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -896,12 +899,12 @@ impl<'ctx> super::Codegen<'ctx> {
         val_te: Option<&TypeExpr>,
         prefix: &str,
     ) -> Result<FunctionValue<'ctx>, String> {
-        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
             return Ok(f);
         }
         let fn_name = format!("karac_display_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(type_name, f);
+            self.display.display_fn_cache.insert(type_name, f);
             return Ok(f);
         }
 
@@ -917,7 +920,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display_fn_cache.insert(type_name, display_fn);
+        self.display.display_fn_cache.insert(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -1243,12 +1246,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// exists.
     pub(super) fn emit_display_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
         let type_name = Self::display_mangle_te(te);
-        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_display_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(type_name, f);
+            self.display.display_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -1377,12 +1380,12 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_vec_display_fn_te(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
         let elem_name = Self::display_mangle_te(elem_te);
         let type_name = format!("Vec_{elem_name}");
-        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_display_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(type_name, f);
+            self.display.display_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -1398,7 +1401,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display_fn_cache.insert(type_name, display_fn);
+        self.display.display_fn_cache.insert(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -1444,11 +1447,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let parts: Vec<String> = elems.iter().map(Self::display_mangle_te).collect();
         let type_name = format!("tuple_{}", parts.join("_"));
         let fn_name = format!("karac_display_{type_name}");
-        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
             return f;
         }
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(type_name, f);
+            self.display.display_fn_cache.insert(type_name, f);
             return f;
         }
 
@@ -1482,7 +1485,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display_fn_cache.insert(type_name, display_fn);
+        self.display.display_fn_cache.insert(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -1892,12 +1895,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Variant(f0, f1)` / `Variant { name: v }`.
     pub(super) fn emit_enum_display_fn(&mut self, enum_name: &str) -> FunctionValue<'ctx> {
         let cache_key = enum_name.to_string();
-        if let Some(&f) = self.display_fn_cache.get(&cache_key) {
+        if let Some(&f) = self.display.display_fn_cache.get(&cache_key) {
             return f;
         }
         let fn_name = format!("karac_display_{enum_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(cache_key, f);
+            self.display.display_fn_cache.insert(cache_key, f);
             return f;
         }
 
@@ -1952,7 +1955,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display_fn_cache
+        self.display
+            .display_fn_cache
             .insert(enum_name.to_string(), display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
@@ -2104,12 +2108,12 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
     ) -> FunctionValue<'ctx> {
         let type_name = struct_name.to_string();
-        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_display_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(type_name, f);
+            self.display.display_fn_cache.insert(type_name, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2137,7 +2141,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display_fn_cache.insert(type_name, display_fn);
+        self.display.display_fn_cache.insert(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2184,12 +2188,12 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_option_display_te(&mut self, payload_te: &TypeExpr) -> FunctionValue<'ctx> {
         let mangled = Self::display_mangle_te(payload_te);
         let type_name = format!("Option_{mangled}");
-        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_display_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(type_name, f);
+            self.display.display_fn_cache.insert(type_name, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2215,7 +2219,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display_fn_cache.insert(type_name, display_fn);
+        self.display.display_fn_cache.insert(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2288,12 +2292,12 @@ impl<'ctx> super::Codegen<'ctx> {
             Self::display_mangle_te(ok_te),
             Self::display_mangle_te(err_te)
         );
-        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
             return f;
         }
         let fn_name = format!("karac_display_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display_fn_cache.insert(type_name, f);
+            self.display.display_fn_cache.insert(type_name, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2324,7 +2328,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display_fn_cache.insert(type_name, display_fn);
+        self.display.display_fn_cache.insert(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2407,7 +2411,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }?;
         if self.enum_layouts.contains_key(&tn)
             && (!self.seeded_enum_names.contains(&tn)
-                || self.baked_display_enum_names.contains(&tn))
+                || self.display.baked_display_enum_names.contains(&tn))
             && tn != "Option"
             && tn != "Result"
         {
@@ -2574,7 +2578,7 @@ impl<'ctx> super::Codegen<'ctx> {
         expr: &Expr,
     ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
         let key = (expr.span.offset, expr.span.length);
-        let Some(full_te) = self.display_option_result_types.get(&key).cloned() else {
+        let Some(full_te) = self.display.display_option_result_types.get(&key).cloned() else {
             return Ok(None);
         };
         // Resolve the Display fn for the concrete payload, guarding to
@@ -2641,7 +2645,7 @@ impl<'ctx> super::Codegen<'ctx> {
         e: &Expr,
     ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
         let key = (e.span.offset, e.span.length);
-        let Some(tuple_te) = self.display_tuple_types.get(&key).cloned() else {
+        let Some(tuple_te) = self.display.display_tuple_types.get(&key).cloned() else {
             return Ok(None);
         };
         let TypeKind::Tuple(elems) = &tuple_te.kind else {
@@ -2699,7 +2703,7 @@ impl<'ctx> super::Codegen<'ctx> {
         e: &Expr,
     ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
         let key = (e.span.offset, e.span.length);
-        let Some(elem_te) = self.display_vec_types.get(&key).cloned() else {
+        let Some(elem_te) = self.display.display_vec_types.get(&key).cloned() else {
             return Ok(None);
         };
         // A bound Vec already has a slot and an owner; only an unbound one is
@@ -2771,11 +2775,11 @@ impl<'ctx> super::Codegen<'ctx> {
         e: &Expr,
     ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
         let key = (e.span.offset, e.span.length);
-        let map_kv = self.display_map_types.get(&key).cloned();
+        let map_kv = self.display.display_map_types.get(&key).cloned();
         let set_elem = if map_kv.is_some() {
             None
         } else {
-            self.display_set_types.get(&key).cloned()
+            self.display.display_set_types.get(&key).cloned()
         };
         if map_kv.is_none() && set_elem.is_none() {
             return Ok(None);
@@ -2824,7 +2828,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // sorted siblings (they share the control-block layout and the same
         // fall-through) but keep only the type arguments; the surface name
         // arrives separately, by span.
-        let sorted = self.display_sorted_collection_spans.contains(&key);
+        let sorted = self.display.display_sorted_collection_spans.contains(&key);
         let disp = match (&map_kv, &set_elem, sorted) {
             (Some((k, v)), _, true) => self.emit_sorted_map_display_fn(k, v)?,
             (Some((k, v)), _, false) => self.emit_map_display_fn(k, v),

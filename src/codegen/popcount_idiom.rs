@@ -455,8 +455,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // `while` keyword: `current_span` is what `emit_panic` bakes into the
         // message, and without this the reported location shifts (observed:
         // `5:22` became `4:5`).
-        let saved_span = self.current_span.clone();
-        self.current_span = Some(m.sub_span.clone());
+        let saved_span = self.tracing.current_span.clone();
+        self.tracing.current_span = Some(m.sub_span.clone());
         let min = src_ty.const_int(1u64 << (w - 1), false);
         let is_min = self
             .builder
@@ -494,9 +494,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(cnt_ty, cnt.ptr, "popcnt.c0")
             .unwrap()
             .into_int_value();
-        self.current_span = Some(m.add_span.clone());
+        self.tracing.current_span = Some(m.add_span.clone());
         let total = self.emit_checked_int_arith("add", c0, bits, false)?;
-        self.current_span = saved_span;
+        self.tracing.current_span = saved_span;
         self.builder.build_store(cnt.ptr, total).unwrap();
         // The loop can only exit with the source exhausted.
         self.builder

@@ -24,7 +24,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Map missing key, slice range) emit their guard inside *this*
         // `compile_expr` call, so the span is exact for them. Cheap: a Span is
         // four `usize`s; this just stores a clone of the current node's span.
-        self.current_span = Some(expr.span.clone());
+        self.tracing.current_span = Some(expr.span.clone());
         // Level 2 crash diagnostics — Part 2: stamp the DWARF source location
         // for the instructions this expression is about to emit (no-op unless
         // debug info is enabled, and self-guarded so it only attaches inside
@@ -422,7 +422,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // neither of which can overflow — while `--interp` blamed
                     // the binary expression. Restoring the node's own span makes
                     // the AOT/JIT column match the interpreter's.
-                    self.current_span = Some(expr.span.clone());
+                    self.tracing.current_span = Some(expr.span.clone());
                     // Vector binops aren't lowered to primitive method calls
                     // (only primitives are), so they reach here as raw
                     // `ExprKind::Binary` with no signedness context. Recover the
@@ -735,7 +735,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // any trap — see the Binary arm above for the full rationale
                 // (`-iN::MIN` traps `integer overflow` through the same
                 // `emit_checked_int_arith` path).
-                self.current_span = Some(expr.span.clone());
+                self.tracing.current_span = Some(expr.span.clone());
                 self.compile_unaryop(op, val)
             }
             ExprKind::Call { callee, args } => self.compile_call(callee, args, &expr.span),
@@ -1772,7 +1772,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(fail_bb);
         // `?`-error-return-trace instrumentation — a debug-only diagnostic,
         // elided in a release build (`strip_error_trace`) for zero `?`-site cost.
-        if !self.strip_error_trace {
+        if !self.tracing.strip_error_trace {
             self.emit_error_trace_push(outer_span);
         }
         // Slice 4 (Phase 7 § *defer / errdefer codegen*): stage the
@@ -1987,7 +1987,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.store_wp_retarget_value_and_branch(agg.into_struct_value().into());
             // Ok/Some continuation block, shared with the fn-level path.
             self.builder.position_at_end(ok_bb);
-            if !self.strip_error_trace {
+            if !self.tracing.strip_error_trace {
                 self.builder
                     .build_call(
                         self.runtime_fns.karac_error_trace_clear_fn,
@@ -2057,7 +2057,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (src/interpreter.rs:1501).
         self.builder.position_at_end(ok_bb);
         // Paired with the push above — also elided under `strip_error_trace`.
-        if !self.strip_error_trace {
+        if !self.tracing.strip_error_trace {
             self.builder
                 .build_call(
                     self.runtime_fns.karac_error_trace_clear_fn,

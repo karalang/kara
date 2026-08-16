@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
+use display::Display;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -18,6 +19,7 @@ use inkwell::AddressSpace;
 use provider_state::ProviderState;
 use runtime_fns::RuntimeFns;
 use target_abi::TargetAbi;
+use tracing::Tracing;
 
 use crate::ast::*;
 use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency};
@@ -54,6 +56,7 @@ mod dataframe;
 mod debug_info;
 mod declarations;
 mod disjoint_par;
+mod display;
 mod driver;
 pub mod drop_obs;
 mod entry_chains;
@@ -105,6 +108,7 @@ mod tcp;
 mod tensor;
 mod test_assert;
 mod tls;
+mod tracing;
 mod types_lowering;
 mod vec_method;
 
@@ -1117,6 +1121,8 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) tracing: Tracing,
+    pub(crate) display: Display<'ctx>,
     pub(crate) provider_state: ProviderState<'ctx>,
     pub(crate) target_abi: TargetAbi<'ctx>,
     /// Cached declarations of the C / `karac_*` runtime functions this
@@ -1503,40 +1509,6 @@ pub(super) struct Codegen<'ctx> {
     /// a natural no-op, and `old(...)` (which lives only inside `ensures`
     /// bodies) is never reached because those bodies aren't compiled.
     pub(crate) strip_contracts: bool,
-    /// When `true`, the `?`-error-return-trace instrumentation is elided: no
-    /// `karac_error_trace_push` at `?` failure sites, no `karac_error_trace_clear`
-    /// on the success path. The trace is a debug-only diagnostic, so a release
-    /// build pays zero `?`-site cost (peer to `strip_contracts`). Defaults from
-    /// `read_strip_error_trace_env` (`KARAC_STRIP_ERROR_TRACE`) at construction;
-    /// `set_strip_error_trace` overrides it (the `release` build path forces it
-    /// on alongside contract stripping). The gate lives at the two emission
-    /// sites in `compile_expr`'s `?` lowering.
-    pub(crate) strip_error_trace: bool,
-    /// Whether `emit_panic` must read the fault-category prefix from the
-    /// runtime (`karac_runtime_panic_prefix()`) rather than folding it to the
-    /// static `""`. Set at the top of `compile_program`: `true` when the
-    /// program declares any contract (`requires` / `ensures` / `invariant`,
-    /// scanned across free fns, impl methods, trait methods, and struct
-    /// invariants by `program_declares_contracts`) and contracts aren't
-    /// stripped, or when compiling a REPL cell module (`main_symbol_override`
-    /// set — a cell can call contracted functions JIT'd from earlier cells,
-    /// which this module's item scan can't see; per-test `main` modules ride
-    /// the same entry point and signal). When `false`, no predicate bracket
-    /// can ever run in-process, the depth counter is statically 0, and the
-    /// prefix is always `""` — `emit_panic` skips the runtime call, so (a)
-    /// the `karac_runtime_panic_prefix` symbol and the writable thread-local
-    /// `__DATA` page it drags into the link dead-strip from contract-free
-    /// binaries (+16 KiB per binary), and (b) panic landing pads stay
-    /// static-string leaves instead of blocks with a live call (the
-    /// unconditional call regressed a bounds-check-hot loop 1.34× —
-    /// kata-5 longest-palindromic-substring, 2026-06-05). Defaults `true`
-    /// (conservative: any path that bypasses `compile_program` keeps the
-    /// always-correct runtime read).
-    pub(crate) runtime_panic_prefix_needed: bool,
-    /// Monotonic counter naming the per-site outlined panic bodies
-    /// (`__karac_panic_site_<n>`) `emit_panic` creates — see its doc for why
-    /// panic bodies are outlined. `Cell` because `emit_panic` is `&self`.
-    pub(crate) panic_site_counter: std::cell::Cell<u32>,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -1805,15 +1777,6 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch — surfaced 2026-05-25 by the codegen suite's
     /// intermittent hang investigation.
     pub(crate) seeded_enum_names: HashSet<String>,
-    /// Names of seeded baked-stdlib enums that carry `#[derive(Display)]`
-    /// (`IoError`, `VarError`) and so must render through the generic
-    /// value-driven Display path (`emit_enum_display_fn`) like a user enum —
-    /// the f-string / `println` / `to_string` dispatch in
-    /// `expr_user_enum_name_any` excludes `seeded_enum_names` (the other
-    /// seeded enums route through bespoke paths), so this set re-admits the
-    /// Display-deriving ones. Populated once from `STDLIB_PROGRAMS` in
-    /// `seed_builtin_enum_layouts`.
-    pub(crate) baked_display_enum_names: HashSet<String>,
     /// Nested loop stack — innermost frame is last.
     pub(crate) loop_stack: Vec<LoopFrame<'ctx>>,
     // ── Generic monomorphization ──────────────────────────────────
@@ -3134,39 +3097,6 @@ pub(super) struct Codegen<'ctx> {
     /// inner type (its `bool` result has no `ref_return_inner_types` entry) and
     /// gate the constant-time compare to the `Secret[String]` inner v1 supports.
     pub(crate) secret_inner_types: HashMap<(usize, usize), TypeExpr>,
-    /// Full `Option[T]` / `Result[T, E]` `TypeExpr` of every such-typed
-    /// expression, keyed by span — populated from
-    /// `Program.display_option_result_types`. Lets `try_compile_option_result_display`
-    /// render an Option/Result *call result* (`f"{cache.get(1)}"`,
-    /// `println(opt_fn())`) via its concrete per-payload Display fn; the
-    /// variable case keys off `var_option_payload_te` instead. Call-result
-    /// half of B-2026-07-08-9.
-    pub(crate) display_option_result_types: HashMap<(usize, usize), TypeExpr>,
-    /// Full anonymous-tuple `TypeExpr` of every tuple-typed expression, keyed
-    /// by span — populated from `Program.display_tuple_types`. Lets
-    /// `try_compile_tuple_display` render a WHOLE tuple value in an f-string /
-    /// `println` (`f"{t}"`, `println(pair)`) via `emit_tuple_display_fn`,
-    /// matching the interpreter's `(a, b)` format (B-2026-07-18-14). Covers both
-    /// a tuple variable and a tuple call-result uniformly.
-    pub(crate) display_tuple_types: HashMap<(usize, usize), TypeExpr>,
-    /// ELEMENT `TypeExpr` of every `Vec[T]`-typed expression, keyed by span —
-    /// populated from `Program.display_vec_types`. Lets
-    /// `try_compile_vec_display` render a Vec with no variable name to key on
-    /// (a fresh literal, a call result) through the same per-element Display fn
-    /// the identifier path uses, instead of falling through to the value-kind
-    /// arms where a Vec is indistinguishable from a String (B-2026-07-28-12).
-    pub(crate) display_vec_types: HashMap<(usize, usize), TypeExpr>,
-    /// B-2026-08-14-31 — key/value types of every `Map`/`SortedMap` expression
-    /// and element types of every `Set`/`SortedSet` one, keyed by span
-    /// (`Program.display_map_types` / `display_set_types`). The Map/Set
-    /// siblings of `display_vec_types`, letting a non-identifier collection
-    /// render like a bound one instead of printing its control pointer.
-    pub(crate) display_map_types: HashMap<(usize, usize), (TypeExpr, TypeExpr)>,
-    pub(crate) display_set_types: HashMap<(usize, usize), TypeExpr>,
-    /// B-2026-08-14-35 — the subset of the two tables above whose surface type
-    /// was `SortedMap` / `SortedSet`. Selects the ascending-order renderer and
-    /// the `SortedMap{` / `SortedSet{` prefix.
-    pub(crate) display_sorted_collection_spans: std::collections::HashSet<(usize, usize)>,
     /// Bare names of USER-defined impl methods whose declared return type is
     /// a borrow (`-> ref T`). Gates the method-ref caller path (let-bind +
     /// direct-use rejection) so it fires ONLY for user accessors — builtin
@@ -3813,14 +3743,6 @@ pub(super) struct Codegen<'ctx> {
         inkwell::values::IntValue<'ctx>,
         inkwell::values::IntValue<'ctx>,
     )>,
-    /// Source span of the expression currently being compiled. Set at the top
-    /// of `compile_expr`; read by `emit_panic` for Level 2 crash diagnostics
-    /// (design.md § Crash diagnostics) — `panic at <file>:<line>:<col> in
-    /// <fn>: <msg>`. `Span` already carries 1-indexed `line`/`column`, so no
-    /// byte-offset resolution is needed. `None` until the first expression is
-    /// compiled (synthetic panics with no originating expression fall back to
-    /// the bare `panic: <msg>` form).
-    pub(crate) current_span: Option<crate::token::Span>,
     /// Level 2 crash diagnostics — Part 2: DWARF debug-info state. `Some` only
     /// when `KARAC_DEBUG_INFO` is on AND a source filename is threaded in;
     /// `None` (the default) makes every `di_*` hook a cheap early-return so the
@@ -4178,20 +4100,6 @@ pub(super) struct Codegen<'ctx> {
     /// for every other K/V tuple, leaving them on the erased fallback
     /// per § 3.6.
     pub(crate) map_mono_methods: HashMap<String, MapMonoMethods<'ctx>>,
-    /// Per-type Display function cache. Keyed by the canonical type name
-    /// (e.g. `"i64"`, `"String"`, `"Vec_i64"`, `"Map_String_i64"`). Each
-    /// emitted fn has signature `void karac_display_<typename>(ptr)` and
-    /// writes characters to stdout via `printf` with no trailing newline.
-    /// The pointer-by-reference convention is uniform across every type so
-    /// callers don't need per-type calling conventions; primitives load the
-    /// value, structs extract fields, opaque ptrs load the handle.
-    ///
-    /// `dead_code` is allowed because subtasks 1+2 of the Display canonical
-    /// bullet ship the machinery + primitive Display fns ahead of subtasks
-    /// 3-7 which add the callers (Vec/Map/Set/Tuple Display fns + the
-    /// `compile_print` integration). Remove the allow when subtask 7 lands.
-    #[allow(dead_code)]
-    pub(crate) display_fn_cache: HashMap<String, FunctionValue<'ctx>>,
     /// Lazily-initialized `TargetData` consumed by the layout-introspection
     /// intrinsics (`align_of[T]()`, `offset_of[T](field)`). Constructed
     /// via `create_target_machine().get_target_data()` on first use; the
@@ -7770,7 +7678,12 @@ impl<'ctx> Codegen<'ctx> {
             current_method_invariants: Vec::new(),
             constructor_invariant_self_type: None,
             strip_contracts: read_strip_contracts_env(),
-            strip_error_trace: read_strip_error_trace_env(),
+            tracing: Tracing {
+                strip_error_trace: read_strip_error_trace_env(),
+                runtime_panic_prefix_needed: true,
+                panic_site_counter: std::cell::Cell::new(0),
+                current_span: None,
+            },
             runtime_fns: RuntimeFns {
                 karac_runtime_enter_predicate_fn,
                 karac_runtime_exit_predicate_fn,
@@ -7839,8 +7752,6 @@ impl<'ctx> Codegen<'ctx> {
                 karac_error_trace_clear_fn,
                 karac_test_record_failure_fn,
             },
-            runtime_panic_prefix_needed: true,
-            panic_site_counter: std::cell::Cell::new(0),
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
             stdout_global,
@@ -7867,7 +7778,16 @@ impl<'ctx> Codegen<'ctx> {
             enum_layouts: HashMap::new(),
             enum_unit_variants: HashMap::new(),
             seeded_enum_names: HashSet::new(),
-            baked_display_enum_names: HashSet::new(),
+            display: Display {
+                baked_display_enum_names: HashSet::new(),
+                display_option_result_types: HashMap::new(),
+                display_tuple_types: HashMap::new(),
+                display_vec_types: HashMap::new(),
+                display_map_types: HashMap::new(),
+                display_set_types: HashMap::new(),
+                display_sorted_collection_spans: std::collections::HashSet::new(),
+                display_fn_cache: HashMap::new(),
+            },
             loop_stack: Vec::new(),
             generic_fns: HashMap::new(),
             fn_asts: HashMap::new(),
@@ -8039,12 +7959,6 @@ impl<'ctx> Codegen<'ctx> {
             task_join_return_types: HashMap::new(),
             ref_return_inner_types: HashMap::new(),
             secret_inner_types: HashMap::new(),
-            display_option_result_types: HashMap::new(),
-            display_tuple_types: HashMap::new(),
-            display_vec_types: HashMap::new(),
-            display_map_types: HashMap::new(),
-            display_set_types: HashMap::new(),
-            display_sorted_collection_spans: std::collections::HashSet::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             user_ref_method_inner: std::collections::HashMap::new(),
             heuristic_inline_hints: std::collections::HashMap::new(),
@@ -8125,7 +8039,6 @@ impl<'ctx> Codegen<'ctx> {
             current_fn_name: String::new(),
             track_caller_fns: std::collections::HashSet::new(),
             current_fn_caller_loc: None,
-            current_span: None,
             debug_info: None,
             par_counter: 0,
             karac_branch_ty,
@@ -8175,7 +8088,6 @@ impl<'ctx> Codegen<'ctx> {
             try_clone_fn_cache: HashMap::new(),
             drop_fn_cache: HashMap::new(),
             map_mono_methods: HashMap::new(),
-            display_fn_cache: HashMap::new(),
             target_data: init_target_data,
             current_fn_arm64_return_coercion: None,
             current_fn_sret_param: None,
@@ -8422,7 +8334,7 @@ impl<'ctx> Codegen<'ctx> {
     /// `_clear` instrumentation; `false` keeps it. Default from
     /// `KARAC_STRIP_ERROR_TRACE`; the `release` build path forces it on.
     pub(crate) fn set_strip_error_trace(&mut self, strip: bool) {
-        self.strip_error_trace = strip;
+        self.tracing.strip_error_trace = strip;
     }
 
     /// Enable the A2 slice 2b.3 coroutine compilation path (default off). When
@@ -9037,7 +8949,7 @@ impl<'ctx> Codegen<'ctx> {
         // REPL cell modules (`main_symbol_override` set) always keep the
         // runtime read: a cell can call contracted functions JIT'd from
         // earlier cells, which this module's item scan cannot see.
-        self.runtime_panic_prefix_needed = self.main_symbol_override.is_some()
+        self.tracing.runtime_panic_prefix_needed = self.main_symbol_override.is_some()
             || (!self.strip_contracts && contracts::program_declares_contracts(program));
         // Eagerly cache the host `TargetData` up front (phase-10 line 282): the
         // `&self` drop-synthesis paths read `self.target_data` to size the
@@ -9402,12 +9314,13 @@ impl<'ctx> Codegen<'ctx> {
         self.task_join_return_types = program.task_join_return_types.clone();
         self.ref_return_inner_types = program.ref_return_inner_types.clone();
         self.secret_inner_types = program.secret_inner_types.clone();
-        self.display_option_result_types = program.display_option_result_types.clone();
-        self.display_tuple_types = program.display_tuple_types.clone();
-        self.display_vec_types = program.display_vec_types.clone();
-        self.display_map_types = program.display_map_types.clone();
-        self.display_set_types = program.display_set_types.clone();
-        self.display_sorted_collection_spans = program.display_sorted_collection_spans.clone();
+        self.display.display_option_result_types = program.display_option_result_types.clone();
+        self.display.display_tuple_types = program.display_tuple_types.clone();
+        self.display.display_vec_types = program.display_vec_types.clone();
+        self.display.display_map_types = program.display_map_types.clone();
+        self.display.display_set_types = program.display_set_types.clone();
+        self.display.display_sorted_collection_spans =
+            program.display_sorted_collection_spans.clone();
         // Bare names of user impl methods that return a borrow — gates the
         // method-ref caller path away from builtin ref-returning methods.
         for item in &program.items {
@@ -10765,11 +10678,17 @@ impl<'ctx> Codegen<'ctx> {
                 );
                 std::mem::swap(&mut self.secret_inner_types, &mut t_secret_inner_types);
                 std::mem::swap(
-                    &mut self.display_option_result_types,
+                    &mut self.display.display_option_result_types,
                     &mut t_display_option_result_types,
                 );
-                std::mem::swap(&mut self.display_tuple_types, &mut t_display_tuple_types);
-                std::mem::swap(&mut self.display_vec_types, &mut t_display_vec_types);
+                std::mem::swap(
+                    &mut self.display.display_tuple_types,
+                    &mut t_display_tuple_types,
+                );
+                std::mem::swap(
+                    &mut self.display.display_vec_types,
+                    &mut t_display_vec_types,
+                );
                 std::mem::swap(
                     &mut self.pattern_binding_types,
                     &mut t_pattern_binding_types,

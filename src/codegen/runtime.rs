@@ -40,8 +40,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // inlined+optimized form hoists). Verified empirically: reverting
         // the panic printf to its 1-operand form restores inlining; with
         // outlining the landing pad is cheaper still.
-        let site_id = self.panic_site_counter.get();
-        self.panic_site_counter.set(site_id + 1);
+        let site_id = self.tracing.panic_site_counter.get();
+        self.tracing.panic_site_counter.set(site_id + 1);
         // `#[track_caller]` slice 5: inside a `#[track_caller]` fn the reported
         // panic location comes from the runtime caller-location params — SSA
         // values of the *enclosing* function, which the separate outlined
@@ -99,7 +99,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // writable 16 KiB __DATA page dead-strips from every contract-free
         // binary (+49% on the lean-binary floor when it crept in). Output is
         // byte-identical (`%s` of `""`).
-        let prefix: BasicValueEnum<'ctx> = if self.runtime_panic_prefix_needed {
+        let prefix: BasicValueEnum<'ctx> = if self.tracing.runtime_panic_prefix_needed {
             b.build_call(
                 self.runtime_fns.karac_runtime_panic_prefix_fn,
                 &[],
@@ -151,7 +151,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 panic_fn.get_nth_param(2).unwrap().into_int_value(),
             ))
         } else {
-            match (&self.source_filename, &self.current_span) {
+            match (&self.source_filename, &self.tracing.current_span) {
                 (Some(file), Some(span)) => {
                     let file_ptr = b
                         .build_global_string_ptr(&format!("{}\0", file), "panic_file")

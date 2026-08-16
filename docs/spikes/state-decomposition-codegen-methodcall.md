@@ -152,6 +152,8 @@ for fp in files:
 | 2 | cluster 1 **`RuntimeFns`** (`src/codegen/runtime_fns.rs`) | **landed** — 66 fields moved (not 67: `static_init_fn` is a *synthesized* fn, not a declare-once cache, so it stays); 338 call sites across 38 files rewritten to `self.runtime_fns.*`; `Codegen` 439 → 374 fields | 2026-08-16 |
 | 2 | cluster 2 **`TargetAbi`** (`src/codegen/target_abi.rs`) | **landed** — 14 fields (target predicates, `#[repr(C)]` param/return adaptations, niche ABI, headerless layout); the three `current_fn_*` ABI fields correctly deferred to cluster 14 `FnCtx`; `Codegen` 374 → 361 fields | 2026-08-16 |
 | 2 | cluster 3 **`Provider`** (`src/codegen/provider_state.rs`) | **landed** — 6 fields moved + the dead `provider_lookup_result_ty` deleted; `Codegen` 361 → 355 fields | 2026-08-16 |
-| 2 | clusters 4–12 | not started | — |
+| 2 | cluster 5 **`Display`** (`src/codegen/display.rs`) | **landed** — 8 fields (per-site payload types for Option/Result, tuple, Vec, Map, Set; baked-Display enums; emitted-fn cache) | 2026-08-16 |
+| 2 | cluster 4 **`Tracing`** (`src/codegen/tracing.rs`) | **landed** — 4 fields (`current_span`, `panic_site_counter`, `strip_error_trace`, `runtime_panic_prefix_needed`); `Codegen` 355 → 345 fields | 2026-08-16 |
+| 2 | clusters 6–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
 | 2 | clusters 14–15 (`FnCtx`, `VarTables`) | deferred — decide after 13 | — |

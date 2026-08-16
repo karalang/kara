@@ -1385,10 +1385,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // location. This is where scalar arithmetic actually lands;
                     // the raw-`Binary` arm in `exprs.rs` only sees operands the
                     // lowering declined to rewrite.
-                    let op_span = self.current_span.clone();
+                    let op_span = self.tracing.current_span.clone();
                     let lhs = self.compile_expr(&_args[0].value)?;
                     let rhs = self.compile_expr(&_args[1].value)?;
-                    self.current_span = op_span;
+                    self.tracing.current_span = op_span;
                     let is_unsigned =
                         matches!(type_name, "u8" | "u16" | "u32" | "u64" | "u128" | "usize");
                     // Narrow integers (8/16/32-bit) are real fixed-width types
@@ -1444,6 +1444,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // gates `Neg` to `Int`/`Float`, so this node never keys the
                 // tensor/column side tables under either span.
                 let neg_span = self
+                    .tracing
                     .current_span
                     .clone()
                     .unwrap_or_else(|| _args[0].value.span.clone());
