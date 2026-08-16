@@ -30,8 +30,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // Gather the set of provider trait names from the resource decls
         // walked earlier. Inherent impls (no trait) don't need vtables —
         // they're called directly by name.
-        let provider_traits: HashSet<String> =
-            self.provider_resource_traits.values().cloned().collect();
+        let provider_traits: HashSet<String> = self
+            .provider_state
+            .provider_resource_traits
+            .values()
+            .cloned()
+            .collect();
         if provider_traits.is_empty() {
             return;
         }
@@ -51,7 +55,12 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(target_name) = impl_target_name(&imp.target_type) else {
                 continue;
             };
-            let Some(method_order) = self.provider_trait_methods.get(&trait_name).cloned() else {
+            let Some(method_order) = self
+                .provider_state
+                .provider_trait_methods
+                .get(&trait_name)
+                .cloned()
+            else {
                 continue;
             };
 
@@ -78,7 +87,8 @@ impl<'ctx> super::Codegen<'ctx> {
             vt_global.set_initializer(&vtable_init);
             vt_global.set_linkage(Linkage::Internal);
             vt_global.set_constant(true);
-            self.provider_vtables
+            self.provider_state
+                .provider_vtables
                 .insert((target_name, trait_name), vt_global);
         }
     }
@@ -142,7 +152,11 @@ impl<'ctx> super::Codegen<'ctx> {
         //    `: T` provider trait, so keying on `provider_resource_traits`
         //    routes all trait-less resources to the ambient path while leaving
         //    user `effect resource R: T` on the trait-vtable path below.
-        if !self.provider_resource_traits.contains_key(resource) {
+        if !self
+            .provider_state
+            .provider_resource_traits
+            .contains_key(resource)
+        {
             return self.compile_with_provider_ambient(
                 resource,
                 provider_expr,
@@ -163,7 +177,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.ok_or_else(|| {
             "with_provider: no current function (called from top-level?)".to_string()
         })?;
-        let frame_ptr = self.create_entry_alloca(fn_val, "wp.frame", self.provider_frame_ty.into());
+        let frame_ptr = self.create_entry_alloca(
+            fn_val,
+            "wp.frame",
+            self.provider_state.provider_frame_ty.into(),
+        );
 
         // 5. Push: karac_provider_push(frame, resource_id, data, vtable_ptr).
         let id_v = self.context.i32_type().const_int(resource_id as u64, false);
@@ -449,6 +467,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //    (`effect resource R;` without `: T`), which the typechecker
         //    should already reject before codegen runs.
         let resource_id = self
+            .provider_state
             .provider_resource_ids
             .get(resource)
             .copied()
@@ -459,6 +478,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
             })?;
         let trait_name = self
+            .provider_state
             .provider_resource_traits
             .get(resource)
             .cloned()
@@ -482,6 +502,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
             })?;
         let vt_global = self
+            .provider_state
             .provider_vtables
             .get(&(provider_type_name.clone(), trait_name.clone()))
             .copied()
@@ -869,13 +890,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     resource
                 )
             })?;
-        let resource_id = *self.provider_resource_ids.get(resource).ok_or_else(|| {
-            format!(
-                "with_provider[{}]: ambient resource has no minted resource ID — add it to \
+        let resource_id = *self
+            .provider_state
+            .provider_resource_ids
+            .get(resource)
+            .ok_or_else(|| {
+                format!(
+                    "with_provider[{}]: ambient resource has no minted resource ID — add it to \
                  `prelude::AMBIENT_RESOURCE_METHODS` (codegen bug)",
-                resource
-            )
-        })?;
+                    resource
+                )
+            })?;
         let vtable_ptr = self.emit_ambient_vtable(&provider_type_name, resource)?;
         let data_ptr = self.compile_provider_data_ptr(provider_expr, &provider_type_name)?;
 
@@ -910,7 +935,11 @@ impl<'ctx> super::Codegen<'ctx> {
         ),
         String,
     > {
-        if self.provider_resource_traits.contains_key(resource) {
+        if self
+            .provider_state
+            .provider_resource_traits
+            .contains_key(resource)
+        {
             return self.resolve_provider_binding_traitful(resource, provider_expr);
         }
         let provider_type_name = self
@@ -921,7 +950,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     resource
                 )
             })?;
-        let resource_id = *self.provider_resource_ids.get(resource).ok_or_else(|| {
+        let resource_id = *self.provider_state.provider_resource_ids.get(resource).ok_or_else(|| {
             format!(
                 "providers[{}]: ambient resource has no minted resource ID — add it to                  `prelude::AMBIENT_RESOURCE_METHODS` (codegen bug)",
                 resource
@@ -942,7 +971,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.ok_or_else(|| {
             "with_provider: no current function (called from top-level?)".to_string()
         })?;
-        Ok(self.create_entry_alloca(fn_val, name, self.provider_frame_ty.into()))
+        Ok(self.create_entry_alloca(fn_val, name, self.provider_state.provider_frame_ty.into()))
     }
 
     /// `karac_provider_push(frame, resource_id, data, vtable)`.
@@ -1046,7 +1075,7 @@ impl<'ctx> super::Codegen<'ctx> {
         resource: &str,
     ) -> Result<inkwell::values::PointerValue<'ctx>, String> {
         let key = (override_type.to_string(), resource.to_string());
-        if let Some(g) = self.provider_vtables.get(&key) {
+        if let Some(g) = self.provider_state.provider_vtables.get(&key) {
             return Ok(g.as_pointer_value());
         }
         // Method order: prelude ambient resources have a hardcoded canonical
@@ -1059,7 +1088,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, m)| *m)
         {
             m.iter().map(|s| s.to_string()).collect()
-        } else if let Some(m) = self.user_ambient_resource_methods.get(resource) {
+        } else if let Some(m) = self
+            .provider_state
+            .user_ambient_resource_methods
+            .get(resource)
+        {
             m.clone()
         } else {
             return Err(format!(
@@ -1086,7 +1119,7 @@ impl<'ctx> super::Codegen<'ctx> {
         vt_global.set_initializer(&vtable_init);
         vt_global.set_linkage(Linkage::Internal);
         vt_global.set_constant(true);
-        self.provider_vtables.insert(key, vt_global);
+        self.provider_state.provider_vtables.insert(key, vt_global);
         Ok(vt_global.as_pointer_value())
     }
 
@@ -1209,8 +1242,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // on `provider_resource_ids` (every valid resource has an
                     // ID by now) to skip bogus names, and trait-absence to
                     // leave trait-ful resources on `emit_provider_vtables`.
-                    if self.provider_resource_ids.contains_key(&resource)
-                        && !self.provider_resource_traits.contains_key(&resource)
+                    if self
+                        .provider_state
+                        .provider_resource_ids
+                        .contains_key(&resource)
+                        && !self
+                            .provider_state
+                            .provider_resource_traits
+                            .contains_key(&resource)
                     {
                         if let Some(ty) =
                             ambient_provider_type(provider_expr, bindings, ctor_returns)
@@ -1229,7 +1268,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .contains(&resource.as_str())
                             {
                                 if let Some(methods) = inherent_methods.get(&ty) {
-                                    self.user_ambient_resource_methods
+                                    self.provider_state
+                                        .user_ambient_resource_methods
                                         .entry(resource.clone())
                                         .or_insert_with(|| methods.clone());
                                 }
@@ -1321,8 +1361,14 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         // Trait-ful resources are served by `emit_provider_vtables`; bogus
         // names have no minted ID. Same two gates as the call-site arm.
-        if !self.provider_resource_ids.contains_key(resource)
-            || self.provider_resource_traits.contains_key(resource)
+        if !self
+            .provider_state
+            .provider_resource_ids
+            .contains_key(resource)
+            || self
+                .provider_state
+                .provider_resource_traits
+                .contains_key(resource)
         {
             return;
         }
@@ -1331,7 +1377,8 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if !crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&resource) {
             if let Some(methods) = inherent_methods.get(&ty) {
-                self.user_ambient_resource_methods
+                self.provider_state
+                    .user_ambient_resource_methods
                     .entry(resource.to_string())
                     .or_insert_with(|| methods.clone());
             }
@@ -1352,7 +1399,7 @@ impl<'ctx> super::Codegen<'ctx> {
         resource: &str,
         method: &str,
     ) -> Option<inkwell::types::FunctionType<'ctx>> {
-        for (target, r) in self.provider_vtables.keys() {
+        for (target, r) in self.provider_state.provider_vtables.keys() {
             if r == resource {
                 if let Some(f) = self.module.get_function(&format!("{}.{}", target, method)) {
                     return Some(f.get_type());
@@ -1506,7 +1553,7 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let Some(&resource_id) = self.provider_resource_ids.get(name) else {
+        let Some(&resource_id) = self.provider_state.provider_resource_ids.get(name) else {
             return Ok(None);
         };
 
@@ -1526,51 +1573,61 @@ impl<'ctx> super::Codegen<'ctx> {
         // NOT recorded in `user_ambient_resource_methods`: it falls through
         // to the ambient FFI-default path (`compile_ambient_resource_method`)
         // via `Ok(None)` so an unoverridden call gets the builtin behaviour.
-        let (method_order, (fn_type, impl_key)) =
-            if let Some(trait_name) = self.provider_resource_traits.get(name).cloned() {
-                let order = self
-                    .provider_trait_methods
-                    .get(&trait_name)
-                    .cloned()
-                    .ok_or_else(|| {
-                        format!(
-                            "R.method dispatch: provider trait '{}' has no recorded method order \
-                         (vtable emission and dispatch out of sync — codegen bug)",
-                            trait_name
-                        )
-                    })?;
-                // Borrow the FunctionType from any impl of this trait method.
-                // All impls of the same trait share the same lowered signature.
-                let ft = self
-                    .provider_method_fn_type(&trait_name, method)
-                    .ok_or_else(|| {
-                        format!(
-                            "R.method dispatch: no impl found for `{}::{}` — at least one \
-                     `impl {} for U` must exist to populate the vtable",
-                            trait_name, method, trait_name
-                        )
-                    })?;
-                (order, ft)
-            } else if let Some(order) = self.user_ambient_resource_methods.get(name).cloned() {
-                // Trait-less user resource. The `(U, R)` vtable uses the resource
-                // name as its "trait" key, so `provider_method_fn_type(R, method)`
-                // recovers the lowered signature from `@U.method`.
-                let ft = self.provider_method_fn_type(name, method).ok_or_else(|| {
+        let (method_order, (fn_type, impl_key)) = if let Some(trait_name) = self
+            .provider_state
+            .provider_resource_traits
+            .get(name)
+            .cloned()
+        {
+            let order = self
+                .provider_state
+                .provider_trait_methods
+                .get(&trait_name)
+                .cloned()
+                .ok_or_else(|| {
                     format!(
-                        "R.method dispatch: no override impl found for trait-less resource '{}' \
-                     method '{}' — a `with_provider[{}]` with a struct-typed provider must \
-                     supply an `impl U {{ fn {}(...) }}`",
-                        name, method, name, method
+                        "R.method dispatch: provider trait '{}' has no recorded method order \
+                         (vtable emission and dispatch out of sync — codegen bug)",
+                        trait_name
                     )
                 })?;
-                (order, ft)
-            } else {
-                // `effect resource R;` with no recorded override in this module
-                // (never reached a scannable `with_provider[R]` site). Fall through
-                // to the regular assoc-call path so an upstream typechecker error
-                // or a future R-as-ID use stays observable.
-                return Ok(None);
-            };
+            // Borrow the FunctionType from any impl of this trait method.
+            // All impls of the same trait share the same lowered signature.
+            let ft = self
+                .provider_method_fn_type(&trait_name, method)
+                .ok_or_else(|| {
+                    format!(
+                        "R.method dispatch: no impl found for `{}::{}` — at least one \
+                     `impl {} for U` must exist to populate the vtable",
+                        trait_name, method, trait_name
+                    )
+                })?;
+            (order, ft)
+        } else if let Some(order) = self
+            .provider_state
+            .user_ambient_resource_methods
+            .get(name)
+            .cloned()
+        {
+            // Trait-less user resource. The `(U, R)` vtable uses the resource
+            // name as its "trait" key, so `provider_method_fn_type(R, method)`
+            // recovers the lowered signature from `@U.method`.
+            let ft = self.provider_method_fn_type(name, method).ok_or_else(|| {
+                format!(
+                    "R.method dispatch: no override impl found for trait-less resource '{}' \
+                     method '{}' — a `with_provider[{}]` with a struct-typed provider must \
+                     supply an `impl U {{ fn {}(...) }}`",
+                    name, method, name, method
+                )
+            })?;
+            (order, ft)
+        } else {
+            // `effect resource R;` with no recorded override in this module
+            // (never reached a scannable `with_provider[R]` site). Fall through
+            // to the regular assoc-call path so an upstream typechecker error
+            // or a future R-as-ID use stays observable.
+            return Ok(None);
+        };
         let method_idx = method_order
             .iter()
             .position(|m| m == method)
@@ -1729,7 +1786,7 @@ impl<'ctx> super::Codegen<'ctx> {
         trait_name: &str,
         method: &str,
     ) -> Option<(inkwell::types::FunctionType<'ctx>, String)> {
-        for (target, t) in self.provider_vtables.keys() {
+        for (target, t) in self.provider_state.provider_vtables.keys() {
             if t == trait_name {
                 let qualified = format!("{}.{}", target, method);
                 if let Some(f) = self.module.get_function(&qualified) {
@@ -1750,15 +1807,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// fallback `try_compile_provider_dispatch` applies. All impls share
     /// the lowered signature, so any registered one is representative.
     pub(super) fn provider_method_impl_key(&self, resource: &str, method: &str) -> Option<String> {
-        if !self.provider_resource_ids.contains_key(resource) {
+        if !self
+            .provider_state
+            .provider_resource_ids
+            .contains_key(resource)
+        {
             return None;
         }
         let trait_key = self
+            .provider_state
             .provider_resource_traits
             .get(resource)
             .cloned()
             .unwrap_or_else(|| resource.to_string());
-        for (target, t) in self.provider_vtables.keys() {
+        for (target, t) in self.provider_state.provider_vtables.keys() {
             if *t == trait_key {
                 let qualified = format!("{}.{}", target, method);
                 if self.module.get_function(&qualified).is_some() {

@@ -41,7 +41,7 @@ Per-field usage was measured across all 77 codegen files (`self.<field>` occurre
 
 **73% of the struct (321 of 439 fields) is touched by at most three files.** That is the finding that makes this tractable: the great majority of `Codegen` is not shared state at all — it is *private state of one subsystem, parked in a global struct*. Only 31 fields are genuinely broadly-shared, and 5 of those (`context`, `builder`, `module`, `current_fn`, `free_fn`) are the legitimate LLVM substrate that *should* stay common.
 
-The zero-read field is `provider_lookup_result_ty` (`codegen.rs:4130`): it is computed and stored by the constructor but **never read back** through `self` — no reader anywhere in `src/` or `tests/`, despite the `pub(crate)`. Verify once more, then delete it in the first slice.
+The zero-read field was `provider_lookup_result_ty`: computed and stored by the constructor but **never read back** through `self`. Re-verified and **deleted** in the cluster-3 slice (the constructor still builds the local, which the lookup fn's `fn_type` needs).
 
 ## Cluster map (measured, proposed)
 
@@ -151,6 +151,7 @@ for fp in files:
 | 1 | **remaining residual** — the receiver-normalization preamble (`obj_ty` → `receiver_for_lookup` / `obj_ty_for_named` / `vec_elem_for_dispatch`), 14 extracted-family call sites, and ~10 small blocks of 9–27 lines each (`spawn`/`join`, refinement, slice, `to_string`, fallible-alloc). No further clean family boundary — the residual is the function's own logic. | judgement call: stop here | — |
 | 2 | cluster 1 **`RuntimeFns`** (`src/codegen/runtime_fns.rs`) | **landed** — 66 fields moved (not 67: `static_init_fn` is a *synthesized* fn, not a declare-once cache, so it stays); 338 call sites across 38 files rewritten to `self.runtime_fns.*`; `Codegen` 439 → 374 fields | 2026-08-16 |
 | 2 | cluster 2 **`TargetAbi`** (`src/codegen/target_abi.rs`) | **landed** — 14 fields (target predicates, `#[repr(C)]` param/return adaptations, niche ABI, headerless layout); the three `current_fn_*` ABI fields correctly deferred to cluster 14 `FnCtx`; `Codegen` 374 → 361 fields | 2026-08-16 |
-| 2 | clusters 3–12 | not started | — |
+| 2 | cluster 3 **`Provider`** (`src/codegen/provider_state.rs`) | **landed** — 6 fields moved + the dead `provider_lookup_result_ty` deleted; `Codegen` 361 → 355 fields | 2026-08-16 |
+| 2 | clusters 4–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
 | 2 | clusters 14–15 (`FnCtx`, `VarTables`) | deferred — decide after 13 | — |

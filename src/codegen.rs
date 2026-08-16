@@ -13,8 +13,9 @@ use inkwell::module::Linkage;
 use inkwell::module::Module;
 use inkwell::targets::{FileType, TargetData};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, StructType};
-use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
+use provider_state::ProviderState;
 use runtime_fns::RuntimeFns;
 use target_abi::TargetAbi;
 
@@ -84,6 +85,7 @@ mod pattern_binding;
 mod pool;
 mod process;
 mod provider;
+mod provider_state;
 mod reduce;
 mod refinement;
 mod runtime;
@@ -1115,6 +1117,7 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) provider_state: ProviderState<'ctx>,
     pub(crate) target_abi: TargetAbi<'ctx>,
     /// Cached declarations of the C / `karac_*` runtime functions this
     /// module calls. Grouped out of `Codegen` as the first Phase-2
@@ -3894,45 +3897,6 @@ pub(super) struct Codegen<'ctx> {
     /// `llvm.experimental.noalias.scope.decl` in THIS function's loop
     /// preheader and are only sound within it.
     pub(crate) tabulate_alias_scopes: Option<TabulateAliasScopes<'ctx>>,
-    // ── Theme 6: `with_provider[R]` trait-method dispatch ──────────
-    /// Resource name → stable u32 ID assigned at codegen init from the
-    /// declaration order of `Item::EffectResource` items. The same
-    /// integer flows through to runtime calls (`karac_provider_push`,
-    /// `karac_provider_lookup`); the runtime is name-agnostic.
-    pub(crate) provider_resource_ids: HashMap<String, u32>,
-    /// Resource name → trait name for resources declared as
-    /// `effect resource R: T`. Used to (1) drive vtable emission for
-    /// the impls of `T` and (2) resolve method indices at `R.method(...)`
-    /// call sites.
-    pub(crate) provider_resource_traits: HashMap<String, String>,
-    /// Trait name → ordered method-name list (source-declaration order
-    /// from the `trait T { ... }` block). Vtables for `impl T for U`
-    /// store fn ptrs in this same order; method dispatch resolves the
-    /// vtable index by `position()` against this list.
-    pub(crate) provider_trait_methods: HashMap<String, Vec<String>>,
-    /// Trait-less *user* effect resource (`effect resource R;`, no `: T`)
-    /// → ordered method-name list, derived from the override type's
-    /// inherent-impl method order during the eager ambient-vtable pre-pass
-    /// (`emit_ambient_provider_vtables`). A trait-less resource has no trait
-    /// to pin a canonical method order, so it is keyed by *resource* (the
-    /// call site `R.method(...)` knows R but not the override type U) and
-    /// plays the same role `provider_trait_methods` plays for trait-ful
-    /// resources: vtable layout + dispatch index. Distinct from
-    /// `prelude::AMBIENT_RESOURCE_METHODS` (prelude resources like `Clock`
-    /// keep their hardcoded order + FFI default); membership here is the
-    /// discriminator that routes a trait-less resource through the
-    /// always-override runtime dispatch (no FFI default) in
-    /// `try_compile_provider_dispatch`.
-    pub(crate) user_ambient_resource_methods: HashMap<String, Vec<String>>,
-    /// (impl-target type name, trait name) → emitted vtable global.
-    /// Populated after impl method declarations run in `compile_program`.
-    pub(crate) provider_vtables: HashMap<(String, String), GlobalValue<'ctx>>,
-    /// LLVM struct type for `ProviderFrame { prev, resource_id, data, vtable }`
-    /// — `#[repr(C)]` matches `runtime/src/lib.rs::ProviderFrame`. Consumed
-    /// at `with_provider[R]` lowering sites for the alloca'd frame storage
-    /// (sub-step 3); declared here so the type is established alongside
-    /// the runtime extern declarations.
-    pub(crate) provider_frame_ty: StructType<'ctx>,
     /// LLVM struct type for `ProviderLookupResult { data, vtable }` —
     /// matches the runtime's `#[repr(C)]` shape. Used once at codegen
     /// init to type the `karac_provider_lookup` extern's return; after
@@ -3942,7 +3906,6 @@ pub(super) struct Codegen<'ctx> {
     /// readers and as the canonical anchor if `ProviderLookupResult`'s
     /// shape ever changes.
     #[allow(dead_code)]
-    pub(crate) provider_lookup_result_ty: StructType<'ctx>,
     // ── Map runtime ───────────────────────────────────────────────
     /// GPU-SLIP-4h: per-`GpuBuffer` binding → element struct name, recorded
     /// when `let buf = gpu.upload(vec)` / a resident `gpu.dispatch` binds a
@@ -8173,13 +8136,14 @@ impl<'ctx> Codegen<'ctx> {
             // target; phase-10 sequential default).
             auto_par_disabled: !read_auto_par_env() || crate::target::active_target_is_wasm(),
             tabulate_alias_scopes: None,
-            provider_resource_ids: HashMap::new(),
-            provider_resource_traits: HashMap::new(),
-            provider_trait_methods: HashMap::new(),
-            user_ambient_resource_methods: HashMap::new(),
-            provider_vtables: HashMap::new(),
-            provider_frame_ty,
-            provider_lookup_result_ty,
+            provider_state: ProviderState {
+                provider_resource_ids: HashMap::new(),
+                provider_resource_traits: HashMap::new(),
+                provider_trait_methods: HashMap::new(),
+                user_ambient_resource_methods: HashMap::new(),
+                provider_vtables: HashMap::new(),
+                provider_frame_ty,
+            },
             gpu_buffer_elem_structs: HashMap::new(),
             gpu_buffer_vars: HashSet::new(),
             user_shadowed_prelude_types: std::collections::HashSet::new(),
@@ -9532,11 +9496,13 @@ impl<'ctx> Codegen<'ctx> {
         let mut next_resource_id: u32 = 0;
         for item in &program.items {
             if let Item::EffectResource(decl) = item {
-                self.provider_resource_ids
+                self.provider_state
+                    .provider_resource_ids
                     .insert(decl.name.clone(), next_resource_id);
                 next_resource_id += 1;
                 if let Some(trait_name) = &decl.provider_trait {
-                    self.provider_resource_traits
+                    self.provider_state
+                        .provider_resource_traits
                         .insert(decl.name.clone(), trait_name.clone());
                 }
             }
@@ -9551,7 +9517,8 @@ impl<'ctx> Codegen<'ctx> {
         // one and already have an ID — `or_insert_with` skips those. IDs
         // continue past the user range so they never collide.
         for (resource, _methods) in crate::prelude::AMBIENT_RESOURCE_METHODS {
-            self.provider_resource_ids
+            self.provider_state
+                .provider_resource_ids
                 .entry(resource.to_string())
                 .or_insert_with(|| {
                     let id = next_resource_id;
@@ -9569,7 +9536,9 @@ impl<'ctx> Codegen<'ctx> {
                         TraitItem::AssocType(_) => None,
                     })
                     .collect();
-                self.provider_trait_methods.insert(t.name.clone(), methods);
+                self.provider_state
+                    .provider_trait_methods
+                    .insert(t.name.clone(), methods);
             }
         }
 

@@ -16411,9 +16411,13 @@ impl<'ctx> super::Codegen<'ctx> {
         fn_type: inkwell::types::FunctionType<'ctx>,
         arg_vals: &[BasicValueEnum<'ctx>],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let resource_id = *self.provider_resource_ids.get(resource).ok_or_else(|| {
-            format!("codegen: ambient resource '{resource}' has no minted ID (codegen bug)")
-        })?;
+        let resource_id = *self
+            .provider_state
+            .provider_resource_ids
+            .get(resource)
+            .ok_or_else(|| {
+                format!("codegen: ambient resource '{resource}' has no minted ID (codegen bug)")
+            })?;
         let i32_t = self.context.i32_type();
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
