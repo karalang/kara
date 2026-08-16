@@ -159,6 +159,16 @@ impl KaracChannel {
 #[inline]
 unsafe fn deliver(blob: &[u8], out_ptr: *mut u8, elem_size: usize) {
     unsafe {
+        // The blob was sized by the SENDER's elem_size; the copy uses the
+        // RECEIVER's. Both are statically the channel's element type, so a
+        // mismatch can only be a codegen bug — catch it as an assert, not a
+        // heap over-read.
+        debug_assert!(
+            blob.len() >= elem_size,
+            "channel deliver: receiver elem_size {} exceeds sent blob {}",
+            elem_size,
+            blob.len()
+        );
         if elem_size != 0 && !out_ptr.is_null() {
             std::ptr::copy_nonoverlapping(blob.as_ptr(), out_ptr, elem_size);
         }
@@ -231,7 +241,7 @@ pub unsafe extern "C" fn karac_runtime_channel_drop_sender(ch: *mut KaracChannel
             // empty-and-not-closed check + park is synchronized against it (no
             // lost wakeup), then wake all parked receivers.
             {
-                let mut inner = (*ch).inner.lock().unwrap();
+                let mut inner = (*ch).inner.lock().unwrap_or_else(|p| p.into_inner());
                 inner.closed = true;
             }
             (*ch).not_empty.notify_all();
@@ -282,7 +292,12 @@ pub unsafe extern "C" fn karac_runtime_channel_send(
         }
         // Enqueue UNDER the lock (sets the non-empty condition the receiver's
         // park predicate checks), then signal one waiter.
-        (*ch).inner.lock().unwrap().queue.push_back(blob);
+        (*ch)
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .queue
+            .push_back(blob);
         (*ch).not_empty.notify_one();
     }
 }
@@ -344,7 +359,7 @@ pub unsafe extern "C" fn karac_runtime_channel_recv(
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 unsafe fn channel_recv_impl(ch: *mut KaracChannel, out_ptr: *mut u8, elem_size: usize) -> u8 {
     unsafe {
-        let mut inner = (*ch).inner.lock().unwrap();
+        let mut inner = (*ch).inner.lock().unwrap_or_else(|p| p.into_inner());
         loop {
             if let Some(blob) = inner.queue.pop_front() {
                 deliver(&blob, out_ptr, elem_size);
@@ -355,7 +370,10 @@ unsafe fn channel_recv_impl(ch: *mut KaracChannel, out_ptr: *mut u8, elem_size: 
                 return 0;
             }
             // Empty and open → park until `send` / last-sender-drop signals.
-            inner = (*ch).not_empty.wait(inner).unwrap();
+            inner = (*ch)
+                .not_empty
+                .wait(inner)
+                .unwrap_or_else(|p| p.into_inner());
         }
     }
 }
@@ -367,7 +385,13 @@ unsafe fn channel_recv_impl(ch: *mut KaracChannel, out_ptr: *mut u8, elem_size: 
 #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
 unsafe fn channel_recv_impl(ch: *mut KaracChannel, out_ptr: *mut u8, elem_size: usize) -> u8 {
     unsafe {
-        match (*ch).inner.lock().unwrap().queue.pop_front() {
+        match (*ch)
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .queue
+            .pop_front()
+        {
             Some(blob) => {
                 deliver(&blob, out_ptr, elem_size);
                 1
@@ -400,7 +424,12 @@ pub unsafe extern "C" fn karac_runtime_channel_try_recv(
             return 0;
         }
         let elem_size = elem_size as usize;
-        let popped = (*ch).inner.lock().unwrap().queue.pop_front();
+        let popped = (*ch)
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .queue
+            .pop_front();
         match popped {
             Some(blob) => {
                 deliver(&blob, out_ptr, elem_size);
@@ -430,7 +459,12 @@ pub unsafe extern "C" fn karac_runtime_channel_pending(ch: *mut KaracChannel) ->
         if ch.is_null() {
             return 0;
         }
-        (*ch).inner.lock().unwrap().queue.len() as u64
+        (*ch)
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .queue
+            .len() as u64
     }
 }
 

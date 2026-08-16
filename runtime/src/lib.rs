@@ -904,12 +904,13 @@ pub extern "C" fn karac_runtime_panic_prefix() -> *const std::os::raw::c_char {
 ///
 /// # Safety
 ///
-/// `name_ptr`/`val_ptr` must each point to `name_len`/`val_len` valid,
-/// initialized UTF-8 bytes (the codegen always passes a Kāra `String`'s
-/// `{ptr, len}`, which satisfies this). Additionally `std::env::set_var`
-/// is only sound when no other thread concurrently reads the environment
-/// block; the effect system upholds this by serializing `writes(Env)`
-/// against concurrent env reads.
+/// `name_ptr`/`val_ptr` must each be null (only when the matching len is 0 —
+/// the canonical empty Kāra `String` is `{null, 0, 0}`) or point to
+/// `name_len`/`val_len` valid, initialized UTF-8 bytes (the codegen always
+/// passes a Kāra `String`'s `{ptr, len}`, which satisfies this). Additionally
+/// `std::env::set_var` is only sound when no other thread concurrently reads
+/// the environment block; the effect system upholds this by serializing
+/// `writes(Env)` against concurrent env reads.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_env_set(
     name_ptr: *const u8,
@@ -918,8 +919,21 @@ pub unsafe extern "C" fn karac_runtime_env_set(
     val_len: usize,
 ) {
     unsafe {
-        let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
-        let val = std::str::from_utf8_unchecked(std::slice::from_raw_parts(val_ptr, val_len));
+        // Null is the canonical empty Kāra String — normalize to "" instead
+        // of feeding a null pointer to `from_raw_parts` (library UB even at
+        // len 0). Same guard shape as `karac_runtime_json_make_string`.
+        let name: &[u8] = if name_ptr.is_null() || name_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(name_ptr, name_len)
+        };
+        let val: &[u8] = if val_ptr.is_null() || val_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(val_ptr, val_len)
+        };
+        let name = std::str::from_utf8_unchecked(name);
+        let val = std::str::from_utf8_unchecked(val);
         std::env::set_var(name, val);
     }
 }
@@ -1072,9 +1086,10 @@ pub unsafe extern "C" fn karac_runtime_env_args_into(out: *mut KaracVec) {
 ///
 /// # Safety
 ///
-/// `name_ptr`/`name_len` must describe a valid UTF-8 byte range (always
-/// true of a Kāra `String`), and `out_str` must point to a writable
-/// `{ptr, i64, i64}` slot the codegen side allocas before the call.
+/// `name_ptr`/`name_len` must describe a valid UTF-8 byte range or be
+/// `{null, 0}` — the canonical empty Kāra `String` (always true of a Kāra
+/// `String`), and `out_str` must point to a writable `{ptr, i64, i64}` slot
+/// the codegen side allocas before the call.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_env_var(
     name_ptr: *const u8,
@@ -1090,7 +1105,15 @@ pub unsafe extern "C" fn karac_runtime_env_var(
         if out_str.is_null() {
             return false;
         }
-        let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
+        // Null is the canonical empty Kāra String — normalize to "" instead
+        // of feeding a null pointer to `from_raw_parts` (library UB even at
+        // len 0). `env::var("")` is then an ordinary `NotPresent`.
+        let name_bytes: &[u8] = if name_ptr.is_null() || name_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(name_ptr, name_len)
+        };
+        let name = std::str::from_utf8_unchecked(name_bytes);
         match std::env::var(name) {
             Ok(v) => {
                 let bytes = v.as_bytes();
@@ -9101,6 +9124,23 @@ mod tests {
     //! thread's frame alive until every dispatched task has finished —
     //! see `ParCall` doc-comments above.
     use super::*;
+
+    /// B-2026-08-16-5: the canonical empty Kāra String is `{null, 0, 0}`, and
+    /// `env_var`/`env_set` used to feed that null straight to
+    /// `slice::from_raw_parts` (library UB even at len 0). The guarded path
+    /// must treat it as `""` — an ordinary NotPresent lookup.
+    #[test]
+    fn env_var_null_name_is_not_present_not_ub() {
+        let mut out = RuntimeKaracString {
+            data: std::ptr::null_mut(),
+            len: 7,
+            cap: 7,
+        };
+        let found = unsafe { karac_runtime_env_var(std::ptr::null(), 0, &mut out) };
+        assert!(!found, "empty/null name must report NotPresent");
+        assert!(out.data.is_null());
+        assert_eq!(out.len, 0);
+    }
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Barrier, Mutex};
 
