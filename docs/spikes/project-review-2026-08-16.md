@@ -40,22 +40,24 @@ CI/structural gaps — none systemic.
 - [x] **3. CI — add `--all-targets` to the base clippy job.** DONE —
   `534faf21`; verified clean locally with the full
   `cargo clippy --all --all-targets -- -D warnings` gate.
-- [ ] **4. E2E harness — close the archive-ABSENT vacuous hole.** Stale
-  archive now panics (B-2026-07-28-1), but a *missing* archive still
-  green-skips ~1,560 tolerant `if let Some(out)` sites in `tests/codegen.rs`
-  locally (CI builds archives, so CI is immune). Options: opt-in
-  `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` turning any `link_or_skip` soft-skip into
-  a panic, or a per-process executed-count canary (≥1 successful
-  `run_program`).
-- [ ] **5. Tests — convert fixed 50ms "settle" sleeps to bounded retries:**
-  `tests/http_server.rs:1575, 1750`, `tests/tcp_stream.rs:225, 430` (+4
-  siblings), `tests/coro_e2e.rs:822, 829`. Same files already use the
-  retry-loop shape (`http_server.rs:330` — ×10 @50ms, 10s cap). Cheapest
-  flakiness reduction available.
-- [ ] **6. CI — nightly full-CI cron on main.** `cancel-in-progress: true`
-  (`ci.yml:37–39`) + no scheduled full run means a push burst can leave
-  intermediate main commits untested with no backfill (only fuzz/supply-chain
-  crons exist).
+- [x] **4. E2E harness — close the archive-ABSENT vacuous hole.** DONE —
+  `220070be`: `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` turns every remaining
+  `link_or_skip` soft-skip into a panic; CI's seven archive-building jobs set
+  it; documented in CLAUDE.md. Bonus find while wiring it (ledger row
+  B-2026-08-16-8): `tests/memory_sanitizer.rs`'s four hand-rolled link-skip
+  sites bypassed `link_or_skip` entirely — the B-2026-07-28-1 stale-archive
+  panic never protected the ASan/LSan suite. All four now route through it.
+  Verified empirically with archives hidden (default skips, gated fails).
+- [x] **5. Tests — convert fixed 50ms "settle" sleeps to bounded retries.**
+  DONE — `e78a0ba7`: the two genuine settle sleeps (http_server keep-alive +
+  chunked-POST) now retry the idempotent round trip (50ms cadence, 5s cap).
+  Review citations corrected on inspection: `tcp_stream.rs`'s sleeps all sit
+  inside bounded connect-retry loops already, and `coro_e2e.rs:829` is
+  deliberate inter-connection pacing — both left alone.
+- [x] **6. CI — nightly full-CI cron on main.** DONE — `d51cd332`: 03:17 UTC
+  cron + `workflow_dispatch`; concurrency group keyed by event so the
+  backfill neither cancels nor is cancelled by push runs; `oracle-sync`
+  (a diff-range guard with no range on a schedule) skips on backfill runs.
 - [ ] **7. Structure — resume extraction.** `src/cli.rs` (14.5k lines,
   `src/cli/` holds only 3 files) and `src/concurrency.rs` (7.5k, no submodule
   dir) are the two unmanaged modules; `src/codegen/method_call.rs` regrew to
