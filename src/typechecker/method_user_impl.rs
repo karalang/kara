@@ -271,7 +271,7 @@ impl<'a> super::TypeChecker<'a> {
                                 // (B-2026-08-12-25). A bare `c.is_digit()` now lands
                                 // on the radix arm's arity error, which carries the
                                 // same two routes.
-                                self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
+                                self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                             }
                             return Type::Error;
                         }
@@ -306,7 +306,7 @@ impl<'a> super::TypeChecker<'a> {
                             recv, method
                         ));
                     }
-                    self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
+                    self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                     return Type::Error;
                 } else {
                     // For other non-named types (chiefly a bare `Type::Str`
@@ -381,7 +381,7 @@ impl<'a> super::TypeChecker<'a> {
                     receiver_display,
                     candidate_lines.join("\n"),
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::AmbiguousMethod,
             );
             for arg in args {
@@ -478,7 +478,7 @@ impl<'a> super::TypeChecker<'a> {
                             params.len(),
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -633,7 +633,7 @@ impl<'a> super::TypeChecker<'a> {
                         "method '{}' is not callable on this `{}`{}: {}",
                         method, type_name, via, detail
                     );
-                    self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
+                    self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                     return Type::Error;
                 }
                 if (is_user_defined
@@ -674,7 +674,7 @@ impl<'a> super::TypeChecker<'a> {
                             msg.push_str(&format!(", did you mean '{}'?", suggestion));
                         }
                     }
-                    self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
+                    self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                 }
                 Type::Error
             }

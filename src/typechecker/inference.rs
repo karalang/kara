@@ -501,7 +501,7 @@ pub(super) fn substitute_const_idents_in_expr(expr: &Expr, subst: &HashMap<Strin
     };
     Expr {
         kind: new_kind,
-        span: expr.span.clone(),
+        span: expr.span,
     }
 }
 
@@ -519,9 +519,9 @@ pub(super) fn expr_as_type_expr(expr: &Expr) -> Option<TypeExpr> {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![name.clone()],
                 generic_args: None,
-                span: expr.span.clone(),
+                span: expr.span,
             }),
-            span: expr.span.clone(),
+            span: expr.span,
         }),
         ExprKind::Path {
             segments,
@@ -530,9 +530,9 @@ pub(super) fn expr_as_type_expr(expr: &Expr) -> Option<TypeExpr> {
             kind: TypeKind::Path(PathExpr {
                 segments: segments.clone(),
                 generic_args: generic_args.clone(),
-                span: expr.span.clone(),
+                span: expr.span,
             }),
-            span: expr.span.clone(),
+            span: expr.span,
         }),
         _ => None,
     }

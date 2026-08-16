@@ -235,7 +235,7 @@ impl SymbolTable {
                 id,
                 name: name.to_string(),
                 kind,
-                span: synthetic_span.clone(),
+                span: synthetic_span,
                 is_pub: true,
                 scope: ScopeId(0),
             });

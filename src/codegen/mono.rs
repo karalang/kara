@@ -459,15 +459,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// hand back a whole container type rather than an element the caller has to
     /// re-wrap (which is what limited the shape above to one generic arg).
     fn path_type_expr(head: &str, args: &[TypeExpr]) -> TypeExpr {
-        let span = args
-            .first()
-            .map(|a| a.span.clone())
-            .unwrap_or(crate::token::Span {
-                line: 0,
-                column: 0,
-                offset: 0,
-                length: 0,
-            });
+        let span = args.first().map(|a| a.span).unwrap_or(crate::token::Span {
+            line: 0,
+            column: 0,
+            offset: 0,
+            length: 0,
+        });
         TypeExpr {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![head.to_string()],
@@ -479,7 +476,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     Some(args.iter().cloned().map(GenericArg::Type).collect())
                 },
-                span: span.clone(),
+                span,
             }),
             span,
         }
@@ -3328,9 +3325,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     kind: TypeKind::Path(PathExpr {
                                         segments: vec![concrete.clone()],
                                         generic_args: None,
-                                        span: t.span.clone(),
+                                        span: t.span,
                                     }),
-                                    span: t.span.clone(),
+                                    span: t.span,
                                 });
                             }
                         }
@@ -3347,9 +3344,9 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![name.clone()],
                 generic_args: Some(new_args),
-                span: te.span.clone(),
+                span: te.span,
             }),
-            span: te.span.clone(),
+            span: te.span,
         })
     }
 

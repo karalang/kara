@@ -108,7 +108,7 @@ impl<'a> super::TypeChecker<'a> {
                         if !args.is_empty() {
                             self.type_error(
                                 format!("{method} expects 0 arguments, got {}", args.len()),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::WrongNumberOfArgs,
                             );
                             return Some(Type::Error);
@@ -119,7 +119,7 @@ impl<'a> super::TypeChecker<'a> {
                         if args.len() != 1 {
                             self.type_error(
                                 format!("{method} expects 1 argument, got {}", args.len()),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::WrongNumberOfArgs,
                             );
                             return Some(Type::Error);
@@ -140,7 +140,7 @@ impl<'a> super::TypeChecker<'a> {
                                     type_display(receiver_for_lookup),
                                     type_display(&arg_ty)
                                 ),
-                                arg.span.clone(),
+                                arg.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             return Some(Type::Error);
@@ -254,7 +254,7 @@ impl<'a> super::TypeChecker<'a> {
             if args.len() != 1 {
                 self.type_error(
                     format!("{method} expects 1 argument, got {}", args.len()),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 return Some(Type::Error);
@@ -278,7 +278,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(receiver_for_lookup),
                         type_display(&arg_ty)
                     ),
-                    arg.span.clone(),
+                    arg.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Some(Type::Error);
@@ -303,7 +303,7 @@ impl<'a> super::TypeChecker<'a> {
             if args.len() != 1 {
                 self.type_error(
                     format!("{method} expects 1 argument, got {}", args.len()),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 return Some(Type::Error);
@@ -322,7 +322,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(receiver_for_lookup),
                         type_display(&arg_ty)
                     ),
-                    arg.span.clone(),
+                    arg.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Some(Type::Error);
@@ -359,7 +359,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("{method} expects 1 argument, got {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     return Some(Type::Error);
@@ -377,7 +377,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(receiver_for_lookup),
                             type_display(&arg_ty)
                         ),
-                        arg.span.clone(),
+                        arg.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Some(Type::Error);
@@ -409,7 +409,7 @@ impl<'a> super::TypeChecker<'a> {
             if args.len() != 1 {
                 self.type_error(
                     format!("pow expects 1 argument, got {}", args.len()),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 return Some(Type::Error);
@@ -425,7 +425,7 @@ impl<'a> super::TypeChecker<'a> {
                         "pow expects an exponent of type `u32`, got `{}` (cast with `as u32`)",
                         type_display(&arg_ty)
                     ),
-                    arg.span.clone(),
+                    arg.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Some(Type::Error);
@@ -447,7 +447,7 @@ impl<'a> super::TypeChecker<'a> {
             if args.len() != 1 {
                 self.type_error(
                     format!("`{method}` expects 1 argument, got {}", args.len()),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 return Some(Type::Error);
@@ -467,7 +467,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(receiver_for_lookup),
                         type_display(&arg_ty)
                     ),
-                    arg.span.clone(),
+                    arg.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Some(Type::Error);
@@ -490,7 +490,7 @@ impl<'a> super::TypeChecker<'a> {
             if args.len() != 2 {
                 self.type_error(
                     format!("`clamp` expects 2 arguments, got {}", args.len()),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 return Some(Type::Error);
@@ -511,7 +511,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(receiver_for_lookup),
                             type_display(&arg_ty)
                         ),
-                        arg.span.clone(),
+                        arg.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Some(Type::Error);
@@ -581,7 +581,7 @@ impl<'a> super::TypeChecker<'a> {
             if args.len() != 1 {
                 self.type_error(
                     format!("abs_diff expects 1 argument, got {}", args.len()),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 return Some(Type::Error);
@@ -599,7 +599,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(receiver_for_lookup),
                         type_display(&arg_ty)
                     ),
-                    arg.span.clone(),
+                    arg.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Some(Type::Error);
@@ -644,7 +644,7 @@ impl<'a> super::TypeChecker<'a> {
                         "`{method}` expects 1 argument (the rotation amount), got {}",
                         args.len()
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 return Some(Type::Error);
@@ -660,7 +660,7 @@ impl<'a> super::TypeChecker<'a> {
                         "`{method}` expects an integer rotation amount, got `{}`",
                         type_display(&arg_ty)
                     ),
-                    arg.span.clone(),
+                    arg.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Some(Type::Error);
@@ -780,7 +780,7 @@ impl<'a> super::TypeChecker<'a> {
                          for the Unicode predicate",
                     );
                 }
-                self.type_error(msg, span.clone(), TypeErrorKind::WrongNumberOfArgs);
+                self.type_error(msg, *span, TypeErrorKind::WrongNumberOfArgs);
                 return Some(Type::Error);
             }
             let u32_ty = Type::UInt(UIntSize::U32);
@@ -794,7 +794,7 @@ impl<'a> super::TypeChecker<'a> {
                         "{method} expects a radix of type `u32`, got `{}` (cast with `as u32`)",
                         type_display(&arg_ty)
                     ),
-                    arg.span.clone(),
+                    arg.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Some(Type::Error);

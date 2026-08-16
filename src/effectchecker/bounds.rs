@@ -354,7 +354,7 @@ impl<'a> super::EffectChecker<'a> {
                             // Construct a minimal Function-like view of the trait method
                             // for the scanner. Only `params` and `generic_params` matter.
                             let stub = Function {
-                                span: m.span.clone(),
+                                span: m.span,
                                 attributes: Vec::new(),
                                 doc_comment: None,
                                 is_pub: t.is_pub,
@@ -375,7 +375,7 @@ impl<'a> super::EffectChecker<'a> {
                                 body: m.body.clone().unwrap_or(Block {
                                     stmts: Vec::new(),
                                     final_expr: None,
-                                    span: m.span.clone(),
+                                    span: m.span,
                                 }),
                                 stdlib_origin: t.stdlib_origin,
                                 deprecation: None,

@@ -194,7 +194,7 @@ fn check_function_with_key(
     );
     diags.push(LintDiagnostic {
         level: default_level,
-        span: f.span.clone(),
+        span: f.span,
         message,
         lint_name: "missing_track_caller".to_string(),
         help,

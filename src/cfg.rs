@@ -809,7 +809,7 @@ impl<'a> CfgBuilder<'a> {
                         UseSite {
                             binding: name.clone(),
                             kind: UseKind::Define,
-                            span: pattern.span.clone(),
+                            span: pattern.span,
                             consume_origin: ConsumeOrigin::Direct,
                             place: PlacePath::new(),
                         },
@@ -921,7 +921,7 @@ impl<'a> CfgBuilder<'a> {
                     UseSite {
                         binding: name.clone(),
                         kind,
-                        span: expr.span.clone(),
+                        span: expr.span,
                         consume_origin,
                         place,
                     },
@@ -937,7 +937,7 @@ impl<'a> CfgBuilder<'a> {
                     UseSite {
                         binding: "self".to_string(),
                         kind,
-                        span: expr.span.clone(),
+                        span: expr.span,
                         consume_origin,
                         place,
                     },
@@ -1088,7 +1088,7 @@ impl<'a> CfgBuilder<'a> {
                         UseSite {
                             binding: name.clone(),
                             kind: UseKind::Define,
-                            span: pattern.span.clone(),
+                            span: pattern.span,
                             consume_origin: ConsumeOrigin::Direct,
                             place: PlacePath::new(),
                         },
@@ -1144,7 +1144,7 @@ impl<'a> CfgBuilder<'a> {
                                 UseSite {
                                     binding: name.clone(),
                                     kind: UseKind::Define,
-                                    span: arm.pattern.span.clone(),
+                                    span: arm.pattern.span,
                                     consume_origin: ConsumeOrigin::Direct,
                                     place: PlacePath::new(),
                                 },
@@ -1249,7 +1249,7 @@ impl<'a> CfgBuilder<'a> {
                         UseSite {
                             binding: name.clone(),
                             kind: UseKind::Define,
-                            span: pattern.span.clone(),
+                            span: pattern.span,
                             consume_origin: ConsumeOrigin::Direct,
                             place: PlacePath::new(),
                         },
@@ -1851,7 +1851,7 @@ mod tests {
         };
         // Synthesize a classification that marks the `w` arg (args[1])
         // as a sink-arg and tags its identifier-leaf use as Consume.
-        let w_arg_span = args[1].value.span.clone();
+        let w_arg_span = args[1].value.span;
         let mut classification = Classification::default();
         classification
             .sink_arg_spans

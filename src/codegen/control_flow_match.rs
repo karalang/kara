@@ -2382,9 +2382,9 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: TypeKind::Path(crate::ast::PathExpr {
                 segments: vec![struct_name.clone()],
                 generic_args: None,
-                span: scrutinee.span.clone(),
+                span: scrutinee.span,
             }),
-            span: scrutinee.span.clone(),
+            span: scrutinee.span,
         };
         if !self.borrow_payload_clone_supported(&te) {
             return (val, None);
@@ -3112,9 +3112,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: TypeKind::Path(crate::ast::PathExpr {
                     segments: vec![leaf.clone()],
                     generic_args: None,
-                    span: value.span.clone(),
+                    span: value.span,
                 }),
-                span: value.span.clone(),
+                span: value.span,
             }
         } else {
             return val;
@@ -5292,7 +5292,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             generic_args: None,
                         }
                     },
-                    span: span.clone(),
+                    span: *span,
                 };
                 self.compile_expr(&expr)
             }

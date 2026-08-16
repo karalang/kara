@@ -161,7 +161,7 @@ pub fn build(scope: &str, program: &Program, ownership: &OwnershipCheckResult) -
                                 "`with_provider[{}]` call site — closure capture is Arc-wrapped if it crosses a task boundary",
                                 site.resource
                             ),
-                            site: site.span.clone(),
+                            site: site.span,
                         });
                     }
                     arc_provider_wraps_total += sites.len();
@@ -193,7 +193,7 @@ pub fn build(scope: &str, program: &Program, ownership: &OwnershipCheckResult) -
                                     "`with_provider[{}]` call site — closure capture is Arc-wrapped if it crosses a task boundary",
                                     site.resource
                                 ),
-                                site: site.span.clone(),
+                                site: site.span,
                             });
                         }
                         arc_provider_wraps_total += sites.len();
@@ -273,7 +273,7 @@ fn shared_struct_mut_field_note(name: &str, mut_fields: &[&str], span: &Span) ->
     PerfNote {
         code: "perf[shared-struct-mut-field]".to_string(),
         message,
-        site: span.clone(),
+        site: *span,
     }
 }
 
@@ -296,7 +296,7 @@ fn rc_derivation(entry: &RcEntry, is_arc: bool) -> DerivationEntry {
     let kind = if is_arc { "Arc" } else { "Rc" };
     DerivationEntry {
         reason: format!("{kind} fallback for `{}` — {trigger_label}", entry.binding),
-        site: entry.other_use_span.clone(),
+        site: entry.other_use_span,
     }
 }
 
@@ -344,7 +344,7 @@ fn walk_expr_for_with_provider(expr: &Expr, out: &mut Vec<WithProviderSite>) {
             if let Some(resource) = match_with_provider_callee(callee) {
                 out.push(WithProviderSite {
                     resource,
-                    span: expr.span.clone(),
+                    span: expr.span,
                 });
             }
             walk_expr_for_with_provider(callee, out);

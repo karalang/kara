@@ -189,7 +189,7 @@ impl super::Parser {
                     let comma_span = self.current_span();
                     self.error_at(
                         "effect items are space-separated, not comma-separated; remove the `,`",
-                        comma_span.clone(),
+                        comma_span,
                     );
                     self.fix_edits.insert(
                         crate::resolver::SpanKey::from_span(&comma_span),

@@ -326,7 +326,7 @@ pub(super) fn integer_to_const_value(
     let out_of_range = |target: &Type| ConstEvalError::OutOfRange {
         value: n as i128,
         target_ty: target.clone(),
-        span: span.clone(),
+        span: *span,
     };
     match target_ty {
         Type::Int(IntSize::I8) => i8::try_from(n)
@@ -385,7 +385,7 @@ pub(super) fn apply_unary(
                 .ok_or(ConstEvalError::UnaryOverflow {
                     op,
                     operand: I8(v),
-                    span: span.clone(),
+                    span: *span,
                 }),
             I16(v) => v
                 .checked_neg()
@@ -393,7 +393,7 @@ pub(super) fn apply_unary(
                 .ok_or(ConstEvalError::UnaryOverflow {
                     op,
                     operand: I16(v),
-                    span: span.clone(),
+                    span: *span,
                 }),
             I32(v) => v
                 .checked_neg()
@@ -401,7 +401,7 @@ pub(super) fn apply_unary(
                 .ok_or(ConstEvalError::UnaryOverflow {
                     op,
                     operand: I32(v),
-                    span: span.clone(),
+                    span: *span,
                 }),
             I64(v) => v
                 .checked_neg()
@@ -409,7 +409,7 @@ pub(super) fn apply_unary(
                 .ok_or(ConstEvalError::UnaryOverflow {
                     op,
                     operand: I64(v),
-                    span: span.clone(),
+                    span: *span,
                 }),
             I128(v) => v
                 .checked_neg()
@@ -417,7 +417,7 @@ pub(super) fn apply_unary(
                 .ok_or(ConstEvalError::UnaryOverflow {
                     op,
                     operand: I128(v),
-                    span: span.clone(),
+                    span: *span,
                 }),
             // B-2026-08-12-10 — float negation, so a NEGATIVE float literal
             // folds like its integer twin. Without it `-2.5` against a
@@ -434,7 +434,7 @@ pub(super) fn apply_unary(
             other => Err(ConstEvalError::UnaryOverflow {
                 op,
                 operand: other,
-                span: span.clone(),
+                span: *span,
             }),
         },
         UnaryOp::Not => match val {
@@ -457,12 +457,12 @@ pub(super) fn apply_unary(
                 // matches the binary case. The renderer keys on `ty` and
                 // mentions the unary site via `span`.
                 op: BinOp::And,
-                span: span.clone(),
+                span: *span,
             }),
         },
         // Other unary ops (BitNot, future extensions) — not in scope for
         // const-eval at slice 2.
-        _ => Err(ConstEvalError::NonConstShape(span.clone())),
+        _ => Err(ConstEvalError::NonConstShape(*span)),
     }
 }
 
@@ -484,7 +484,7 @@ pub(super) fn apply_binary(
                 (l, _) => Err(ConstEvalError::LogicalOnNonBool {
                     ty: const_value_type(&l),
                     op,
-                    span: span.clone(),
+                    span: *span,
                 }),
             };
         }
@@ -494,7 +494,7 @@ pub(super) fn apply_binary(
                 (l, _) => Err(ConstEvalError::LogicalOnNonBool {
                     ty: const_value_type(&l),
                     op,
-                    span: span.clone(),
+                    span: *span,
                 }),
             };
         }
@@ -533,7 +533,7 @@ fn apply_comparison(
     let incomparable = |l: &ConstValue, r: &ConstValue| ConstEvalError::CompareIncomparable {
         lhs_ty: const_value_type(l),
         rhs_ty: const_value_type(r),
-        span: span.clone(),
+        span: *span,
     };
     let result = match (&lhs, &rhs) {
         (I8(a), I8(b)) => cmp(a.cmp(b)),
@@ -649,13 +649,13 @@ fn apply_arithmetic(
             Err(ConstEvalError::ArithOnNonInt {
                 ty: const_value_type(l),
                 op,
-                span: span.clone(),
+                span: *span,
             })
         }
         _ => Err(ConstEvalError::ArithOnNonInt {
             ty: const_value_type(&lhs),
             op,
-            span: span.clone(),
+            span: *span,
         }),
     }
 }

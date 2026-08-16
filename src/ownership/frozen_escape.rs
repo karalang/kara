@@ -648,7 +648,7 @@ impl<'a> Cx<'a, '_> {
             is_alias: self.aliases.contains(name),
             is_source: self.sources.contains(name),
             name: name.to_string(),
-            span: span.clone(),
+            span: *span,
             reason,
         });
     }
@@ -1218,7 +1218,7 @@ fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
                 }
                 if let Some(ct) = container_candidate_type(ty.as_ref(), cx.tc) {
                     cx.container_candidates.insert(n.as_str(), ct);
-                    cx.container_spans.insert(n.as_str(), value.span.clone());
+                    cx.container_spans.insert(n.as_str(), value.span);
                     cx.container_path.insert(n.as_str(), cx.block_path.clone());
                     // An element read out of the container is owned by whatever
                     // was pushed in, and every one of those was proved to
@@ -1596,7 +1596,7 @@ fn try_admit_frozen_freeze<'a>(
     // becoming an ordinary binding.
     cx.freeze_sites.push((
         raw.as_ref().and_then(head_type_name).map(str::to_string),
-        value.span.clone(),
+        value.span,
         FreezeSite::Statement { uniquely_bound },
     ));
     let Some(ty) = raw.and_then(|t| cx.as_shared_handle(t)) else {

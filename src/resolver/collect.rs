@@ -94,7 +94,7 @@ impl<'a> super::Resolver<'a> {
                             "layout collection type must be Vec[T] or Array[T, N], found '{}'",
                             coll_name
                         ),
-                        span: layout.span.clone(),
+                        span: layout.span,
                         kind: ResolveErrorKind::UndefinedType,
                         suggestion: None,
                         replacement: None,
@@ -128,7 +128,7 @@ impl<'a> super::Resolver<'a> {
                     message:
                         "layout collection type must specify an element type (e.g., Vec[Entity])"
                             .to_string(),
-                    span: layout.span.clone(),
+                    span: layout.span,
                     kind: ResolveErrorKind::UndefinedType,
                     suggestion: None,
                     replacement: None,
@@ -153,7 +153,7 @@ impl<'a> super::Resolver<'a> {
                                     "layout group '{}' is not allowed for enum types; use split_by_variant",
                                     name
                                 ),
-                                span: span.clone(),
+                                span: *span,
                                 kind: ResolveErrorKind::UndefinedField,
                                 suggestion: Some("use split_by_variant instead of group".to_string()),
                                 replacement: None,
@@ -173,11 +173,9 @@ impl<'a> super::Resolver<'a> {
                 // every site they need to remove, not just the first.
                 for item in &layout.items {
                     let (name, span) = match item {
-                        LayoutItem::Group { name, span, .. } => (name.clone(), span.clone()),
-                        LayoutItem::Cold { span, .. } => ("cold".to_string(), span.clone()),
-                        LayoutItem::SplitByVariant(span) => {
-                            ("split_by_variant".to_string(), span.clone())
-                        }
+                        LayoutItem::Group { name, span, .. } => (name.clone(), *span),
+                        LayoutItem::Cold { span, .. } => ("cold".to_string(), *span),
+                        LayoutItem::SplitByVariant(span) => ("split_by_variant".to_string(), *span),
                     };
                     self.errors.push(ResolveError {
                         message: format!(
@@ -198,7 +196,7 @@ impl<'a> super::Resolver<'a> {
             } else {
                 self.errors.push(ResolveError {
                     message: format!("'{}' is not a struct", struct_name),
-                    span: layout.span.clone(),
+                    span: layout.span,
                     kind: ResolveErrorKind::UndefinedType,
                     suggestion: None,
                     replacement: None,
@@ -209,7 +207,7 @@ impl<'a> super::Resolver<'a> {
         } else {
             self.errors.push(ResolveError {
                 message: format!("undefined struct '{}' in layout definition", struct_name),
-                span: layout.span.clone(),
+                span: layout.span,
                 kind: ResolveErrorKind::UndefinedType,
                 suggestion: None,
                 replacement: None,
@@ -259,7 +257,7 @@ impl<'a> super::Resolver<'a> {
                                     "field '{}' does not exist on struct '{}' (in group '{}')",
                                     field, struct_name, name
                                 ),
-                                span: span.clone(),
+                                span: *span,
                                 kind: ResolveErrorKind::UndefinedField,
                                 suggestion: None,
                                 replacement: None,
@@ -271,7 +269,7 @@ impl<'a> super::Resolver<'a> {
                                     "field '{}' appears in multiple sections in layout '{}'",
                                     field, layout.name
                                 ),
-                                span: span.clone(),
+                                span: *span,
                                 kind: ResolveErrorKind::DuplicateDefinition,
                                 suggestion: None,
                                 replacement: None,
@@ -285,7 +283,7 @@ impl<'a> super::Resolver<'a> {
                                          which is not yet supported in SoA layouts",
                                         layout.name, name, field, why
                                     ),
-                                    span: span.clone(),
+                                    span: *span,
                                     kind: ResolveErrorKind::UndefinedField,
                                     suggestion: Some(
                                         "String and Vec[POD] fields ARE supported in SoA layouts; \
@@ -307,7 +305,7 @@ impl<'a> super::Resolver<'a> {
                                     "align({}) is not a power of two in layout '{}' group '{}'",
                                     n, layout.name, name
                                 ),
-                                span: span.clone(),
+                                span: *span,
                                 kind: ResolveErrorKind::UndefinedField,
                                 suggestion: Some(
                                     "common values: 8, 16, 32, 64 (cache line), 128 (Apple Silicon cache line)".to_string(),
@@ -326,7 +324,7 @@ impl<'a> super::Resolver<'a> {
                                 "layout '{}' has more than one cold section; at most one is allowed",
                                 layout.name
                             ),
-                            span: span.clone(),
+                            span: *span,
                             kind: ResolveErrorKind::DuplicateDefinition,
                             suggestion: None,
                             replacement: None,
@@ -340,7 +338,7 @@ impl<'a> super::Resolver<'a> {
                                     "field '{}' does not exist on struct '{}' (in cold section)",
                                     field, struct_name
                                 ),
-                                span: span.clone(),
+                                span: *span,
                                 kind: ResolveErrorKind::UndefinedField,
                                 suggestion: None,
                                 replacement: None,
@@ -352,7 +350,7 @@ impl<'a> super::Resolver<'a> {
                                     "field '{}' appears in multiple sections in layout '{}'",
                                     field, layout.name
                                 ),
-                                span: span.clone(),
+                                span: *span,
                                 kind: ResolveErrorKind::DuplicateDefinition,
                                 suggestion: None,
                                 replacement: None,
@@ -366,7 +364,7 @@ impl<'a> super::Resolver<'a> {
                                          which is not yet supported in SoA layouts",
                                         layout.name, field, why
                                     ),
-                                    span: span.clone(),
+                                    span: *span,
                                     kind: ResolveErrorKind::UndefinedField,
                                     suggestion: Some(
                                         "String and Vec[POD] fields ARE supported in SoA layouts; \
@@ -386,7 +384,7 @@ impl<'a> super::Resolver<'a> {
                     self.errors.push(ResolveError {
                         message: "split_by_variant is only valid for enum layout blocks"
                             .to_string(),
-                        span: span.clone(),
+                        span: *span,
                         kind: ResolveErrorKind::UndefinedField,
                         suggestion: None,
                         replacement: None,
@@ -413,7 +411,7 @@ impl<'a> super::Resolver<'a> {
                     "layout '{}': fields not assigned to any group or cold section: {}. These will be placed in an implicit trailing hot group.",
                     layout.name, field_list
                 ),
-                span: layout.span.clone(),
+                span: layout.span,
                 kind: ResolveErrorKind::UndefinedField,
                 suggestion: Some("assign all fields to groups, or suppress with #[allow(layout_unassigned_fields)]".to_string()),
                 replacement: None,
@@ -577,7 +575,7 @@ impl<'a> super::Resolver<'a> {
                               individually instead. See design.md § \
                               `#[deprecated]` for Item Deprecation."
                         .to_string(),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::DeprecatedOnImpl,
                     suggestion: None,
                     replacement: None,
@@ -603,7 +601,7 @@ impl<'a> super::Resolver<'a> {
                               reads/writes is bundled with the post-v1 \
                               lint expansion."
                         .to_string(),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::DeprecatedOnField,
                     suggestion: None,
                     replacement: None,
@@ -640,7 +638,7 @@ impl<'a> super::Resolver<'a> {
                          — see design.md § Error Handling > \"Stdlib \
                          panic-emitters report the caller's source location\"",
                     ),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::TrackCallerInvalidTarget,
                     suggestion: None,
                     replacement: None,
@@ -676,7 +674,7 @@ impl<'a> super::Resolver<'a> {
                          makes it callable from `gpu.dispatch`. See \
                          design.md § GPU Subset Constraints.",
                     ),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::GpuInvalidTarget,
                     suggestion: None,
                     replacement: None,
@@ -713,7 +711,7 @@ impl<'a> super::Resolver<'a> {
                          hint every method of an `impl` block, annotate each method \
                          (block-level shorthand is post-v1).",
                     ),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::CodegenHintInvalidTarget,
                     suggestion: None,
                     replacement: None,
@@ -737,7 +735,7 @@ impl<'a> super::Resolver<'a> {
                          Kāra function definition — including an `extern \"C\" fn name(...) \
                          {{ ... }}` *definition* with a body.",
                     ),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::CodegenHintOnExternDecl,
                     suggestion: None,
                     replacement: None,
@@ -762,7 +760,7 @@ impl<'a> super::Resolver<'a> {
                          the attribute asserts per-function profile \
                          compatibility and only applies to `fn` declarations",
                     ),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::ProfileInvalidTarget,
                     suggestion: None,
                     replacement: None,
@@ -795,7 +793,7 @@ impl<'a> super::Resolver<'a> {
                         fn_name = f.name,
                         known = KNOWN.join(", "),
                     ),
-                    span: f.span.clone(),
+                    span: f.span,
                     kind: ResolveErrorKind::UnknownProfile,
                     suggestion: None,
                     replacement: None,
@@ -831,7 +829,7 @@ impl<'a> super::Resolver<'a> {
                          `pub enum` declarations — see design.md § \
                          `#[non_exhaustive]` for Evolvable Public Types",
                     ),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::NonExhaustiveInvalidTarget,
                     suggestion: None,
                     replacement: None,
@@ -857,7 +855,7 @@ impl<'a> super::Resolver<'a> {
                 self.errors.push(ResolveError {
                     message: "`#[compiler_builtin]` is reserved for stdlib source baked into the compiler binary"
                         .to_string(),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::CompilerBuiltinReserved,
                     suggestion: None,
                     replacement: None,
@@ -879,7 +877,7 @@ impl<'a> super::Resolver<'a> {
         match self.table.define(
             f.name.clone(),
             SymbolKind::Function { param_names },
-            f.span.clone(),
+            f.span,
             f.is_pub,
         ) {
             Ok(id) => {
@@ -921,7 +919,7 @@ impl<'a> super::Resolver<'a> {
         match self.table.define(
             s.name.clone(),
             SymbolKind::Struct { field_names },
-            s.span.clone(),
+            s.span,
             s.is_pub,
         ) {
             Ok(id) => {
@@ -966,7 +964,7 @@ impl<'a> super::Resolver<'a> {
                          union definition changes in lockstep",
                         u.name,
                     ),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::UnionNonExhaustiveForbidden,
                     suggestion: None,
                     // B-2026-08-10-2's sweep. "Remove the attribute" is
@@ -1004,7 +1002,7 @@ impl<'a> super::Resolver<'a> {
         match self.table.define(
             u.name.clone(),
             SymbolKind::Union { field_names },
-            u.span.clone(),
+            u.span,
             u.is_pub,
         ) {
             Ok(id) => {
@@ -1040,7 +1038,7 @@ impl<'a> super::Resolver<'a> {
         let enum_id = match self.table.define(
             e.name.clone(),
             SymbolKind::Enum { variant_names },
-            e.span.clone(),
+            e.span,
             e.is_pub,
         ) {
             Ok(id) => {
@@ -1073,7 +1071,7 @@ impl<'a> super::Resolver<'a> {
                     parent_enum: enum_id,
                     variant_kind,
                 },
-                variant.span.clone(),
+                variant.span,
                 e.is_pub,
             ) {
                 self.record_deprecation_if_present(variant_id, &variant.deprecation);
@@ -1110,7 +1108,7 @@ impl<'a> super::Resolver<'a> {
         let trait_id = match self.table.define(
             t.name.clone(),
             SymbolKind::Trait { method_names },
-            t.span.clone(),
+            t.span,
             t.is_pub,
         ) {
             Ok(id) => {
@@ -1145,12 +1143,10 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&t.attributes, "trait alias");
         self.reject_codegen_hint_attrs(&t.attributes, "trait alias");
         self.reject_profile_attr(&t.attributes, "trait alias");
-        match self.table.define(
-            t.name.clone(),
-            SymbolKind::TraitAlias,
-            t.span.clone(),
-            t.is_pub,
-        ) {
+        match self
+            .table
+            .define(t.name.clone(), SymbolKind::TraitAlias, t.span, t.is_pub)
+        {
             Ok(id) => {
                 self.record_deprecation_if_present(id, &t.deprecation);
                 self.record_unstable_if_present(id, &t.unstable);
@@ -1175,7 +1171,7 @@ impl<'a> super::Resolver<'a> {
             SymbolKind::Trait {
                 method_names: Vec::new(),
             },
-            t.span.clone(),
+            t.span,
             t.is_pub,
         ) {
             Ok(id) => {
@@ -1226,7 +1222,7 @@ impl<'a> super::Resolver<'a> {
                     id: method_id,
                     name: method.name.clone(),
                     kind: SymbolKind::Function { param_names },
-                    span: method.span.clone(),
+                    span: method.span,
                     is_pub: method.is_pub,
                     scope: self.table.current_scope,
                 });
@@ -1246,7 +1242,7 @@ impl<'a> super::Resolver<'a> {
                      see deferred.md § Comptime Effect Defaults",
                     e.name
                 ),
-                span: e.span.clone(),
+                span: e.span,
                 kind: ResolveErrorKind::ReservedEffectResource,
                 suggestion: None,
                 replacement: None,
@@ -1257,7 +1253,7 @@ impl<'a> super::Resolver<'a> {
         if let Err(err) = self.table.define(
             e.name.clone(),
             SymbolKind::EffectResource,
-            e.span.clone(),
+            e.span,
             true, // effect resources are always accessible
         ) {
             self.errors.push(err);
@@ -1265,23 +1261,19 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn collect_effect_group(&mut self, e: &EffectGroupDecl) {
-        if let Err(err) = self.table.define(
-            e.name.clone(),
-            SymbolKind::EffectGroup,
-            e.span.clone(),
-            e.is_pub,
-        ) {
+        if let Err(err) =
+            self.table
+                .define(e.name.clone(), SymbolKind::EffectGroup, e.span, e.is_pub)
+        {
             self.errors.push(err);
         }
     }
 
     fn collect_effect_verb(&mut self, e: &EffectVerbDecl) {
-        if let Err(err) = self.table.define(
-            e.verb_name.clone(),
-            SymbolKind::EffectVerb,
-            e.span.clone(),
-            true,
-        ) {
+        if let Err(err) =
+            self.table
+                .define(e.verb_name.clone(), SymbolKind::EffectVerb, e.span, true)
+        {
             self.errors.push(err);
         }
     }
@@ -1297,12 +1289,10 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&c.attributes, "module const");
         self.reject_codegen_hint_attrs(&c.attributes, "module const");
         self.reject_profile_attr(&c.attributes, "module const");
-        match self.table.define(
-            c.name.clone(),
-            SymbolKind::Constant,
-            c.span.clone(),
-            c.is_pub,
-        ) {
+        match self
+            .table
+            .define(c.name.clone(), SymbolKind::Constant, c.span, c.is_pub)
+        {
             Ok(id) => {
                 self.record_deprecation_if_present(id, &c.deprecation);
                 self.record_unstable_if_present(id, &c.unstable);
@@ -1372,7 +1362,7 @@ impl<'a> super::Resolver<'a> {
                      (SCREAMING_SNAKE_CASE); {advice}",
                     b.name,
                 ),
-                span: b.span.clone(),
+                span: b.span,
                 kind: ResolveErrorKind::UndefinedName,
                 suggestion: suggestion.as_ref().map(|s| format!("rename to `{s}`")),
                 // Machine-applicable rename (B-2026-07-06-3), deferred.
@@ -1400,12 +1390,10 @@ impl<'a> super::Resolver<'a> {
             // offending name so use-site references don't double-up
             // with cascading "undefined name" diagnostics.
         }
-        match self.table.define(
-            b.name.clone(),
-            SymbolKind::Constant,
-            b.span.clone(),
-            b.is_pub,
-        ) {
+        match self
+            .table
+            .define(b.name.clone(), SymbolKind::Constant, b.span, b.is_pub)
+        {
             Ok(id) => {
                 self.record_deprecation_if_present(id, &b.deprecation);
                 self.record_unstable_if_present(id, &b.unstable);
@@ -1415,8 +1403,8 @@ impl<'a> super::Resolver<'a> {
                             error_index,
                             symbol: id,
                             new_name,
-                            name_span: b.name_span.clone(),
-                            diag_span: b.span.clone(),
+                            name_span: b.name_span,
+                            diag_span: b.span,
                             name_len: b.name.len(),
                         });
                 }
@@ -1440,12 +1428,10 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&t.attributes, "type alias");
         self.reject_codegen_hint_attrs(&t.attributes, "type alias");
         self.reject_profile_attr(&t.attributes, "type alias");
-        match self.table.define(
-            t.name.clone(),
-            SymbolKind::TypeAlias,
-            t.span.clone(),
-            t.is_pub,
-        ) {
+        match self
+            .table
+            .define(t.name.clone(), SymbolKind::TypeAlias, t.span, t.is_pub)
+        {
             Ok(id) => {
                 self.record_deprecation_if_present(id, &t.deprecation);
                 self.record_unstable_if_present(id, &t.unstable);
@@ -1455,12 +1441,10 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn collect_distinct_type(&mut self, d: &crate::ast::DistinctTypeDef) {
-        match self.table.define(
-            d.name.clone(),
-            SymbolKind::DistinctType,
-            d.span.clone(),
-            d.is_pub,
-        ) {
+        match self
+            .table
+            .define(d.name.clone(), SymbolKind::DistinctType, d.span, d.is_pub)
+        {
             Ok(id) => {
                 self.record_deprecation_if_present(id, &d.deprecation);
                 self.record_unstable_if_present(id, &d.unstable);
@@ -1497,7 +1481,7 @@ impl<'a> super::Resolver<'a> {
                 SymbolKind::Import {
                     path: u.path.clone(),
                 },
-                u.span.clone(),
+                u.span,
                 u.is_pub,
             ) {
                 self.errors.push(err);
@@ -1567,7 +1551,7 @@ impl<'a> super::Resolver<'a> {
         }
         self.errors.push(ResolveError {
             message,
-            span: imp.span.clone(),
+            span: imp.span,
             kind: ResolveErrorKind::UnknownModule,
             suggestion,
             replacement: None,
@@ -1599,7 +1583,7 @@ impl<'a> super::Resolver<'a> {
                 if let Err(e) = self.table.define(
                     bound,
                     SymbolKind::Import { path: full },
-                    item.span.clone(),
+                    item.span,
                     imp.is_pub,
                 ) {
                     self.errors.push(e);
@@ -1648,7 +1632,7 @@ impl<'a> super::Resolver<'a> {
             });
             self.errors.push(ResolveError {
                 message,
-                span: imp.span.clone(),
+                span: imp.span,
                 kind: ResolveErrorKind::UnknownModule,
                 suggestion,
                 replacement,
@@ -1663,7 +1647,7 @@ impl<'a> super::Resolver<'a> {
                 if let Err(e) = self.table.define(
                     bound,
                     SymbolKind::Import { path: full },
-                    item.span.clone(),
+                    item.span,
                     imp.is_pub,
                 ) {
                     self.errors.push(e);
@@ -1698,7 +1682,7 @@ impl<'a> super::Resolver<'a> {
                             crate::target::active_target(),
                             spec,
                         ),
-                        span: item.span.clone(),
+                        span: item.span,
                         kind: ResolveErrorKind::UndefinedName,
                         suggestion: None,
                         replacement: None,
@@ -1750,7 +1734,7 @@ impl<'a> super::Resolver<'a> {
                 });
                 self.errors.push(ResolveError {
                     message,
-                    span: item.span.clone(),
+                    span: item.span,
                     kind: ResolveErrorKind::UnknownItemInModule,
                     suggestion,
                     replacement,
@@ -1781,7 +1765,7 @@ impl<'a> super::Resolver<'a> {
                         );
                         self.errors.push(ResolveError {
                             message,
-                            span: item.span.clone(),
+                            span: item.span,
                             kind: ResolveErrorKind::PrivateItemAccess,
                             suggestion: Some(format!(
                                 "mark `{}` as `pub` or move the caller into the same directory",
@@ -1810,7 +1794,7 @@ impl<'a> super::Resolver<'a> {
                                     "`{}` in package `{}` is not `pub` — only `pub` items can be imported across packages",
                                     def_name, def_label,
                                 ),
-                                span: item.span.clone(),
+                                span: item.span,
                                 kind: ResolveErrorKind::PrivateItemAccess,
                                 suggestion: Some(format!(
                                     "mark `{}` as `pub` in package `{}`",
@@ -1845,7 +1829,7 @@ impl<'a> super::Resolver<'a> {
                 SymbolKind::Import {
                     path: canonical_full.clone(),
                 },
-                item.span.clone(),
+                item.span,
                 imp.is_pub,
             ) {
                 Ok(import_id) => {
@@ -1911,7 +1895,7 @@ impl<'a> super::Resolver<'a> {
                     parent_enum,
                     variant_kind,
                 },
-                variant.span.clone(),
+                variant.span,
                 enum_def.is_pub,
             );
         }
@@ -1921,23 +1905,19 @@ impl<'a> super::Resolver<'a> {
         // Codegen hints have no Kāra-side body to attach to on a foreign
         // import — reject them with the extern-specific diagnostic.
         self.reject_codegen_hint_on_extern(&e.attributes);
-        if let Err(err) = self.table.define(
-            e.name.clone(),
-            SymbolKind::ExternFunction,
-            e.span.clone(),
-            true,
-        ) {
+        if let Err(err) =
+            self.table
+                .define(e.name.clone(), SymbolKind::ExternFunction, e.span, true)
+        {
             self.errors.push(err);
         }
     }
 
     fn collect_opaque_foreign_type(&mut self, o: &OpaqueTypeDecl) {
-        if let Err(err) = self.table.define(
-            o.name.clone(),
-            SymbolKind::OpaqueForeignType,
-            o.span.clone(),
-            true,
-        ) {
+        if let Err(err) =
+            self.table
+                .define(o.name.clone(), SymbolKind::OpaqueForeignType, o.span, true)
+        {
             self.errors.push(err);
         }
     }

@@ -106,7 +106,7 @@ impl super::Parser {
                 Token::Question => {
                     self.advance();
                     lhs = Expr {
-                        span: lhs.span.clone(),
+                        span: lhs.span,
                         kind: ExprKind::Question(Box::new(lhs)),
                     };
                     continue;
@@ -123,7 +123,7 @@ impl super::Parser {
                         None
                     };
                     lhs = Expr {
-                        span: lhs.span.clone(),
+                        span: lhs.span,
                         kind: ExprKind::OptionalChain {
                             object: Box::new(lhs),
                             field_or_method,
@@ -140,7 +140,7 @@ impl super::Parser {
                     self.advance();
                     let ty = self.parse_type()?;
                     lhs = Expr {
-                        span: lhs.span.clone(),
+                        span: lhs.span,
                         kind: ExprKind::Cast {
                             expr: Box::new(lhs),
                             ty,
@@ -155,7 +155,7 @@ impl super::Parser {
                         Token::Integer(idx, _) => {
                             self.advance();
                             lhs = Expr {
-                                span: lhs.span.clone(),
+                                span: lhs.span,
                                 kind: ExprKind::TupleIndex {
                                     object: Box::new(lhs),
                                     index: idx as u64,
@@ -201,9 +201,9 @@ impl super::Parser {
                                 self.advance();
                                 let args = self.parse_arg_list()?;
                                 self.expect(&Token::RightParen)?;
-                                let args_close_span = self.tokens[self.pos - 1].span.clone();
+                                let args_close_span = self.tokens[self.pos - 1].span;
                                 lhs = Expr {
-                                    span: lhs.span.clone(),
+                                    span: lhs.span,
                                     kind: ExprKind::MethodCall {
                                         object: Box::new(lhs),
                                         method,
@@ -215,7 +215,7 @@ impl super::Parser {
                             } else {
                                 // Field access
                                 lhs = Expr {
-                                    span: lhs.span.clone(),
+                                    span: lhs.span,
                                     kind: ExprKind::FieldAccess {
                                         object: Box::new(lhs),
                                         field: method,
@@ -236,7 +236,7 @@ impl super::Parser {
                     let args = self.parse_arg_list()?;
                     self.expect(&Token::RightParen)?;
                     lhs = Expr {
-                        span: lhs.span.clone(),
+                        span: lhs.span,
                         kind: ExprKind::Call {
                             callee: Box::new(lhs),
                             args,
@@ -266,7 +266,7 @@ impl super::Parser {
                         };
                         let gen_args = self.parse_generic_type_args()?;
                         lhs = Expr {
-                            span: lhs.span.clone(),
+                            span: lhs.span,
                             kind: ExprKind::Path {
                                 segments,
                                 generic_args: Some(gen_args),
@@ -300,7 +300,7 @@ impl super::Parser {
                     };
                     self.expect(&Token::RightBracket)?;
                     lhs = Expr {
-                        span: lhs.span.clone(),
+                        span: lhs.span,
                         kind: ExprKind::Index {
                             object: Box::new(lhs),
                             index: Box::new(index),
@@ -320,7 +320,7 @@ impl super::Parser {
                 self.advance();
                 let rhs = self.parse_expr_bp(pipe_bp + 1)?;
                 lhs = Expr {
-                    span: lhs.span.clone(),
+                    span: lhs.span,
                     kind: ExprKind::Pipe {
                         left: Box::new(lhs),
                         right: Box::new(rhs),
@@ -338,7 +338,7 @@ impl super::Parser {
                 self.advance();
                 let rhs = self.parse_expr_bp(nil_bp + 1)?;
                 lhs = Expr {
-                    span: lhs.span.clone(),
+                    span: lhs.span,
                     kind: ExprKind::NilCoalesce {
                         left: Box::new(lhs),
                         right: Box::new(rhs),
@@ -373,7 +373,7 @@ impl super::Parser {
                     None
                 };
                 lhs = Expr {
-                    span: lhs.span.clone(),
+                    span: lhs.span,
                     kind: ExprKind::Range {
                         start: Some(Box::new(lhs)),
                         end,
@@ -974,7 +974,7 @@ impl super::Parser {
             Token::LeftBrace => {
                 let block = self.parse_block()?;
                 Some(Expr {
-                    span: block.span.clone(),
+                    span: block.span,
                     kind: ExprKind::Block(block),
                 })
             }
@@ -1038,7 +1038,7 @@ impl super::Parser {
                                      lowering when they cross a closure-typed parameter — \
                                      move the hint onto a named `fn` if you need it."
                                 ),
-                                span: attr.span.clone(),
+                                span: attr.span,
                             });
                             continue;
                         }
@@ -1053,7 +1053,7 @@ impl super::Parser {
                                  See `docs/implementation_checklist/phase-7-codegen.md` \
                                  collect-style reduction follow-on for the surface plan."
                             ),
-                            span: attr.span.clone(),
+                            span: attr.span,
                         });
                     }
                 }
@@ -1351,7 +1351,7 @@ impl super::Parser {
                 } else {
                     let block = self.parse_block()?;
                     Some(Box::new(Expr {
-                        span: block.span.clone(),
+                        span: block.span,
                         kind: ExprKind::Block(block),
                     }))
                 }
@@ -1377,7 +1377,7 @@ impl super::Parser {
             } else {
                 let block = self.parse_block()?;
                 Some(Box::new(Expr {
-                    span: block.span.clone(),
+                    span: block.span,
                     kind: ExprKind::Block(block),
                 }))
             }
@@ -1417,7 +1417,7 @@ impl super::Parser {
             let body = if body_is_block {
                 let block = self.parse_block()?;
                 Expr {
-                    span: block.span.clone(),
+                    span: block.span,
                     kind: ExprKind::Block(block),
                 }
             } else {
@@ -1600,7 +1600,7 @@ impl super::Parser {
         let body = if self.check(&Token::LeftBrace) {
             let block = self.parse_block()?;
             Expr {
-                span: block.span.clone(),
+                span: block.span,
                 kind: ExprKind::Block(block),
             }
         } else {
@@ -1786,7 +1786,7 @@ impl super::Parser {
                     // identifier's span (`start`) for diagnostic span fidelity
                     // (LB hard-stop default fallback: label_span on
                     // LabeledBlock only; loop-side parity is v1.x polish).
-                    let label_span = start.clone();
+                    let label_span = start;
                     self.loop_labels.push((name.clone(), LabelKind::Block));
                     let body = self.parse_block()?;
                     self.loop_labels.pop();
@@ -2187,7 +2187,7 @@ impl super::Parser {
                 fields.push(FieldInit {
                     value: Expr {
                         kind: ExprKind::Identifier(name.clone()),
-                        span: span.clone(),
+                        span,
                     },
                     name,
                     shorthand: true,
@@ -2406,7 +2406,7 @@ impl super::Parser {
     /// untouched body otherwise (the overwhelmingly common case) — so the
     /// caller can use the result unconditionally.
     fn recover_assignment_arm_body(&mut self, expr: Expr) -> Expr {
-        let target_span = expr.span.clone();
+        let target_span = expr.span;
         let (op_span, compound) = if self.check(&Token::Equal) {
             let span = self.current_span();
             self.advance();
@@ -2428,7 +2428,7 @@ impl super::Parser {
         self.error_at(
             "assignment is a statement, not an expression, so it cannot be a bare \
              `match` arm body — wrap it in braces: `pattern => { place = value; }`",
-            op_span.clone(),
+            op_span,
         );
 
         let Some(value) = self.parse_expression() else {
@@ -2486,12 +2486,9 @@ impl super::Parser {
             },
         };
         Expr {
-            span: span.clone(),
+            span,
             kind: ExprKind::Block(Block {
-                stmts: vec![Stmt {
-                    span: span.clone(),
-                    kind,
-                }],
+                stmts: vec![Stmt { span, kind }],
                 final_expr: None,
                 span,
             }),

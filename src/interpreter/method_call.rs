@@ -405,7 +405,7 @@ impl<'a> super::Interpreter<'a> {
                                 if m.self_param.is_some() {
                                     tys.push(crate::ast::TypeExpr {
                                         kind: crate::ast::TypeKind::Tuple(Vec::new()),
-                                        span: m.span.clone(),
+                                        span: m.span,
                                     });
                                 }
                                 tys.extend(m.params.iter().map(|p| p.ty.clone()));

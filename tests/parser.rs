@@ -12050,7 +12050,7 @@ fn test_fstring_interp_spans_distinct_across_strings() {
         let ExprKind::Binary { left, .. } = &h.kind else {
             panic!("expected Binary, got {:?}", h.kind);
         };
-        left.span.clone()
+        left.span
     };
     let first = left_span(holes[0]);
     let second = left_span(holes[1]);

@@ -328,7 +328,7 @@ pub(super) fn normalize_bounds_into_where_clause(
             constraints.push(WhereConstraint::TypeBound {
                 type_name: param.name.clone(),
                 bounds: param.bounds.clone(),
-                span: param.span.clone(),
+                span: param.span,
             });
         }
     }
@@ -340,8 +340,8 @@ pub(super) fn normalize_bounds_into_where_clause(
     }
     let span = where_clause
         .as_ref()
-        .map(|wc| wc.span.clone())
-        .or(generic_params.as_ref().map(|gp| gp.span.clone()))
+        .map(|wc| wc.span)
+        .or(generic_params.as_ref().map(|gp| gp.span))
         .unwrap_or(Span {
             line: 0,
             column: 0,
@@ -2424,7 +2424,7 @@ impl<'a> TypeChecker<'a> {
                     );
                     self.type_lint_warning(
                         message,
-                        ov.span.clone(),
+                        ov.span,
                         TypeErrorKind::UnknownLint,
                         "unknown_lint",
                     );
@@ -2640,7 +2640,7 @@ impl<'a> TypeChecker<'a> {
             if let Item::EnumDef(e) = item {
                 if e.stdlib_origin && e.is_pub && e.name.ends_with("Error") && !e.is_non_exhaustive
                 {
-                    emissions.push((e.lint_overrides.clone(), e.span.clone(), e.name.clone()));
+                    emissions.push((e.lint_overrides.clone(), e.span, e.name.clone()));
                 }
             }
         }
@@ -2762,7 +2762,7 @@ impl<'a> TypeChecker<'a> {
                  collection methods under `panic_on_alloc_failure = false`"
             ),
         };
-        self.type_error(message, span.clone(), TypeErrorKind::PanickingAllocRejected);
+        self.type_error(message, *span, TypeErrorKind::PanickingAllocRejected);
     }
 
     /// Render a `ConstEvalError` from the const-expression evaluator
@@ -3056,12 +3056,7 @@ impl<'a> TypeChecker<'a> {
             message.push_str(&format!(" (since {since})"));
         }
         message.push_str(" — suppress with `#[allow(deprecated)]` on the enclosing item");
-        self.type_lint_warning(
-            message,
-            span.clone(),
-            TypeErrorKind::Deprecated,
-            "deprecated",
-        );
+        self.type_lint_warning(message, *span, TypeErrorKind::Deprecated, "deprecated");
     }
 
     /// Phase-8 line 49 — at a reference site, check whether the
@@ -3122,12 +3117,7 @@ impl<'a> TypeChecker<'a> {
             " — opt in with `#[allow(unstable_api)]` on the enclosing item, or globally \
              via `[lints].allow_unstable_api = true` in `kara.toml`",
         );
-        self.type_lint_warning(
-            message,
-            span.clone(),
-            TypeErrorKind::UnstableApi,
-            "unstable_api",
-        );
+        self.type_lint_warning(message, *span, TypeErrorKind::UnstableApi, "unstable_api");
     }
 
     /// Phase-8 line 96 — method / associated-function use-site stability
@@ -3270,7 +3260,7 @@ impl<'a> TypeChecker<'a> {
                     type_display(base),
                     name,
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::InvalidCast,
             );
             return;
@@ -3320,7 +3310,7 @@ impl<'a> TypeChecker<'a> {
                         type_display(to_ty),
                         type_display(to_ty)
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::InvalidCast,
                 );
                 return;
@@ -3346,7 +3336,7 @@ impl<'a> TypeChecker<'a> {
                      `Result[char, _]`",
                     type_display(from_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::InvalidCast,
             );
             return;
@@ -3361,7 +3351,7 @@ impl<'a> TypeChecker<'a> {
                      check",
                     type_display(from_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::InvalidCast,
             );
             return;
@@ -3377,7 +3367,7 @@ impl<'a> TypeChecker<'a> {
                      explicitly (e.g., `f != 0.0`) before casting",
                     type_display(from_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::InvalidCast,
             );
             return;
@@ -3398,7 +3388,7 @@ impl<'a> TypeChecker<'a> {
                     type_display(from_ty),
                     type_display(to_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::InvalidCast,
             );
             return;
@@ -3421,7 +3411,7 @@ impl<'a> TypeChecker<'a> {
                     type_display(from_ty),
                     type_display(to_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::InvalidCast,
             );
             return;
@@ -3455,7 +3445,7 @@ impl<'a> TypeChecker<'a> {
                     type_display(from_ty),
                     type_display(to_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::InvalidCast,
             );
             return;
@@ -3519,7 +3509,7 @@ impl<'a> TypeChecker<'a> {
                         type_display(from_ty),
                         type_display(to_ty),
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::InvalidCast,
                 );
             }
@@ -3533,7 +3523,7 @@ impl<'a> TypeChecker<'a> {
                 type_display(from_ty),
                 type_display(to_ty)
             ),
-            span.clone(),
+            *span,
             TypeErrorKind::InvalidCast,
         );
     }
@@ -3560,7 +3550,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(ctor) = constructor {
             msg.push_str(&format!(", or use `{ctor}`"));
         }
-        self.type_error(msg, span.clone(), TypeErrorKind::TypeMismatch);
+        self.type_error(msg, *span, TypeErrorKind::TypeMismatch);
     }
 
     /// Default `_` arm body for per-type `infer_*_method` dispatch on arms
@@ -3599,7 +3589,7 @@ impl<'a> TypeChecker<'a> {
             ),
             None => format!("no method '{}' on type '{}'", method, type_name),
         };
-        self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
+        self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
         for arg in args {
             self.infer_expr(&arg.value);
         }
@@ -3896,7 +3886,7 @@ impl<'a> TypeChecker<'a> {
             return;
         }
         self.return_impl_trait_witnesses
-            .push((type_display(&f), span.clone()));
+            .push((type_display(&f), *span));
     }
 
     /// End-of-body check for a return-position `impl Trait`: reject the
@@ -3914,14 +3904,14 @@ impl<'a> TypeChecker<'a> {
         let mut distinct: Vec<(String, Span)> = Vec::new();
         for (name, span) in &self.return_impl_trait_witnesses {
             if !distinct.iter().any(|(n, _)| n == name) {
-                distinct.push((name.clone(), span.clone()));
+                distinct.push((name.clone(), *span));
             }
         }
         if distinct.len() < 2 {
             return;
         }
         let names: Vec<&str> = distinct.iter().map(|(n, _)| n.as_str()).collect();
-        let second_span = distinct[1].1.clone();
+        let second_span = distinct[1].1;
         self.type_error(
             format!(
                 "error[E_IMPL_TRAIT_MULTIPLE_WITNESSES]: return-position `impl {trait_name}` \
@@ -4241,14 +4231,14 @@ impl<'a> TypeChecker<'a> {
                  annotated as owned but receives a borrowed value; help: write \
                  `{want}` (or drop the annotation — it is inferred)"
             ),
-            span: ty_expr.span.clone(),
+            span: ty_expr.span,
             kind: TypeErrorKind::TypeMismatch,
             lint_name: None,
             // Machine-applicable: the annotation's own span is exactly the text
             // to replace, so `karac fix` can rewrite `|x: String|` to
             // `|x: ref String|` unattended.
             fix_it: Some(FixIt {
-                span: ty_expr.span.clone(),
+                span: ty_expr.span,
                 replacement: want.clone(),
             }),
             class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
@@ -4324,7 +4314,7 @@ fn collect_forbidden_allows(
 ) {
     for ov in overrides {
         if ov.level == crate::lints::LintLevel::Allow && cli.is_forbidden(&ov.lint) {
-            out.push((ov.span.clone(), ov.lint.clone()));
+            out.push((ov.span, ov.lint.clone()));
         }
     }
 }
@@ -4342,7 +4332,7 @@ fn collect_expect_on_unfulfilled(
     for ov in overrides {
         if ov.level == crate::lints::LintLevel::Expect && ov.lint == "unfulfilled_lint_expectation"
         {
-            out.push(ov.span.clone());
+            out.push(ov.span);
         }
     }
 }
@@ -4377,7 +4367,7 @@ fn collect_unfulfilled_expects(
             out.push((
                 outer_frame.clone(),
                 inner_frame.clone(),
-                ov.span.clone(),
+                ov.span,
                 ov.lint.clone(),
             ));
         }

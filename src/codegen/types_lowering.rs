@@ -305,9 +305,9 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: TypeKind::Path(crate::ast::PathExpr {
                 segments: vec![name.clone()],
                 generic_args: Some(args),
-                span: expr.span.clone(),
+                span: expr.span,
             }),
-            span: expr.span.clone(),
+            span: expr.span,
         })
     }
 
@@ -335,9 +335,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: TypeKind::Path(crate::ast::PathExpr {
                     segments: vec!["String".to_string()],
                     generic_args: None,
-                    span: e.span.clone(),
+                    span: e.span,
                 }),
-                span: e.span.clone(),
+                span: e.span,
             });
         }
         let te = self.infer_arg_elem_te(e);
@@ -995,9 +995,9 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: TypeKind::Path(crate::ast::PathExpr {
                 segments: vec!["u8".to_string()],
                 generic_args: None,
-                span: span.clone(),
+                span: *span,
             }),
-            span: span.clone(),
+            span: *span,
         };
         match &expr.kind {
             ExprKind::MethodCall { object, method, .. }

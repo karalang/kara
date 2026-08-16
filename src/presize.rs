@@ -231,14 +231,14 @@ fn analyze_while(condition: &Expr, body: &Block, v: &str, bound_between: &[Strin
 /// append adds one element. Spans are inherited from `e` — synthesized nodes
 /// never surface in diagnostics, they only feed the `with_capacity` argument.
 fn add_const(e: &Expr, k: i64) -> Expr {
-    let span = e.span.clone();
+    let span = e.span;
     Expr {
         kind: ExprKind::Binary {
             op: BinOp::Add,
             left: Box::new(e.clone()),
             right: Box::new(Expr {
                 kind: ExprKind::Integer(k, None),
-                span: span.clone(),
+                span,
             }),
         },
         span,
@@ -521,20 +521,20 @@ fn rewrite_to_with_capacity(stmt: &mut Stmt, coll: Coll, bound: Expr) {
     let StmtKind::Let { value, .. } = &mut stmt.kind else {
         return;
     };
-    let span = value.span.clone();
+    let span = value.span;
     let callee = Expr {
         kind: ExprKind::Path {
             segments: vec![coll.type_name().to_string(), "with_capacity".to_string()],
             generic_args: None,
         },
-        span: span.clone(),
+        span,
     };
     let arg = CallArg {
         label: None,
         mut_marker: false,
         mut_marker_span: None,
         value: bound,
-        span: span.clone(),
+        span,
     };
     *value = Expr {
         kind: ExprKind::Call {

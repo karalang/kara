@@ -1569,7 +1569,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             } else {
                                 let synthetic = Pattern {
                                     kind: PatternKind::Binding(field_pat.name.clone()),
-                                    span: field_pat.span.clone(),
+                                    span: field_pat.span,
                                 };
                                 let bound =
                                     self.reconstruct_payload_value(&synthetic, &field_words)?;
@@ -1601,7 +1601,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         } else {
                             let synthetic = Pattern {
                                 kind: PatternKind::Binding(field_pat.name.clone()),
-                                span: field_pat.span.clone(),
+                                span: field_pat.span,
                             };
                             self.bind_pattern_values(&synthetic, field_val)?;
                         }
@@ -1643,7 +1643,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let synthetic = Pattern {
                     kind: PatternKind::Binding(name.clone()),
-                    span: pattern.span.clone(),
+                    span: pattern.span,
                 };
                 let bind_result = self
                     .bind_pattern_values(&synthetic, scrut)

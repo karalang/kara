@@ -233,7 +233,7 @@ fn emit_off_target_for(
         };
         diags.push(LintDiagnostic {
             level,
-            span: attr.span.clone(),
+            span: attr.span,
             message: format!(
                 "warning[malformed_diagnostic_attribute]: \
                  `#[diagnostic::{member}]` is only valid on \
@@ -258,7 +258,7 @@ fn check_impl_do_not_recommend(i: &ImplBlock, level: LintLevel, diags: &mut Vec<
         if seen_first {
             diags.push(LintDiagnostic {
                 level,
-                span: attr.span.clone(),
+                span: attr.span,
                 message: "warning[malformed_diagnostic_attribute]: \
                      duplicate `#[diagnostic::do_not_recommend]` on the same \
                      impl — only the first attribute is observed; remove the \
@@ -271,7 +271,7 @@ fn check_impl_do_not_recommend(i: &ImplBlock, level: LintLevel, diags: &mut Vec<
         if !attr.args.is_empty() || attr.string_value.is_some() {
             diags.push(LintDiagnostic {
                 level,
-                span: attr.span.clone(),
+                span: attr.span,
                 message: "warning[malformed_diagnostic_attribute]: \
                      `#[diagnostic::do_not_recommend]` takes no arguments — \
                      drop the parenthesised form and write the bare \
@@ -295,7 +295,7 @@ fn check_trait_on_unimplemented(t: &TraitDef, level: LintLevel, diags: &mut Vec<
         if seen_first {
             diags.push(LintDiagnostic {
                 level,
-                span: attr.span.clone(),
+                span: attr.span,
                 message: "warning[malformed_diagnostic_attribute]: \
                      duplicate `#[diagnostic::on_unimplemented]` on the same \
                      trait — only the first attribute is used; remove the \
@@ -327,7 +327,7 @@ fn validate_attr_shape(
     if attr.string_value.is_some() {
         diags.push(LintDiagnostic {
             level,
-            span: attr.span.clone(),
+            span: attr.span,
             message: "warning[malformed_diagnostic_attribute]: \
                  `#[diagnostic::on_unimplemented = \"...\"]` is not a \
                  recognised shape; use the parenthesised form with named \
@@ -344,7 +344,7 @@ fn validate_attr_shape(
         let Some(name) = &arg.name else {
             diags.push(LintDiagnostic {
                 level,
-                span: arg.span.clone(),
+                span: arg.span,
                 message: "warning[malformed_diagnostic_attribute]: \
                      `#[diagnostic::on_unimplemented]` requires named \
                      arguments — `message: \"...\"`, `label: \"...\"`, \
@@ -360,7 +360,7 @@ fn validate_attr_shape(
             other => {
                 diags.push(LintDiagnostic {
                     level,
-                    span: arg.span.clone(),
+                    span: arg.span,
                     message: format!(
                         "warning[malformed_diagnostic_attribute]: \
                          `#[diagnostic::on_unimplemented]` does not accept \
@@ -374,7 +374,7 @@ fn validate_attr_shape(
         if *seen_slot {
             diags.push(LintDiagnostic {
                 level,
-                span: arg.span.clone(),
+                span: arg.span,
                 message: format!(
                     "warning[malformed_diagnostic_attribute]: \
                      `#[diagnostic::on_unimplemented]` field `{name}` \
@@ -386,7 +386,7 @@ fn validate_attr_shape(
         let Some(value_expr) = &arg.value else {
             diags.push(LintDiagnostic {
                 level,
-                span: arg.span.clone(),
+                span: arg.span,
                 message: format!(
                     "warning[malformed_diagnostic_attribute]: \
                      `#[diagnostic::on_unimplemented]` field `{name}` \
@@ -398,7 +398,7 @@ fn validate_attr_shape(
         let ExprKind::StringLit(s) = &value_expr.kind else {
             diags.push(LintDiagnostic {
                 level,
-                span: arg.span.clone(),
+                span: arg.span,
                 message: format!(
                     "warning[malformed_diagnostic_attribute]: \
                      `#[diagnostic::on_unimplemented]` field `{name}` \
@@ -454,7 +454,7 @@ fn validate_placeholders(
         if !is_known_placeholder(name, arity) {
             diags.push(LintDiagnostic {
                 level,
-                span: arg_span.clone(),
+                span: *arg_span,
                 message: format!(
                     "warning[malformed_diagnostic_attribute]: \
                      unknown placeholder `{{{name}}}` in \

@@ -98,7 +98,7 @@ impl<'a> super::EffectChecker<'a> {
                                     verb_name(&te.effect.verb),
                                     te.effect.resource,
                                 ),
-                                span: span.clone(),
+                                span,
                                 kind: EffectErrorKind::MissingEffectDeclaration,
                                 subtype_trace: None,
                                 replacement: None,
@@ -153,7 +153,7 @@ impl<'a> super::EffectChecker<'a> {
                                         verb_name(&te.effect.verb),
                                         te.effect.resource,
                                     ),
-                                    span: span.clone(),
+                                    span,
                                     kind: EffectErrorKind::MissingEffectDeclaration,
                                     subtype_trace: None,
                                     replacement: None,
@@ -193,7 +193,7 @@ impl<'a> super::EffectChecker<'a> {
                                         effect.resource,
                                         origin_msg,
                                     ),
-                                    span: span.clone(),
+                                    span,
                                     kind: EffectErrorKind::MissingEffectDeclaration,
                                     subtype_trace: None,
                                     replacement: None,
@@ -214,7 +214,7 @@ impl<'a> super::EffectChecker<'a> {
                                         verb_name(&effect.verb),
                                         effect.resource,
                                     ),
-                                    span: span.clone(),
+                                    span,
                                     kind: EffectErrorKind::OverDeclaredEffect,
                                     subtype_trace: None,
                                     replacement: None,
@@ -300,7 +300,7 @@ impl<'a> super::EffectChecker<'a> {
                                         effects_list.join(", "),
                                         effects_list.join(" "),
                                     ),
-                                    span: span.clone(),
+                                    span,
                                     kind: EffectErrorKind::MissingEffectDeclaration,
                                     subtype_trace: None,
                                     replacement: None,
@@ -320,7 +320,7 @@ impl<'a> super::EffectChecker<'a> {
                          not declare `with _`. Add `with _` to propagate closure effects.",
                         name,
                     ),
-                    span: span.clone(),
+                    span,
                     kind: EffectErrorKind::MissingEffectDeclaration,
                     subtype_trace: None,
                     replacement: None,
@@ -388,7 +388,7 @@ impl<'a> super::EffectChecker<'a> {
                 continue;
             }
 
-            offenders.push((name.clone(), func.span.clone()));
+            offenders.push((name.clone(), func.span));
         }
 
         for (name, span) in offenders {
@@ -438,15 +438,15 @@ impl<'a> super::EffectChecker<'a> {
                 Item::ExternBlock(block) if block.abi == "C-unwind" => {
                     for extern_item in &block.items {
                         if let ExternItem::Function(f) = extern_item {
-                            offenders.push(("import", f.name.clone(), f.span.clone()));
+                            offenders.push(("import", f.name.clone(), f.span));
                         }
                     }
                 }
                 Item::ExternFunction(f) if f.abi == "C-unwind" => {
-                    offenders.push(("import", f.name.clone(), f.span.clone()));
+                    offenders.push(("import", f.name.clone(), f.span));
                 }
                 Item::Function(f) if f.abi.as_deref() == Some("C-unwind") => {
-                    offenders.push(("export", f.name.clone(), f.span.clone()));
+                    offenders.push(("export", f.name.clone(), f.span));
                 }
                 _ => {}
             }
@@ -502,7 +502,7 @@ impl<'a> super::EffectChecker<'a> {
                     .any(|te| matches!(te.effect.verb, EffectVerbKind::Suspends))
             });
             if body_suspends {
-                offenders.push((name.clone(), func.span.clone()));
+                offenders.push((name.clone(), func.span));
             }
         }
 
@@ -615,7 +615,7 @@ impl<'a> super::EffectChecker<'a> {
                                 method.name,
                                 ceiling_str,
                             ),
-                            span: method.span.clone(),
+                            span: method.span,
                             kind: EffectErrorKind::ImplExceedsTraitCeiling,
                             subtype_trace: None,
                             replacement: None,
@@ -693,7 +693,7 @@ impl<'a> super::EffectChecker<'a> {
                                 te.effect.resource,
                                 ceiling_str,
                             ),
-                            span: m.span.clone(),
+                            span: m.span,
                             kind: EffectErrorKind::TraitDefaultExceedsCeiling,
                             subtype_trace: None,
                             replacement: None,

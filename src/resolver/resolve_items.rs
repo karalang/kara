@@ -74,12 +74,9 @@ impl<'a> super::Resolver<'a> {
 
         // Register self if present
         if f.self_param.is_some() {
-            let _ = self.table.define(
-                "self".to_string(),
-                SymbolKind::SelfValue,
-                f.span.clone(),
-                false,
-            );
+            let _ = self
+                .table
+                .define("self".to_string(), SymbolKind::SelfValue, f.span, false);
         }
 
         // Register parameters
@@ -111,7 +108,7 @@ impl<'a> super::Resolver<'a> {
                 SymbolKind::Function {
                     param_names: vec!["expr".to_string()],
                 },
-                req.span.clone(),
+                req.span,
                 false,
             );
             self.resolve_expr(req);
@@ -124,14 +121,14 @@ impl<'a> super::Resolver<'a> {
                 SymbolKind::Function {
                     param_names: vec!["expr".to_string()],
                 },
-                clause.span.clone(),
+                clause.span,
                 false,
             );
             if let Some(binding) = &clause.param {
                 let _ = self.table.define(
                     binding.clone(),
                     SymbolKind::Variable { is_mut: false },
-                    clause.span.clone(),
+                    clause.span,
                     false,
                 );
             }
@@ -220,12 +217,7 @@ impl<'a> super::Resolver<'a> {
         self.table.push_scope(ScopeKind::Block);
         let self_id = self
             .table
-            .define(
-                "Self".to_string(),
-                SymbolKind::TypeParam,
-                t.span.clone(),
-                false,
-            )
+            .define("Self".to_string(), SymbolKind::TypeParam, t.span, false)
             .ok();
         // Supertrait constraints (`trait Foo: Bar + Baz`) are bounds on `Self`
         // — every `Self` value is also a `Bar` and a `Baz`. Recording them
@@ -266,7 +258,7 @@ impl<'a> super::Resolver<'a> {
                         let _ = self.table.define(
                             "self".to_string(),
                             SymbolKind::SelfValue,
-                            method.span.clone(),
+                            method.span,
                             false,
                         );
                     }
@@ -347,7 +339,7 @@ impl<'a> super::Resolver<'a> {
                 "user-defined `impl {trait_name} for T` is not allowed; \
                  `{trait_name}` is derived from `{source_trait}` via a blanket impl"
             ),
-            span: trait_path.span.clone(),
+            span: trait_path.span,
             kind: ResolveErrorKind::IntoTraitImplNotAllowed,
             suggestion: Some(format!(
                 "implement `{source_trait}` instead; `x.into()` will dispatch through it"
@@ -378,7 +370,7 @@ impl<'a> super::Resolver<'a> {
                 "impl-level effect variables ({var_list}) are not supported; \
                  use `with _` on the trait method instead"
             ),
-            span: generics.span.clone(),
+            span: generics.span,
             kind: ResolveErrorKind::ImplLevelEffectVarNotAllowed,
             suggestion: Some(
                 "remove the `with E` from the impl's generic parameters and declare the \
@@ -449,7 +441,7 @@ impl<'a> super::Resolver<'a> {
         };
         self.errors.push(ResolveError {
             message,
-            span: trait_path.span.clone(),
+            span: trait_path.span,
             kind: ResolveErrorKind::OperatorTraitImplRestricted,
             suggestion,
             replacement: None,
@@ -487,12 +479,9 @@ impl<'a> super::Resolver<'a> {
         self.check_impl_level_effect_vars(imp);
 
         // Register Self as a type
-        let _ = self.table.define(
-            "Self".to_string(),
-            SymbolKind::TypeParam,
-            imp.span.clone(),
-            false,
-        );
+        let _ = self
+            .table
+            .define("Self".to_string(), SymbolKind::TypeParam, imp.span, false);
 
         for item in &imp.items {
             match item {
@@ -583,10 +572,7 @@ impl<'a> super::Resolver<'a> {
             return;
         };
         if self.table.lookup(trait_name).is_none() {
-            let span = r
-                .provider_trait_span
-                .clone()
-                .unwrap_or_else(|| r.span.clone());
+            let span = r.provider_trait_span.unwrap_or(r.span);
             self.error_undefined_type(trait_name, span);
         }
     }
@@ -599,7 +585,7 @@ impl<'a> super::Resolver<'a> {
                 }
                 EffectGroupTerm::GroupRef(name) => {
                     if self.table.lookup(name).is_none() {
-                        self.error_undefined_name(name, g.span.clone());
+                        self.error_undefined_name(name, g.span);
                     }
                 }
             }

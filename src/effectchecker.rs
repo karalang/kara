@@ -613,10 +613,7 @@ impl<'a> EffectChecker<'a> {
             "process.exit",
         ] {
             let mut set = EffectSet::new();
-            set.add(
-                panics_effect.clone(),
-                EffectOrigin::Direct(builtin_span.clone()),
-            );
+            set.add(panics_effect.clone(), EffectOrigin::Direct(builtin_span));
             self.inferred_effects.insert(builtin.to_string(), set);
         }
 
@@ -629,10 +626,7 @@ impl<'a> EffectChecker<'a> {
         // routed to this single key in `effectchecker/inference.rs`.
         {
             let mut set = EffectSet::new();
-            set.add(
-                panics_effect.clone(),
-                EffectOrigin::Direct(builtin_span.clone()),
-            );
+            set.add(panics_effect.clone(), EffectOrigin::Direct(builtin_span));
             self.inferred_effects
                 .insert("float.trunc_to_int".to_string(), set);
         }
@@ -785,19 +779,13 @@ impl<'a> EffectChecker<'a> {
             crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY,
         ] {
             let mut set = EffectSet::new();
-            set.add(
-                alloc_heap.clone(),
-                EffectOrigin::Direct(builtin_span.clone()),
-            );
+            set.add(alloc_heap.clone(), EffectOrigin::Direct(builtin_span));
             self.inferred_effects.insert(stdlib_fn.to_string(), set);
         }
         // Receiver.recv suspends (blocks until a message arrives).
         {
             let mut set = EffectSet::new();
-            set.add(
-                suspends_effect.clone(),
-                EffectOrigin::Direct(builtin_span.clone()),
-            );
+            set.add(suspends_effect.clone(), EffectOrigin::Direct(builtin_span));
             self.inferred_effects
                 .insert("Receiver.recv".to_string(), set);
         }
@@ -810,10 +798,7 @@ impl<'a> EffectChecker<'a> {
         // concurrency` both see it). Free-function key — the bare name.
         {
             let mut set = EffectSet::new();
-            set.add(
-                suspends_effect.clone(),
-                EffectOrigin::Direct(builtin_span.clone()),
-            );
+            set.add(suspends_effect.clone(), EffectOrigin::Direct(builtin_span));
             self.inferred_effects.insert("sleep_ms".to_string(), set);
         }
         // `volatile_read` / `volatile_write` MMIO intrinsics — like the
@@ -832,7 +817,7 @@ impl<'a> EffectChecker<'a> {
                     verb: EffectVerbKind::Reads,
                     resource: "Hardware".to_string(),
                 },
-                EffectOrigin::Direct(builtin_span.clone()),
+                EffectOrigin::Direct(builtin_span),
             );
             self.inferred_effects
                 .insert("volatile_read".to_string(), set);
@@ -844,7 +829,7 @@ impl<'a> EffectChecker<'a> {
                     verb: EffectVerbKind::Writes,
                     resource: "Hardware".to_string(),
                 },
-                EffectOrigin::Direct(builtin_span.clone()),
+                EffectOrigin::Direct(builtin_span),
             );
             self.inferred_effects
                 .insert("volatile_write".to_string(), set);
@@ -865,7 +850,7 @@ impl<'a> EffectChecker<'a> {
                     verb: EffectVerbKind::Writes,
                     resource: "Hardware".to_string(),
                 },
-                EffectOrigin::Direct(builtin_span.clone()),
+                EffectOrigin::Direct(builtin_span),
             );
             self.inferred_effects
                 .insert("critical_section.acquire".to_string(), set);
@@ -931,14 +916,8 @@ impl<'a> EffectChecker<'a> {
                 "WebSocket.send_binary_masked",
             ] {
                 let mut set = EffectSet::new();
-                set.add(
-                    sends_network.clone(),
-                    EffectOrigin::Direct(builtin_span.clone()),
-                );
-                set.add(
-                    receives_network.clone(),
-                    EffectOrigin::Direct(builtin_span.clone()),
-                );
+                set.add(sends_network.clone(), EffectOrigin::Direct(builtin_span));
+                set.add(receives_network.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
         }
@@ -956,10 +935,7 @@ impl<'a> EffectChecker<'a> {
             };
             for fn_name in ["Env.set", "env.set"] {
                 let mut set = EffectSet::new();
-                set.add(
-                    writes_env.clone(),
-                    EffectOrigin::Direct(builtin_span.clone()),
-                );
+                set.add(writes_env.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
         }
@@ -987,7 +963,7 @@ impl<'a> EffectChecker<'a> {
             };
             for fn_name in ["File.open", "File.read"] {
                 let mut set = EffectSet::new();
-                set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span.clone()));
+                set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
             for fn_name in [
@@ -999,10 +975,7 @@ impl<'a> EffectChecker<'a> {
                 "File.sync_data",
             ] {
                 let mut set = EffectSet::new();
-                set.add(
-                    writes_fs.clone(),
-                    EffectOrigin::Direct(builtin_span.clone()),
-                );
+                set.add(writes_fs.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
             // Phase 8 `BufReader[R]` slice: the buffered read methods carry
@@ -1025,7 +998,7 @@ impl<'a> EffectChecker<'a> {
                 "BufReader.fill_buf",
             ] {
                 let mut set = EffectSet::new();
-                set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span.clone()));
+                set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
             // Phase 8 `BufWriter[W]` slice (Write-side peer of `BufReader`):
@@ -1037,10 +1010,7 @@ impl<'a> EffectChecker<'a> {
             // `File.*` / `BufReader.*` blocks above.
             for fn_name in ["BufWriter.write", "BufWriter.write_all", "BufWriter.flush"] {
                 let mut set = EffectSet::new();
-                set.add(
-                    writes_fs.clone(),
-                    EffectOrigin::Direct(builtin_span.clone()),
-                );
+                set.add(writes_fs.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
             // Phase 11 DataFrame CSV leg: `df.write_csv(path)` writes the
@@ -1053,14 +1023,11 @@ impl<'a> EffectChecker<'a> {
             // their own).
             {
                 let mut set = EffectSet::new();
-                set.add(
-                    writes_fs.clone(),
-                    EffectOrigin::Direct(builtin_span.clone()),
-                );
+                set.add(writes_fs.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects
                     .insert("DataFrame.write_csv".to_string(), set);
                 let mut rset = EffectSet::new();
-                rset.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span.clone()));
+                rset.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects
                     .insert("DataFrame.read_csv".to_string(), rset);
             }
@@ -1079,14 +1046,14 @@ impl<'a> EffectChecker<'a> {
                         verb: EffectVerbKind::Reads,
                         resource: "Stdin".to_string(),
                     },
-                    EffectOrigin::Direct(builtin_span.clone()),
+                    EffectOrigin::Direct(builtin_span),
                 );
                 set.add(
                     Effect {
                         verb: EffectVerbKind::Blocks,
                         resource: String::new(),
                     },
-                    EffectOrigin::Direct(builtin_span.clone()),
+                    EffectOrigin::Direct(builtin_span),
                 );
                 self.inferred_effects.insert("Stdin.lines".to_string(), set);
             }
@@ -1109,8 +1076,7 @@ impl<'a> EffectChecker<'a> {
             self.declared_effects
                 .insert(key.clone(), DeclaredEffects::Polymorphic);
             self.function_visibility.insert(key.clone(), true);
-            self.function_spans
-                .insert(key.clone(), builtin_span.clone());
+            self.function_spans.insert(key.clone(), builtin_span);
             self.fn_uses_with_underscore.insert(key);
         }
 
@@ -1232,7 +1198,7 @@ impl<'a> EffectChecker<'a> {
             if let Some(decl) = decls.get(name) {
                 self.errors.push(EffectError {
                     message: format!("circular effect group reference: '{}'", name),
-                    span: decl.span.clone(),
+                    span: decl.span,
                     kind: EffectErrorKind::CircularEffectGroup,
                     subtype_trace: None,
                     replacement: None,
@@ -1264,7 +1230,7 @@ impl<'a> EffectChecker<'a> {
                                     verb: verb.kind.clone(),
                                     resource: String::new(),
                                 },
-                                EffectOrigin::Direct(verb.span.clone()),
+                                EffectOrigin::Direct(verb.span),
                             );
                         }
                         for resource in &verb.resources {
@@ -1274,7 +1240,7 @@ impl<'a> EffectChecker<'a> {
                                     verb: verb.kind.clone(),
                                     resource: res_name,
                                 },
-                                EffectOrigin::Direct(verb.span.clone()),
+                                EffectOrigin::Direct(verb.span),
                             );
                         }
                     }
@@ -1285,7 +1251,7 @@ impl<'a> EffectChecker<'a> {
                                     "undefined effect group: '{}' referenced by group '{}'",
                                     ref_name, name
                                 ),
-                                span: decl.span.clone(),
+                                span: decl.span,
                                 kind: EffectErrorKind::UndefinedEffectGroup,
                                 subtype_trace: None,
                                 replacement: None,
@@ -1317,7 +1283,7 @@ impl<'a> EffectChecker<'a> {
                     }
                     self.declared_effects.insert(f.name.clone(), decl);
                     self.function_visibility.insert(f.name.clone(), f.is_pub);
-                    self.function_spans.insert(f.name.clone(), f.span.clone());
+                    self.function_spans.insert(f.name.clone(), f.span);
                 }
                 Item::ExternFunction(e) => self.register_extern_function_effects(e, &[]),
                 Item::ExternBlock(b) => {
@@ -1351,7 +1317,7 @@ impl<'a> EffectChecker<'a> {
                         }
                         self.declared_effects.insert(key.clone(), decl);
                         self.function_visibility.insert(key.clone(), method.is_pub);
-                        self.function_spans.insert(key.clone(), method.span.clone());
+                        self.function_spans.insert(key.clone(), method.span);
                     }
                 }
                 Item::TraitDef(t) => {
@@ -1381,7 +1347,7 @@ impl<'a> EffectChecker<'a> {
                         // Trait methods inherit trait visibility for the purpose of
                         // public-declaration verification.
                         self.function_visibility.insert(key.clone(), t.is_pub);
-                        self.function_spans.insert(key.clone(), method.span.clone());
+                        self.function_spans.insert(key.clone(), method.span);
                     }
                 }
                 _ => {}
@@ -1415,7 +1381,7 @@ impl<'a> EffectChecker<'a> {
                                 verb: verb.kind.clone(),
                                 resource: String::new(),
                             },
-                            EffectOrigin::Direct(verb.span.clone()),
+                            EffectOrigin::Direct(verb.span),
                         );
                     }
                     for resource in &verb.resources {
@@ -1425,7 +1391,7 @@ impl<'a> EffectChecker<'a> {
                                 verb: verb.kind.clone(),
                                 resource: res_name,
                             },
-                            EffectOrigin::Direct(verb.span.clone()),
+                            EffectOrigin::Direct(verb.span),
                         );
                     }
                 }
@@ -1437,7 +1403,7 @@ impl<'a> EffectChecker<'a> {
                     } else {
                         self.errors.push(EffectError {
                             message: format!("undefined effect group: '{}'", name),
-                            span: effects.span.clone(),
+                            span: effects.span,
                             kind: EffectErrorKind::UndefinedEffectGroup,
                             subtype_trace: None,
                             replacement: None,
@@ -1568,7 +1534,7 @@ impl<'a> EffectChecker<'a> {
                         // ceiling here — the body's inferred effects must stand on their own
                         // so verify_trait_default_bodies can detect violations.
                         let stub = Function {
-                            span: m.span.clone(),
+                            span: m.span,
                             attributes: Vec::new(),
                             doc_comment: None,
                             is_pub: t.is_pub,
@@ -1732,7 +1698,7 @@ impl<'a> EffectChecker<'a> {
                 let effects = self.get_callee_effects(name);
                 let mut result = EffectSet::new();
                 for e in effects {
-                    result.add(e, EffectOrigin::Direct(arg.span.clone()));
+                    result.add(e, EffectOrigin::Direct(arg.span));
                 }
                 result
             }
@@ -1747,7 +1713,7 @@ impl<'a> EffectChecker<'a> {
                             e,
                             EffectOrigin::Callee {
                                 fn_name: callee.clone(),
-                                span: span.clone(),
+                                span,
                             },
                         );
                     }

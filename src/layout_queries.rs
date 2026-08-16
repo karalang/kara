@@ -321,7 +321,7 @@ fn build_layout_query(
             def_path: def_path.clone(),
             sub_item_hash: SubItemHash(loop_expr.span.offset as u64),
         },
-        site: loop_expr.span.clone(),
+        site: loop_expr.span,
         kind: QueryKind::LayoutChoice,
         options: vec![
             QueryOption {

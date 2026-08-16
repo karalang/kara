@@ -382,7 +382,7 @@ impl Walker<'_> {
     fn make_implicit_diag(&self, expr: &Expr, kind: &str, why: &str) -> LintDiagnostic {
         LintDiagnostic {
             level: self.level,
-            span: expr.span.clone(),
+            span: expr.span,
             message: format!("discarded `{kind}` value — `{kind}` is implicitly `#[must_use]`",),
             lint_name: "must_use".to_string(),
             help: Some(
@@ -412,7 +412,7 @@ impl Walker<'_> {
         };
         LintDiagnostic {
             level: self.level,
-            span: expr.span.clone(),
+            span: expr.span,
             message: format!(
                 "discarded `{type_name}` value — `{type_name}` is annotated `#[must_use]`"
             ),
@@ -442,7 +442,7 @@ impl Walker<'_> {
         };
         LintDiagnostic {
             level: self.level,
-            span: expr.span.clone(),
+            span: expr.span,
             message: format!(
                 "discarded return value of `{callee_name}` — the function is annotated \
                  `#[must_use]`"

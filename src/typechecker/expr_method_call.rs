@@ -495,7 +495,7 @@ impl<'a> super::TypeChecker<'a> {
                          add a trait bound declaring it (e.g. `{}: SomeTrait`)",
                         method, type_param_name, type_param_name,
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::NoMethodFound,
                 );
                 Type::Error
@@ -543,7 +543,7 @@ impl<'a> super::TypeChecker<'a> {
                          Use UFCS `Trait.{}(receiver, ...)` to disambiguate.",
                         method, type_param_name, trait_list, method,
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::AmbiguousAssocFn,
                 );
                 Type::Error
@@ -606,7 +606,7 @@ impl<'a> super::TypeChecker<'a> {
                          the alias's concrete witness requires the deferred TAIT machinery \
                          — cast through the trait surface for now"
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::NoMethodFound,
                 );
             }
@@ -617,7 +617,7 @@ impl<'a> super::TypeChecker<'a> {
                          declared on trait '{trait_name}' are callable through the \
                          existential"
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::NoMethodFound,
                 );
             }
@@ -690,7 +690,7 @@ impl<'a> super::TypeChecker<'a> {
                          declare it on the trait or a supertrait",
                         method, trait_name,
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::NoMethodFound,
                 );
                 Type::Error
@@ -714,7 +714,7 @@ impl<'a> super::TypeChecker<'a> {
                          Use UFCS `Trait.{}(self, ...)` to disambiguate.",
                         method, trait_name, trait_list, method,
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::AmbiguousAssocFn,
                 );
                 Type::Error
@@ -761,7 +761,7 @@ impl<'a> super::TypeChecker<'a> {
                          Use UFCS `Trait.{}(...)` to disambiguate.",
                         method, type_name, trait_list, method,
                     ),
-                    call_span.clone(),
+                    *call_span,
                     TypeErrorKind::AmbiguousAssocFn,
                 );
                 Some(Type::Error)
@@ -822,7 +822,7 @@ impl<'a> super::TypeChecker<'a> {
                     param_types.len(),
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -831,7 +831,7 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             for (arg, param) in args.iter().zip(param_types.iter()) {
                 let arg_ty = self.infer_expr(&arg.value);
-                self.check_assignable(param, &arg_ty, arg.value.span.clone());
+                self.check_assignable(param, &arg_ty, arg.value.span);
             }
         }
 
@@ -939,13 +939,13 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     "reflection method `derives` takes exactly one argument (the trait name)"
                         .to_string(),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
             } else if !matches!(arg_tys[0], Type::Str | Type::Error) {
                 self.type_error(
                     "reflection method `derives` expects a `String` trait name".to_string(),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -954,7 +954,7 @@ impl<'a> super::TypeChecker<'a> {
         if !args.is_empty() {
             self.type_error(
                 format!("reflection method `{method}` takes no arguments"),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
         }
@@ -1763,7 +1763,7 @@ impl<'a> super::TypeChecker<'a> {
                     dotted,
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -1778,7 +1778,7 @@ impl<'a> super::TypeChecker<'a> {
         if arg.label.is_some() {
             self.type_error(
                 format!("'{}' does not accept labeled arguments", dotted),
-                arg.value.span.clone(),
+                arg.value.span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
         }
@@ -1800,7 +1800,7 @@ impl<'a> super::TypeChecker<'a> {
                      stable address",
                     code, dotted
                 ),
-                arg.value.span.clone(),
+                arg.value.span,
                 TypeErrorKind::InvalidUnaryOp,
             );
             return Type::Pointer {
@@ -1822,7 +1822,7 @@ impl<'a> super::TypeChecker<'a> {
                  the deref chain passes through a '*const T', neither of which permits \
                  mutation"
                     .to_string(),
-                arg.value.span.clone(),
+                arg.value.span,
                 TypeErrorKind::InvalidUnaryOp,
             );
         }
@@ -1929,7 +1929,7 @@ impl<'a> super::TypeChecker<'a> {
         if args.len() != 1 {
             self.type_error(
                 format!("'splat' takes exactly one argument, found {}", args.len()),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for a in args {
@@ -1973,7 +1973,7 @@ impl<'a> super::TypeChecker<'a> {
                     "'from_array' takes exactly one argument, found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for a in args {
@@ -2017,7 +2017,7 @@ impl<'a> super::TypeChecker<'a> {
                     "'from_slice' takes exactly one argument, found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for a in args {
@@ -2038,7 +2038,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&element),
                             type_display(arg_elem)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2051,7 +2051,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(&element),
                         type_display(other)
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -2087,7 +2087,7 @@ impl<'a> super::TypeChecker<'a> {
                     "'load_masked' takes exactly two arguments (slice, mask), found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for a in args {
@@ -2109,7 +2109,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&element),
                             type_display(arg_elem)
                         ),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2122,7 +2122,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(&element),
                         type_display(other)
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -2140,7 +2140,7 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(&expected_mask),
                     type_display(&mask_ty)
                 ),
-                args[1].value.span.clone(),
+                args[1].value.span,
                 TypeErrorKind::TypeMismatch,
             );
         }
@@ -2169,7 +2169,7 @@ impl<'a> super::TypeChecker<'a> {
                     "'gather' takes exactly two arguments (slice, indices), found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for a in args {
@@ -2191,7 +2191,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&element),
                             type_display(arg_elem)
                         ),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2204,7 +2204,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(&element),
                         type_display(other)
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -2222,7 +2222,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'gather' indices must be an integer vector, found '{}'",
                             type_display(&idx_ty)
                         ),
-                        args[1].value.span.clone(),
+                        args[1].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 } else if il != &lanes {
@@ -2236,7 +2236,7 @@ impl<'a> super::TypeChecker<'a> {
                             }),
                             type_display(&idx_ty)
                         ),
-                        args[1].value.span.clone(),
+                        args[1].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2248,7 +2248,7 @@ impl<'a> super::TypeChecker<'a> {
                         "'gather' indices must be an integer vector, found '{}'",
                         type_display(other)
                     ),
-                    args[1].value.span.clone(),
+                    args[1].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -2283,7 +2283,7 @@ impl<'a> super::TypeChecker<'a> {
                     "'cast_from' target element must be a numeric type (int or float), found '{}'",
                     type_display(&element)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
         }
@@ -2293,7 +2293,7 @@ impl<'a> super::TypeChecker<'a> {
                     "'cast_from' takes exactly one argument (the source vector), found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for a in args {
@@ -2313,7 +2313,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'cast_from' source element must be a numeric type, found '{}'",
                             type_display(&src_ty)
                         ),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 } else if sl != &lanes {
@@ -2327,7 +2327,7 @@ impl<'a> super::TypeChecker<'a> {
                             }),
                             type_display(&src_ty)
                         ),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2339,7 +2339,7 @@ impl<'a> super::TypeChecker<'a> {
                         "'cast_from' expects a source Vector[S, N], found '{}'",
                         type_display(other)
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -2367,7 +2367,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{}' takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2382,7 +2382,7 @@ impl<'a> super::TypeChecker<'a> {
                             method,
                             type_display(&elem)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -2399,7 +2399,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{}' takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2414,7 +2414,7 @@ impl<'a> super::TypeChecker<'a> {
                             method,
                             type_display(&elem)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -2429,7 +2429,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'dot' takes exactly one argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2445,7 +2445,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&expected),
                             type_display(&arg_ty)
                         ),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2466,7 +2466,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{}' takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2481,7 +2481,7 @@ impl<'a> super::TypeChecker<'a> {
                             method,
                             type_display(&elem)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -2504,7 +2504,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{}' takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2521,7 +2521,7 @@ impl<'a> super::TypeChecker<'a> {
                                  Vector element is '{}'",
                                 type_display(&elem)
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return Type::Error;
@@ -2536,7 +2536,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{}' takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2560,7 +2560,7 @@ impl<'a> super::TypeChecker<'a> {
                             want_bits,
                             type_display(&elem)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -2587,7 +2587,7 @@ impl<'a> super::TypeChecker<'a> {
                              found '{}'",
                             type_display(&vec_ty)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     for a in args {
@@ -2598,7 +2598,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'cross' takes exactly one argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2614,7 +2614,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&vec_ty),
                             type_display(&arg_ty)
                         ),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2637,7 +2637,7 @@ impl<'a> super::TypeChecker<'a> {
                              by a vector comparison; receiver is '{}'",
                             type_display(&mask_ty)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     for a in args {
@@ -2648,7 +2648,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 2 {
                     self.type_error(
                         format!("'select' takes exactly two arguments, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2677,7 +2677,7 @@ impl<'a> super::TypeChecker<'a> {
                                     type_display(&a_ty),
                                     type_display(&b_ty)
                                 ),
-                                args[1].value.span.clone(),
+                                args[1].value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             return Type::Error;
@@ -2690,7 +2690,7 @@ impl<'a> super::TypeChecker<'a> {
                                     type_display(&mask_ty),
                                     type_display(&a_ty)
                                 ),
-                                args[0].value.span.clone(),
+                                args[0].value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             return Type::Error;
@@ -2706,7 +2706,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(&a_ty),
                                 type_display(&b_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         Type::Error
@@ -2724,7 +2724,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "'reverse' takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2748,7 +2748,7 @@ impl<'a> super::TypeChecker<'a> {
                              found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2763,7 +2763,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'{method}' requires a non-negative compile-time integer literal \
                              rotate amount"
                         ),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2787,7 +2787,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'replace' takes exactly two arguments (index, value), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2802,7 +2802,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'replace' index must be an integer, found '{}'",
                             type_display(&idx_ty)
                         ),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2828,7 +2828,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'shuffle' takes exactly one argument (the index list), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2841,7 +2841,7 @@ impl<'a> super::TypeChecker<'a> {
                         "'shuffle' requires a compile-time array literal of lane indices, \
                          e.g. v.shuffle([0, 2, 1, 3])"
                             .to_string(),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     let _ = self.infer_expr(&args[0].value);
@@ -2850,7 +2850,7 @@ impl<'a> super::TypeChecker<'a> {
                 if items.is_empty() {
                     self.type_error(
                         "'shuffle' index list must select at least one lane".to_string(),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -2867,7 +2867,7 @@ impl<'a> super::TypeChecker<'a> {
                                             "shuffle index {v} out of range for a {nn}-lane \
                                              source vector (valid indices are 0..{nn})"
                                         ),
-                                        it.span.clone(),
+                                        it.span,
                                         TypeErrorKind::TypeMismatch,
                                     );
                                 }
@@ -2877,7 +2877,7 @@ impl<'a> super::TypeChecker<'a> {
                             self.type_error(
                                 "'shuffle' indices must be non-negative integer literals"
                                     .to_string(),
-                                it.span.clone(),
+                                it.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -2902,7 +2902,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'store_masked' takes exactly two arguments (slice, mask), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -2924,7 +2924,7 @@ impl<'a> super::TypeChecker<'a> {
                                     type_display(&elem),
                                     type_display(arg_elem)
                                 ),
-                                args[0].value.span.clone(),
+                                args[0].value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -2934,7 +2934,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'store_masked' requires a 'mut Slice[T]' destination (the slice \
                              must be mutable to write into)"
                                 .to_string(),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -2947,7 +2947,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(&elem),
                                 type_display(other)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -2965,7 +2965,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&expected_mask),
                             type_display(&mask_ty)
                         ),
-                        args[1].value.span.clone(),
+                        args[1].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2984,7 +2984,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'scatter' takes exactly two arguments (slice, indices), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for a in args {
@@ -3006,7 +3006,7 @@ impl<'a> super::TypeChecker<'a> {
                                     type_display(&elem),
                                     type_display(arg_elem)
                                 ),
-                                args[0].value.span.clone(),
+                                args[0].value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -3016,7 +3016,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'scatter' requires a 'mut Slice[T]' destination (the slice must \
                              be mutable to write into)"
                                 .to_string(),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -3028,7 +3028,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(&elem),
                                 type_display(other)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -3045,7 +3045,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "'scatter' indices must be an integer vector, found '{}'",
                                     type_display(&idx_ty)
                                 ),
-                                args[1].value.span.clone(),
+                                args[1].value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         } else if il != lanes {
@@ -3059,7 +3059,7 @@ impl<'a> super::TypeChecker<'a> {
                                     }),
                                     type_display(&idx_ty)
                                 ),
-                                args[1].value.span.clone(),
+                                args[1].value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -3071,7 +3071,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'scatter' indices must be an integer vector, found '{}'",
                                 type_display(other)
                             ),
-                            args[1].value.span.clone(),
+                            args[1].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -3089,7 +3089,7 @@ impl<'a> super::TypeChecker<'a> {
                         method,
                         type_display(&elem)
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 for a in args {
@@ -3176,7 +3176,7 @@ impl<'a> super::TypeChecker<'a> {
                     "`critical_section.acquire` takes no arguments, found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             // Still type the args so downstream diagnostics don't cascade.
@@ -3215,7 +3215,7 @@ impl<'a> super::TypeChecker<'a> {
                      `gpu.upload(vec)` (found {} argument(s))",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             return gpu_buffer(Type::Error);
@@ -3235,7 +3235,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_UPLOAD_BUFFER]: `gpu.upload` requires a `Vec[S]` over a struct \
                      element with a `layout` block"
                         .to_string(),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return gpu_buffer(Type::Error);
@@ -3260,7 +3260,7 @@ impl<'a> super::TypeChecker<'a> {
                         "error[E_GPU_UPLOAD_BUFFER]: every field of `{struct_name}` must be `f32` \
                          (the decided GPU precision) to `gpu.upload`"
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return gpu_buffer(struct_ty);
@@ -3271,7 +3271,7 @@ impl<'a> super::TypeChecker<'a> {
                         "error[E_GPU_UPLOAD_BUFFER]: `gpu.upload` buffer element `{struct_name}` \
                          is not a struct"
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return gpu_buffer(struct_ty);
@@ -3284,7 +3284,7 @@ impl<'a> super::TypeChecker<'a> {
                 "error[E_GPU_UPLOAD_BUFFER]: `gpu.upload` requires a bare binding carrying a \
                  `layout` block (bind the buffer to a `let` first)"
                     .to_string(),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return gpu_buffer(struct_ty);
@@ -3332,7 +3332,7 @@ impl<'a> super::TypeChecker<'a> {
                      `{struct_name}` — a `layout` block over `{struct_name}` exists, so bind that \
                      variable (or remove the layout to use the default interleaved GPU buffer)"
                 ),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return gpu_buffer(struct_ty);
@@ -3358,7 +3358,7 @@ impl<'a> super::TypeChecker<'a> {
                      `gpu.download(buf)` (found {} argument(s))",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             return vec_of(Type::Error);
@@ -3373,7 +3373,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_DOWNLOAD_BUFFER]: `gpu.download` requires a `GpuBuffer[S]` handle \
                      (the result of `gpu.upload` / `gpu.dispatch`)"
                         .to_string(),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 vec_of(Type::Error)
@@ -3414,7 +3414,7 @@ impl<'a> super::TypeChecker<'a> {
                      `gpu.dispatch(kernel, buffer, ...)` (found {} argument(s))",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             return vec_of(Type::Float(FloatSize::F32));
@@ -3468,7 +3468,7 @@ impl<'a> super::TypeChecker<'a> {
                 "error[E_GPU_DISPATCH_ARITY]: extra `gpu.dispatch` arguments (scalar uniforms) \
                  require a struct buffer with a `layout` block"
                     .to_string(),
-                args[2].value.span.clone(),
+                args[2].value.span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             return vec_of(Type::Float(FloatSize::F32));
@@ -3489,7 +3489,7 @@ impl<'a> super::TypeChecker<'a> {
                              `Vec[f32]`, `Vec[i32]`, or `Vec[u32]` in slice-0, found `{}`",
                             type_display(&buf_ty)
                         ),
-                        args[1].value.span.clone(),
+                        args[1].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -3506,7 +3506,7 @@ impl<'a> super::TypeChecker<'a> {
                 "error[E_GPU_DISPATCH_KERNEL]: the `gpu.dispatch` kernel must be a bare \
                  `#[gpu]` function name in slice-0"
                     .to_string(),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result_vec;
@@ -3526,7 +3526,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_DISPATCH_KERNEL]: no `#[gpu]` function named `{kernel_name}` \
                      is in scope for `gpu.dispatch`"
                 ),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result_vec;
@@ -3542,7 +3542,7 @@ impl<'a> super::TypeChecker<'a> {
                         "error[E_GPU_DISPATCH_KERNEL]: kernel `{kernel_name}` maps `{kernel_elem}` \
                          but the buffer is `Vec[{elem_spell}]` — the element types must match"
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return result_vec;
@@ -3573,7 +3573,7 @@ impl<'a> super::TypeChecker<'a> {
                          shader — {}",
                         e.reason()
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -3637,7 +3637,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_DISPATCH_BUFFER]: `gpu.dispatch` buffer element `{struct_name}` \
                      is not a struct"
                 ),
-                args[1].value.span.clone(),
+                args[1].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result_vec;
@@ -3648,7 +3648,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_DISPATCH_BUFFER]: a struct `gpu.dispatch` buffer requires every \
                      field of `{struct_name}` to be `f32` (the decided GPU precision)"
                 ),
-                args[1].value.span.clone(),
+                args[1].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result_vec;
@@ -3663,7 +3663,7 @@ impl<'a> super::TypeChecker<'a> {
                 "error[E_GPU_DISPATCH_BUFFER]: a struct `gpu.dispatch` buffer must be a bare \
                  binding carrying a `layout` block"
                     .to_string(),
-                args[1].value.span.clone(),
+                args[1].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result_vec;
@@ -3678,7 +3678,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_DISPATCH_BUFFER]: `gpu.dispatch` on a struct buffer requires a \
                      `layout` block for `{buf_name}` (each field group becomes a GPU buffer)"
                 ),
-                args[1].value.span.clone(),
+                args[1].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result_vec;
@@ -3690,7 +3690,7 @@ impl<'a> super::TypeChecker<'a> {
                 "error[E_GPU_DISPATCH_KERNEL]: the `gpu.dispatch` kernel must be a bare `#[gpu]` \
                  function name"
                     .to_string(),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result_vec;
@@ -3705,7 +3705,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_DISPATCH_KERNEL]: no `#[gpu]` function named `{kernel_name}` is \
                      in scope for `gpu.dispatch`"
                 ),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result_vec;
@@ -3743,7 +3743,7 @@ impl<'a> super::TypeChecker<'a> {
                      `Vec[{struct_name}], <int index> -> {struct_name}` (stencil), with any extra \
                      params `f32` uniforms"
                 ),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result_vec;
@@ -3757,7 +3757,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_DISPATCH_ARITY]: kernel `{kernel_name}` takes \
                      {n_uniform_params} uniform(s) but {n_uniform_args} were passed"
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             return result_vec;
@@ -3771,7 +3771,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_DISPATCH_UNIFORM]: `gpu.dispatch` uniform arguments must be a \
                      float (`f32`/`f64`)"
                         .to_string(),
-                    ua.value.span.clone(),
+                    ua.value.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -3827,7 +3827,7 @@ impl<'a> super::TypeChecker<'a> {
                 "error[E_GPU_DISPATCH_KERNEL]: the `gpu.dispatch` kernel must be a bare `#[gpu]` \
                  function name"
                     .to_string(),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return gpu_buffer;
@@ -3842,7 +3842,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_DISPATCH_KERNEL]: no `#[gpu]` function named `{kernel_name}` is \
                      in scope for `gpu.dispatch`"
                 ),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return gpu_buffer;
@@ -3871,7 +3871,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_GPU_DISPATCH_KERNEL]: kernel `{kernel_name}` must be `fn(S[, i]) -> S` \
                      over `{struct_name}` with `f32` uniforms for a resident `gpu.dispatch`"
                 ),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return gpu_buffer;
@@ -3883,7 +3883,7 @@ impl<'a> super::TypeChecker<'a> {
                      uniform(s) but got {}",
                     args.len().saturating_sub(2)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             return gpu_buffer;
@@ -3894,7 +3894,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     "error[E_GPU_DISPATCH_UNIFORM]: `gpu.dispatch` uniform arguments must be `f32`"
                         .to_string(),
-                    ua.value.span.clone(),
+                    ua.value.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }

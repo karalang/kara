@@ -57,7 +57,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             format!("'.raw()' takes no arguments, found {}", args.len()),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         for arg in args {
@@ -87,7 +87,7 @@ impl<'a> super::TypeChecker<'a> {
                     if args.len() != 1 {
                         self.type_error(
                             format!("'cmp' expects 1 argument, found {}", args.len()),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         for arg in args {
@@ -95,11 +95,7 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     } else {
                         let arg_ty = self.infer_expr(&args[0].value);
-                        self.check_assignable(
-                            receiver_for_lookup,
-                            &arg_ty,
-                            args[0].value.span.clone(),
-                        );
+                        self.check_assignable(receiver_for_lookup, &arg_ty, args[0].value.span);
                     }
                     return Some(Type::Named {
                         name: "Ordering".to_string(),
@@ -127,7 +123,7 @@ impl<'a> super::TypeChecker<'a> {
                          or call a free function from the `unsafe extern \"C\" {{ … }}` \
                          block that takes `ref {name}` / `mut ref {name}`."
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::NoMethodFound,
                 );
                 for arg in args {
@@ -242,7 +238,7 @@ impl<'a> super::TypeChecker<'a> {
                     method,
                     type_display(receiver_for_lookup)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::NoMethodFound,
             );
             return Some(Type::Error);

@@ -196,7 +196,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     message: format!(
                         "closure with `{mode_str}` capture of `{cap_name}` escapes its scope by being returned — the borrow of `{cap_name}` would outlive its source"
                     ),
-                    span: closure_span.clone(),
+                    span: closure_span,
                     kind: OwnershipErrorKind::RefCaptureEscapesScope,
                     suggestion: Some(fix),
                     replacement: None,

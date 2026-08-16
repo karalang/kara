@@ -28,7 +28,7 @@ impl<'a> super::TypeChecker<'a> {
                 if seen_unlabeled_after_label {
                     self.type_error(
                         "labeled arguments must be contiguous — cannot have unlabeled arguments between labeled ones".to_string(),
-                        arg.span.clone(),
+                        arg.span,
                         TypeErrorKind::NonContiguousLabels,
                     );
                 }
@@ -45,14 +45,14 @@ impl<'a> super::TypeChecker<'a> {
                                     pname,
                                     i + 1
                                 ),
-                                arg.span.clone(),
+                                arg.span,
                                 TypeErrorKind::LabelMismatch,
                             );
                         }
                     } else {
                         self.type_error(
                             format!("parameter at position {} cannot be labeled (destructuring pattern)", i + 1),
-                            arg.span.clone(),
+                            arg.span,
                             TypeErrorKind::LabelMismatch,
                         );
                     }

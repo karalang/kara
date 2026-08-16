@@ -1287,7 +1287,7 @@ impl<'a> OwnershipChecker<'a> {
                 "{} — `{}` is declared without `mut` at line {}:{}",
                 message, name, let_span.line, let_span.column
             ),
-            span: write_span.clone(),
+            span: *write_span,
             kind,
             suggestion: Some(format!("change the declaration to `let mut {}`", name)),
             replacement: Some(Box::new(crate::resolver::TextEdit {
@@ -1309,7 +1309,7 @@ impl<'a> OwnershipChecker<'a> {
             if is_mut {
                 self.immutable_lets.remove(&name);
             } else {
-                self.immutable_lets.insert(name, span.clone());
+                self.immutable_lets.insert(name, *span);
             }
         }
     }
@@ -1948,8 +1948,8 @@ impl<'a> OwnershipChecker<'a> {
     fn find_type_span(&self, type_name: &str) -> Span {
         for item in &self.program.items {
             match item {
-                Item::StructDef(s) if s.name == type_name => return s.span.clone(),
-                Item::EnumDef(e) if e.name == type_name => return e.span.clone(),
+                Item::StructDef(s) if s.name == type_name => return s.span,
+                Item::EnumDef(e) if e.name == type_name => return e.span,
                 _ => {}
             }
         }
@@ -3198,7 +3198,7 @@ pub(crate) fn merge_states(
     for (name, state_a) in branch_a {
         let state_b = branch_b.get(name);
         let moved_at = match (state_a, state_b) {
-            (ValueState::Moved { at }, _) | (_, Some(ValueState::Moved { at })) => Some(at.clone()),
+            (ValueState::Moved { at }, _) | (_, Some(ValueState::Moved { at })) => Some(*at),
             _ => None,
         };
         let Some(at) = moved_at else { continue };
@@ -3389,6 +3389,6 @@ pub(crate) fn merge_branch_into(
         if !target.contains_key(name) {
             continue;
         }
-        target.insert(name.clone(), ValueState::Moved { at: at.clone() });
+        target.insert(name.clone(), ValueState::Moved { at: *at });
     }
 }

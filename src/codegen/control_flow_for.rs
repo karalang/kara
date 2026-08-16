@@ -995,7 +995,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // the right LAYOUT. Whether the write was permitted at all is a
             // typechecker question, already settled before codegen runs.
             kind: TypeKind::MutSlice(Box::new(elem_te.clone())),
-            span: elem_te.span.clone(),
+            span: elem_te.span,
         }
     }
 
@@ -1004,9 +1004,9 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: TypeKind::Path(PathExpr {
                 segments: vec!["Vec".to_string()],
                 generic_args: Some(vec![GenericArg::Type(elem_te.clone())]),
-                span: elem_te.span.clone(),
+                span: elem_te.span,
             }),
-            span: elem_te.span.clone(),
+            span: elem_te.span,
         }
     }
 
@@ -1107,7 +1107,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: iterable.span.clone(),
+            span: iterable.span,
         };
         let result = self.compile_for(label, pattern, &synth_expr, body);
         // Drop synth registries (the queued cleanup references the alloca,
@@ -1191,7 +1191,7 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: iterable.span.clone(),
+            span: iterable.span,
         };
         let result = self.compile_for(label, pattern, &synth_expr, body);
         // Drop synth registries (the queued cleanup references the alloca).
@@ -1246,7 +1246,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let outer: &Expr = if matches!(outer.kind, ExprKind::SelfValue) {
             self_ident = Expr {
                 kind: ExprKind::Identifier("self".to_string()),
-                span: outer.span.clone(),
+                span: outer.span,
             };
             &self_ident
         } else {
@@ -1285,7 +1285,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: outer.span.clone(),
+            span: outer.span,
         };
         let result = self.compile_for(label, pattern, &synth_expr, body);
 
@@ -1377,7 +1377,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: tuple_index.span.clone(),
+            span: tuple_index.span,
         };
         let result = self.compile_for(label, pattern, &synth_expr, body);
 
@@ -4500,7 +4500,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn map_half_pattern(inner: &Pattern, want_key: bool) -> Pattern {
         let hole = Pattern {
             kind: PatternKind::Wildcard,
-            span: inner.span.clone(),
+            span: inner.span,
         };
         let elems = if want_key {
             vec![inner.clone(), hole]
@@ -4509,7 +4509,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         Pattern {
             kind: PatternKind::Tuple(elems),
-            span: inner.span.clone(),
+            span: inner.span,
         }
     }
 
@@ -4997,27 +4997,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 attributes: Vec::new(),
                 body: user_body,
             },
-            span: span.clone(),
+            span: *span,
         };
         let outer_for = Expr {
             kind: ExprKind::For {
                 label: Some(outer_label),
                 pattern: Pattern {
                     kind: PatternKind::Binding(p),
-                    span: span.clone(),
+                    span: *span,
                 },
                 iterable: Box::new(recv.clone()),
                 attributes: Vec::new(),
                 body: Block {
                     stmts: vec![Stmt {
                         kind: StmtKind::Expr(inner_for),
-                        span: span.clone(),
+                        span: *span,
                     }],
                     final_expr: None,
-                    span: span.clone(),
+                    span: *span,
                 },
             },
-            span: span.clone(),
+            span: *span,
         };
         Ok(Some(self.compile_expr(&outer_for)?))
     }
@@ -5076,32 +5076,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 pattern: pattern.clone(),
                 iterable: Box::new(Expr {
                     kind: ExprKind::Identifier(inner_var.clone()),
-                    span: span.clone(),
+                    span: *span,
                 }),
                 attributes: Vec::new(),
                 body: user_body,
             },
-            span: span.clone(),
+            span: *span,
         };
         let outer_for = Expr {
             kind: ExprKind::For {
                 label: Some(outer_label),
                 pattern: Pattern {
                     kind: PatternKind::Binding(inner_var),
-                    span: span.clone(),
+                    span: *span,
                 },
                 iterable: Box::new(recv.clone()),
                 attributes: Vec::new(),
                 body: Block {
                     stmts: vec![Stmt {
                         kind: StmtKind::Expr(inner_for),
-                        span: span.clone(),
+                        span: *span,
                     }],
                     final_expr: None,
-                    span: span.clone(),
+                    span: *span,
                 },
             },
-            span: span.clone(),
+            span: *span,
         };
         Ok(Some(self.compile_expr(&outer_for)?))
     }
@@ -5166,7 +5166,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let cyp = format!("__cyp_{uid}");
         let ident = |name: &str| Expr {
             kind: ExprKind::Identifier(name.to_string()),
-            span: span.clone(),
+            span: *span,
         };
 
         let mut user_body = body.clone();
@@ -5184,16 +5184,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 target: ident(&cyp),
                 value: Expr {
                     kind: ExprKind::Bool(true),
-                    span: span.clone(),
+                    span: *span,
                 },
             },
-            span: span.clone(),
+            span: *span,
         }];
         inner_stmts.extend(user_body.stmts);
         let inner_body = Block {
             stmts: inner_stmts,
             final_expr: user_body.final_expr,
-            span: span.clone(),
+            span: *span,
         };
 
         let pass_for = Stmt {
@@ -5205,9 +5205,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     attributes: Vec::new(),
                     body: inner_body,
                 },
-                span: span.clone(),
+                span: *span,
             }),
-            span: span.clone(),
+            span: *span,
         };
         // `if !__cyp_N { break }` — unlabeled: binds the enclosing loop.
         let empty_guard = Stmt {
@@ -5218,7 +5218,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             op: UnaryOp::Not,
                             operand: Box::new(ident(&cyp)),
                         },
-                        span: span.clone(),
+                        span: *span,
                     }),
                     then_block: Block {
                         stmts: vec![Stmt {
@@ -5227,33 +5227,33 @@ impl<'ctx> super::Codegen<'ctx> {
                                     label: None,
                                     value: None,
                                 },
-                                span: span.clone(),
+                                span: *span,
                             }),
-                            span: span.clone(),
+                            span: *span,
                         }],
                         final_expr: None,
-                        span: span.clone(),
+                        span: *span,
                     },
                     else_branch: None,
                 },
-                span: span.clone(),
+                span: *span,
             }),
-            span: span.clone(),
+            span: *span,
         };
         let flag_let = Stmt {
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
                     kind: PatternKind::Binding(cyp.clone()),
-                    span: span.clone(),
+                    span: *span,
                 },
                 ty: None,
                 value: Expr {
                     kind: ExprKind::Bool(false),
-                    span: span.clone(),
+                    span: *span,
                 },
             },
-            span: span.clone(),
+            span: *span,
         };
         let cycle_loop = Expr {
             kind: ExprKind::Loop {
@@ -5261,11 +5261,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 body: Block {
                     stmts: vec![flag_let, pass_for, empty_guard],
                     final_expr: None,
-                    span: span.clone(),
+                    span: *span,
                 },
                 attributes: Vec::new(),
             },
-            span: span.clone(),
+            span: *span,
         };
         Ok(Some(self.compile_expr(&cycle_loop)?))
     }
@@ -5351,29 +5351,29 @@ impl<'ctx> super::Codegen<'ctx> {
         let uid = self.indexed_elem_counter;
         let accname = format!("__sacc_{uid}");
         let tname = format!("__st_{uid}");
-        let sp = span.clone();
+        let sp = *span;
         let ident = |name: &str| Expr {
             kind: ExprKind::Identifier(name.to_string()),
-            span: sp.clone(),
+            span: sp,
         };
         let let_stmt = |is_mut: bool, name: &str, value: Expr| Stmt {
             kind: StmtKind::Let {
                 is_mut,
                 pattern: Pattern {
                     kind: PatternKind::Binding(name.to_string()),
-                    span: sp.clone(),
+                    span: sp,
                 },
                 ty: None,
                 value,
             },
-            span: sp.clone(),
+            span: sp,
         };
         let tuple_idx = |recv: Expr, idx: u64| Expr {
             kind: ExprKind::TupleIndex {
                 object: Box::new(recv),
                 index: idx,
             },
-            span: sp.clone(),
+            span: sp,
         };
 
         let mut for_body = vec![
@@ -5384,7 +5384,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     target: ident(&accname),
                     value: tuple_idx(ident(&tname), 0),
                 },
-                span: sp.clone(),
+                span: sp,
             },
             Stmt {
                 kind: StmtKind::Let {
@@ -5393,14 +5393,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     ty: None,
                     value: tuple_idx(ident(&tname), 1),
                 },
-                span: sp.clone(),
+                span: sp,
             },
         ];
         for_body.extend(body.stmts.iter().cloned());
         if let Some(fe) = &body.final_expr {
             for_body.push(Stmt {
                 kind: StmtKind::Expr((**fe).clone()),
-                span: sp.clone(),
+                span: sp,
             });
         }
 
@@ -5410,27 +5410,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     label: label.map(str::to_string),
                     pattern: Pattern {
                         kind: PatternKind::Binding(x_p.clone()),
-                        span: sp.clone(),
+                        span: sp,
                     },
                     iterable: Box::new(src.clone()),
                     attributes: Vec::new(),
                     body: Block {
                         stmts: for_body,
                         final_expr: None,
-                        span: sp.clone(),
+                        span: sp,
                     },
                 },
-                span: sp.clone(),
+                span: sp,
             }),
-            span: sp.clone(),
+            span: sp,
         };
         let block = Expr {
             kind: ExprKind::Block(Block {
                 stmts: vec![let_stmt(true, &accname, init.clone()), for_loop],
                 final_expr: None,
-                span: sp.clone(),
+                span: sp,
             }),
-            span: sp.clone(),
+            span: sp,
         };
         Ok(Some(self.compile_expr(&block)?))
     }
@@ -5493,7 +5493,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.indexed_elem_counter += 1;
         let uid = self.indexed_elem_counter;
-        let sp = span.clone();
+        let sp = *span;
         let n_name = format!("__wcn_{uid}");
         let len_name = format!("__wcl_{uid}");
         let end_name = format!("__wce_{uid}");
@@ -5502,31 +5502,31 @@ impl<'ctx> super::Codegen<'ctx> {
         let v_name = format!("__wcv_{uid}");
         let ident = |name: &str| Expr {
             kind: ExprKind::Identifier(name.to_string()),
-            span: sp.clone(),
+            span: sp,
         };
         let i64_lit = |n: i64| Expr {
             kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
-            span: sp.clone(),
+            span: sp,
         };
         let i64_ty = || TypeExpr {
             kind: TypeKind::Path(PathExpr {
                 segments: vec!["i64".to_string()],
                 generic_args: None,
-                span: sp.clone(),
+                span: sp,
             }),
-            span: sp.clone(),
+            span: sp,
         };
         let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
             kind: StmtKind::Let {
                 is_mut,
                 pattern: Pattern {
                     kind: PatternKind::Binding(name.to_string()),
-                    span: sp.clone(),
+                    span: sp,
                 },
                 ty,
                 value,
             },
-            span: sp.clone(),
+            span: sp,
         };
         let bin = |op: BinOp, l: Expr, r: Expr| Expr {
             kind: ExprKind::Binary {
@@ -5534,7 +5534,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 left: Box::new(l),
                 right: Box::new(r),
             },
-            span: sp.clone(),
+            span: sp,
         };
         let if_expr = |cond: Expr, then_e: Expr, else_e: Expr| Expr {
             kind: ExprKind::If {
@@ -5542,18 +5542,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 then_block: Block {
                     stmts: Vec::new(),
                     final_expr: Some(Box::new(then_e)),
-                    span: sp.clone(),
+                    span: sp,
                 },
                 else_branch: Some(Box::new(Expr {
                     kind: ExprKind::Block(Block {
                         stmts: Vec::new(),
                         final_expr: Some(Box::new(else_e)),
-                        span: sp.clone(),
+                        span: sp,
                     }),
-                    span: sp.clone(),
+                    span: sp,
                 })),
             },
-            span: sp.clone(),
+            span: sp,
         };
         let range = |start: Expr, end: Expr| Expr {
             kind: ExprKind::Range {
@@ -5561,7 +5561,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 end: Some(Box::new(end)),
                 inclusive: false,
             },
-            span: sp.clone(),
+            span: sp,
         };
         let len_call = Expr {
             kind: ExprKind::MethodCall {
@@ -5569,9 +5569,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 method: "len".to_string(),
                 turbofish: None,
                 args: vec![],
-                args_close_span: sp.clone(),
+                args_close_span: sp,
             },
-            span: sp.clone(),
+            span: sp,
         };
         let vec_new = Expr {
             kind: ExprKind::Call {
@@ -5580,11 +5580,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
                     },
-                    span: sp.clone(),
+                    span: sp,
                 }),
                 args: vec![],
             },
-            span: sp.clone(),
+            span: sp,
         };
         let push_elem = Stmt {
             kind: StmtKind::Expr(Expr {
@@ -5601,15 +5601,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                 object: Box::new(ident(&var_name)),
                                 index: Box::new(ident(&j_name)),
                             },
-                            span: sp.clone(),
+                            span: sp,
                         },
-                        span: sp.clone(),
+                        span: sp,
                     }],
-                    args_close_span: sp.clone(),
+                    args_close_span: sp,
                 },
-                span: sp.clone(),
+                span: sp,
             }),
-            span: sp.clone(),
+            span: sp,
         };
 
         // Pre-loop bindings + the outer position iterable + the group end.
@@ -5672,11 +5672,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         mut_marker: false,
                         mut_marker_span: None,
                         value: ident(&n_name),
-                        span: sp.clone(),
+                        span: sp,
                     }],
-                    args_close_span: sp.clone(),
+                    args_close_span: sp,
                 },
-                span: sp.clone(),
+                span: sp,
             };
             let raw_end = bin(BinOp::Add, ident(&i_name), ident(&n_name));
             (
@@ -5699,7 +5699,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         label: None,
                         pattern: Pattern {
                             kind: PatternKind::Binding(j_name.clone()),
-                            span: sp.clone(),
+                            span: sp,
                         },
                         iterable: Box::new(range(
                             ident(&i_name),
@@ -5709,12 +5709,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         body: Block {
                             stmts: vec![push_elem],
                             final_expr: None,
-                            span: sp.clone(),
+                            span: sp,
                         },
                     },
-                    span: sp.clone(),
+                    span: sp,
                 }),
-                span: sp.clone(),
+                span: sp,
             },
             Stmt {
                 kind: StmtKind::Let {
@@ -5729,14 +5729,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     ty: Some(vec_te.clone()),
                     value: ident(&v_name),
                 },
-                span: sp.clone(),
+                span: sp,
             },
         ];
         outer_body.extend(body.stmts.iter().cloned());
         if let Some(fe) = &body.final_expr {
             outer_body.push(Stmt {
                 kind: StmtKind::Expr((**fe).clone()),
-                span: sp.clone(),
+                span: sp,
             });
         }
 
@@ -5746,19 +5746,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     label: label.map(str::to_string),
                     pattern: Pattern {
                         kind: PatternKind::Binding(i_name.clone()),
-                        span: sp.clone(),
+                        span: sp,
                     },
                     iterable: Box::new(outer_iterable),
                     attributes: Vec::new(),
                     body: Block {
                         stmts: outer_body,
                         final_expr: None,
-                        span: sp.clone(),
+                        span: sp,
                     },
                 },
-                span: sp.clone(),
+                span: sp,
             }),
-            span: sp.clone(),
+            span: sp,
         };
         let mut block_stmts = prelude;
         block_stmts.push(outer_for);
@@ -5766,9 +5766,9 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: None,
-                span: sp.clone(),
+                span: sp,
             }),
-            span: sp.clone(),
+            span: sp,
         };
         Ok(Some(self.compile_expr(&block)?))
     }
@@ -5855,7 +5855,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.indexed_elem_counter += 1;
         let uid = self.indexed_elem_counter;
-        let sp = span.clone();
+        let sp = *span;
         let len_n = format!("__cbl_{uid}");
         let starts_n = format!("__cbst_{uid}");
         let i_n = format!("__cbi_{uid}");
@@ -5866,39 +5866,39 @@ impl<'ctx> super::Codegen<'ctx> {
         let v_n = format!("__cbv_{uid}");
         let ident = |name: &str| Expr {
             kind: ExprKind::Identifier(name.to_string()),
-            span: sp.clone(),
+            span: sp,
         };
         let i64_lit = |n: i64| Expr {
             kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
-            span: sp.clone(),
+            span: sp,
         };
         let i64_ty = || TypeExpr {
             kind: TypeKind::Path(PathExpr {
                 segments: vec!["i64".to_string()],
                 generic_args: None,
-                span: sp.clone(),
+                span: sp,
             }),
-            span: sp.clone(),
+            span: sp,
         };
         let vec_i64_ty = || TypeExpr {
             kind: TypeKind::Path(PathExpr {
                 segments: vec!["Vec".to_string()],
                 generic_args: Some(vec![GenericArg::Type(i64_ty())]),
-                span: sp.clone(),
+                span: sp,
             }),
-            span: sp.clone(),
+            span: sp,
         };
         let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
             kind: StmtKind::Let {
                 is_mut,
                 pattern: Pattern {
                     kind: PatternKind::Binding(name.to_string()),
-                    span: sp.clone(),
+                    span: sp,
                 },
                 ty,
                 value,
             },
-            span: sp.clone(),
+            span: sp,
         };
         let bin = |op: BinOp, l: Expr, r: Expr| Expr {
             kind: ExprKind::Binary {
@@ -5906,14 +5906,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 left: Box::new(l),
                 right: Box::new(r),
             },
-            span: sp.clone(),
+            span: sp,
         };
         let index = |obj: Expr, idx: Expr| Expr {
             kind: ExprKind::Index {
                 object: Box::new(obj),
                 index: Box::new(idx),
             },
-            span: sp.clone(),
+            span: sp,
         };
         let call1 = |obj: Expr, method: &str, arg: Option<Expr>| Expr {
             kind: ExprKind::MethodCall {
@@ -5927,13 +5927,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             mut_marker: false,
                             mut_marker_span: None,
                             value: a,
-                            span: sp.clone(),
+                            span: sp,
                         }]
                     })
                     .unwrap_or_default(),
-                args_close_span: sp.clone(),
+                args_close_span: sp,
             },
-            span: sp.clone(),
+            span: sp,
         };
         // The key of one element: for an identity key, the element itself
         // (`xs[<idx>]` — compared in place, no binding); for a computed key,
@@ -5947,14 +5947,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: ExprKind::Block(Block {
                     stmts: vec![let_stmt(false, key_p, None, index(ident(&var_name), idx))],
                     final_expr: Some(Box::new((**key_body).clone())),
-                    span: sp.clone(),
+                    span: sp,
                 }),
-                span: sp.clone(),
+                span: sp,
             }
         };
         let expr_stmt = |e: Expr| Stmt {
             kind: StmtKind::Expr(e),
-            span: sp.clone(),
+            span: sp,
         };
         let if_stmt = |cond: Expr, then_stmts: Vec<Stmt>, else_stmts: Option<Vec<Stmt>>| {
             expr_stmt(Expr {
@@ -5963,20 +5963,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     then_block: Block {
                         stmts: then_stmts,
                         final_expr: None,
-                        span: sp.clone(),
+                        span: sp,
                     },
                     else_branch: else_stmts.map(|s| {
                         Box::new(Expr {
                             kind: ExprKind::Block(Block {
                                 stmts: s,
                                 final_expr: None,
-                                span: sp.clone(),
+                                span: sp,
                             }),
-                            span: sp.clone(),
+                            span: sp,
                         })
                     }),
                 },
-                span: sp.clone(),
+                span: sp,
             })
         };
         let assign = |name: &str, value: Expr| Stmt {
@@ -5984,7 +5984,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 target: ident(name),
                 value,
             },
-            span: sp.clone(),
+            span: sp,
         };
         let push_to = |vec: &str, val: Expr| expr_stmt(call1(ident(vec), "push", Some(val)));
 
@@ -6002,7 +6002,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             key_of(ident(&i_n)),
                         )),
                     },
-                    span: sp.clone(),
+                    span: sp,
                 },
                 vec![push_to(&starts_n, ident(&i_n))],
                 None,
@@ -6018,11 +6018,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         assign(&i_n, bin(BinOp::Add, ident(&i_n), i64_lit(1))),
                     ],
                     final_expr: None,
-                    span: sp.clone(),
+                    span: sp,
                 },
                 attributes: Vec::new(),
             },
-            span: sp.clone(),
+            span: sp,
         });
 
         // Phase 2: the group loop.
@@ -6033,11 +6033,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
                     },
-                    span: sp.clone(),
+                    span: sp,
                 }),
                 args: vec![],
             },
-            span: sp.clone(),
+            span: sp,
         };
         let mut group_body = vec![
             let_stmt(false, &s_n, None, index(ident(&starts_n), ident(&g_n))),
@@ -6053,7 +6053,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     label: None,
                     pattern: Pattern {
                         kind: PatternKind::Binding(j_n.clone()),
-                        span: sp.clone(),
+                        span: sp,
                     },
                     iterable: Box::new(Expr {
                         kind: ExprKind::Range {
@@ -6061,16 +6061,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             end: Some(Box::new(ident(&e_n))),
                             inclusive: false,
                         },
-                        span: sp.clone(),
+                        span: sp,
                     }),
                     attributes: Vec::new(),
                     body: Block {
                         stmts: vec![push_to(&v_n, index(ident(&var_name), ident(&j_n)))],
                         final_expr: None,
-                        span: sp.clone(),
+                        span: sp,
                     },
                 },
-                span: sp.clone(),
+                span: sp,
             }),
             Stmt {
                 kind: StmtKind::Let {
@@ -6079,7 +6079,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     ty: Some(vec_te),
                     value: ident(&v_n),
                 },
-                span: sp.clone(),
+                span: sp,
             },
         ];
         group_body.extend(body.stmts.iter().cloned());
@@ -6091,7 +6091,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 label: label.map(str::to_string),
                 pattern: Pattern {
                     kind: PatternKind::Binding(g_n.clone()),
-                    span: sp.clone(),
+                    span: sp,
                 },
                 iterable: Box::new(Expr {
                     kind: ExprKind::Range {
@@ -6103,16 +6103,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         ))),
                         inclusive: false,
                     },
-                    span: sp.clone(),
+                    span: sp,
                 }),
                 attributes: Vec::new(),
                 body: Block {
                     stmts: group_body,
                     final_expr: None,
-                    span: sp.clone(),
+                    span: sp,
                 },
             },
-            span: sp.clone(),
+            span: sp,
         });
 
         let block = Expr {
@@ -6131,9 +6131,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     group_for,
                 ],
                 final_expr: None,
-                span: sp.clone(),
+                span: sp,
             }),
-            span: sp.clone(),
+            span: sp,
         };
         Ok(Some(self.compile_expr(&block)?))
     }
@@ -6148,10 +6148,10 @@ fn vec_new_expr(sp: &crate::token::Span) -> Expr {
                     segments: vec!["Vec".to_string(), "new".to_string()],
                     generic_args: None,
                 },
-                span: sp.clone(),
+                span: *sp,
             }),
             args: vec![],
         },
-        span: sp.clone(),
+        span: *sp,
     }
 }

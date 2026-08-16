@@ -145,7 +145,7 @@ fn check_extern_block_safety_doc(
     if !has_safety {
         diags.push(LintDiagnostic {
             level,
-            span: block.span.clone(),
+            span: block.span,
             message: "unsafe extern block is missing a `# Safety` doc-comment \
                       section explaining the trust contract for its imports"
                 .to_string(),
@@ -175,7 +175,7 @@ fn check_unsafe_fn_safety_doc(f: &Function, level: LintLevel, diags: &mut Vec<Li
     if !has_safety {
         diags.push(LintDiagnostic {
             level,
-            span: f.span.clone(),
+            span: f.span,
             message: format!(
                 "unsafe fn `{}` is missing a `# Safety` doc-comment section \
                  documenting the precondition callers must uphold before calling it",
@@ -297,7 +297,7 @@ fn check_unsafe_span(
     if !preceding_ok {
         diags.push(LintDiagnostic {
             level,
-            span: span.clone(),
+            span: *span,
             message: "unsafe block is not preceded by a `// Safety:` comment".to_string(),
             lint_name: "undocumented_unsafe".to_string(),
             help: None,
@@ -755,7 +755,7 @@ impl OpWalker<'_> {
                 if !in_unsafe && self.is_raw_pointer_deref(operand) {
                     self.diags.push(LintDiagnostic {
                         level: LintLevel::Error,
-                        span: expr.span.clone(),
+                        span: expr.span,
                         message: "raw-pointer dereference must be wrapped in an \
                                   `unsafe { ... }` block"
                             .to_string(),
@@ -789,7 +789,7 @@ impl OpWalker<'_> {
                         if self.registry.top_level_unsafe.contains(&name) {
                             self.diags.push(LintDiagnostic {
                                 level: LintLevel::Error,
-                                span: expr.span.clone(),
+                                span: expr.span,
                                 message: format!(
                                     "call to `unsafe fn {name}` must be wrapped in an \
                                      `unsafe {{ ... }}` block"
@@ -847,7 +847,7 @@ impl OpWalker<'_> {
                             {
                                 self.diags.push(LintDiagnostic {
                                     level: LintLevel::Error,
-                                    span: expr.span.clone(),
+                                    span: expr.span,
                                     message: format!(
                                         "raw-pointer `{method}` must be wrapped in an \
                                          `unsafe {{ ... }}` block"
@@ -881,7 +881,7 @@ impl OpWalker<'_> {
                         if self.registry.top_level_unsafe.contains(&dotted) {
                             self.diags.push(LintDiagnostic {
                                 level: LintLevel::Error,
-                                span: expr.span.clone(),
+                                span: expr.span,
                                 message: format!(
                                     "call to `unsafe fn {dotted}` must be wrapped in an \
                                      `unsafe {{ ... }}` block"
@@ -907,7 +907,7 @@ impl OpWalker<'_> {
                             {
                                 self.diags.push(LintDiagnostic {
                                     level: LintLevel::Error,
-                                    span: expr.span.clone(),
+                                    span: expr.span,
                                     message: format!(
                                         "call to `unsafe fn {recv}.{m}` must be wrapped in an \
                                          `unsafe {{ ... }}` block"

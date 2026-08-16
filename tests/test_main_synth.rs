@@ -180,7 +180,7 @@ fn synth_no_arg_call(name: &str) -> Expr {
         kind: ExprKind::Call {
             callee: Box::new(Expr {
                 kind: ExprKind::Identifier(name.to_string()),
-                span: zero.clone(),
+                span: zero,
             }),
             args: Vec::new(),
         },

@@ -95,7 +95,7 @@ fn collect_occurrences(
                         param: path.segments[0].clone(),
                         polarity: ctx,
                         position: position.to_string(),
-                        span: ty.span.clone(),
+                        span: ty.span,
                     });
                 }
                 return;
@@ -262,7 +262,7 @@ fn stdlib_variance_decl_errors(
                      or '-{n}' for contravariant (design.md § Variance)",
                     n = p.name,
                 ),
-                p.span.clone(),
+                p.span,
             ));
         }
     }
@@ -324,7 +324,7 @@ impl<'a> super::TypeChecker<'a> {
             if p.variance == Variance::Invariant {
                 continue;
             }
-            let span = p.variance_span.clone().unwrap_or_else(|| p.span.clone());
+            let span = p.variance_span.unwrap_or(p.span);
             self.type_error(
                 "error[E_VARIANCE_USER_DECL_NOT_YET]: variance declarations are \
                  reserved for stdlib types in v1; remove the marker — the parameter \

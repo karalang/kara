@@ -82,12 +82,7 @@ impl<'a> super::OwnershipChecker<'a> {
             false
         };
         if !is_copy {
-            states.insert(
-                name.to_string(),
-                ValueState::Moved {
-                    at: use_span.clone(),
-                },
-            );
+            states.insert(name.to_string(), ValueState::Moved { at: *use_span });
             if let Some(usage) = param_usage.get_mut(name) {
                 *usage = ParamUsage::Consumed;
             }
@@ -319,12 +314,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     // still proceeds so downstream state stays consistent.
                     self.check_move_of_borrowed(name, &expr.span);
                     // Non-copy value is consumed → mark as moved.
-                    states.insert(
-                        name.clone(),
-                        ValueState::Moved {
-                            at: expr.span.clone(),
-                        },
-                    );
+                    states.insert(name.clone(), ValueState::Moved { at: expr.span });
                     if let Some(usage) = param_usage.get_mut(name) {
                         *usage = ParamUsage::Consumed;
                     }
@@ -368,7 +358,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         // borrow push; see `check_expr_reading`'s Call arm
                         // for rationale.
                         if let Some(place) = self.place_expr_root(&arg.value) {
-                            self.push_active_borrow(borrow_kind, place, arg.value.span.clone());
+                            self.push_active_borrow(borrow_kind, place, arg.value.span);
                         }
                     }
                 }
@@ -461,7 +451,7 @@ impl<'a> super::OwnershipChecker<'a> {
         };
         self.errors.push(OwnershipError {
             message,
-            span: use_span.clone(),
+            span: *use_span,
             kind: OwnershipErrorKind::UseOfUninitialized,
             suggestion: Some(suggestion),
             replacement: None,
@@ -587,7 +577,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         // against any live slice on the same source. The
                         // borrow drops at the call's snapshot-restore.
                         if let Some(place) = self.place_expr_root(&arg.value) {
-                            self.push_active_borrow(borrow_kind, place, arg.value.span.clone());
+                            self.push_active_borrow(borrow_kind, place, arg.value.span);
                         }
                     }
                 }
@@ -688,7 +678,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 if !matches!(method.as_str(), "as_slice" | "as_slice_mut") {
                     if let Some(borrow_kind) = self.method_self_borrow_kind(expr) {
                         if let Some(place) = self.place_expr_root(object) {
-                            self.push_active_borrow(borrow_kind, place, expr.span.clone());
+                            self.push_active_borrow(borrow_kind, place, expr.span);
                         }
                     }
                 }
@@ -1013,7 +1003,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 // the full span so consumers can render line/column.
                 self.closure_function
                     .insert(closure_key, self.current_function.clone());
-                self.closure_spans.insert(closure_key, expr.span.clone());
+                self.closure_spans.insert(closure_key, expr.span);
 
                 // Restore the outer scope: drop closure-param entries
                 // that didn't pre-exist and reinstate any shadowed
@@ -1245,7 +1235,7 @@ impl<'a> super::OwnershipChecker<'a> {
                                 message: format!(
                                     "capture `{name}` declared `mut ref` but never mutated — consider `ref`",
                                 ),
-                                span: expr.span.clone(),
+                                span: expr.span,
                                 kind: OwnershipErrorKind::UnusedMutCaptureNote,
                                 suggestion: Some(
                                     "change the closure prefix from `mut ref` to `ref`"
@@ -1289,7 +1279,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         // Phase-7-codegen.md line 45 — `at` now comes
                         // from the classifier's `closure_capture_consumes`
                         // map instead of `ValueState::Moved { at }`.
-                        let at = at.clone();
+                        let at = *at;
                         // K2 enforcement (design.md § Closure Behavior,
                         // Rule 2½): an explicit `ref` / `mut ref` prefix
                         // forbids consume of any captured name. Fire the
@@ -1318,7 +1308,7 @@ impl<'a> super::OwnershipChecker<'a> {
                                     "capture `{name}` declared `{declared_str}` but consumed in closure body at {}:{} — {fix}",
                                     at.line, at.column,
                                 ),
-                                span: expr.span.clone(),
+                                span: expr.span,
                                 kind: OwnershipErrorKind::CaptureModeViolation,
                                 suggestion: Some(fix.to_string()),
                                 replacement: None,

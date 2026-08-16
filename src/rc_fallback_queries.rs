@@ -168,7 +168,7 @@ fn build_rc_fallback_query(def_path: &DefPath, entry: &RcEntry, is_arc: bool) ->
             def_path: def_path.clone(),
             sub_item_hash: SubItemHash(entry.other_use_span.offset as u64),
         },
-        site: entry.other_use_span.clone(),
+        site: entry.other_use_span,
         kind: QueryKind::RcFallbackDecision,
         options: vec![
             QueryOption {

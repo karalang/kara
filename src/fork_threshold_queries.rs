@@ -167,7 +167,7 @@ fn build_fork_query(def_path: &DefPath, site: &Span, group_size: usize) -> Compi
             def_path: def_path.clone(),
             sub_item_hash: SubItemHash(site.offset as u64),
         },
-        site: site.clone(),
+        site: *site,
         kind: QueryKind::ForkThresholdDecision,
         options: vec![
             QueryOption {

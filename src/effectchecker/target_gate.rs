@@ -99,7 +99,7 @@ impl<'a> super::EffectChecker<'a> {
                     continue;
                 }
                 let direct_here = match &te.origin {
-                    EffectOrigin::Direct(span) => Some(span.clone()),
+                    EffectOrigin::Direct(span) => Some(*span),
                     EffectOrigin::Callee {
                         fn_name: callee,
                         span,
@@ -107,7 +107,7 @@ impl<'a> super::EffectChecker<'a> {
                         if graph.contains_key(callee) {
                             None // examined at the callee's own node
                         } else {
-                            Some(span.clone()) // body-less callee: charge here
+                            Some(*span) // body-less callee: charge here
                         }
                     }
                 };
@@ -197,7 +197,7 @@ impl<'a> super::EffectChecker<'a> {
                          keep it off this target's entry path \
                          (design.md § Cross-target Compilation)",
                     ),
-                    span: span.clone(),
+                    span: *span,
                     kind: EffectErrorKind::TargetGateViolation,
                     subtype_trace: None,
                     replacement: None,

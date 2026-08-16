@@ -139,7 +139,7 @@ fn synth_provider_ctor_marker() -> Stmt {
         kind: ExprKind::Call {
             callee: Box::new(Expr {
                 kind: ExprKind::Identifier("println".to_string()),
-                span: zero.clone(),
+                span: zero,
             }),
             args: vec![CallArg {
                 label: None,
@@ -147,12 +147,12 @@ fn synth_provider_ctor_marker() -> Stmt {
                 mut_marker_span: None,
                 value: Expr {
                     kind: ExprKind::StringLit(PROVIDER_CTOR_MARKER.to_string()),
-                    span: zero.clone(),
+                    span: zero,
                 },
-                span: zero.clone(),
+                span: zero,
             }],
         },
-        span: zero.clone(),
+        span: zero,
     };
     Stmt {
         kind: StmtKind::Expr(call),
@@ -165,7 +165,7 @@ fn synth_call_expr(test_fn_name: &str) -> Expr {
     let zero = Span::default();
     let callee = Expr {
         kind: ExprKind::Identifier(test_fn_name.to_string()),
-        span: zero.clone(),
+        span: zero,
     };
     Expr {
         kind: ExprKind::Call {
@@ -192,20 +192,20 @@ fn synth_with_provider_call(resource: &str, provider: Expr, inner: Expr) -> Expr
             prefix_span: None,
             body: Box::new(inner),
         },
-        span: zero.clone(),
+        span: zero,
     };
     let callee = Expr {
         kind: ExprKind::Index {
             object: Box::new(Expr {
                 kind: ExprKind::Identifier("with_provider".to_string()),
-                span: zero.clone(),
+                span: zero,
             }),
             index: Box::new(Expr {
                 kind: ExprKind::Identifier(resource.to_string()),
-                span: zero.clone(),
+                span: zero,
             }),
         },
-        span: zero.clone(),
+        span: zero,
     };
     Expr {
         kind: ExprKind::Call {
@@ -216,14 +216,14 @@ fn synth_with_provider_call(resource: &str, provider: Expr, inner: Expr) -> Expr
                     mut_marker: false,
                     mut_marker_span: None,
                     value: provider,
-                    span: zero.clone(),
+                    span: zero,
                 },
                 CallArg {
                     label: None,
                     mut_marker: false,
                     mut_marker_span: None,
                     value: closure,
-                    span: zero.clone(),
+                    span: zero,
                 },
             ],
         },
@@ -251,7 +251,7 @@ fn synth_let_binding(name: &str, init: Expr) -> Stmt {
             is_mut: false,
             pattern: Pattern {
                 kind: PatternKind::Binding(name.to_string()),
-                span: zero.clone(),
+                span: zero,
             },
             ty: None,
             value: init,
@@ -272,7 +272,7 @@ fn synth_block_with_lets_and_final_call(mut let_stmts: Vec<Stmt>, final_call: Ex
     let zero = Span::default();
     let_stmts.push(Stmt {
         kind: StmtKind::Expr(final_call),
-        span: zero.clone(),
+        span: zero,
     });
     Block {
         stmts: let_stmts,

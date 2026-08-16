@@ -311,7 +311,7 @@ fn default_attr_malformed(attr: &Attribute, errors: &mut Vec<ResolveError>) -> b
                   write it as a bare `#[default]` on the unit enum variant that should be \
                   the default."
             .to_string(),
-        span: attr.span.clone(),
+        span: attr.span,
         kind: ResolveErrorKind::MalformedAttributeArgs,
         suggestion: None,
         replacement: None,
@@ -335,7 +335,7 @@ fn report_default_invalid_position(attrs: &[Attribute], errors: &mut Vec<Resolve
             message: "error[E_DEFAULT_ATTRIBUTE_INVALID_POSITION]: `#[default]` is only valid \
                       on a unit enum variant under `#[derive(Default)]`."
                 .to_string(),
-            span: attr.span.clone(),
+            span: attr.span,
             kind: ResolveErrorKind::DefaultAttributeInvalidPosition,
             suggestion: None,
             replacement: None,
@@ -368,7 +368,7 @@ fn check_item_default(item: &Item, errors: &mut Vec<ResolveError>) {
                                  `#[derive(Default)]` — add `#[derive(Default)]` to enum `{}`.",
                                 variant.name, e.name, e.name
                             ),
-                            span: attr.span.clone(),
+                            span: attr.span,
                             kind: ResolveErrorKind::DefaultAttributeWithoutDerive,
                             suggestion: None,
                             replacement: None,
@@ -458,7 +458,7 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
                          you intended a tool attribute, use a namespaced form like \
                          `#[your_tool::{name}]`."
                     ),
-                    span: attr.span.clone(),
+                    span: attr.span,
                     kind: ResolveErrorKind::UnknownAttribute,
                     suggestion: None,
                     replacement: None,
@@ -508,8 +508,8 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
                 .iter()
                 .filter(|(n, _)| n == a || n == b)
                 .nth(1)
-                .map(|(_, s)| (*s).clone())
-                .unwrap_or_else(|| names_on_item[0].1.clone());
+                .map(|(_, s)| *(*s))
+                .unwrap_or_else(|| *names_on_item[0].1);
             errors.push(ResolveError {
                 message: format!(
                     "error[E_QUERY_RESOLUTION_CONFLICT]: `#[{a}]` and `#[{b}]` resolve \

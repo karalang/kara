@@ -2165,7 +2165,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
                 self_ident = Expr {
                     kind: ExprKind::Identifier("self".to_string()),
-                    span: inner.span.clone(),
+                    span: inner.span,
                 };
                 &self_ident
             } else {
@@ -2186,7 +2186,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.register_var_from_type_expr(&synth, &field_te);
                 let synth_expr = Expr {
                     kind: ExprKind::Identifier(synth.clone()),
-                    span: object.span.clone(),
+                    span: object.span,
                 };
                 let result = self.compile_index(&synth_expr, index);
 
@@ -2257,7 +2257,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.register_var_from_type_expr(&synth, &container_te);
                         let synth_expr = Expr {
                             kind: ExprKind::Identifier(synth.clone()),
-                            span: object.span.clone(),
+                            span: object.span,
                         };
                         let result = self.compile_index(&synth_expr, index);
                         self.variables.remove(&synth);
@@ -2619,12 +2619,12 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return None,
         };
         let elem_te = self.var_types.var_elem_type_exprs.get(leaf)?.clone();
-        let sp = body.span.clone();
+        let sp = body.span;
         Some(TypeExpr {
             kind: TypeKind::Path(PathExpr {
                 segments: vec!["Vec".to_string()],
                 generic_args: Some(vec![GenericArg::Type(elem_te)]),
-                span: sp.clone(),
+                span: sp,
             }),
             span: sp,
         })
@@ -2673,20 +2673,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !recv_is_tensor {
                     return None;
                 }
-                let sp = recv.span.clone();
+                let sp = recv.span;
                 let i64_te = TypeExpr {
                     kind: TypeKind::Path(PathExpr {
                         segments: vec!["i64".to_string()],
                         generic_args: None,
-                        span: sp.clone(),
+                        span: sp,
                     }),
-                    span: sp.clone(),
+                    span: sp,
                 };
                 Some(TypeExpr {
                     kind: TypeKind::Path(PathExpr {
                         segments: vec!["Vec".to_string()],
                         generic_args: Some(vec![GenericArg::Type(i64_te)]),
-                        span: sp.clone(),
+                        span: sp,
                     }),
                     span: sp,
                 })
@@ -2842,7 +2842,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: object.span.clone(),
+            span: object.span,
         };
         let elem = self.compile_index(&synth_expr, index)?;
 
@@ -3139,9 +3139,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         kind: TypeKind::Path(PathExpr {
                             segments: vec![concrete.clone()],
                             generic_args: None,
-                            span: te.span.clone(),
+                            span: te.span,
                         }),
-                        span: te.span.clone(),
+                        span: te.span,
                     },
                 )
             })
@@ -5655,7 +5655,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
                     self_ident = Expr {
                         kind: ExprKind::Identifier("self".to_string()),
-                        span: inner.span.clone(),
+                        span: inner.span,
                     };
                     &self_ident
                 } else {
@@ -5676,14 +5676,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.register_var_from_type_expr(&synth, &field_te);
                     let synth_expr = Expr {
                         kind: ExprKind::Identifier(synth.clone()),
-                        span: outer.span.clone(),
+                        span: outer.span,
                     };
                     let nested_obj = Expr {
                         kind: ExprKind::Index {
                             object: Box::new(synth_expr),
                             index: outer_idx.clone(),
                         },
-                        span: object.span.clone(),
+                        span: object.span,
                     };
                     let result =
                         self.compile_index_store(&nested_obj, index, val, rhs_is_fresh, rhs_src);
@@ -5721,7 +5721,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
                 self_ident = Expr {
                     kind: ExprKind::Identifier("self".to_string()),
-                    span: inner.span.clone(),
+                    span: inner.span,
                 };
                 &self_ident
             } else {
@@ -5742,7 +5742,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.register_var_from_type_expr(&synth, &field_te);
                 let synth_expr = Expr {
                     kind: ExprKind::Identifier(synth.clone()),
-                    span: object.span.clone(),
+                    span: object.span,
                 };
                 let result =
                     self.compile_index_store(&synth_expr, index, val, rhs_is_fresh, rhs_src);
@@ -5810,7 +5810,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.register_var_from_type_expr(&synth, &container_te);
                         let synth_expr = Expr {
                             kind: ExprKind::Identifier(synth.clone()),
-                            span: object.span.clone(),
+                            span: object.span,
                         };
                         let result = self.compile_index_store(
                             &synth_expr,

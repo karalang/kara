@@ -5509,7 +5509,7 @@ fn network_yield_filter_rejects_non_send_receive_verbs() {
                 verb: verb.clone(),
                 resource: "Network".to_string(),
             },
-            EffectOrigin::Direct(span.clone()),
+            EffectOrigin::Direct(span),
         );
         assert!(
             !set_has_network_yield_effect(&set),
@@ -5537,21 +5537,21 @@ fn network_yield_filter_picks_one_of_many() {
             verb: EffectVerbKind::Allocates,
             resource: "Heap".to_string(),
         },
-        EffectOrigin::Direct(span.clone()),
+        EffectOrigin::Direct(span),
     );
     set.add(
         Effect {
             verb: EffectVerbKind::Reads,
             resource: "Filesystem".to_string(),
         },
-        EffectOrigin::Direct(span.clone()),
+        EffectOrigin::Direct(span),
     );
     set.add(
         Effect {
             verb: EffectVerbKind::Sends,
             resource: "Network".to_string(),
         },
-        EffectOrigin::Direct(span.clone()),
+        EffectOrigin::Direct(span),
     );
     assert!(set_has_network_yield_effect(&set));
 }

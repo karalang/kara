@@ -314,7 +314,7 @@ fn find_exact_fill_loop(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Fill>
                     if iv != v && while_fill_body_ok(body, v, &iv, bound) {
                         return Some(Fill {
                             fi,
-                            key_span: condition.span.clone(),
+                            key_span: condition.span,
                             bound: bound.clone(),
                             counter: Some(iv),
                         });
@@ -337,7 +337,7 @@ fn find_exact_fill_loop(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Fill>
                     if for_fill_body_ok(body, v, bound) {
                         return Some(Fill {
                             fi,
-                            key_span: bound.span.clone(),
+                            key_span: bound.span,
                             bound: bound.clone(),
                             counter: None,
                         });

@@ -84,7 +84,7 @@ impl<'a> super::TypeChecker<'a> {
                     nodes.insert(
                         f.name.clone(),
                         (
-                            f.span.clone(),
+                            f.span,
                             f.is_gpu,
                             is_type_generic(&f.generic_params),
                             &f.body,
@@ -99,7 +99,7 @@ impl<'a> super::TypeChecker<'a> {
                             nodes.insert(
                                 key,
                                 (
-                                    m.span.clone(),
+                                    m.span,
                                     m.is_gpu,
                                     is_type_generic(&m.generic_params),
                                     &m.body,
@@ -115,12 +115,7 @@ impl<'a> super::TypeChecker<'a> {
                                 let key = format!("{}.{}", t.name, m.name);
                                 nodes.insert(
                                     key,
-                                    (
-                                        m.span.clone(),
-                                        m.is_gpu,
-                                        is_type_generic(&m.generic_params),
-                                        body,
-                                    ),
+                                    (m.span, m.is_gpu, is_type_generic(&m.generic_params), body),
                                 );
                             }
                         }
@@ -141,7 +136,7 @@ impl<'a> super::TypeChecker<'a> {
                 (
                     key.clone(),
                     GpuNode {
-                        span: span.clone(),
+                        span: *span,
                         is_gpu: *is_gpu,
                         is_generic: *is_generic,
                         callees,
@@ -174,7 +169,7 @@ impl<'a> super::TypeChecker<'a> {
                     root,
                     chain.join(" → "),
                 );
-                violations.push((graph[*root].span.clone(), message));
+                violations.push((graph[*root].span, message));
             }
         }
 
@@ -233,7 +228,7 @@ fn collect_generic_callee_violations(
                      design.md § GPU Subset Constraints > Generics and `#[gpu]`.",
                     chain.join(" → "),
                 );
-                violations.push((span.clone(), message));
+                violations.push((*span, message));
             } else {
                 collect_generic_callee_violations(callee, graph, path, visited, violations);
             }
@@ -370,7 +365,7 @@ fn collect_edges_expr(
         ExprKind::Call { callee, args } => {
             if let Some(key) = callee_key(callee) {
                 if known.contains(&key) {
-                    out.push((key, expr.span.clone()));
+                    out.push((key, expr.span));
                 }
             }
             collect_edges_expr(callee, known, method_callee, out);
@@ -381,7 +376,7 @@ fn collect_edges_expr(
         ExprKind::MethodCall { object, args, .. } => {
             if let Some(key) = method_callee.get(&SpanKey::from_span(&expr.span)) {
                 if known.contains(key) {
-                    out.push((key.clone(), expr.span.clone()));
+                    out.push((key.clone(), expr.span));
                 }
             }
             collect_edges_expr(object, known, method_callee, out);
@@ -396,7 +391,7 @@ fn collect_edges_expr(
         } => {
             if let Some(key) = method_callee.get(&SpanKey::from_span(&expr.span)) {
                 if known.contains(key) {
-                    out.push((key.clone(), expr.span.clone()));
+                    out.push((key.clone(), expr.span));
                 }
             }
             collect_edges_expr(object, known, method_callee, out);

@@ -1991,7 +1991,7 @@ impl<'a> ConcurrencyChecker<'a> {
             &parallel_groups,
         );
 
-        let statement_spans = stmts.iter().map(|s| s.span.clone()).collect();
+        let statement_spans = stmts.iter().map(|s| s.span).collect();
 
         FunctionConcurrency {
             parallel_groups,
@@ -2554,7 +2554,7 @@ impl<'a> ConcurrencyChecker<'a> {
         stmt_index: usize,
     ) -> Option<DisjointWriteLoop> {
         let loop_line = loop_expr.span.line;
-        let loop_span = loop_expr.span.clone();
+        let loop_span = loop_expr.span;
         let mk = |loop_var: String,
                   decline: Option<DisjointDecline>,
                   targets: Vec<TargetFootprint>,
@@ -2562,7 +2562,7 @@ impl<'a> ConcurrencyChecker<'a> {
             Some(DisjointWriteLoop {
                 stmt_index,
                 loop_line,
-                loop_span: loop_span.clone(),
+                loop_span,
                 loop_var,
                 decline,
                 targets,
@@ -2838,7 +2838,7 @@ impl<'a> ConcurrencyChecker<'a> {
                                 let chain = Block {
                                     stmts: Vec::new(),
                                     final_expr: Some(Box::new((**else_expr).clone())),
-                                    span: else_expr.span.clone(),
+                                    span: else_expr.span,
                                 };
                                 self.recognize_reductions_in_block(&chain, out, declined, frozen);
                             }
@@ -2858,7 +2858,7 @@ impl<'a> ConcurrencyChecker<'a> {
                         let arm_block = Block {
                             stmts: Vec::new(),
                             final_expr: Some(Box::new(arm.body.clone())),
-                            span: arm.body.span.clone(),
+                            span: arm.body.span,
                         };
                         self.recognize_reductions_in_block(&arm_block, out, declined, frozen);
                     }

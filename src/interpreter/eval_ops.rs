@@ -909,7 +909,7 @@ impl<'a> super::Interpreter<'a> {
             // a |> f => f(a)
             ExprKind::Identifier(_) | ExprKind::Path { .. } => {
                 let desugared = Expr {
-                    span: right.span.clone(),
+                    span: right.span,
                     kind: ExprKind::Call {
                         callee: Box::new(right.clone()),
                         args: vec![CallArg {
@@ -917,7 +917,7 @@ impl<'a> super::Interpreter<'a> {
                             mut_marker: false,
                             mut_marker_span: None,
                             value: left.clone(),
-                            span: left.span.clone(),
+                            span: left.span,
                         }],
                     },
                 };
@@ -939,7 +939,7 @@ impl<'a> super::Interpreter<'a> {
                                     mut_marker: false,
                                     mut_marker_span: None,
                                     value: left.clone(),
-                                    span: left.span.clone(),
+                                    span: left.span,
                                 }
                             } else {
                                 arg.clone()
@@ -952,14 +952,14 @@ impl<'a> super::Interpreter<'a> {
                         mut_marker: false,
                         mut_marker_span: None,
                         value: left.clone(),
-                        span: left.span.clone(),
+                        span: left.span,
                     }];
                     new_args.extend(args.iter().cloned());
                     new_args
                 };
 
                 let desugared = Expr {
-                    span: right.span.clone(),
+                    span: right.span,
                     kind: ExprKind::Call {
                         callee: callee.clone(),
                         args: desugared_args,

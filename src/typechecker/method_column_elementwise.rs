@@ -77,7 +77,7 @@ impl<'a> super::TypeChecker<'a> {
                     if args.is_empty() || args.len() > 2 {
                         self.type_error(
                             format!("fillna expects 1 or 2 argument(s), got {}", args.len()),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         return Some(Type::Error);
@@ -85,7 +85,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else if !args.is_empty() {
                     self.type_error(
                         format!("{method} expects 0 argument(s), got {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     return Some(Type::Error);
@@ -104,7 +104,7 @@ impl<'a> super::TypeChecker<'a> {
                         .or_else(|| args.iter().filter(|a| a.label.is_none()).nth(1))
                     {
                         let flag_ty = self.infer_expr(&flag.value);
-                        self.check_assignable(&Type::Bool, &flag_ty, flag.value.span.clone());
+                        self.check_assignable(&Type::Bool, &flag_ty, flag.value.span);
                     }
                 }
                 let vec_of = |inner: Type| Type::Named {
@@ -172,7 +172,7 @@ impl<'a> super::TypeChecker<'a> {
                             "{container}.fold expects 2 arguments (init, closure), got {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -228,7 +228,7 @@ impl<'a> super::TypeChecker<'a> {
                             "{enum_name}.map expects 1 argument (closure), got {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -289,7 +289,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "{enum_name}.map expects a function argument, got '{}'",
                                 type_display(&f_resolved)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return Some(Type::Error);
@@ -390,7 +390,7 @@ impl<'a> super::TypeChecker<'a> {
                             "{container}.map expects 1 argument (closure), got {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {

@@ -159,7 +159,7 @@ impl<'a> super::TypeChecker<'a> {
                          concrete type; the type parameter '{name}' is not \
                          resolvable to a layout at this call site"
                     ),
-                    ty.span.clone(),
+                    ty.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -171,7 +171,7 @@ impl<'a> super::TypeChecker<'a> {
                          struct target; got '{}'",
                         type_display(&resolved)
                     ),
-                    ty.span.clone(),
+                    ty.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -184,7 +184,7 @@ impl<'a> super::TypeChecker<'a> {
                      opaque foreign type '{current_struct_name}'; the type's layout \
                      is unknown to Kāra"
                 ),
-                ty.span.clone(),
+                ty.span,
                 TypeErrorKind::TypeMismatch,
             );
             return Type::Error;
@@ -194,7 +194,7 @@ impl<'a> super::TypeChecker<'a> {
                 "error[E_OFFSET_OF_INVALID_PATH]: offset_of requires at least \
                  one field-name segment"
                     .to_string(),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             return Type::Error;
@@ -212,7 +212,7 @@ impl<'a> super::TypeChecker<'a> {
                          walk into '{current_struct_name}'; only struct types \
                          have field offsets"
                     ),
-                    ty.span.clone(),
+                    ty.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -232,7 +232,7 @@ impl<'a> super::TypeChecker<'a> {
                          has no field '{segment_name}'; available fields are: {}",
                         available.join(", ")
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::UndefinedField,
                 );
                 return Type::Error;
@@ -255,7 +255,7 @@ impl<'a> super::TypeChecker<'a> {
                              '{segment_name}' is not a struct type; cannot walk \
                              further into the offset_of path"
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -604,7 +604,7 @@ impl<'a> super::TypeChecker<'a> {
                                 struct_name,
                                 available.join(", ")
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::UndefinedField,
                         );
                         return Type::Error;
@@ -772,7 +772,7 @@ impl<'a> super::TypeChecker<'a> {
                         "no associated function '{}' on type '{}'",
                         member, type_name
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::NoMethodFound,
                 );
                 return Type::Error;
@@ -951,7 +951,7 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(left_ty),
                     type_display(right_ty)
                 ),
-                left.span.clone(),
+                left.span,
                 TypeErrorKind::InvalidBinaryOp,
             );
             return Type::Error;
@@ -975,7 +975,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(left_ty),
                             type_display(right_ty)
                         ),
-                        right.span.clone(),
+                        right.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -992,7 +992,7 @@ impl<'a> super::TypeChecker<'a> {
                              lanes; Vector element is '{}'",
                             type_display(le)
                         ),
-                        left.span.clone(),
+                        left.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -1016,7 +1016,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(left_ty),
                         type_display(right_ty)
                     ),
-                    right.span.clone(),
+                    right.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 Type::Error
@@ -1055,7 +1055,7 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(left_ty),
                     type_display(right_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::InvalidBinaryOp,
             );
             return Type::Error;
@@ -1081,7 +1081,7 @@ impl<'a> super::TypeChecker<'a> {
                              found '{}'",
                             type_display(&le)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -1093,7 +1093,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&le),
                             type_display(&re)
                         ),
-                        right.span.clone(),
+                        right.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -1107,7 +1107,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(left_ty),
                             type_display(right_ty)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -1126,7 +1126,7 @@ impl<'a> super::TypeChecker<'a> {
                                     type_display(left_ty),
                                     type_display(right_ty)
                                 ),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             return Type::Error;
@@ -1197,7 +1197,7 @@ impl<'a> super::TypeChecker<'a> {
                          (rank-polymorphic tensor arithmetic is v1.5 shape arithmetic)",
                         what
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 None
@@ -1222,7 +1222,7 @@ impl<'a> super::TypeChecker<'a> {
                     "element-wise tensor arithmetic requires a numeric element type, found '{}'",
                     type_display(elem)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             return false;
@@ -1247,7 +1247,7 @@ impl<'a> super::TypeChecker<'a> {
                 type_display(scalar_ty),
                 type_display(elem)
             ),
-            scalar.span.clone(),
+            scalar.span,
             TypeErrorKind::TypeMismatch,
         );
         false
@@ -1350,7 +1350,7 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(left_ty),
                     type_display(right_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::InvalidBinaryOp,
             );
             return Type::Error;
@@ -1372,7 +1372,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&le),
                             type_display(&re)
                         ),
-                        right.span.clone(),
+                        right.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -1384,7 +1384,7 @@ impl<'a> super::TypeChecker<'a> {
                              found '{}'",
                             type_display(&le)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -1425,7 +1425,7 @@ impl<'a> super::TypeChecker<'a> {
                     "element-wise column arithmetic requires a numeric element type, found '{}'",
                     type_display(elem)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             return false;
@@ -1452,7 +1452,7 @@ impl<'a> super::TypeChecker<'a> {
                 type_display(scalar_ty),
                 type_display(elem)
             ),
-            scalar.span.clone(),
+            scalar.span,
             TypeErrorKind::TypeMismatch,
         );
         false
@@ -1756,7 +1756,7 @@ impl<'a> super::TypeChecker<'a> {
                                     type_display(&right_ty),
                                     type_display(&left_ty)
                                 ),
-                                right.span.clone(),
+                                right.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -1790,7 +1790,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(int_side),
                                 type_display(float_side),
                             ),
-                            right.span.clone(),
+                            right.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     } else if matches!(left_ty, Type::Float(_))
@@ -1845,7 +1845,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(wide),
                                 type_display(narrow),
                             ),
-                            right.span.clone(),
+                            right.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     } else if !types_compatible(&left_ty, &right_ty) {
@@ -1856,7 +1856,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(&right_ty),
                                 Self::arith_wrapper_unwrap_hint(&left_ty, &right_ty)
                             ),
-                            right.span.clone(),
+                            right.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -1871,7 +1871,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(&left_ty),
                                 type_display(&right_ty)
                             ),
-                            right.span.clone(),
+                            right.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -1888,7 +1888,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(&left_ty),
                                 type_display(&right_ty)
                             ),
-                            right.span.clone(),
+                            right.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -1912,7 +1912,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(&left_ty),
                                 type_display(&right_ty)
                             ),
-                            right.span.clone(),
+                            right.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -1923,7 +1923,7 @@ impl<'a> super::TypeChecker<'a> {
                             "arithmetic operator requires numeric type, found '{}'",
                             type_display(&left_ty)
                         ),
-                        left.span.clone(),
+                        left.span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
                     Type::Error
@@ -1942,7 +1942,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&left_ty),
                             type_display(&right_ty)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
                 } else if !self.type_supports_partial_eq(cmp_left) {
@@ -1951,7 +1951,7 @@ impl<'a> super::TypeChecker<'a> {
                             "type '{}' does not implement Eq; add #[derive(Eq)] to use == or !=",
                             type_display(cmp_left)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
                 }
@@ -1968,7 +1968,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&left_ty),
                             type_display(&right_ty)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
                 } else if matches!(cmp_left, Type::Named { name, .. } if self.env.distinct_types.contains_key(name))
@@ -1984,7 +1984,7 @@ impl<'a> super::TypeChecker<'a> {
                              <, <=, >, or >=",
                             type_display(cmp_left)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
                 } else if matches!(cmp_left, Type::Named { name, .. }
@@ -2006,7 +2006,7 @@ impl<'a> super::TypeChecker<'a> {
                              <, <=, >, or >=",
                             type_display(cmp_left)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
                 }
@@ -2019,7 +2019,7 @@ impl<'a> super::TypeChecker<'a> {
                             "logical operator requires 'bool', found '{}'",
                             type_display(&left_ty)
                         ),
-                        left.span.clone(),
+                        left.span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
                 }
@@ -2029,7 +2029,7 @@ impl<'a> super::TypeChecker<'a> {
                             "logical operator requires 'bool', found '{}'",
                             type_display(&right_ty)
                         ),
-                        right.span.clone(),
+                        right.span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
                 }
@@ -2042,7 +2042,7 @@ impl<'a> super::TypeChecker<'a> {
                             "bitwise operator requires integer type, found '{}'",
                             type_display(&left_ty)
                         ),
-                        left.span.clone(),
+                        left.span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
                     return Type::Error;
@@ -2054,7 +2054,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&left_ty),
                             type_display(&right_ty)
                         ),
-                        right.span.clone(),
+                        right.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2064,7 +2064,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !types_compatible(&left_ty, &right_ty) {
                     self.type_error(
                         "range bounds must have same type".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2128,7 +2128,7 @@ impl<'a> super::TypeChecker<'a> {
                                  found '{}'",
                                 type_display(&elem)
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::InvalidUnaryOp,
                         );
                         return Type::Error;
@@ -2149,7 +2149,7 @@ impl<'a> super::TypeChecker<'a> {
                                  found '{}'",
                                 type_display(&elem)
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::InvalidUnaryOp,
                         );
                         return Type::Error;
@@ -2169,7 +2169,7 @@ impl<'a> super::TypeChecker<'a> {
                             "unary '-' requires numeric type, found '{}'",
                             type_display(&ty)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::InvalidUnaryOp,
                     );
                     Type::Error
@@ -2181,7 +2181,7 @@ impl<'a> super::TypeChecker<'a> {
                 if ty != Type::Bool {
                     self.type_error(
                         format!("unary '!' requires 'bool', found '{}'", type_display(&ty)),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::InvalidUnaryOp,
                     );
                     Type::Error
@@ -2205,7 +2205,7 @@ impl<'a> super::TypeChecker<'a> {
                              found '{}'",
                             type_display(&ty)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::InvalidUnaryOp,
                     );
                     Type::Error
@@ -2229,7 +2229,7 @@ impl<'a> super::TypeChecker<'a> {
                              ('*const T' / '*mut T'), found '{}'",
                             type_display(&ty)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::InvalidUnaryOp,
                     );
                     Type::Error
@@ -2249,7 +2249,7 @@ impl<'a> super::TypeChecker<'a> {
                     mut_marker: false,
                     mut_marker_span: None,
                     value: left.clone(),
-                    span: left.span.clone(),
+                    span: left.span,
                 };
                 self.infer_call(right, &[synthetic_arg], span)
             }
@@ -2265,7 +2265,7 @@ impl<'a> super::TypeChecker<'a> {
                 if placeholder_count > 1 {
                     self.type_error(
                         "at most one '_' placeholder allowed per pipe stage".to_string(),
-                        right.span.clone(),
+                        right.span,
                         TypeErrorKind::InvalidPipePlaceholder,
                     );
                     self.infer_expr(callee);
@@ -2288,7 +2288,7 @@ impl<'a> super::TypeChecker<'a> {
                                     mut_marker: arg.mut_marker,
                                     mut_marker_span: None,
                                     value: left.clone(),
-                                    span: left.span.clone(),
+                                    span: left.span,
                                 }
                             } else {
                                 arg.clone()
@@ -2302,7 +2302,7 @@ impl<'a> super::TypeChecker<'a> {
                         mut_marker: false,
                         mut_marker_span: None,
                         value: left.clone(),
-                        span: left.span.clone(),
+                        span: left.span,
                     }];
                     new_args.extend(args.iter().cloned());
                     new_args
@@ -2314,7 +2314,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => {
                 self.type_error(
                     "right-hand side of pipe must be a function name or function call".to_string(),
-                    right.span.clone(),
+                    right.span,
                     TypeErrorKind::NotCallable,
                 );
                 self.infer_expr(right);
@@ -2355,7 +2355,7 @@ impl<'a> super::TypeChecker<'a> {
                         "'?' operator requires `Result` or `Option`, found '{}'",
                         type_display(&inner_ty)
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -2397,7 +2397,7 @@ impl<'a> super::TypeChecker<'a> {
                 _ => {
                     self.type_error(
                         format!("'?' operator requires `Result` or `Option`, found '{inner_name}'"),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -2410,7 +2410,7 @@ impl<'a> super::TypeChecker<'a> {
             None => {
                 self.type_error(
                     "'?' operator used outside a function body".to_string(),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -2424,7 +2424,7 @@ impl<'a> super::TypeChecker<'a> {
                         "'?' requires the enclosing function to return `Result` or `Option`, found '{}'",
                         type_display(&return_ty)
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -2451,7 +2451,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(inner_err),
                                 type_display(ret_err)
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return Type::Error;
@@ -2474,7 +2474,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(inner_err),
                         target_name
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 Type::Error
@@ -2486,7 +2486,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(&inner_ty),
                         type_display(&return_ty)
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 Type::Error
@@ -2498,7 +2498,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(&inner_ty),
                         type_display(&return_ty)
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 Type::Error

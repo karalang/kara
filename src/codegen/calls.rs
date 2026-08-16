@@ -123,7 +123,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let obj: &Expr = if matches!(object.kind, ExprKind::SelfValue) {
                 self_ident = Expr {
                     kind: ExprKind::Identifier("self".to_string()),
-                    span: object.span.clone(),
+                    span: object.span,
                 };
                 &self_ident
             } else {
@@ -147,7 +147,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.register_var_from_type_expr(&synth, &field_te);
                     let expr = Expr {
                         kind: ExprKind::Identifier(synth.clone()),
-                        span: inner.span.clone(),
+                        span: inner.span,
                     };
                     hoisted_container = Some(synth);
                     Some(expr)
@@ -194,7 +194,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.register_var_from_type_expr(&synth, &vec_te);
                     let expr = Expr {
                         kind: ExprKind::Identifier(synth.clone()),
-                        span: inner.span.clone(),
+                        span: inner.span,
                     };
                     hoisted_container = Some(synth);
                     Some(expr)
@@ -228,7 +228,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.register_var_from_type_expr(&synth, &vec_te);
                 let expr = Expr {
                     kind: ExprKind::Identifier(synth.clone()),
-                    span: inner.span.clone(),
+                    span: inner.span,
                 };
                 hoisted_container = Some(synth);
                 Some(expr)
@@ -359,7 +359,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (Identifier, not Index) and fall into the regular flow.
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: inner.span.clone(),
+            span: inner.span,
         };
         let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
 
@@ -540,7 +540,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         let fobj: &Expr = if matches!(fobj.kind, ExprKind::SelfValue) {
                             self_ident = Expr {
                                 kind: ExprKind::Identifier("self".to_string()),
-                                span: fobj.span.clone(),
+                                span: fobj.span,
                             };
                             &self_ident
                         } else {
@@ -933,7 +933,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: span.clone(),
+            span: *span,
         };
         let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
 
@@ -1050,7 +1050,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.register_var_from_type_expr(&synth, &elem_te);
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: outer.span.clone(),
+            span: outer.span,
         };
         let result = self.compile_for(label, pattern, &synth_expr, body);
         self.variables.remove(&synth);
@@ -1183,7 +1183,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.register_var_from_type_expr(&synth, &elem_te);
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: inner_object.span.clone(),
+            span: inner_object.span,
         };
         let result = self.compile_index(&synth_expr, outer_idx);
         self.variables.remove(&synth);
@@ -1226,7 +1226,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
             self_ident = Expr {
                 kind: ExprKind::Identifier("self".to_string()),
-                span: inner.span.clone(),
+                span: inner.span,
             };
             &self_ident
         } else {
@@ -1394,7 +1394,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: inner_object.span.clone(),
+            span: inner_object.span,
         };
         let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
 
@@ -1856,9 +1856,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // span as its receiver, so a chained `opt.map(f).unwrap_or(d)` would
         // collide on `call_span`. Ok/Err bindings need distinct keys, so nudge
         // the length.
-        let mut x_span = mapper.span.clone();
+        let mut x_span = mapper.span;
         x_span.length += 2;
-        let mut e_span = mapper.span.clone();
+        let mut e_span = mapper.span;
         e_span.length += 3;
         self.seed_synthetic_pattern_binding_type(&x_span, inner_te);
         if let Some(ete) = err_te {
@@ -1866,13 +1866,13 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let mk = |kind: ExprKind| Expr {
             kind,
-            span: call_span.clone(),
+            span: *call_span,
         };
         let arg = |value: Expr| CallArg {
             label: None,
             mut_marker: false,
             mut_marker_span: None,
-            span: value.span.clone(),
+            span: value.span,
             value,
         };
         let bind_pat_spanned = |name: &str, span: crate::token::Span| Pattern {
@@ -1881,7 +1881,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let bind_pat = |name: &str| Pattern {
             kind: PatternKind::Binding(name.to_string()),
-            span: call_span.clone(),
+            span: *call_span,
         };
         let call_f = mk(ExprKind::Call {
             callee: Box::new(mapper.clone()),
@@ -1896,13 +1896,13 @@ impl<'ctx> super::Codegen<'ctx> {
             pattern: Pattern {
                 kind: PatternKind::TupleVariant {
                     path: vec![present_ctor.to_string()],
-                    patterns: vec![bind_pat_spanned(x_name, x_span.clone())],
+                    patterns: vec![bind_pat_spanned(x_name, x_span)],
                 },
-                span: call_span.clone(),
+                span: *call_span,
             },
             guard: None,
             body: present_body,
-            span: call_span.clone(),
+            span: *call_span,
         };
         let absent_arm = if is_result {
             let err_body = mk(ExprKind::Call {
@@ -1913,20 +1913,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 pattern: Pattern {
                     kind: PatternKind::TupleVariant {
                         path: vec!["Err".to_string()],
-                        patterns: vec![bind_pat_spanned(e_name, e_span.clone())],
+                        patterns: vec![bind_pat_spanned(e_name, e_span)],
                     },
-                    span: call_span.clone(),
+                    span: *call_span,
                 },
                 guard: None,
                 body: err_body,
-                span: call_span.clone(),
+                span: *call_span,
             }
         } else {
             MatchArm {
                 pattern: bind_pat("None"),
                 guard: None,
                 body: mk(ExprKind::Identifier("None".to_string())),
-                span: call_span.clone(),
+                span: *call_span,
             }
         };
         let match_expr = mk(ExprKind::Match {
@@ -2155,13 +2155,13 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             let mk = |kind: ExprKind| Expr {
                 kind,
-                span: call_span.clone(),
+                span: *call_span,
             };
             let arg = |value: Expr| CallArg {
                 label: None,
                 mut_marker: false,
                 mut_marker_span: None,
-                span: value.span.clone(),
+                span: value.span,
                 value,
             };
             let x_ident = mk(ExprKind::Identifier(x_name.to_string()));
@@ -3476,13 +3476,13 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         let mk = |kind: ExprKind| Expr {
             kind,
-            span: call_span.clone(),
+            span: *call_span,
         };
         let arg = CallArg {
             label: None,
             mut_marker: false,
             mut_marker_span: None,
-            span: call_span.clone(),
+            span: *call_span,
             value: mk(ExprKind::Identifier(x_name.to_string())),
         };
         let call = mk(ExprKind::Call {
@@ -3514,7 +3514,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 callee: Box::new(closure.clone()),
                 args: vec![],
             },
-            span: call_span.clone(),
+            span: *call_span,
         };
         self.compile_expr(&call)
     }

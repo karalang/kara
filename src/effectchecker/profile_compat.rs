@@ -110,7 +110,7 @@ impl super::EffectChecker<'_> {
             );
             self.errors.push(EffectError {
                 message,
-                span: f.span.clone(),
+                span: f.span,
                 kind: EffectErrorKind::ProfileIncompatibleEffect,
                 subtype_trace: None,
                 replacement: None,

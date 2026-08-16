@@ -282,8 +282,8 @@ pub fn check_raii_across_yield(
                     fn_key: fn_key.clone(),
                     binding_name: field.name.clone(),
                     type_name: type_name.clone(),
-                    yield_span: first_yp.span.clone(),
-                    binding_span: field.binding_span.clone(),
+                    yield_span: first_yp.span,
+                    binding_span: field.binding_span,
                     state_violation: None,
                 });
             }
@@ -654,7 +654,7 @@ impl StateFlowWalker<'_> {
     fn binding_span_of(&self, binding_name: &str) -> Option<Span> {
         for (name, _, span) in self.scope.iter().rev() {
             if name == binding_name {
-                return span.clone();
+                return *span;
             }
         }
         None
@@ -685,7 +685,7 @@ impl StateFlowWalker<'_> {
             fn_key: self.fn_key.clone(),
             binding_name: binding_name.to_string(),
             type_name,
-            yield_span: yield_span.clone(),
+            yield_span: *yield_span,
             binding_span,
             state_violation: Some(StateViolation {
                 soiling_method,
@@ -796,7 +796,7 @@ impl StateFlowWalker<'_> {
                 binding_name,
                 BindingState::Soiled {
                     soiling_method: method_name.to_string(),
-                    soil_span: call_span.clone(),
+                    soil_span: *call_span,
                     clear_method_name: clear_name.clone(),
                 },
             );
@@ -880,8 +880,7 @@ impl StateFlowWalker<'_> {
             StmtKind::LetUninit {
                 name, name_span, ..
             } => {
-                self.scope
-                    .push((name.clone(), None, Some(name_span.clone())));
+                self.scope.push((name.clone(), None, Some(*name_span)));
             }
             StmtKind::LetElse {
                 value,

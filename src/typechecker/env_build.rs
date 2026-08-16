@@ -2051,7 +2051,7 @@ impl<'a> super::TypeChecker<'a> {
                      `#[repr(C, packed)]`) on the declaration",
                     u.name
                 ),
-                u.span.clone(),
+                u.span,
                 TypeErrorKind::TypeMismatch,
             );
         }
@@ -2069,7 +2069,7 @@ impl<'a> super::TypeChecker<'a> {
                         fname,
                         type_display(fty),
                     ),
-                    u.span.clone(),
+                    u.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -2095,7 +2095,7 @@ impl<'a> super::TypeChecker<'a> {
                      inside `unsafe {{ }}`",
                     u.name,
                 ),
-                u.span.clone(),
+                u.span,
                 TypeErrorKind::TypeMismatch,
             );
         }
@@ -2238,7 +2238,7 @@ impl<'a> super::TypeChecker<'a> {
                              struct {target_name}Handle {{ p: ref {target_name} }}`) \
                              and impl on the wrapper instead"
                         ),
-                        imp.span.clone(),
+                        imp.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return;
@@ -2426,7 +2426,7 @@ impl<'a> super::TypeChecker<'a> {
                          manually inside an `unsafe {{ }}` block at every \
                          site that finishes with that variant"
                     ),
-                    imp.span.clone(),
+                    imp.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return;
@@ -2485,7 +2485,7 @@ impl<'a> super::TypeChecker<'a> {
                          use the constant-time `.ct_eq(...)`, and rely on the \
                          built-in `Zeroize`/`Drop` for wiping"
                     ),
-                    imp.span.clone(),
+                    imp.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return;
@@ -2524,7 +2524,7 @@ impl<'a> super::TypeChecker<'a> {
                          implementation; merge the cleanup logic into the existing \
                          `impl Drop for {type_name}` block"
                     ),
-                    imp.span.clone(),
+                    imp.span,
                     TypeErrorKind::ConflictingImpl,
                 );
                 return;
@@ -2572,7 +2572,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_name,
                         sig_problems.join("; "),
                     ),
-                    imp.span.clone(),
+                    imp.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return;
@@ -2675,7 +2675,7 @@ impl<'a> super::TypeChecker<'a> {
                          existing one (v1 has no method specialization)",
                         type_name, rendered_args, plural, joined, type_name,
                     ),
-                    imp.span.clone(),
+                    imp.span,
                     TypeErrorKind::ConflictingImpl,
                 );
                 return;
@@ -2702,7 +2702,7 @@ impl<'a> super::TypeChecker<'a> {
                             format!("[{}]", rendered)
                         },
                     ),
-                    imp.span.clone(),
+                    imp.span,
                     TypeErrorKind::ConflictingImpl,
                 );
                 return;
@@ -2719,7 +2719,7 @@ impl<'a> super::TypeChecker<'a> {
             methods,
             generic_params: imp.generic_params.clone(),
             where_clause: imp.where_clause.clone(),
-            target_span: Some(imp.target_type.span.clone()),
+            target_span: Some(imp.target_type.span),
         });
     }
 
@@ -3152,7 +3152,7 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
                         "{PREFIX} generic arguments are not allowed in a refinement \
                          predicate — reference a plain constant"
                     ),
-                    expr.span.clone(),
+                    expr.span,
                 ))
             } else {
                 Ok(())
@@ -3172,7 +3172,7 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
                          predicate",
                         super::const_eval::binop_glyph(op)
                     ),
-                    expr.span.clone(),
+                    expr.span,
                 ))
             }
         }
@@ -3183,7 +3183,7 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
             }
             UnaryOp::Deref => Err((
                 format!("{PREFIX} dereference (`*`) is not allowed in a refinement predicate"),
-                expr.span.clone(),
+                expr.span,
             )),
         },
         // `self.field` — and nested field chains rooted at an allowed
@@ -3206,7 +3206,7 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
                          allowed in a refinement predicate — only zero-argument \
                          methods on `self` (e.g. `self.len()`) are permitted"
                     ),
-                    expr.span.clone(),
+                    expr.span,
                 ))
             } else if turbofish.is_some() {
                 Err((
@@ -3214,7 +3214,7 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
                         "{PREFIX} generic arguments on method `{method}` are not \
                          allowed in a refinement predicate"
                     ),
-                    expr.span.clone(),
+                    expr.span,
                 ))
             } else {
                 validate_refinement_predicate(object)
@@ -3226,7 +3226,7 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
                 "{PREFIX} function calls are not allowed in a refinement predicate — \
                  only zero-argument methods on `self` are permitted"
             ),
-            expr.span.clone(),
+            expr.span,
         )),
         _ => Err((
             format!(
@@ -3235,7 +3235,7 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
                  zero-argument `self` methods, constants, and arithmetic / \
                  comparison / boolean operators"
             ),
-            expr.span.clone(),
+            expr.span,
         )),
     }
 }

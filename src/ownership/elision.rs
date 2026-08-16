@@ -105,7 +105,7 @@ impl ElisionScan {
             self.blocked.push(ElisionBlocked {
                 binding: name.to_string(),
                 reason: reason.to_string(),
-                span: span.clone(),
+                span: *span,
             });
         }
     }
@@ -1181,7 +1181,7 @@ impl ClusterScan {
 impl ClusterScan {
     fn poison(&mut self, reason: &str, span: &Span) {
         if self.poisoned.is_none() {
-            self.poisoned = Some((reason.to_string(), span.clone()));
+            self.poisoned = Some((reason.to_string(), *span));
         }
     }
 

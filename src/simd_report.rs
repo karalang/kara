@@ -415,7 +415,7 @@ impl Scan<'_> {
             None
         };
         self.findings.push(SimdFinding {
-            span: span.clone(),
+            span: *span,
             func_name: self.func_name.clone(),
             require_simd: self.require_simd,
             op_desc,

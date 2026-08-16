@@ -171,7 +171,7 @@ impl MonomorphizationTable {
                         count,
                         threshold: error,
                         level: BudgetLevel::Error,
-                        site: first.site.clone(),
+                        site: first.site,
                     });
                     continue;
                 }
@@ -183,7 +183,7 @@ impl MonomorphizationTable {
                         count,
                         threshold: warn,
                         level: BudgetLevel::Warning,
-                        site: first.site.clone(),
+                        site: first.site,
                     });
                 }
             }
@@ -295,7 +295,7 @@ impl Walker<'_> {
         self.groups
             .entry(generic)
             .or_insert_with(GroupAccum::new)
-            .record(types, effects, span.clone());
+            .record(types, effects, *span);
     }
 
     fn walk_block(&mut self, block: &Block) {

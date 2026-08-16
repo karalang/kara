@@ -232,7 +232,7 @@ impl<'a> super::OwnershipChecker<'a> {
                              two disjoint mutable halves.",
                             place = render_place(&place),
                         ),
-                        span: arg.value.span.clone(),
+                        span: arg.value.span,
                         kind: OwnershipErrorKind::ExclusiveBorrowAliasedArgs,
                         suggestion: Some(
                             "pass distinct bindings to the two parameters, or split the value \
@@ -240,12 +240,12 @@ impl<'a> super::OwnershipChecker<'a> {
                                 .to_string(),
                         ),
                         replacement: None,
-                        consume_span: Some(prev_span.clone()),
+                        consume_span: Some(*prev_span),
                     });
                     break;
                 }
             }
-            borrows.push((place, is_excl, arg.value.span.clone()));
+            borrows.push((place, is_excl, arg.value.span));
         }
     }
 
@@ -326,7 +326,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 } else {
                     BorrowKind::ImmSlice
                 };
-                self.push_active_borrow(kind, place, slice_span.clone());
+                self.push_active_borrow(kind, place, *slice_span);
             }
         }
     }
@@ -371,7 +371,7 @@ impl<'a> super::OwnershipChecker<'a> {
             {
                 e.insert((place.clone(), false));
             }
-            self.push_active_borrow(BorrowKind::ImmSlice, place, call_span.clone());
+            self.push_active_borrow(BorrowKind::ImmSlice, place, *call_span);
         }
     }
 
@@ -417,14 +417,14 @@ impl<'a> super::OwnershipChecker<'a> {
                                 prior.span.line,
                                 prior.span.column
                             ),
-                            span: span.clone(),
+                            span,
                             kind: OwnershipErrorKind::SliceBorrowConflict { shape },
                             suggestion: Some(
                                 "drop the prior borrow before creating a new one (or restructure so they don't overlap)"
                                     .to_string(),
                             ),
                             replacement: None,
-                            consume_span: Some(prior.span.clone()),
+                            consume_span: Some(prior.span),
                         });
                     }
                     BorrowConflict::CrossForm => {
@@ -437,14 +437,14 @@ impl<'a> super::OwnershipChecker<'a> {
                                 prior.span.line,
                                 prior.span.column
                             ),
-                            span: span.clone(),
+                            span,
                             kind: OwnershipErrorKind::CrossBorrowConflict,
                             suggestion: Some(
                                 "drop the slice borrow before mutating the source (or restructure so they don't overlap)"
                                     .to_string(),
                             ),
                             replacement: None,
-                            consume_span: Some(prior.span.clone()),
+                            consume_span: Some(prior.span),
                         });
                     }
                     BorrowConflict::None => {}
@@ -522,7 +522,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             self.slice_binding_scope_depth.get(&b.source.root)
                         {
                             if slice_depth < exit_depth {
-                                to_emit.push((b.source.clone(), b.span.clone(), b.span.clone()));
+                                to_emit.push((b.source.clone(), b.span, b.span));
                             }
                         }
                     }
@@ -621,7 +621,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 "cannot move `{}` while {} is still live (borrowed at line {}:{})",
                 name, borrow_desc, prior.span.line, prior.span.column
             ),
-            span: move_span.clone(),
+            span: *move_span,
             kind: OwnershipErrorKind::SliceBorrowConflict {
                 shape: SliceConflictShape::MoveOfBorrowed,
             },
@@ -731,7 +731,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 .push(ActiveClosureCapture {
                     path: path.clone(),
                     mode: mode.clone(),
-                    closure_span: closure_span.clone(),
+                    closure_span: *closure_span,
                     scope_depth: self.current_scope_depth,
                 });
         }
@@ -816,14 +816,14 @@ impl<'a> super::OwnershipChecker<'a> {
                     captured_place_str,
                     mode_str,
                 ),
-                span: consume_span.clone(),
+                span: *consume_span,
                 kind: OwnershipErrorKind::ClosureCaptureBorrowConflict,
                 suggestion: Some(
                     "drop the closure (or restructure so its captures end before the consume) before moving the source"
                         .to_string(),
                 ),
                 replacement: None,
-                consume_span: Some(cap.closure_span.clone()),
+                consume_span: Some(cap.closure_span),
             });
         }
     }

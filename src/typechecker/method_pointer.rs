@@ -120,7 +120,7 @@ impl<'a> super::TypeChecker<'a> {
                              with a turbofish on the originating constructor (e.g. \
                              `ptr.null[u8]()`)."
                         ),
-                        object.span.clone(),
+                        object.span,
                         TypeErrorKind::CannotInferTypeParam,
                     );
                     return Some(Type::Error);
@@ -133,7 +133,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'{method}' on a raw pointer takes {want} argument{}",
                             if want == 1 { "" } else { "s" }
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     return false;

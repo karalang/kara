@@ -166,7 +166,7 @@ pub(super) fn match_kernighan_popcount(
         source,
         counter,
         sub_span,
-        add_span: body.stmts[1].span.clone(),
+        add_span: body.stmts[1].span,
         signed_suffix,
         unsigned_suffix,
     })
@@ -245,7 +245,7 @@ fn collect_suffixes(e: &Expr, signed: &mut bool, unsigned: &mut bool) {
 fn is_sub_one_of(e: &Expr, var: &str) -> Option<crate::token::Span> {
     let (lhs, rhs) = binary_operands(e, BinOp::Sub, "sub")?;
     if identifier_name(lhs).as_deref() == Some(var) && int_literal_is(rhs, 1) {
-        return Some(rhs.span.clone());
+        return Some(rhs.span);
     }
     None
 }
@@ -460,8 +460,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // `while` keyword: `current_span` is what `emit_panic` bakes into the
         // message, and without this the reported location shifts (observed:
         // `5:22` became `4:5`).
-        let saved_span = self.tracing.current_span.clone();
-        self.tracing.current_span = Some(m.sub_span.clone());
+        let saved_span = self.tracing.current_span;
+        self.tracing.current_span = Some(m.sub_span);
         let min = src_ty.const_int(1u64 << (w - 1), false);
         let is_min = self
             .builder
@@ -499,7 +499,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(cnt_ty, cnt.ptr, "popcnt.c0")
             .unwrap()
             .into_int_value();
-        self.tracing.current_span = Some(m.add_span.clone());
+        self.tracing.current_span = Some(m.add_span);
         let total = self.emit_checked_int_arith("add", c0, bits, false)?;
         self.tracing.current_span = saved_span;
         self.builder.build_store(cnt.ptr, total).unwrap();
@@ -648,17 +648,17 @@ fn main() {
         let sp = Span::default();
         let id = |n: &str| E {
             kind: EK::Identifier(n.into()),
-            span: sp.clone(),
+            span: sp,
         };
         let int = |v: i64| E {
             kind: EK::Integer(v, None),
-            span: sp.clone(),
+            span: sp,
         };
         let arg = |v: E| crate::ast::CallArg {
             label: None,
             mut_marker: false,
             mut_marker_span: None,
-            span: v.span.clone(),
+            span: v.span,
             value: v,
         };
         let call = |m: &str, a: E, b: E| E {
@@ -668,11 +668,11 @@ fn main() {
                         segments: vec!["Ops".into(), m.into()],
                         generic_args: None,
                     },
-                    span: sp.clone(),
+                    span: sp,
                 }),
                 args: vec![arg(a), arg(b)],
             },
-            span: sp.clone(),
+            span: sp,
         };
         let cond = call("ne", id("x"), int(0));
         let body = Block {
@@ -682,18 +682,18 @@ fn main() {
                         target: id("x"),
                         value: call("bitand", id("x"), call("sub", id("x"), int(1))),
                     },
-                    span: sp.clone(),
+                    span: sp,
                 },
                 Stmt {
                     kind: StmtKind::Assign {
                         target: id("c"),
                         value: call("add", id("c"), int(1)),
                     },
-                    span: sp.clone(),
+                    span: sp,
                 },
             ],
             final_expr: None,
-            span: sp.clone(),
+            span: sp,
         };
         let m = match_kernighan_popcount(&cond, &body).expect("lowered form must match");
         assert_eq!((m.source.as_str(), m.counter.as_str()), ("x", "c"));

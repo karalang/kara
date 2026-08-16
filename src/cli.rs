@@ -2273,7 +2273,7 @@ impl YieldPointWalker<'_> {
                         let captured = self.snapshot_scope();
                         self.out.push(crate::ast::YieldPoint {
                             callee: key,
-                            span: expr.span.clone(),
+                            span: expr.span,
                             captured_locals: captured,
                         });
                     }
@@ -2293,7 +2293,7 @@ impl YieldPointWalker<'_> {
                         let captured = self.snapshot_scope();
                         self.out.push(crate::ast::YieldPoint {
                             callee: key,
-                            span: expr.span.clone(),
+                            span: expr.span,
                             captured_locals: captured,
                         });
                     }
@@ -2713,7 +2713,7 @@ impl StateStructLayoutWalker<'_> {
                 self.fields.push(crate::ast::StateStructField {
                     name: entry.name.clone(),
                     type_name,
-                    binding_span: entry.binding_span.clone(),
+                    binding_span: entry.binding_span,
                 });
             }
         }
@@ -2786,7 +2786,7 @@ impl StateStructLayoutWalker<'_> {
                 self.scope.push(ScopeEntry {
                     name: name.clone(),
                     span_key: Some(crate::resolver::SpanKey::from_span(name_span)),
-                    binding_span: Some(name_span.clone()),
+                    binding_span: Some(*name_span),
                     type_override: None,
                 });
             }
@@ -12281,7 +12281,7 @@ fn mangled_test_function_name(module_label: &str, line: usize, case_name: &str) 
 ///   whatever the parser attached without behavior change.
 fn lower_test_case_to_function(tc: &crate::ast::TestCase, mangled_name: String) -> Function {
     Function {
-        span: tc.span.clone(),
+        span: tc.span,
         attributes: tc.attributes.clone(),
         doc_comment: tc.doc_comment.clone(),
         is_pub: false,
@@ -14425,7 +14425,7 @@ mod diagnostic_json_tests {
         let mut diags = DiagnosticJson::new();
         let span = synth_span();
         let fix = FixIt {
-            span: span.clone(),
+            span,
             replacement: ", ..".to_string(),
         };
         diags.add(DiagEntry {
@@ -14510,7 +14510,7 @@ mod diagnostic_json_tests {
         let mut diags = DiagnosticJson::new();
         let span = synth_span();
         let fix = FixIt {
-            span: span.clone(),
+            span,
             replacement: "_".to_string(),
         };
         diags.add(DiagEntry {

@@ -1398,7 +1398,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // location. This is where scalar arithmetic actually lands;
                     // the raw-`Binary` arm in `exprs.rs` only sees operands the
                     // lowering declined to rewrite.
-                    let op_span = self.tracing.current_span.clone();
+                    let op_span = self.tracing.current_span;
                     let lhs = self.compile_expr(&_args[0].value)?;
                     let rhs = self.compile_expr(&_args[1].value)?;
                     self.tracing.current_span = op_span;
@@ -1459,8 +1459,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let neg_span = self
                     .tracing
                     .current_span
-                    .clone()
-                    .unwrap_or_else(|| _args[0].value.span.clone());
+                    .unwrap_or_else(|| _args[0].value.span);
                 let synth = Expr {
                     span: neg_span,
                     kind: ExprKind::Unary {
@@ -1502,7 +1501,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     UnaryOp::BitNot
                 };
                 let synth = Expr {
-                    span: _args[0].value.span.clone(),
+                    span: _args[0].value.span,
                     kind: ExprKind::Unary {
                         op: un_op,
                         operand: Box::new(_args[0].value.clone()),

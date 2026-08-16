@@ -82,7 +82,7 @@ impl<'a> super::EffectChecker<'a> {
                             direct
                                 .entry(fn_name.clone())
                                 .or_default()
-                                .push((format!("an explicit panic (`{label}`)"), span.clone()));
+                                .push((format!("an explicit panic (`{label}`)"), *span));
                         }
                     }
                     continue;
@@ -92,7 +92,7 @@ impl<'a> super::EffectChecker<'a> {
                     continue;
                 };
                 let span_here = match &te.origin {
-                    EffectOrigin::Direct(span) => Some(span.clone()),
+                    EffectOrigin::Direct(span) => Some(*span),
                     EffectOrigin::Callee {
                         fn_name: callee,
                         span,
@@ -100,7 +100,7 @@ impl<'a> super::EffectChecker<'a> {
                         if graph.contains_key(callee) {
                             None
                         } else {
-                            Some(span.clone())
+                            Some(*span)
                         }
                     }
                 };
@@ -149,7 +149,7 @@ fn gpu_gate_dfs(
                      and explicit panics — restructure to keep it off the `#[gpu]` call graph. \
                      See design.md § GPU Subset Constraints.",
                 ),
-                span: span.clone(),
+                span: *span,
                 kind: EffectErrorKind::GpuEffectViolation,
                 subtype_trace: None,
                 replacement: None,

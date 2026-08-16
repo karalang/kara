@@ -1877,7 +1877,7 @@ impl<'a> super::Interpreter<'a> {
                         if f.name == fn_name && f.stdlib_origin)
                 });
                 if is_stdlib_wrapper {
-                    self.stdlib_wrapper_call_spans.push(span.clone());
+                    self.stdlib_wrapper_call_spans.push(*span);
                 }
                 // B-2026-08-01-12: expose the callee's OWNED param names to
                 // the body's let-destructure gate — a struct destructure of
@@ -2188,7 +2188,7 @@ impl<'a> super::Interpreter<'a> {
                 if m.self_param.is_some() {
                     tys.push(crate::ast::TypeExpr {
                         kind: crate::ast::TypeKind::Tuple(Vec::new()),
-                        span: m.span.clone(),
+                        span: m.span,
                     });
                 }
                 tys.extend(m.params.iter().map(|p| p.ty.clone()));

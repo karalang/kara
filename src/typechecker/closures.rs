@@ -399,7 +399,7 @@ impl<'a> super::TypeChecker<'a> {
                         if !self.is_copy_type_during_check(ty) {
                             *reason = Some(OnceReason {
                                 consumed_binding: name.clone(),
-                                consumed_span: expr.span.clone(),
+                                consumed_span: expr.span,
                             });
                         }
                     }
@@ -411,7 +411,7 @@ impl<'a> super::TypeChecker<'a> {
                         if !self.is_copy_type_during_check(ty) {
                             *reason = Some(OnceReason {
                                 consumed_binding: "self".to_string(),
-                                consumed_span: expr.span.clone(),
+                                consumed_span: expr.span,
                             });
                         }
                     }

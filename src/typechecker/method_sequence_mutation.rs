@@ -93,7 +93,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Vec.retain() expects 1 argument (predicate closure), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -124,7 +124,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("Vec.dedup() takes no arguments, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -160,7 +160,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Vec.split_off() expects 1 argument (index), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -202,7 +202,7 @@ impl<'a> super::TypeChecker<'a> {
                             arg_label,
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -347,7 +347,7 @@ impl<'a> super::TypeChecker<'a> {
                             if !args.is_empty() {
                                 self.type_error(
                                     "Array.len() takes no arguments".to_string(),
-                                    span.clone(),
+                                    *span,
                                     TypeErrorKind::WrongNumberOfArgs,
                                 );
                             }
@@ -357,7 +357,7 @@ impl<'a> super::TypeChecker<'a> {
                             if !args.is_empty() {
                                 self.type_error(
                                     "Array.is_empty() takes no arguments".to_string(),
-                                    span.clone(),
+                                    *span,
                                     TypeErrorKind::WrongNumberOfArgs,
                                 );
                             }
@@ -367,7 +367,7 @@ impl<'a> super::TypeChecker<'a> {
                             if !args.is_empty() {
                                 self.type_error(
                                     format!("Array.{}() takes no arguments", method),
-                                    span.clone(),
+                                    *span,
                                     TypeErrorKind::WrongNumberOfArgs,
                                 );
                             }
@@ -379,7 +379,7 @@ impl<'a> super::TypeChecker<'a> {
                                 self.check_assignable(
                                     &Type::Int(IntSize::I64),
                                     &at,
-                                    arg.value.span.clone(),
+                                    arg.value.span,
                                 );
                             }
                             return Some(option_elem);
@@ -387,7 +387,7 @@ impl<'a> super::TypeChecker<'a> {
                         "contains" => {
                             for arg in args {
                                 let at = self.infer_expr(&arg.value);
-                                self.check_assignable(&elem, &at, arg.value.span.clone());
+                                self.check_assignable(&elem, &at, arg.value.span);
                             }
                             return Some(Type::Bool);
                         }

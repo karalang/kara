@@ -86,7 +86,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // valid (val_size = 0).
                         let unit_te = TypeExpr {
                             kind: TypeKind::Tuple(Vec::new()),
-                            span: elem_te.span.clone(),
+                            span: elem_te.span,
                         };
                         return self.emit_map_clone_fn(&elem_te, &unit_te);
                     }
@@ -2037,7 +2037,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // uses at line 13402–13416.
                         let unit_te = TypeExpr {
                             kind: TypeKind::Tuple(Vec::new()),
-                            span: elem_te.span.clone(),
+                            span: elem_te.span,
                         };
                         return self.emit_map_drop_fn(&elem_te, &unit_te);
                     }

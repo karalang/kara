@@ -923,12 +923,12 @@ impl<'a> Lowerer<'a> {
                 for a in args.iter_mut() {
                     self.lower_expr(&mut a.value);
                     if is_collect_all && !matches!(&a.value.kind, ExprKind::Closure { .. }) {
-                        let span = a.value.span.clone();
+                        let span = a.value.span;
                         let inner = std::mem::replace(
                             &mut a.value,
                             Expr {
                                 kind: ExprKind::Tuple(Vec::new()),
-                                span: span.clone(),
+                                span,
                             },
                         );
                         a.value = Expr {
@@ -950,7 +950,7 @@ impl<'a> Lowerer<'a> {
                 args_close_span,
                 ..
             } => {
-                let args_close_span = args_close_span.clone();
+                let args_close_span = *args_close_span;
                 self.lower_expr(object);
                 for a in args {
                     self.lower_expr(&mut a.value);
@@ -996,12 +996,12 @@ impl<'a> Lowerer<'a> {
                         .direct_iter_terminals
                         .contains(&SpanKey::for_method_call(&object.span, &args_close_span));
                     if recv_is_iterable_collection {
-                        let recv_span = object.span.clone();
+                        let recv_span = object.span;
                         let inner = std::mem::replace(
                             &mut **object,
                             Expr {
                                 kind: ExprKind::Tuple(Vec::new()),
-                                span: recv_span.clone(),
+                                span: recv_span,
                             },
                         );
                         **object = Expr {
@@ -1010,7 +1010,7 @@ impl<'a> Lowerer<'a> {
                                 method: "iter".to_string(),
                                 turbofish: None,
                                 args: Vec::new(),
-                                args_close_span: recv_span.clone(),
+                                args_close_span: recv_span,
                             },
                             span: recv_span,
                         };
@@ -1274,14 +1274,14 @@ impl<'a> Lowerer<'a> {
         }
         let scrut_ty_expr = TypeChecker::type_to_type_expr(ty);
 
-        let outer_span = expr.span.clone();
+        let outer_span = expr.span;
         let ExprKind::Match { scrutinee, arms } =
             std::mem::replace(&mut expr.kind, ExprKind::Error)
         else {
             unreachable!("guarded by the match above");
         };
         let scrut_expr = *scrutinee;
-        let scrut_span = scrut_expr.span.clone();
+        let scrut_span = scrut_expr.span;
         let binding = format!("__karac_msc_{}_{}", scrut_span.offset, scrut_span.length);
 
         let let_stmt = Stmt {
@@ -1289,22 +1289,22 @@ impl<'a> Lowerer<'a> {
                 is_mut: false,
                 pattern: Pattern {
                     kind: PatternKind::Binding(binding.clone()),
-                    span: scrut_span.clone(),
+                    span: scrut_span,
                 },
                 ty: Some(scrut_ty_expr),
                 value: scrut_expr,
             },
-            span: scrut_span.clone(),
+            span: scrut_span,
         };
         let inner_match = Expr {
             kind: ExprKind::Match {
                 scrutinee: Box::new(Expr {
                     kind: ExprKind::Identifier(binding),
-                    span: scrut_span.clone(),
+                    span: scrut_span,
                 }),
                 arms,
             },
-            span: outer_span.clone(),
+            span: outer_span,
         };
         expr.kind = ExprKind::Block(Block {
             stmts: vec![let_stmt],
@@ -1411,7 +1411,7 @@ impl<'a> Lowerer<'a> {
                 segments: vec![segments[0].clone(), segments[1].clone()],
                 generic_args: None,
             },
-            span: callee.span.clone(),
+            span: callee.span,
         };
         // Annotate the synthesized binding with the enum type so codegen —
         // which never saw this binding at type-check time — records
@@ -1423,39 +1423,39 @@ impl<'a> Lowerer<'a> {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![segments[0].clone()],
                 generic_args: None,
-                span: callee.span.clone(),
+                span: callee.span,
             }),
-            span: callee.span.clone(),
+            span: callee.span,
         };
         let let_stmt = Stmt {
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
                     kind: PatternKind::Binding(recv.clone()),
-                    span: callee.span.clone(),
+                    span: callee.span,
                 },
                 ty: Some(enum_ty),
                 value: enum_lit,
             },
-            span: span.clone(),
+            span: *span,
         };
         let mcall = Expr {
             kind: ExprKind::MethodCall {
                 object: Box::new(Expr {
                     kind: ExprKind::Identifier(recv),
-                    span: callee.span.clone(),
+                    span: callee.span,
                 }),
                 method: segments[2].clone(),
                 turbofish: None,
                 args: args.to_vec(),
-                args_close_span: span.clone(),
+                args_close_span: *span,
             },
-            span: span.clone(),
+            span: *span,
         };
         Some(ExprKind::Block(Block {
             stmts: vec![let_stmt],
             final_expr: Some(Box::new(mcall)),
-            span: span.clone(),
+            span: *span,
         }))
     }
 
@@ -1493,7 +1493,7 @@ impl<'a> Lowerer<'a> {
             return None;
         }
         let object = Box::new(Expr {
-            span: callee.span.clone(),
+            span: callee.span,
             kind: ExprKind::Identifier(segments[0].clone()),
         });
         Some(ExprKind::MethodCall {
@@ -1505,7 +1505,7 @@ impl<'a> Lowerer<'a> {
             // span; consumers that care about the call's source extent
             // (L205 lock-block edit emission) only fire on user-source
             // method-call receivers, never on synthetic lowerings.
-            args_close_span: span.clone(),
+            args_close_span: *span,
         })
     }
 
@@ -1530,7 +1530,7 @@ impl<'a> Lowerer<'a> {
             .get(&SpanKey::from_span(span))?
             .clone();
         let new_callee = Box::new(Expr {
-            span: callee.span.clone(),
+            span: callee.span,
             kind: ExprKind::Path {
                 segments: vec![target, name],
                 generic_args: None,
@@ -1672,7 +1672,7 @@ impl<'a> Lowerer<'a> {
         // stdlib impl table, so they dispatch directly.
         if matches!(op, BinOp::NotEq) && matches!(lhs_ty, Type::Named { .. }) {
             let eq_call = Expr {
-                span: left.span.clone(),
+                span: left.span,
                 kind: call_path(
                     vec![target, "eq".to_string()],
                     vec![left.clone(), right.clone()],
@@ -1736,31 +1736,28 @@ impl<'a> Lowerer<'a> {
 fn call_ident(name: &str, arg: Expr) -> ExprKind {
     ExprKind::Call {
         callee: Box::new(Expr {
-            span: arg.span.clone(),
+            span: arg.span,
             kind: ExprKind::Identifier(name.to_string()),
         }),
         args: vec![CallArg {
             label: None,
             mut_marker: false,
             mut_marker_span: None,
-            span: arg.span.clone(),
+            span: arg.span,
             value: arg,
         }],
     }
 }
 
 fn call_path(segments: Vec<String>, args: Vec<Expr>) -> ExprKind {
-    let span = args
-        .first()
-        .map(|a| a.span.clone())
-        .unwrap_or_else(|| Span {
-            line: 0,
-            column: 0,
-            offset: 0,
-            length: 0,
-        });
+    let span = args.first().map(|a| a.span).unwrap_or_else(|| Span {
+        line: 0,
+        column: 0,
+        offset: 0,
+        length: 0,
+    });
     let callee = Box::new(Expr {
-        span: span.clone(),
+        span,
         kind: ExprKind::Path {
             segments,
             generic_args: None,
@@ -1772,7 +1769,7 @@ fn call_path(segments: Vec<String>, args: Vec<Expr>) -> ExprKind {
             label: None,
             mut_marker: false,
             mut_marker_span: None,
-            span: e.span.clone(),
+            span: e.span,
             value: e,
         })
         .collect();
@@ -1963,7 +1960,7 @@ fn collapse_block(block: &mut Block, counts: &HashMap<String, usize>) {
             value,
             Expr {
                 kind: ExprKind::Error,
-                span: value.span.clone(),
+                span: value.span,
             },
         );
         if let StmtKind::Expr(e) = &mut block.stmts[j].kind {

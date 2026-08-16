@@ -208,9 +208,9 @@ impl<'a> super::TypeChecker<'a> {
         );
         let msg = format_cross_task_diagnostic(&lead, capture_ty, path);
         let span = if anchor_span.line == 0 && anchor_span.column == 0 {
-            call_span.clone()
+            *call_span
         } else {
-            anchor_span.clone()
+            *anchor_span
         };
         self.type_error(msg, span, TypeErrorKind::CrossTaskUnsafeCapture);
     }
@@ -244,7 +244,7 @@ impl<'a> super::TypeChecker<'a> {
             ty = type_display(value_ty),
         );
         let msg = format_cross_task_diagnostic(&lead, value_ty, path);
-        self.type_error(msg, span.clone(), TypeErrorKind::CrossTaskUnsafeCapture);
+        self.type_error(msg, *span, TypeErrorKind::CrossTaskUnsafeCapture);
     }
 }
 
@@ -304,7 +304,7 @@ fn collect_captures_expr(
                 && !seen.contains(name) =>
         {
             seen.insert(name.clone());
-            out.push((name.clone(), expr.span.clone()));
+            out.push((name.clone(), expr.span));
         }
         ExprKind::Identifier(_) => {}
         ExprKind::SelfValue
@@ -313,7 +313,7 @@ fn collect_captures_expr(
                 && !seen.contains("self") =>
         {
             seen.insert("self".to_string());
-            out.push(("self".to_string(), expr.span.clone()));
+            out.push(("self".to_string(), expr.span));
         }
         ExprKind::SelfValue => {}
         ExprKind::Binary { left, right, .. } => {

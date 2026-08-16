@@ -83,9 +83,9 @@ pub(crate) fn alias_subst_for_module(
                     kind: TypeKind::Path(PathExpr {
                         segments: vec![item.name.clone()],
                         generic_args: None,
-                        span: item.span.clone(),
+                        span: item.span,
                     }),
-                    span: item.span.clone(),
+                    span: item.span,
                 },
             );
         }

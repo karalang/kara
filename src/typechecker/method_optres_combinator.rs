@@ -97,7 +97,7 @@ impl<'a> super::TypeChecker<'a> {
                         if !args.is_empty() {
                             self.type_error(
                                 format!("Result.{method} takes no arguments"),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::WrongNumberOfArgs,
                             );
                         }
@@ -147,7 +147,7 @@ impl<'a> super::TypeChecker<'a> {
                         if !args.is_empty() {
                             self.type_error(
                                 "Option.flatten takes no arguments".to_string(),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::WrongNumberOfArgs,
                             );
                         }
@@ -164,7 +164,7 @@ impl<'a> super::TypeChecker<'a> {
                                          receiver, found `Option[{}]`",
                                         type_display(&inner)
                                     ),
-                                    span.clone(),
+                                    *span,
                                     TypeErrorKind::TypeMismatch,
                                 );
                                 Some(Type::Error)
@@ -181,7 +181,7 @@ impl<'a> super::TypeChecker<'a> {
                         if !args.is_empty() {
                             self.type_error(
                                 "Option.take takes no arguments".to_string(),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::WrongNumberOfArgs,
                             );
                         }
@@ -198,11 +198,11 @@ impl<'a> super::TypeChecker<'a> {
                     "get_or_insert" if !is_result => {
                         if let Some(a) = args.first() {
                             let at = self.infer_expr(&a.value);
-                            self.check_assignable(&t_ty, &at, a.value.span.clone());
+                            self.check_assignable(&t_ty, &at, a.value.span);
                         } else {
                             self.type_error(
                                 "Option.get_or_insert expects 1 argument".to_string(),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::WrongNumberOfArgs,
                             );
                         }

@@ -306,7 +306,7 @@ fn make_diagnostic(f: &Function, reason: FireReason, level: LintLevel) -> LintDi
     };
     LintDiagnostic {
         level,
-        span: f.span.clone(),
+        span: f.span,
         message,
         lint_name: "missing_must_use".to_string(),
         help,

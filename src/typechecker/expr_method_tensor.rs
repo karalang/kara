@@ -112,7 +112,7 @@ impl<'a> super::TypeChecker<'a> {
                          shape transforms are v1.5 shape arithmetic)",
                         method, method
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 for arg in args {
@@ -133,7 +133,7 @@ impl<'a> super::TypeChecker<'a> {
                      transforms are v1.5 shape arithmetic)",
                     method, method
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             for arg in args {
@@ -170,7 +170,7 @@ impl<'a> super::TypeChecker<'a> {
         if !args.is_empty() {
             self.type_error(
                 format!("transpose takes no arguments, found {}", args.len()),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -205,7 +205,7 @@ impl<'a> super::TypeChecker<'a> {
                     "matmul requires a numeric element type, found '{}'",
                     type_display(&elem_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             for arg in args {
@@ -221,7 +221,7 @@ impl<'a> super::TypeChecker<'a> {
                     shape.len(),
                     shape_display(shape)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             for arg in args {
@@ -235,7 +235,7 @@ impl<'a> super::TypeChecker<'a> {
                     "matmul takes exactly 1 argument (the right-hand tensor), found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -259,7 +259,7 @@ impl<'a> super::TypeChecker<'a> {
                         "matmul expects a tensor argument, found '{}'",
                         type_display(&other_ty)
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -270,7 +270,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => {
                 self.type_error(
                     "matmul requires the argument tensor's rank to be statically known".to_string(),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -284,7 +284,7 @@ impl<'a> super::TypeChecker<'a> {
                     other_shape.len(),
                     shape_display(&other_shape)
                 ),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return Type::Error;
@@ -296,7 +296,7 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(&elem_ty),
                     type_display(&other_elem)
                 ),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return Type::Error;
@@ -316,7 +316,7 @@ impl<'a> super::TypeChecker<'a> {
                         shape_display(&other_shape),
                         k2
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -360,7 +360,7 @@ impl<'a> super::TypeChecker<'a> {
                     "iter_axis takes exactly 1 argument (the axis), found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -374,7 +374,7 @@ impl<'a> super::TypeChecker<'a> {
                 if i < 0 || i as usize >= rank {
                     self.type_error(
                         format!("axis {} out of bounds for rank-{} tensor", i, rank),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -448,7 +448,7 @@ impl<'a> super::TypeChecker<'a> {
                     method,
                     type_display(&elem_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             for arg in args {
@@ -474,7 +474,7 @@ impl<'a> super::TypeChecker<'a> {
                          (rank-polymorphic reduction is v1.5 shape arithmetic)",
                         method
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 for arg in args {
@@ -493,7 +493,7 @@ impl<'a> super::TypeChecker<'a> {
                         method,
                         args.len()
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 for arg in args {
@@ -512,7 +512,7 @@ impl<'a> super::TypeChecker<'a> {
                     method,
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -527,7 +527,7 @@ impl<'a> super::TypeChecker<'a> {
                 if i < 0 || i as usize >= rank {
                     self.type_error(
                         format!("axis {} out of bounds for rank-{} tensor", i, rank),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -597,7 +597,7 @@ impl<'a> super::TypeChecker<'a> {
                          (rank-polymorphic broadcasting is v1.5 shape arithmetic)",
                         method
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 for arg in args {
@@ -613,7 +613,7 @@ impl<'a> super::TypeChecker<'a> {
                     method,
                     type_display(&self_elem)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             for arg in args {
@@ -628,7 +628,7 @@ impl<'a> super::TypeChecker<'a> {
                     method,
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -655,7 +655,7 @@ impl<'a> super::TypeChecker<'a> {
                         method,
                         type_display(&other_ty)
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -676,7 +676,7 @@ impl<'a> super::TypeChecker<'a> {
                          a bare-`S` or splice-bearing shape isn't supported here",
                         method
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -690,7 +690,7 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(&self_elem),
                     type_display(&other_elem)
                 ),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return Type::Error;
@@ -709,7 +709,7 @@ impl<'a> super::TypeChecker<'a> {
                         a,
                         b
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -743,7 +743,7 @@ impl<'a> super::TypeChecker<'a> {
                     "reshape takes exactly 1 argument (the new dims), found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -758,7 +758,7 @@ impl<'a> super::TypeChecker<'a> {
                  static rank comes from the literal's length (`t.reshape([3, 4])`); \
                  runtime-shaped reshape is v1.5 shape arithmetic"
                     .to_string(),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return Type::Error;
@@ -768,7 +768,7 @@ impl<'a> super::TypeChecker<'a> {
                 "reshape to rank 0 — `[]` is not a valid dims list (rank-0 \
                  tensors aren't expressible)"
                     .to_string(),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return Type::Error;
@@ -781,7 +781,7 @@ impl<'a> super::TypeChecker<'a> {
                     if v < 0 {
                         self.type_error(
                             format!("reshape dim must be non-negative, got {}", v),
-                            entry.span.clone(),
+                            entry.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return Type::Error;
@@ -808,7 +808,7 @@ impl<'a> super::TypeChecker<'a> {
                         shape_display(&new_dims),
                         new_count
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -841,7 +841,7 @@ impl<'a> super::TypeChecker<'a> {
                     "permute takes exactly 1 argument (the axis list), found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -856,7 +856,7 @@ impl<'a> super::TypeChecker<'a> {
                 "permute requires a literal axis-list argument \
                  (`t.permute([1, 0])`) — runtime-valued permutations are v1.5"
                     .to_string(),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return Type::Error;
@@ -869,7 +869,7 @@ impl<'a> super::TypeChecker<'a> {
                     if entries.len() == 1 { "y" } else { "ies" },
                     rank
                 ),
-                args[0].value.span.clone(),
+                args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return Type::Error;
@@ -882,7 +882,7 @@ impl<'a> super::TypeChecker<'a> {
                     if i < 0 || i as usize >= rank {
                         self.type_error(
                             format!("axis {} out of bounds for rank-{} tensor", i, rank),
-                            entry.span.clone(),
+                            entry.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return Type::Error;
@@ -890,7 +890,7 @@ impl<'a> super::TypeChecker<'a> {
                     if seen[i as usize] {
                         self.type_error(
                             format!("permute axis list repeats axis {}", i),
-                            entry.span.clone(),
+                            entry.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return Type::Error;
@@ -903,7 +903,7 @@ impl<'a> super::TypeChecker<'a> {
                         "permute axes must be integer literals — runtime-valued \
                          permutations are v1.5"
                             .to_string(),
-                        entry.span.clone(),
+                        entry.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -939,7 +939,7 @@ impl<'a> super::TypeChecker<'a> {
                     "slice takes exactly 3 arguments (axis, start, end), found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -960,7 +960,7 @@ impl<'a> super::TypeChecker<'a> {
                 if i < 0 || i as usize >= rank {
                     self.type_error(
                         format!("axis {} out of bounds for rank-{} tensor", i, rank),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -973,7 +973,7 @@ impl<'a> super::TypeChecker<'a> {
             if s < 0 {
                 self.type_error(
                     format!("slice start must be non-negative, got {}", s),
-                    args[1].value.span.clone(),
+                    args[1].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -983,7 +983,7 @@ impl<'a> super::TypeChecker<'a> {
             if e < s {
                 self.type_error(
                     format!("slice end {} is before start {}", e, s),
-                    args[2].value.span.clone(),
+                    args[2].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 return Type::Error;
@@ -1000,7 +1000,7 @@ impl<'a> super::TypeChecker<'a> {
                                         "slice end {} out of bounds for dim {} (size {})",
                                         e, n, d
                                     ),
-                                    args[2].value.span.clone(),
+                                    args[2].value.span,
                                     TypeErrorKind::TypeMismatch,
                                 );
                                 return Type::Error;
@@ -1057,7 +1057,7 @@ impl<'a> super::TypeChecker<'a> {
                          a `?` dim's size (and therefore the result rank) isn't \
                          known at compile time; use `squeeze(n)` for a specific axis"
                             .to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -1075,7 +1075,7 @@ impl<'a> super::TypeChecker<'a> {
                              (use `squeeze(n)`)",
                             shape_display(shape)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -1091,7 +1091,7 @@ impl<'a> super::TypeChecker<'a> {
                         "cannot squeeze a rank-1 tensor — the result would be \
                          rank-0, which isn't expressible"
                             .to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     self.infer_expr(&axis_arg.value);
@@ -1104,7 +1104,7 @@ impl<'a> super::TypeChecker<'a> {
                         if i < 0 || i as usize >= rank {
                             self.type_error(
                                 format!("axis {} out of bounds for rank-{} tensor", i, rank),
-                                axis_arg.value.span.clone(),
+                                axis_arg.value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             return Type::Error;
@@ -1114,7 +1114,7 @@ impl<'a> super::TypeChecker<'a> {
                             if *d != 1 {
                                 self.type_error(
                                     format!("cannot squeeze axis {}: its size is {}, not 1", n, d),
-                                    axis_arg.value.span.clone(),
+                                    axis_arg.value.span,
                                     TypeErrorKind::TypeMismatch,
                                 );
                                 return Type::Error;
@@ -1143,7 +1143,7 @@ impl<'a> super::TypeChecker<'a> {
                         "squeeze takes 0 or 1 argument(s) (an optional axis), found {}",
                         args.len()
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 for arg in args {
@@ -1164,7 +1164,7 @@ impl<'a> super::TypeChecker<'a> {
         if !is_integer(&ty) && ty != Type::Error {
             self.type_error(
                 format!("{} must be an integer, found '{}'", what, type_display(&ty)),
-                expr.span.clone(),
+                expr.span,
                 TypeErrorKind::TypeMismatch,
             );
             return IntArg::Bad;

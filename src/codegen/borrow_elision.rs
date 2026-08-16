@@ -113,7 +113,7 @@ fn candidate_binding(stmt: &Stmt) -> Option<(String, String, crate::token::Span)
     if r_name == v_name {
         return None;
     }
-    Some((r_name.clone(), v_name.clone(), value.span.clone()))
+    Some((r_name.clone(), v_name.clone(), value.span))
 }
 
 /// Conservative gate: every occurrence of `r` and `v` in the binding's scope

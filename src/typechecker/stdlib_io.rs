@@ -31,7 +31,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         "Regex.is_match() takes 1 argument".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -44,7 +44,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         "Regex.find() takes 1 argument".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -60,7 +60,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         "Regex.find_all() takes 1 argument".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -76,7 +76,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 2 {
                     self.type_error(
                         "Regex.replace_all() takes 2 arguments (s, replacement)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -126,7 +126,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         "Client.get() takes 1 argument (url: str)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -139,7 +139,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 2 {
                     self.type_error(
                         "Client.post() takes 2 arguments (url: str, body: str)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -153,7 +153,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 2 {
                     self.type_error(
                         "Client.request() takes 2 arguments (method: str, url: str)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -212,7 +212,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(
                         "RequestBuilder.header() takes 2 arguments (name: str, value: str)"
                             .to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -225,7 +225,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         "RequestBuilder.body() takes 1 argument (body: str)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -238,7 +238,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         "RequestBuilder.timeout() takes 1 argument (ms: i64)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -251,7 +251,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "RequestBuilder.send() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -290,7 +290,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Response.status() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -303,7 +303,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("Response.{method}() takes no arguments"),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -313,7 +313,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Response.bytes() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -326,7 +326,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         "Response.header() takes 1 argument (name: str)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -344,7 +344,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Response.headers() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -374,7 +374,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "HttpError.message() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -425,13 +425,13 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         "BoundedChannel.send expects exactly one argument".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                    self.check_assignable(&elem, &at, arg.value.span);
                 }
                 // `Result[Unit, ChannelError]`.
                 Type::Named {
@@ -449,7 +449,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "BoundedChannel.recv() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -568,7 +568,7 @@ impl<'a> super::TypeChecker<'a> {
                                      is bound to the scope that created it",
                                     name
                                 ),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::ScopeLocalEscape,
                             );
                         }
@@ -595,7 +595,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     for arg in args {
                         let at = self.infer_expr(&arg.value);
-                        self.check_assignable(&elem, &at, arg.value.span.clone());
+                        self.check_assignable(&elem, &at, arg.value.span);
                     }
                     Type::Unit
                 }
@@ -603,7 +603,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.clone() takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -624,16 +624,12 @@ impl<'a> super::TypeChecker<'a> {
                         self.type_error(
                             "Sender.__schedule_after expects exactly one argument (delay in ms)"
                                 .to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     } else {
                         let at = self.infer_expr(&args[0].value);
-                        self.check_assignable(
-                            &Type::Int(IntSize::I64),
-                            &at,
-                            args[0].value.span.clone(),
-                        );
+                        self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
                     }
                     Type::Unit
                 }
@@ -649,16 +645,12 @@ impl<'a> super::TypeChecker<'a> {
                         self.type_error(
                             "Sender.__schedule_every expects exactly one argument (period in ms)"
                                 .to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     } else {
                         let at = self.infer_expr(&args[0].value);
-                        self.check_assignable(
-                            &Type::Int(IntSize::I64),
-                            &at,
-                            args[0].value.span.clone(),
-                        );
+                        self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
                     }
                     Type::Unit
                 }
@@ -675,7 +667,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_animation_frames takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -696,7 +688,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_pointer_moves takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -712,7 +704,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_wheel takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -728,7 +720,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_keydown takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -744,7 +736,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_keyup takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -760,7 +752,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_input takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -777,7 +769,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_clicks takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -793,7 +785,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_dblclick takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -809,7 +801,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_resize takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -826,7 +818,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_contextmenu takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -844,7 +836,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_focus takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -854,7 +846,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_blur takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -874,7 +866,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_touchstart takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -884,7 +876,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_touchmove takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -894,7 +886,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_touchend takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -909,7 +901,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Receiver.recv() takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
@@ -919,7 +911,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Receiver.try_recv() takes no arguments".to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }

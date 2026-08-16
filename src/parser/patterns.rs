@@ -313,12 +313,7 @@ impl super::Parser {
                         self.advance();
                         let new_rest = if let Token::Identifier { .. } = self.peek_token() {
                             let name = self.expect_identifier()?;
-                            self.check_ident_class(
-                                &name,
-                                IdentClass::Value,
-                                "binding",
-                                rest_span.clone(),
-                            );
+                            self.check_ident_class(&name, IdentClass::Value, "binding", rest_span);
                             RestPattern::Bound(name)
                         } else {
                             RestPattern::Ignored

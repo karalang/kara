@@ -1624,7 +1624,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         object: Box::new(base.clone()),
                         field: "value".to_string(),
                     },
-                    span: base.span.clone(),
+                    span: base.span,
                 }),
                 None,
             )]);
@@ -1655,7 +1655,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     object: Box::new(base.clone()),
                     field: fname.clone(),
                 },
-                span: base.span.clone(),
+                span: base.span,
             };
             match te.and_then(|t| self.display_field_struct_name(t)) {
                 Some(nested) => {
@@ -1692,7 +1692,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let parts = self.build_struct_display_parts(base, type_name)?;
         let lit = Expr {
             kind: ExprKind::InterpolatedStringLit(parts),
-            span: base.span.clone(),
+            span: base.span,
         };
         self.compile_expr(&lit)
     }

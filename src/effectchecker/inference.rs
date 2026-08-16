@@ -125,8 +125,8 @@ impl<'a> super::EffectChecker<'a> {
                             trait_name: t.name.clone(),
                             name: m.name.clone(),
                             self_param: sp.clone(),
-                            self_span: m.self_span.clone(),
-                            span: m.span.clone(),
+                            self_span: m.self_span,
+                            span: m.span,
                             effects: m.effects.clone(),
                         });
                 }
@@ -164,7 +164,7 @@ impl<'a> super::EffectChecker<'a> {
                             SelfParam::MutRef => "mut ref self",
                             SelfParam::Ref => unreachable!("ref self seeds reads"),
                         };
-                        let span = m.self_span.clone().unwrap_or_else(|| m.span.clone());
+                        let span = m.self_span.unwrap_or(m.span);
                         self.errors.push(EffectError {
                             message: format!(
                                 "trait method '{}.{}' declares {}({}) but its `{}` \
@@ -180,7 +180,7 @@ impl<'a> super::EffectChecker<'a> {
                                 r.name,
                                 r.name,
                             ),
-                            span: span.clone(),
+                            span,
                             kind: EffectErrorKind::ResourceReceiverContradiction,
                             subtype_trace: None,
                             replacement: Some(Box::new(crate::resolver::TextEdit {
@@ -198,7 +198,7 @@ impl<'a> super::EffectChecker<'a> {
                         verb,
                         resource: r.name.clone(),
                     },
-                    EffectOrigin::Direct(builtin_span.clone()),
+                    EffectOrigin::Direct(*builtin_span),
                 );
                 // Union the method's declared effect ceiling: a dispatch
                 // call site inherits everything the clause declares
@@ -467,7 +467,7 @@ impl<'a> super::EffectChecker<'a> {
                     effect.clone(),
                     EffectOrigin::Callee {
                         fn_name: callee_name.clone(),
-                        span: call_span.clone(),
+                        span: *call_span,
                     },
                 ));
             }
@@ -531,7 +531,7 @@ impl<'a> super::EffectChecker<'a> {
             for (callee, call_span) in &calls {
                 for effect in self.get_callee_effects(callee) {
                     if effect.verb != EffectVerbKind::Panics {
-                        violations.push((effect, call_span.clone(), *kind));
+                        violations.push((effect, *call_span, *kind));
                     }
                 }
             }
@@ -698,13 +698,13 @@ impl<'a> super::EffectChecker<'a> {
                 let trait_keys = self.extract_trait_assoc_fn_keys(callee, bounds);
                 let callee_name: Option<String> = if !trait_keys.is_empty() {
                     for key in &trait_keys {
-                        calls.push((key.clone(), expr.span.clone()));
+                        calls.push((key.clone(), expr.span));
                     }
                     trait_keys.into_iter().next()
                 } else {
                     let n = self.extract_callee_name(callee);
                     if let Some(ref name) = n {
-                        calls.push((name.clone(), expr.span.clone()));
+                        calls.push((name.clone(), expr.span));
                     }
                     n
                 };
@@ -717,7 +717,7 @@ impl<'a> super::EffectChecker<'a> {
                 // their own declared effects.
                 if let ExprKind::Identifier(n) = &callee.kind {
                     if self.refinement_type_names.contains(n) {
-                        calls.push(("__builtin_refinement_assert".to_string(), expr.span.clone()));
+                        calls.push(("__builtin_refinement_assert".to_string(), expr.span));
                     }
                 }
                 self.collect_calls_in_expr(callee, calls, bounds);
@@ -735,7 +735,7 @@ impl<'a> super::EffectChecker<'a> {
                         for arg in args {
                             if let ExprKind::Identifier(arg_name) = &arg.value.kind {
                                 if self.is_user_function(arg_name) {
-                                    calls.push((arg_name.clone(), arg.value.span.clone()));
+                                    calls.push((arg_name.clone(), arg.value.span));
                                 }
                             }
                         }
@@ -757,7 +757,7 @@ impl<'a> super::EffectChecker<'a> {
                         for b in bs {
                             if let Some(t) = b.path.last() {
                                 if self.trait_declares_no_self_method(t, method) {
-                                    calls.push((format!("{}.{}", t, method), expr.span.clone()));
+                                    calls.push((format!("{}.{}", t, method), expr.span));
                                 }
                             }
                         }
@@ -777,21 +777,21 @@ impl<'a> super::EffectChecker<'a> {
                 // only contribute effects that genuinely belong to the resolved
                 // method, so it never taints `map.get()` / `sender.send()`.
                 if let Some(precise_key) = self.resolve_method_callee_key(&expr.span) {
-                    calls.push((precise_key, expr.span.clone()));
+                    calls.push((precise_key, expr.span));
                 }
                 // For method calls without a recorded precise callee, we'd need
                 // type info to know the exact method. Fall back to searching all
                 // impl methods with matching name.
                 for key in self.method_bodies.keys() {
                     if key.ends_with(&format!(".{}", method)) {
-                        calls.push((key.clone(), expr.span.clone()));
+                        calls.push((key.clone(), expr.span));
                     }
                 }
                 // unwrap() and expect() always panic on None/Err (F-057).
                 if method == "unwrap" {
-                    calls.push(("__builtin_unwrap".to_string(), expr.span.clone()));
+                    calls.push(("__builtin_unwrap".to_string(), expr.span));
                 } else if method == "expect" {
-                    calls.push(("__builtin_expect".to_string(), expr.span.clone()));
+                    calls.push(("__builtin_expect".to_string(), expr.span));
                 }
                 // Lowercase stdlib module aliases routed through `MethodCall`
                 // syntax (`env.set(...)`, etc.). The parser produces a
@@ -805,14 +805,14 @@ impl<'a> super::EffectChecker<'a> {
                 // so seeded `inferred_effects` flow to the caller.
                 if let ExprKind::Identifier(mod_name) = &object.kind {
                     if mod_name == "env" {
-                        calls.push((format!("Env.{}", method), expr.span.clone()));
+                        calls.push((format!("Env.{}", method), expr.span));
                     } else if mod_name == "critical_section" {
                         // `critical_section.acquire()` → the dotted seed key
                         // (`writes(Hardware)`, seeded in
                         // `effectchecker.rs::seed_builtin_effects`). Receiver-
                         // keyed like `env`/`stdin` so the `Hardware` effect
                         // reaches the caller's inferred set.
-                        calls.push((format!("critical_section.{}", method), expr.span.clone()));
+                        calls.push((format!("critical_section.{}", method), expr.span));
                     } else if mod_name == "stdin" {
                         // `stdin.<method>()` → the capitalized `Stdin.<method>`
                         // seed key (phase-8 `Stdin.lines()` slice). Receiver-keyed,
@@ -823,7 +823,7 @@ impl<'a> super::EffectChecker<'a> {
                         // capitalized `Stdin.lines()` form already routes via
                         // `extract_callee_name`. (`stdin.read_line`/`read_to_string`
                         // carry no static seed, so this is inert for them.)
-                        calls.push((format!("Stdin.{}", method), expr.span.clone()));
+                        calls.push((format!("Stdin.{}", method), expr.span));
                     }
                 }
                 // Stdlib methods whose effects are pre-seeded in inferred_effects.
@@ -887,7 +887,7 @@ impl<'a> super::EffectChecker<'a> {
                 ];
                 for &(method_name, qualified) in STDLIB_METHOD_MAP {
                     if method.as_str() == method_name {
-                        calls.push((qualified.to_string(), expr.span.clone()));
+                        calls.push((qualified.to_string(), expr.span));
                     }
                 }
                 // Fallible-allocation instance companions (phase-8-stdlib-floor
@@ -898,7 +898,7 @@ impl<'a> super::EffectChecker<'a> {
                 if crate::fallible_alloc::instance_companion_base(method).is_some() {
                     calls.push((
                         crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY.to_string(),
-                        expr.span.clone(),
+                        expr.span,
                     ));
                 }
                 // `f.trunc_to_<intN>()` carries `panics` (the trapping float→int
@@ -909,7 +909,7 @@ impl<'a> super::EffectChecker<'a> {
                 // `float.trunc_to_int` key seeded in `seed_builtin_effects`.
                 if let Some(suffix) = method.as_str().strip_prefix("trunc_to_") {
                     if crate::numeric_conv::is_int_target(suffix) {
-                        calls.push(("float.trunc_to_int".to_string(), expr.span.clone()));
+                        calls.push(("float.trunc_to_int".to_string(), expr.span));
                     }
                 }
                 // Function-reference argument propagation, mirror of the
@@ -928,7 +928,7 @@ impl<'a> super::EffectChecker<'a> {
                         for arg in args {
                             if let ExprKind::Identifier(arg_name) = &arg.value.kind {
                                 if self.is_user_function(arg_name) {
-                                    calls.push((arg_name.clone(), arg.value.span.clone()));
+                                    calls.push((arg_name.clone(), arg.value.span));
                                 }
                             }
                         }
@@ -943,7 +943,7 @@ impl<'a> super::EffectChecker<'a> {
                 self.collect_calls_in_expr(left, calls, bounds);
                 self.collect_calls_in_expr(right, calls, bounds);
                 if matches!(op, BinOp::Div | BinOp::Mod) {
-                    calls.push(("__builtin_div_rem".to_string(), expr.span.clone()));
+                    calls.push(("__builtin_div_rem".to_string(), expr.span));
                 }
             }
             ExprKind::Pipe { left, right } => {
@@ -1047,7 +1047,7 @@ impl<'a> super::EffectChecker<'a> {
                 self.collect_calls_in_expr(index, calls, bounds);
                 // Indexing with [] calls Index::index which has panics effect
                 // (can panic on out-of-bounds). Use .get() for fallible access.
-                calls.push(("__builtin_index".to_string(), expr.span.clone()));
+                calls.push(("__builtin_index".to_string(), expr.span));
             }
             ExprKind::Tuple(exprs) => {
                 for e in exprs {
@@ -1076,7 +1076,7 @@ impl<'a> super::EffectChecker<'a> {
                 // `panics` effect propagates to the enclosing function.
                 // Numeric / pointer / other casts carry no effect.
                 if self.cast_target_is_refinement(ty) {
-                    calls.push(("__builtin_refinement_assert".to_string(), expr.span.clone()));
+                    calls.push(("__builtin_refinement_assert".to_string(), expr.span));
                 }
                 self.collect_calls_in_expr(inner, calls, bounds);
             }
@@ -1095,7 +1095,7 @@ impl<'a> super::EffectChecker<'a> {
                     if self.function_bodies.contains_key(&key)
                         || self.method_bodies.contains_key(&key)
                     {
-                        calls.push((key, expr.span.clone()));
+                        calls.push((key, expr.span));
                     }
                 }
             }
@@ -1134,10 +1134,7 @@ impl<'a> super::EffectChecker<'a> {
                     // call collection. Real consumers are unaffected:
                     // `build_call_graph` filters to known fn names and
                     // `get_callee_effects` misses harmlessly.
-                    calls.push((
-                        format!("__providers_bind::{}", b.resource),
-                        b.resource_span.clone(),
-                    ));
+                    calls.push((format!("__providers_bind::{}", b.resource), b.resource_span));
                     self.collect_calls_in_expr(&b.value, calls, bounds);
                 }
                 let block_calls = self.collect_calls_in_block(body, bounds);

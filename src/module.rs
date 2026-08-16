@@ -560,11 +560,7 @@ pub fn build_program_tree_with_deps(
                         let intra =
                             imp.path.is_empty() || own_first_segments.contains(&imp.path[0]);
                         if intra {
-                            let first_span = imp
-                                .path_spans
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| imp.span.clone());
+                            let first_span = imp.path_spans.first().cloned().unwrap_or(imp.span);
                             imp.path.insert(0, dep.name.clone());
                             imp.path_spans.insert(0, first_span);
                         }

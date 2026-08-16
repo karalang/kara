@@ -87,7 +87,7 @@ impl Interpreter<'_> {
         };
         self.comptime_user_errors.push(RuntimeError {
             message: msg,
-            span: span.clone(),
+            span: *span,
             left: None,
             right: None,
         });
@@ -138,7 +138,7 @@ fn parse_comptime_item(s: &str) -> Result<Item, String> {
 /// string. A coarse re-anchor (one span for the whole fragment) — fine for
 /// the tree-walk interpreter, which uses spans only for diagnostics.
 fn reanchor_spans(expr: &mut Expr, site: &Span) {
-    crate::span_visitor::visit_expr_spans_mut(expr, &mut |s| *s = site.clone());
+    crate::span_visitor::visit_expr_spans_mut(expr, &mut |s| *s = *site);
 }
 
 /// The item analogue of [`reanchor_spans`] for a spliced derive-generated item.

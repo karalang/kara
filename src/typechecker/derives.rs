@@ -316,7 +316,7 @@ impl<'a> super::TypeChecker<'a> {
              {harm}. Use the total-order wrapper `{wrapper}` \
              (`{wrapper}.from(x)`), e.g. `xs.iter().map({wrapper}.from).collect()`"
         ));
-        self.type_error(msg, span.clone(), TypeErrorKind::TraitBoundNotSatisfied);
+        self.type_error(msg, *span, TypeErrorKind::TraitBoundNotSatisfied);
     }
 
     /// The name of an IEEE float primitive reachable inside `ty` by a
@@ -990,7 +990,7 @@ impl<'a> super::TypeChecker<'a> {
                 if let Item::DistinctType(d) = item {
                     let traits = extract_derived_traits(&d.attributes);
                     if traits.contains("Copy") {
-                        return Some((d.name.clone(), d.span.clone(), d.base_type.clone()));
+                        return Some((d.name.clone(), d.span, d.base_type.clone()));
                     }
                 }
                 None
@@ -1025,7 +1025,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "struct '{}' derives Copy but not Clone; Copy requires Clone",
                                 s.name
                             ),
-                            s.span.clone(),
+                            s.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -1038,7 +1038,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "enum '{}' derives Copy but not Clone; Copy requires Clone",
                                 e.name
                             ),
-                            e.span.clone(),
+                            e.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -1051,7 +1051,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "distinct type '{}' derives Copy but not Clone; Copy requires Clone",
                                 d.name
                             ),
-                            d.span.clone(),
+                            d.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -1106,7 +1106,7 @@ impl<'a> super::TypeChecker<'a> {
             .collect();
         for (name, info) in structs {
             let struct_span = self.program.items.iter().find_map(|item| match item {
-                Item::StructDef(s) if s.name == name => Some(s.span.clone()),
+                Item::StructDef(s) if s.name == name => Some(s.span),
                 _ => None,
             });
             let Some(struct_span) = struct_span else {
@@ -1123,7 +1123,7 @@ impl<'a> super::TypeChecker<'a> {
                             field_name,
                             type_display(field_ty)
                         ),
-                        struct_span.clone(),
+                        struct_span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1159,7 +1159,7 @@ impl<'a> super::TypeChecker<'a> {
                              add it to the variant that represents the starting state",
                             e.name
                         ),
-                        e.span.clone(),
+                        e.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1174,7 +1174,7 @@ impl<'a> super::TypeChecker<'a> {
                                  the desired starting state",
                                 only.name, only.name, e.name, e.name
                             ),
-                            only.span.clone(),
+                            only.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -1187,7 +1187,7 @@ impl<'a> super::TypeChecker<'a> {
                              markers on '{}' and '{}'",
                             e.name, first.name, second.name
                         ),
-                        e.span.clone(),
+                        e.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1311,7 +1311,7 @@ impl<'a> super::TypeChecker<'a> {
                                              boundary), or wrap it in a `Vec` / collection layer",
                                             e.name, variant.name, head
                                         ),
-                                        variant.span.clone(),
+                                        variant.span,
                                         TypeErrorKind::TypeMismatch,
                                     );
                                 }
@@ -1352,7 +1352,7 @@ impl<'a> super::TypeChecker<'a> {
                              struct '{}'; use manual trait impls for structs",
                             s.name
                         ),
-                        s.span.clone(),
+                        s.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1365,7 +1365,7 @@ impl<'a> super::TypeChecker<'a> {
                              enum '{}'; use manual trait impls for enums",
                             e.name
                         ),
-                        e.span.clone(),
+                        e.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1381,7 +1381,7 @@ impl<'a> super::TypeChecker<'a> {
                                 d.name,
                                 type_display(&base_ty)
                             ),
-                            d.span.clone(),
+                            d.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -1413,7 +1413,7 @@ impl<'a> super::TypeChecker<'a> {
             let struct_span = self.program.items.iter().find_map(|item| {
                 if let Item::StructDef(s) = item {
                     if s.name == name {
-                        return Some(s.span.clone());
+                        return Some(s.span);
                     }
                 }
                 None
@@ -1423,7 +1423,7 @@ impl<'a> super::TypeChecker<'a> {
             };
             for (field_name, field_ty, _) in &info.fields {
                 if !supports(self, field_ty) {
-                    let span = struct_span.clone();
+                    let span = struct_span;
                     self.type_error(
                         format!(
                             "struct '{}' derives {} but field '{}' has non-{} type '{}'",
@@ -1452,7 +1452,7 @@ impl<'a> super::TypeChecker<'a> {
             let enum_span = self.program.items.iter().find_map(|item| {
                 if let Item::EnumDef(e) = item {
                     if e.name == name {
-                        return Some(e.span.clone());
+                        return Some(e.span);
                     }
                 }
                 None
@@ -1486,7 +1486,7 @@ impl<'a> super::TypeChecker<'a> {
                             trait_name,
                             type_display(&field_ty)
                         ),
-                        enum_span.clone(),
+                        enum_span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1531,7 +1531,7 @@ impl<'a> super::TypeChecker<'a> {
                      '#[allow(derive_clone_allocates)]' if you accept the panic",
                     type_display(&field_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::DeriveCloneAllocates,
             );
         }

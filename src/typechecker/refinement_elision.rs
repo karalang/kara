@@ -175,7 +175,7 @@ impl TypeChecker<'_> {
                  contract violation — supply a value the predicate admits, or construct it through \
                  `{name}.try_from(x)?` to handle the failure at runtime"
             ),
-            expr.span.clone(),
+            expr.span,
             TypeErrorKind::TypeMismatch,
         );
     }
@@ -224,7 +224,7 @@ impl TypeChecker<'_> {
                  so a surrounding `if` guard does not refine the value's type",
                 type_display(actual),
             ),
-            expr.span.clone(),
+            expr.span,
             TypeErrorKind::TypeMismatch,
         );
     }
@@ -246,7 +246,7 @@ impl TypeChecker<'_> {
                  (v1 has no implication-based elision). Use `{name}.try_from(x)?` or `x as {name}`",
                 type_display(base),
             ),
-            expr.span.clone(),
+            expr.span,
             TypeErrorKind::TypeMismatch,
         );
     }

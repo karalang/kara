@@ -395,8 +395,8 @@ fn first_witness(
             }
             return Some(RcWitness {
                 binding: binding.to_string(),
-                consume_span: c.span.clone(),
-                other_use_span: u.span.clone(),
+                consume_span: c.span,
+                other_use_span: u.span,
                 consume_block: *cb,
                 other_block: *ub,
                 consume_origin: c.consume_origin,
@@ -635,8 +635,8 @@ fn first_uam_witness(
             }
             return Some(UamWitness {
                 binding: binding.to_string(),
-                consume_span: c.span.clone(),
-                other_use_span: u.span.clone(),
+                consume_span: c.span,
+                other_use_span: u.span,
                 consume_block: *cb,
                 other_block: *ub,
             });
@@ -781,8 +781,8 @@ pub fn loop_of_consume_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<Str
                 binding.clone(),
                 RcWitness {
                     binding: binding.clone(),
-                    consume_span: c.span.clone(),
-                    other_use_span: c.span.clone(),
+                    consume_span: c.span,
+                    other_use_span: c.span,
                     consume_block: *cb,
                     other_block: *cb,
                     consume_origin: c.consume_origin,

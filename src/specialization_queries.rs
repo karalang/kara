@@ -153,7 +153,7 @@ fn collect_generic_fn_defs(program: &Program) -> HashMap<String, GenericFnInfo> 
             f.name.clone(),
             GenericFnInfo {
                 def_path: DefPath::item(f.name.clone()),
-                span: f.span.clone(),
+                span: f.span,
                 sorted_param_names,
                 has_specialize_attr: has_specialize_attr(&f.attributes),
             },
@@ -216,7 +216,7 @@ fn build_specialization_query(
             def_path: info.def_path.clone(),
             sub_item_hash: SubItemHash::ROOT,
         },
-        site: info.span.clone(),
+        site: info.span,
         kind: QueryKind::SpecializationDecision,
         options,
         default,

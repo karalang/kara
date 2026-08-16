@@ -160,7 +160,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 mut_marker: false,
                 mut_marker_span: None,
                 value: (*operand).clone(),
-                span: operand.span.clone(),
+                span: operand.span,
             };
             self.compile_vec_method(name, ptr, "push_str", std::slice::from_ref(&arg))?;
         }
@@ -1164,7 +1164,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // grouped stmt — the conceptual fire-point of the
                 // inferred `par_run` — rather than the whole function-
                 // body span (slice 2's MVP).
-                let group_span = body.stmts[group.statement_indices[0]].span.clone();
+                let group_span = body.stmts[group.statement_indices[0]].span;
                 // Slice 1a (Phase 7 — Par codegen: cancellation and
                 // error propagation, 2026-05-18) — auto-par dispatch
                 // doesn't currently surface Result-typed branches, so
@@ -3556,9 +3556,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 kind: TypeKind::Path(PathExpr {
                                     segments: vec!["char".to_string()],
                                     generic_args: None,
-                                    span: value.span.clone(),
+                                    span: value.span,
                                 }),
-                                span: value.span.clone(),
+                                span: value.span,
                             },
                         );
                         detected = true;
@@ -11167,9 +11167,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     kind: TypeKind::Path(crate::ast::PathExpr {
                         segments: vec![head.clone()],
                         generic_args: Some(vec![crate::ast::GenericArg::Type(elem)]),
-                        span: e.span.clone(),
+                        span: e.span,
                     }),
-                    span: e.span.clone(),
+                    span: e.span,
                 })
             }
             // A free-function CALL: the callee's declared return type is
@@ -11197,9 +11197,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         kind: TypeKind::Path(crate::ast::PathExpr {
                             segments: vec![ctor],
                             generic_args: Some(vec![crate::ast::GenericArg::Type(payload_te)]),
-                            span: e.span.clone(),
+                            span: e.span,
                         }),
-                        span: e.span.clone(),
+                        span: e.span,
                     })
                 }
             },
@@ -11218,7 +11218,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         })
                         .collect(),
                 ),
-                span: e.span.clone(),
+                span: e.span,
             }),
             _ => None,
         }
@@ -12307,7 +12307,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.register_var_from_type_expr(&synth, &field_te);
             let synth_expr = Expr {
                 kind: ExprKind::Identifier(synth.clone()),
-                span: object.span.clone(),
+                span: object.span,
             };
             self.emit_displaced_index_elem_drop(
                 &synth_expr,
@@ -13029,7 +13029,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .map(|x| self.infer_discard_elem_te(x))
                         .collect(),
                 ),
-                span: e.span.clone(),
+                span: e.span,
             };
         }
         if let ExprKind::Call { callee, .. } = &e.kind {
@@ -13053,9 +13053,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
                             segments: vec![tn.clone()],
                             generic_args: None,
-                            span: e.span.clone(),
+                            span: e.span,
                         }),
-                        span: e.span.clone(),
+                        span: e.span,
                     };
                 }
             }

@@ -556,7 +556,7 @@ impl super::Parser {
                 // Reserved-but-unimplemented calling conventions get a
                 // targeted "reserved at v1" diagnostic; only a genuinely
                 // unknown ABI falls through to the generic message.
-                if !self.reserved_abi_diagnostic(other, abi_span.clone()) {
+                if !self.reserved_abi_diagnostic(other, abi_span) {
                     self.error_at(
                         &format!(
                             "unsupported FFI export ABI \"{other}\" — only \"C\" \
@@ -598,7 +598,7 @@ impl super::Parser {
                               location and has no configurable shape; \
                               remove the arguments"
                         .to_string(),
-                    span: attr.span.clone(),
+                    span: attr.span,
                 });
             }
         }
@@ -635,7 +635,7 @@ impl super::Parser {
                               only the GPU-compatible subset; remove the \
                               arguments"
                         .to_string(),
-                    span: attr.span.clone(),
+                    span: attr.span,
                 });
             }
         }
@@ -674,7 +674,7 @@ impl super::Parser {
         let Some(tf) = attributes.iter().find(|a| a.is_bare("target_feature")) else {
             return;
         };
-        let span = tf.span.clone();
+        let span = tf.span;
         if crate::ast::target_feature_enables(attributes).is_empty() {
             self.errors.push(super::ParseError {
                 kind: crate::parser::ParseErrorKind::Syntax,
@@ -719,7 +719,7 @@ impl super::Parser {
                 message: "error[E_MULTIVERSION_EMPTY]: `#[multiversion(...)]` needs at least one \
                           feature variant — e.g. `#[multiversion(baseline, \"avx2\")]`"
                     .to_string(),
-                span: mv.span.clone(),
+                span: mv.span,
             });
         }
     }
@@ -774,10 +774,10 @@ impl super::Parser {
                     continue;
                 };
                 if hint == InlineHint::Always {
-                    always_span = Some(attr.span.clone());
+                    always_span = Some(attr.span);
                 }
                 match &inline {
-                    None => inline = Some((hint, display(hint), attr.span.clone())),
+                    None => inline = Some((hint, display(hint), attr.span)),
                     Some((prev, prev_disp, _)) if *prev != hint => {
                         // Two different inline-axis attributes — mutually
                         // exclusive. Anchor at the second; name both.
@@ -788,7 +788,7 @@ impl super::Parser {
                                  mutually exclusive — keep only the inlining hint you mean",
                                 display(hint),
                             ),
-                            span: attr.span.clone(),
+                            span: attr.span,
                         });
                     }
                     // Same inline-axis attribute repeated: tolerated here;
@@ -802,7 +802,7 @@ impl super::Parser {
                         message: "error[E_MALFORMED_ATTRIBUTE_ARGS]: `#[cold]` accepts no \
                                   arguments — write it as a bare `#[cold]`"
                             .to_string(),
-                        span: attr.span.clone(),
+                        span: attr.span,
                     });
                     continue;
                 }
@@ -838,7 +838,7 @@ impl super::Parser {
                       single `always` / `never` keyword — write `#[inline]`, \
                       `#[inline(always)]`, or `#[inline(never)]`"
                 .to_string(),
-            span: span.clone(),
+            span: *span,
         });
     }
 
@@ -878,7 +878,7 @@ impl super::Parser {
                               `#[profile = \"...\"]` is not a recognised shape; \
                               use `#[profile(NAME, ...)]` with bare profile names"
                         .to_string(),
-                    span: attr.span.clone(),
+                    span: attr.span,
                 });
                 continue;
             }
@@ -889,7 +889,7 @@ impl super::Parser {
                               `#[profile]` requires at least one profile name — \
                               `#[profile(default)]`, `#[profile(embedded, kernel)]`, etc."
                         .to_string(),
-                    span: attr.span.clone(),
+                    span: attr.span,
                 });
                 continue;
             }
@@ -901,7 +901,7 @@ impl super::Parser {
                                   `#[profile(...)]` takes positional profile names only; \
                                   remove the `name:` / `name =` prefix"
                             .to_string(),
-                        span: arg.span.clone(),
+                        span: arg.span,
                     });
                     // B-2026-08-10-2's sweep — the same gap as the call-site
                     // markers, found by enumerating the family rather than
@@ -938,7 +938,7 @@ impl super::Parser {
                                       string literals — write `#[profile(embedded)]` \
                                       instead of `#[profile(\"embedded\")]`"
                                 .to_string(),
-                            span: arg.span.clone(),
+                            span: arg.span,
                         });
                         continue;
                     }
@@ -949,7 +949,7 @@ impl super::Parser {
                                       `#[profile(...)]` takes bare profile-name identifiers; \
                                       this argument is not an identifier"
                                 .to_string(),
-                            span: arg.span.clone(),
+                            span: arg.span,
                         });
                         continue;
                     }
@@ -996,7 +996,7 @@ impl super::Parser {
                               multiple `#[deprecated]` attributes on the \
                               same item; keep one and remove the rest"
                         .to_string(),
-                    span: attr.span.clone(),
+                    span: attr.span,
                 });
                 continue;
             }
@@ -1011,12 +1011,12 @@ impl super::Parser {
                                   `#[deprecated = \"...\"]` cannot also \
                                   carry parenthesised arguments"
                             .to_string(),
-                        span: attr.span.clone(),
+                        span: attr.span,
                     });
                     continue;
                 }
                 first = Some(Deprecation {
-                    span: attr.span.clone(),
+                    span: attr.span,
                     since: None,
                     note: Some(s.clone()),
                 });
@@ -1035,7 +1035,7 @@ impl super::Parser {
                                   `note: \"...\"`, or the shorthand \
                                   `#[deprecated = \"note\"]`"
                             .to_string(),
-                        span: arg.span.clone(),
+                        span: arg.span,
                     });
                     continue;
                 };
@@ -1051,7 +1051,7 @@ impl super::Parser {
                                  `{other}`; the accepted fields are \
                                  `since` and `note`",
                             ),
-                            span: arg.span.clone(),
+                            span: arg.span,
                         });
                         continue;
                     }
@@ -1064,7 +1064,7 @@ impl super::Parser {
                              `#[deprecated]` field `{name}` requires a \
                              string-literal value",
                         ),
-                        span: arg.span.clone(),
+                        span: arg.span,
                     });
                     continue;
                 };
@@ -1076,14 +1076,14 @@ impl super::Parser {
                              `#[deprecated]` field `{name}` requires a \
                              string-literal value",
                         ),
-                        span: arg.span.clone(),
+                        span: arg.span,
                     });
                     continue;
                 };
                 *field_slot = Some(s.clone());
             }
             first = Some(Deprecation {
-                span: attr.span.clone(),
+                span: attr.span,
                 since,
                 note,
             });
@@ -1117,14 +1117,14 @@ impl super::Parser {
                               multiple `#[unstable]` attributes on the \
                               same item; keep one and remove the rest"
                         .to_string(),
-                    span: attr.span.clone(),
+                    span: attr.span,
                 });
                 continue;
             }
             // Shorthand: `#[unstable = "note"]`
             if let Some(s) = &attr.string_value {
                 first = Some(Unstable {
-                    span: attr.span.clone(),
+                    span: attr.span,
                     note: Some(s.clone()),
                 });
                 continue;
@@ -1140,7 +1140,7 @@ impl super::Parser {
                                   arguments — use `note: \"...\"`, or \
                                   the shorthand `#[unstable = \"note\"]`"
                             .to_string(),
-                        span: arg.span.clone(),
+                        span: arg.span,
                     });
                     continue;
                 };
@@ -1161,7 +1161,7 @@ impl super::Parser {
                 }
             }
             first = Some(Unstable {
-                span: attr.span.clone(),
+                span: attr.span,
                 note,
             });
         }
@@ -1215,7 +1215,7 @@ impl super::Parser {
                 }
             }
             return Some(OnUnimplemented {
-                span: attr.span.clone(),
+                span: attr.span,
                 message,
                 label,
                 note,
@@ -1303,7 +1303,7 @@ impl super::Parser {
                          `#[{}(lint_name)]`",
                         attr.path[0], attr.path[0],
                     ),
-                    span: attr.span.clone(),
+                    span: attr.span,
                 });
                 continue;
             }
@@ -1316,7 +1316,7 @@ impl super::Parser {
                          write `#[{}(lint_name)]`",
                         attr.path[0], attr.path[0],
                     ),
-                    span: attr.span.clone(),
+                    span: attr.span,
                 });
                 continue;
             }
@@ -1349,7 +1349,7 @@ impl super::Parser {
                              expression",
                             attr.path[0],
                         ),
-                        span: arg.span.clone(),
+                        span: arg.span,
                     });
                     continue;
                 };
@@ -1362,12 +1362,12 @@ impl super::Parser {
                              `#[{}(...)]`",
                             name, attr.path[0],
                         ),
-                        span: arg.span.clone(),
+                        span: arg.span,
                     });
                     continue;
                 }
                 overrides.push(LintLevelOverride {
-                    span: arg.span.clone(),
+                    span: arg.span,
                     level,
                     lint: name.clone(),
                 });
@@ -1521,7 +1521,7 @@ impl super::Parser {
         // recover by treating the parameter as `_: TY`.
         if let Some(ty) = self.try_parse_anonymous_param_type() {
             let doc_comment = self.take_pending_doc();
-            let ty_span = ty.span.clone();
+            let ty_span = ty.span;
             let pattern = Pattern {
                 kind: PatternKind::Wildcard,
                 span: ty_span,
@@ -1647,7 +1647,7 @@ impl super::Parser {
                  write `_: {type_text}` for an unused parameter, or \
                  `arg: {type_text}` for a meaningful name"
             ),
-            span: ty.span.clone(),
+            span: ty.span,
         });
         Some(ty)
     }

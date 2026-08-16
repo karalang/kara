@@ -82,7 +82,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'cpu.supports' expects 1 argument (a feature-name string), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 } else {
@@ -92,7 +92,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'cpu.supports' expects a String feature name — e.g. \
                              `cpu.supports(\"avx2\")`"
                                 .to_string(),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -117,7 +117,7 @@ impl<'a> super::TypeChecker<'a> {
                                 sig.params.len(),
                                 args.len()
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         for arg in args {
@@ -189,7 +189,7 @@ impl<'a> super::TypeChecker<'a> {
                                 sig.params.len(),
                                 args.len()
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         for arg in args {
@@ -199,7 +199,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     for (arg, param_ty) in args.iter().zip(sig.params.iter()) {
                         let at = self.infer_expr(&arg.value);
-                        self.check_assignable(param_ty, &at, arg.value.span.clone());
+                        self.check_assignable(param_ty, &at, arg.value.span);
                     }
                     return Some(sig.return_type);
                 }
@@ -312,7 +312,7 @@ impl<'a> super::TypeChecker<'a> {
                     if args.len() != 1 {
                         self.type_error(
                             format!("char.try_from expects 1 argument, got {}", args.len()),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         return Some(Type::Error);
@@ -324,7 +324,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "char.try_from expects an integer codepoint, got `{}`",
                                 type_display(&arg_ty)
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return Some(Type::Error);
@@ -359,7 +359,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(&arg_ty),
                             type_name
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Some(Type::Error);
@@ -386,7 +386,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_name,
                                 args.len()
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         return Some(Type::Error);
@@ -409,7 +409,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_name,
                             type_display(&arg_ty)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Some(Type::Error);
@@ -427,7 +427,7 @@ impl<'a> super::TypeChecker<'a> {
                                 sig.params.len(),
                                 args.len()
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         for arg in args {
@@ -437,7 +437,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     for (arg, param) in args.iter().zip(sig.params.iter()) {
                         let arg_ty = self.infer_expr(&arg.value);
-                        self.check_assignable(param, &arg_ty, arg.value.span.clone());
+                        self.check_assignable(param, &arg_ty, arg.value.span);
                     }
                     return Some(sig.return_type);
                 }
@@ -475,7 +475,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     self.type_error(
                         format!("no associated function '{method}' on type '{type_name}'"),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::NoMethodFound,
                     );
                     return Some(Type::Error);
@@ -612,7 +612,7 @@ impl<'a> super::TypeChecker<'a> {
                             receiver_display,
                             candidate_lines.join("\n"),
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::AmbiguousAssocFn,
                     );
                     for arg in args {
@@ -646,7 +646,7 @@ impl<'a> super::TypeChecker<'a> {
                                 param_types.len(),
                                 args.len()
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         for arg in args {
@@ -656,7 +656,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     for (arg, param) in args.iter().zip(param_types.iter()) {
                         let arg_ty = self.infer_expr(&arg.value);
-                        self.check_assignable(param, &arg_ty, arg.value.span.clone());
+                        self.check_assignable(param, &arg_ty, arg.value.span);
                     }
                     return Some(return_ty);
                 }
@@ -666,7 +666,7 @@ impl<'a> super::TypeChecker<'a> {
                 // slice; falling through to a focused diagnostic.
                 self.type_error(
                     format!("no method '{}' on `{}[…]`", method, type_name),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::NoMethodFound,
                 );
                 for arg in args {

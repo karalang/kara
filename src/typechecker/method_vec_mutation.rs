@@ -102,7 +102,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(referent),
                                 type_display(referent),
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         self.record_expr_type(&args[0].value.span, &Type::Error);
@@ -175,7 +175,7 @@ impl<'a> super::TypeChecker<'a> {
                     &self.env.const_substitutions,
                     &no_const_names,
                 );
-                self.check_assignable(&resolved_elem, &resolved_arg, args[0].value.span.clone());
+                self.check_assignable(&resolved_elem, &resolved_arg, args[0].value.span);
                 // B-2026-08-02-12 — the arg was INFERRED, so an inference-
                 // driven collection constructor (`v.push(Map.new())`) recorded
                 // `Map[?K, ?V]` in `expr_types` BEFORE the unify above bound
@@ -222,11 +222,7 @@ impl<'a> super::TypeChecker<'a> {
             };
             if let Some(elem) = element_ty {
                 let idx_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(
-                    &Type::Int(IntSize::I64),
-                    &idx_ty,
-                    args[0].value.span.clone(),
-                );
+                self.check_assignable(&Type::Int(IntSize::I64), &idx_ty, args[0].value.span);
                 let val_ty = self.infer_expr(&args[1].value);
                 unify_types(
                     &elem,
@@ -250,7 +246,7 @@ impl<'a> super::TypeChecker<'a> {
                     &self.env.const_substitutions,
                     &no_const_names,
                 );
-                self.check_assignable(&resolved_elem, &resolved_arg, args[1].value.span.clone());
+                self.check_assignable(&resolved_elem, &resolved_arg, args[1].value.span);
                 // Ctor-shaped value arg: re-record resolved (B-2026-08-02-12,
                 // see the push arm).
                 self.rerecord_resolved_ctor_arg(&args[1].value, &resolved_arg);
@@ -314,11 +310,7 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     let resolved_elem = resolve_type_var_top(&elem, &self.env.substitutions);
                     let resolved_src = resolve_type_var_top(&src, &self.env.substitutions);
-                    self.check_assignable(
-                        &resolved_elem,
-                        &resolved_src,
-                        args[0].value.span.clone(),
-                    );
+                    self.check_assignable(&resolved_elem, &resolved_src, args[0].value.span);
                     return Some(Type::Unit);
                 }
             }
@@ -392,11 +384,7 @@ impl<'a> super::TypeChecker<'a> {
             };
             if let Some(elem) = element_ty {
                 let arg_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(
-                    &Type::Int(IntSize::I64),
-                    &arg_ty,
-                    args[0].value.span.clone(),
-                );
+                self.check_assignable(&Type::Int(IntSize::I64), &arg_ty, args[0].value.span);
                 return Some(resolve_type_var_top(&elem, &self.env.substitutions));
             }
         }
@@ -442,11 +430,7 @@ impl<'a> super::TypeChecker<'a> {
             };
             if let Some(elem) = element_ty {
                 let arg_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(
-                    &Type::Int(IntSize::I64),
-                    &arg_ty,
-                    args[0].value.span.clone(),
-                );
+                self.check_assignable(&Type::Int(IntSize::I64), &arg_ty, args[0].value.span);
                 return Some(resolve_type_var_top(&elem, &self.env.substitutions));
             }
         }
@@ -498,11 +482,7 @@ impl<'a> super::TypeChecker<'a> {
                     &self.env.const_substitutions,
                     &no_const_names,
                 );
-                self.check_assignable(
-                    &resolved_elem,
-                    &deep_resolved_arg,
-                    args[0].value.span.clone(),
-                );
+                self.check_assignable(&resolved_elem, &deep_resolved_arg, args[0].value.span);
                 // Ctor-shaped arg: re-record resolved (B-2026-08-02-12, see
                 // the push arm).
                 self.rerecord_resolved_ctor_arg(&args[0].value, &deep_resolved_arg);

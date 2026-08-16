@@ -216,7 +216,7 @@ impl<'a> super::Interpreter<'a> {
                 // diagnostic, `--output=json` consumers can see it, and the
                 // "please report" framing says plainly that reaching here is a
                 // compiler bug rather than the program's fault.
-                let span = expr.span.clone();
+                let span = expr.span;
                 let name = name.clone();
                 self.record_runtime_error(
                     format!(
@@ -1396,7 +1396,7 @@ impl<'a> super::Interpreter<'a> {
                 let closure_body = Block {
                     stmts: Vec::new(),
                     final_expr: Some(Box::new(body.as_ref().clone())),
-                    span: body.span.clone(),
+                    span: body.span,
                 };
                 Value::Function {
                     name: "<closure>".to_string(),

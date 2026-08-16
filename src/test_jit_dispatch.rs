@@ -224,16 +224,16 @@ fn build_skeleton(module_program: &Program) -> Program {
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
                     kind: ExprKind::Identifier("unreachable".to_string()),
-                    span: body_span.clone(),
+                    span: body_span,
                 }),
                 args: Vec::new(),
             },
-            span: body_span.clone(),
+            span: body_span,
         };
         Block {
             stmts: vec![Stmt {
                 kind: StmtKind::Expr(call),
-                span: body_span.clone(),
+                span: body_span,
             }],
             final_expr: None,
             span: body_span,
@@ -246,7 +246,7 @@ fn build_skeleton(module_program: &Program) -> Program {
             // anyway, but the module never carries one (`_test.kara`); the
             // guard is defensive and keeps the skeleton faithful.
             Item::Function(f) if f.name != "main" && f.generic_params.is_none() => {
-                f.body = stub(f.body.span.clone());
+                f.body = stub(f.body.span);
                 f.requires.clear();
                 f.ensures.clear();
             }
@@ -254,7 +254,7 @@ fn build_skeleton(module_program: &Program) -> Program {
                 for ii in &mut imp.items {
                     if let ImplItem::Method(m) = ii {
                         if m.generic_params.is_none() {
-                            m.body = stub(m.body.span.clone());
+                            m.body = stub(m.body.span);
                             m.requires.clear();
                             m.ensures.clear();
                         }
@@ -1174,7 +1174,7 @@ fn generic[T](a: T) -> T { a }
         // Capture original body spans before comparing (clone of the parse).
         let orig = crate::parse(src).program;
         let orig_helper_span = match &orig.items[2] {
-            Item::Function(f) => f.body.span.clone(),
+            Item::Function(f) => f.body.span,
             _ => panic!("expected helper fn at index 2"),
         };
 

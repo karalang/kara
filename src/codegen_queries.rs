@@ -132,7 +132,7 @@ fn collect_pub_fns(program: &Program) -> HashMap<String, PubFnInfo> {
             }
             let info = PubFnInfo {
                 def_path: DefPath::item(f.name.clone()),
-                span: f.span.clone(),
+                span: f.span,
                 body_stmt_count: count_block_stmts(&f.body),
                 has_inline_attr: has_inline_resolution_attr(&f.attributes),
             };
@@ -183,7 +183,7 @@ fn build_inlining_query(name: &str, info: &PubFnInfo, loop_call_count: usize) ->
             def_path: info.def_path.clone(),
             sub_item_hash: SubItemHash::ROOT,
         },
-        site: info.span.clone(),
+        site: info.span,
         kind: QueryKind::InliningDecision,
         options: vec![
             QueryOption {
@@ -612,7 +612,7 @@ fn build_if_branch_hint_query(
             def_path: def_path.clone(),
             sub_item_hash: SubItemHash(expr.span.offset as u64),
         },
-        site: expr.span.clone(),
+        site: expr.span,
         kind: QueryKind::BranchHint,
         options: vec![
             QueryOption {
@@ -671,7 +671,7 @@ fn build_match_branch_hint_query(
             def_path: def_path.clone(),
             sub_item_hash: SubItemHash(expr.span.offset as u64),
         },
-        site: expr.span.clone(),
+        site: expr.span,
         kind: QueryKind::BranchHint,
         options: vec![
             QueryOption {

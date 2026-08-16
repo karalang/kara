@@ -151,7 +151,7 @@ impl<'a> super::EffectChecker<'a> {
                 _ => continue,
             };
             let arg_effects = self.get_arg_effects(&call_arg.value);
-            let arg_span = call_arg.value.span.clone();
+            let arg_span = call_arg.value.span;
 
             // Pre-compute trace fields shared across all E0404 errors for
             // this argument position (slot / argument / offending sets).
@@ -210,7 +210,7 @@ impl<'a> super::EffectChecker<'a> {
                     }
                     self.errors.push(EffectError {
                         message,
-                        span: arg_span.clone(),
+                        span: arg_span,
                         kind: EffectErrorKind::EffectSubtypeViolation,
                         subtype_trace: Some(EffectSubtypeTrace {
                             slot_effects: slot_str.clone(),

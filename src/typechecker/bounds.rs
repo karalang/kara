@@ -105,7 +105,7 @@ impl<'a> super::TypeChecker<'a> {
                  implementation lands in P1 — write the bound list \
                  explicitly for now: `{bound_list}`"
             ),
-            span.clone(),
+            *span,
             TypeErrorKind::TypeMismatch,
         );
     }
@@ -134,7 +134,7 @@ impl<'a> super::TypeChecker<'a> {
                             "unknown trait '{}' in inline bound on type parameter '{}'",
                             trait_name, param.name
                         ),
-                        bound.span.clone(),
+                        bound.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -170,7 +170,7 @@ impl<'a> super::TypeChecker<'a> {
                          (see design.md § Type Inference > Const generic parameters)",
                         type_display(&lowered)
                     ),
-                    ty_expr.span.clone(),
+                    ty_expr.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -213,7 +213,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "where clause references unknown type parameter '{}'",
                                 type_name
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -225,7 +225,7 @@ impl<'a> super::TypeChecker<'a> {
                         } else if !self.is_known_trait(&trait_name) {
                             self.type_error(
                                 format!("unknown trait '{}' in where clause", trait_name),
-                                bound.span.clone(),
+                                bound.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -244,7 +244,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "where clause references unknown type parameter '{}'",
                                 type_name
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -273,7 +273,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "unknown trait '{}' in where clause projection bound",
                                     trait_name
                                 ),
-                                bound.span.clone(),
+                                bound.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -400,7 +400,7 @@ impl<'a> super::TypeChecker<'a> {
                 // Type-check the default value against the parameter type
                 let param_ty = self.lower_type_expr(&param.ty, generic_scope);
                 let default_ty = self.infer_expr(default_expr);
-                self.check_assignable(&param_ty, &default_ty, default_expr.span.clone());
+                self.check_assignable(&param_ty, &default_ty, default_expr.span);
                 // Verify the default is a constant expression. Route
                 // through the const-expression evaluator (slice 2) for
                 // leaf expressions; recurse on tuple / array-literal
@@ -421,7 +421,7 @@ impl<'a> super::TypeChecker<'a> {
                                  another parameter ('{}')",
                                 sibling
                             ),
-                            default_expr.span.clone(),
+                            default_expr.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -430,7 +430,7 @@ impl<'a> super::TypeChecker<'a> {
                 // Non-defaulted param after a defaulted one
                 self.type_error(
                     "non-defaulted parameter cannot follow a defaulted parameter".to_string(),
-                    param.span.clone(),
+                    param.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }

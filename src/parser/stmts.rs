@@ -56,7 +56,7 @@ impl super::Parser {
                         if self.eat(&Token::Semicolon) {
                             // Expression statement
                             stmts.push(Stmt {
-                                span: expr.span.clone(),
+                                span: expr.span,
                                 kind: StmtKind::Expr(expr),
                             });
                         } else if self.check(&Token::RightBrace) {
@@ -65,7 +65,7 @@ impl super::Parser {
                                 // Block-like expressions (while, for, loop, etc.)
                                 // are statements that don't need semicolons
                                 stmts.push(Stmt {
-                                    span: expr.span.clone(),
+                                    span: expr.span,
                                     kind: StmtKind::Expr(expr),
                                 });
                             } else {
@@ -80,7 +80,7 @@ impl super::Parser {
                             // Assignment: expr = value
                             let value = self.parse_expression()?;
                             self.expect(&Token::Semicolon)?;
-                            let span = expr.span.clone();
+                            let span = expr.span;
                             stmts.push(Stmt {
                                 span,
                                 kind: StmtKind::Assign {
@@ -92,7 +92,7 @@ impl super::Parser {
                             // Compound assignment: expr += value
                             let value = self.parse_expression()?;
                             self.expect(&Token::Semicolon)?;
-                            let span = expr.span.clone();
+                            let span = expr.span;
                             stmts.push(Stmt {
                                 span,
                                 kind: StmtKind::CompoundAssign {
@@ -105,13 +105,13 @@ impl super::Parser {
                             // Block-like expressions (if, while, for, loop, match, unsafe)
                             // don't need semicolons when used as statements
                             stmts.push(Stmt {
-                                span: expr.span.clone(),
+                                span: expr.span,
                                 kind: StmtKind::Expr(expr),
                             });
                         } else {
                             // Expression without semicolon and not at end
                             stmts.push(Stmt {
-                                span: expr.span.clone(),
+                                span: expr.span,
                                 kind: StmtKind::Expr(expr),
                             });
                         }
@@ -146,7 +146,7 @@ impl super::Parser {
         let expr = self.parse_expression_stmt()?;
         if self.eat(&Token::Semicolon) {
             return Some(Stmt {
-                span: expr.span.clone(),
+                span: expr.span,
                 kind: StmtKind::Expr(expr),
             });
         }
@@ -156,7 +156,7 @@ impl super::Parser {
         if self.eat(&Token::Equal) {
             let value = self.parse_expression()?;
             self.expect(&Token::Semicolon)?;
-            let span = expr.span.clone();
+            let span = expr.span;
             return Some(Stmt {
                 span,
                 kind: StmtKind::Assign {
@@ -168,7 +168,7 @@ impl super::Parser {
         if let Some(cop) = self.try_compound_op() {
             let value = self.parse_expression()?;
             self.expect(&Token::Semicolon)?;
-            let span = expr.span.clone();
+            let span = expr.span;
             return Some(Stmt {
                 span,
                 kind: StmtKind::CompoundAssign {
@@ -181,7 +181,7 @@ impl super::Parser {
         // Block-like expression (`if`/`while`/`match`/...) or a trailing
         // expression without a semicolon — both are statements here.
         Some(Stmt {
-            span: expr.span.clone(),
+            span: expr.span,
             kind: StmtKind::Expr(expr),
         })
     }
@@ -421,10 +421,10 @@ impl super::Parser {
                     // defer expr;
                     let expr = self.parse_expression()?;
                     self.expect(&Token::Semicolon)?;
-                    let span = expr.span.clone();
+                    let span = expr.span;
                     Block {
                         stmts: vec![Stmt {
-                            span: span.clone(),
+                            span,
                             kind: StmtKind::Expr(expr),
                         }],
                         final_expr: None,
@@ -454,10 +454,10 @@ impl super::Parser {
                     // errdefer expr;
                     let expr = self.parse_expression()?;
                     self.expect(&Token::Semicolon)?;
-                    let span = expr.span.clone();
+                    let span = expr.span;
                     Block {
                         stmts: vec![Stmt {
-                            span: span.clone(),
+                            span,
                             kind: StmtKind::Expr(expr),
                         }],
                         final_expr: None,
@@ -478,7 +478,7 @@ impl super::Parser {
                 } else if self.eat(&Token::Equal) {
                     // Assignment
                     let value = self.parse_expression()?;
-                    let span = expr.span.clone();
+                    let span = expr.span;
                     self.expect(&Token::Semicolon)?;
                     Some(Stmt {
                         span,
@@ -490,7 +490,7 @@ impl super::Parser {
                 } else if let Some(cop) = self.try_compound_op() {
                     // Compound assignment
                     let value = self.parse_expression()?;
-                    let span = expr.span.clone();
+                    let span = expr.span;
                     self.expect(&Token::Semicolon)?;
                     Some(Stmt {
                         span,
@@ -503,7 +503,7 @@ impl super::Parser {
                 } else {
                     self.expect(&Token::Semicolon)?;
                     Some(Stmt {
-                        span: expr.span.clone(),
+                        span: expr.span,
                         kind: StmtKind::Expr(expr),
                     })
                 }
@@ -521,7 +521,7 @@ impl super::Parser {
     /// writing any target — so `a, b = b, a` swaps. Keeping the surface node
     /// lets the formatter round-trip the comma syntax verbatim.
     fn finish_multi_assign(&mut self, first: Expr) -> Option<Stmt> {
-        let start = first.span.clone();
+        let start = first.span;
         let mut targets = vec![first];
         while self.eat(&Token::Comma) {
             targets.push(self.parse_expression()?);
@@ -579,13 +579,13 @@ impl super::Parser {
                 return None;
             };
             let (name, name_span) = match &pattern.kind {
-                PatternKind::Binding(name) => (name.clone(), pattern.span.clone()),
+                PatternKind::Binding(name) => (name.clone(), pattern.span),
                 _ => {
                     self.errors.push(ParseError {
                         kind: crate::parser::ParseErrorKind::Syntax,
                         message: "uninitialized `let` must bind a single name; destructuring patterns require an initializer"
                             .to_string(),
-                        span: pattern.span.clone(),
+                        span: pattern.span,
                     });
                     return None;
                 }

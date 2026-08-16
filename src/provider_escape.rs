@@ -649,7 +649,7 @@ impl<'a> EscapeChecker<'a> {
             if let Some((resource, provider_expr, closure_expr)) = match_with_provider(callee, args)
             {
                 self.visit_expr(provider_expr, false);
-                self.enter_with_provider(resource, expr.span.clone());
+                self.enter_with_provider(resource, expr.span);
                 self.visit_closure_body(closure_expr, true);
                 self.exit_scope();
                 return;
@@ -664,7 +664,7 @@ impl<'a> EscapeChecker<'a> {
             for b in bindings {
                 self.visit_expr(&b.value, false);
             }
-            self.enter_providers(bindings, expr.span.clone());
+            self.enter_providers(bindings, expr.span);
             self.visit_block(body, true);
             self.exit_scope();
             return;
@@ -848,7 +848,7 @@ impl<'a> EscapeChecker<'a> {
 
     fn enter_with_provider(&mut self, resource: String, block_span: Span) {
         self.rooted.push(RootedScope {
-            resources: vec![(resource, block_span.clone())],
+            resources: vec![(resource, block_span)],
             block_span,
         });
     }
@@ -856,7 +856,7 @@ impl<'a> EscapeChecker<'a> {
     fn enter_providers(&mut self, bindings: &[ProviderBinding], block_span: Span) {
         let resources = bindings
             .iter()
-            .map(|b| (b.resource.clone(), b.resource_span.clone()))
+            .map(|b| (b.resource.clone(), b.resource_span))
             .collect();
         self.rooted.push(RootedScope {
             resources,
@@ -914,8 +914,8 @@ impl<'a> EscapeChecker<'a> {
                 self.errors.push(EscapeError {
                     resource,
                     provider_span: res_span,
-                    closure_span: expr.span.clone(),
-                    escape_span: escape_span.clone(),
+                    closure_span: expr.span,
+                    escape_span: *escape_span,
                     kind: kind.clone(),
                 });
             }
@@ -1085,8 +1085,8 @@ impl<'a> EscapeChecker<'a> {
                 self.errors.push(EscapeError {
                     resource,
                     provider_span: res_span,
-                    closure_span: value.span.clone(),
-                    escape_span: escape_span.clone(),
+                    closure_span: value.span,
+                    escape_span: *escape_span,
                     kind: EscapeKind::OuterIdentifierAssignment {
                         target_name: target_name.to_string(),
                     },
@@ -1157,8 +1157,8 @@ impl<'a> EscapeChecker<'a> {
                 self.errors.push(EscapeError {
                     resource,
                     provider_span: res_span,
-                    closure_span: value.span.clone(),
-                    escape_span: escape_span.clone(),
+                    closure_span: value.span,
+                    escape_span: *escape_span,
                     kind: EscapeKind::FieldAssignment {
                         target_desc: target_desc.to_string(),
                     },
@@ -1174,9 +1174,9 @@ impl<'a> EscapeChecker<'a> {
         for scope in self.rooted.iter().rev() {
             for (name, span) in &scope.resources {
                 let anchor = if scope.resources.len() == 1 {
-                    scope.block_span.clone()
+                    scope.block_span
                 } else {
-                    span.clone()
+                    *span
                 };
                 out.push((name.clone(), anchor));
             }

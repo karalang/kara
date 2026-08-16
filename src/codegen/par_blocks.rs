@@ -711,7 +711,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let mini = Block {
                 stmts: vec![stmt.clone()],
                 final_expr: None,
-                span: span.clone(),
+                span: *span,
             };
             self.refs_in_block(&mini, &mut refs, &mut inner_defs);
         }

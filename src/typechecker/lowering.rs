@@ -66,7 +66,7 @@ impl<'a> super::TypeChecker<'a> {
                                      `mut ref {name}` (or `*const {name}` / `*mut {name}` \
                                      in FFI signatures) to use it through indirection"
                                 ),
-                                ty.span.clone(),
+                                ty.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -229,7 +229,7 @@ impl<'a> super::TypeChecker<'a> {
                              callers cannot synthesize a thunk; route through a generic \
                              parameter `[T: {trait_name}]` instead"
                         ),
-                        ty.span.clone(),
+                        ty.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 } else {
@@ -241,7 +241,7 @@ impl<'a> super::TypeChecker<'a> {
                              design.md § Polymorphism; route through a generic parameter \
                              `[T: {trait_name}]` for now"
                         ),
-                        ty.span.clone(),
+                        ty.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -318,7 +318,7 @@ impl<'a> super::TypeChecker<'a> {
                                      `Array[T, N]` accepts const-args at v1",
                                     target
                                 ),
-                                expr.span.clone(),
+                                expr.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             None
@@ -345,7 +345,7 @@ impl<'a> super::TypeChecker<'a> {
                                          to accept a shape literal here",
                                         target
                                     ),
-                                    lit.span.clone(),
+                                    lit.span,
                                     TypeErrorKind::TypeMismatch,
                                 );
                                 None
@@ -521,7 +521,7 @@ impl<'a> super::TypeChecker<'a> {
                     ExprKind::Integer(n, _) => {
                         self.type_error(
                             format!("shape dim must be non-negative; got {}", n),
-                            expr.span.clone(),
+                            expr.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         dims.push(DimArg::Dynamic);
@@ -545,7 +545,7 @@ impl<'a> super::TypeChecker<'a> {
                              v1.5 — it requires the type-level const-evaluator (design.md \
                              § Shape-param arithmetic)"
                                 .to_string(),
-                            expr.span.clone(),
+                            expr.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         dims.push(DimArg::Dynamic);
@@ -558,7 +558,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "shape dim const-expression must evaluate to a \
                                      non-negative integer"
                                         .to_string(),
-                                    expr.span.clone(),
+                                    expr.span,
                                     TypeErrorKind::TypeMismatch,
                                 );
                                 dims.push(DimArg::Dynamic);
@@ -579,7 +579,7 @@ impl<'a> super::TypeChecker<'a> {
                                  the generic-param list (`[T, ...{}]`)",
                                 name, name
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                     } else if seen_splice {
@@ -587,7 +587,7 @@ impl<'a> super::TypeChecker<'a> {
                             "a shape literal may contain at most one `...S` splice — two \
                              variadic splices have no unambiguous dim split"
                                 .to_string(),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                     } else {
@@ -640,7 +640,7 @@ impl<'a> super::TypeChecker<'a> {
                                      non-negative integer; got {}",
                                     type_display(&const_value_type(&cv))
                                 ),
-                                expr.span.clone(),
+                                expr.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             return None;
@@ -724,7 +724,7 @@ impl<'a> super::TypeChecker<'a> {
                      (i8..i128, u8..u64, f32, f64); got {}",
                     type_display(&element_ty)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             return None;
@@ -736,7 +736,7 @@ impl<'a> super::TypeChecker<'a> {
                     if *n <= 0 {
                         self.type_error(
                             format!("Vector lane count must be positive (N > 0); got {}", n),
-                            expr.span.clone(),
+                            expr.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return None;
@@ -752,7 +752,7 @@ impl<'a> super::TypeChecker<'a> {
                             self.type_error(
                                 "Vector lane count must evaluate to a positive integer (N > 0)"
                                     .to_string(),
-                                expr.span.clone(),
+                                expr.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             return None;
@@ -851,7 +851,7 @@ impl<'a> super::TypeChecker<'a> {
                     supplied.len(),
                     if supplied.len() == 1 { "was" } else { "were" },
                 ),
-                path.span.clone(),
+                path.span,
                 TypeErrorKind::TypeMismatch,
             );
         }
@@ -872,7 +872,7 @@ impl<'a> super::TypeChecker<'a> {
                                 alias_name,
                                 param.name,
                             ),
-                            path.span.clone(),
+                            path.span,
                             TypeErrorKind::TypeAliasBoundNotSatisfied,
                         );
                     }

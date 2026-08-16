@@ -81,7 +81,7 @@ impl<'a> super::Resolver<'a> {
                 name,
                 name_span,
                 ..
-            } => vec![(name.clone(), name_span.clone(), *is_mut)],
+            } => vec![(name.clone(), *name_span, *is_mut)],
             StmtKind::LetElse { pattern, .. } => pattern
                 .binding_name_spans()
                 .into_iter()
@@ -121,7 +121,7 @@ impl<'a> super::Resolver<'a> {
             for (j, binds) in branch_bindings.iter().enumerate() {
                 if j != i {
                     for (name, span, _) in binds {
-                        self.par_sibling_bindings.insert(name.clone(), span.clone());
+                        self.par_sibling_bindings.insert(name.clone(), *span);
                     }
                 }
             }
@@ -138,7 +138,7 @@ impl<'a> super::Resolver<'a> {
                 if let Err(e) = self.table.define_shadowable(
                     name.clone(),
                     SymbolKind::Variable { is_mut: *is_mut },
-                    span.clone(),
+                    *span,
                     false,
                 ) {
                     self.errors.push(e);
@@ -180,7 +180,7 @@ impl<'a> super::Resolver<'a> {
                 if let Err(e) = self.table.define_shadowable(
                     name.clone(),
                     SymbolKind::Variable { is_mut: *is_mut },
-                    name_span.clone(),
+                    *name_span,
                     false,
                 ) {
                     self.errors.push(e);
@@ -208,7 +208,7 @@ impl<'a> super::Resolver<'a> {
                     if let Err(e) = self.table.define(
                         name.clone(),
                         SymbolKind::Variable { is_mut: false },
-                        stmt.span.clone(),
+                        stmt.span,
                         false,
                     ) {
                         self.errors.push(e);
@@ -263,7 +263,7 @@ impl<'a> super::Resolver<'a> {
                                     "error[E_CONTINUE_LABEL_BLOCK]: continue label `{}` refers to a labeled block; continue is only valid for loops",
                                     name
                                 ),
-                                span: expr.span.clone(),
+                                span: expr.span,
                                 kind: ResolveErrorKind::ContinueOnBlockLabel,
                                 suggestion: Some(format!(
                                     "rename the label or restructure `{}` as a loop if iteration is intended",
@@ -294,7 +294,7 @@ impl<'a> super::Resolver<'a> {
                             };
                             self.errors.push(ResolveError {
                                 message,
-                                span: expr.span.clone(),
+                                span: expr.span,
                                 kind: ResolveErrorKind::UndefinedLabel,
                                 suggestion,
                                 replacement,
@@ -319,7 +319,7 @@ impl<'a> super::Resolver<'a> {
                         }
                         self.errors.push(ResolveError {
                             message,
-                            span: expr.span.clone(),
+                            span: expr.span,
                             kind: ResolveErrorKind::UndefinedLabel,
                             suggestion,
                             replacement: None,
@@ -344,7 +344,7 @@ impl<'a> super::Resolver<'a> {
                     if self.call_callee_span != Some((expr.span.offset, expr.span.length))
                         && self.table.prelude_fn_ids.contains(&id)
                     {
-                        self.error_builtin_not_a_value(name, expr.span.clone());
+                        self.error_builtin_not_a_value(name, expr.span);
                         return;
                     }
                     self.record_resolution(&expr.span, id);
@@ -353,7 +353,7 @@ impl<'a> super::Resolver<'a> {
                     // it always *starts* at it. B-2026-07-31-33.
                     self.record_ident_ref(&expr.span, id);
                 } else {
-                    self.error_undefined_name(name, expr.span.clone());
+                    self.error_undefined_name(name, expr.span);
                 }
             }
 
@@ -368,7 +368,7 @@ impl<'a> super::Resolver<'a> {
                         // holds and a rename rewrites the qualifier only.
                         self.record_ident_ref(&expr.span, id);
                     } else {
-                        self.error_undefined_name(first, expr.span.clone());
+                        self.error_undefined_name(first, expr.span);
                     }
                 }
             }
@@ -380,7 +380,7 @@ impl<'a> super::Resolver<'a> {
                 } else {
                     self.errors.push(ResolveError {
                         message: "'self' used outside of impl method".to_string(),
-                        span: expr.span.clone(),
+                        span: expr.span,
                         kind: ResolveErrorKind::UndefinedName,
                         suggestion: None,
                         replacement: None,
@@ -396,7 +396,7 @@ impl<'a> super::Resolver<'a> {
                 } else {
                     self.errors.push(ResolveError {
                         message: "'Self' used outside of impl block".to_string(),
-                        span: expr.span.clone(),
+                        span: expr.span,
                         kind: ResolveErrorKind::UndefinedName,
                         suggestion: None,
                         replacement: None,
@@ -450,7 +450,7 @@ impl<'a> super::Resolver<'a> {
                         if self.is_trait_assoc_fn_name(name) {
                             deferred = true;
                         } else if self.is_test_file {
-                            self.error_undefined_call_with_stub(name, callee.span.clone(), args);
+                            self.error_undefined_call_with_stub(name, callee.span, args);
                             handled = true;
                         }
                     }
@@ -665,7 +665,7 @@ impl<'a> super::Resolver<'a> {
                         }
                         self.errors.push(ResolveError {
                             message,
-                            span: expr.span.clone(),
+                            span: expr.span,
                             kind: ResolveErrorKind::UndefinedLabel,
                             suggestion,
                             replacement: None,
@@ -693,7 +693,7 @@ impl<'a> super::Resolver<'a> {
                         let id = sym.id;
                         self.record_resolution(&expr.span, id);
                     } else {
-                        self.error_undefined_name(first, expr.span.clone());
+                        self.error_undefined_name(first, expr.span);
                     }
                 }
                 for field in fields {
@@ -800,7 +800,7 @@ impl<'a> super::Resolver<'a> {
                     let _ = self.table.define(
                         name,
                         SymbolKind::Variable { is_mut: true },
-                        expr.span.clone(),
+                        expr.span,
                         false,
                     );
                 }
@@ -822,7 +822,7 @@ impl<'a> super::Resolver<'a> {
                         Some(_) => {
                             self.errors.push(ResolveError {
                                 message: format!("'{}' is not an effect resource", b.resource),
-                                span: b.resource_span.clone(),
+                                span: b.resource_span,
                                 kind: ResolveErrorKind::UndefinedName,
                                 suggestion: None,
                                 replacement: None,
@@ -837,7 +837,7 @@ impl<'a> super::Resolver<'a> {
                                     "undefined effect resource '{}'; declare `effect resource {};` or import one (e.g. `import std.web.{};`)",
                                     b.resource, b.resource, b.resource
                                 ),
-                                span: b.resource_span.clone(),
+                                span: b.resource_span,
                                 kind: ResolveErrorKind::UndefinedName,
                                 suggestion: None,
                                 replacement: None,

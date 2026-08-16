@@ -42,7 +42,7 @@ impl<'a> super::TypeChecker<'a> {
             // error reporting fires.
             let synthetic = Expr {
                 kind: ExprKind::Identifier(name.to_string()),
-                span: span.clone(),
+                span: *span,
             };
             return self.infer_call(&synthetic, args, span);
         };
@@ -53,7 +53,7 @@ impl<'a> super::TypeChecker<'a> {
                     sig.params.len(),
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -109,7 +109,7 @@ impl<'a> super::TypeChecker<'a> {
                         n,
                         args.len()
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
             }
@@ -149,7 +149,7 @@ impl<'a> super::TypeChecker<'a> {
         if args.len() != 2 {
             self.type_error(
                 format!("`ref_eq` takes exactly two arguments, got {}", args.len()),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for a in args {
@@ -167,7 +167,7 @@ impl<'a> super::TypeChecker<'a> {
                          `{}` is not a `shared` type — use `==` for structural equality",
                         type_display(t)
                     ),
-                    a.value.span.clone(),
+                    a.value.span,
                     TypeErrorKind::TraitBoundNotSatisfied,
                 );
             }
@@ -181,7 +181,7 @@ impl<'a> super::TypeChecker<'a> {
                         "`ref_eq` compares two values of the SAME `shared` type; \
                          got `shared {na}` and `shared {nb}`"
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -202,7 +202,7 @@ impl<'a> super::TypeChecker<'a> {
                     "error[E_LAYOUT_QUERY_TAKES_NO_ARGS]: `{name}` takes a type \
                      argument only — call shape is `{name}[T]()`, no value arguments"
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for a in args {
@@ -218,7 +218,7 @@ impl<'a> super::TypeChecker<'a> {
                         "error[E_LAYOUT_QUERY_TYPE_ARG_REQUIRED]: `{name}` requires \
                          exactly one type argument — call shape is `{name}[T]()`"
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 return usize_ty;
@@ -236,7 +236,7 @@ impl<'a> super::TypeChecker<'a> {
                          applied to opaque foreign type '{ty_name}'; the type's \
                          size and alignment are unknown to Kāra"
                     ),
-                    type_arg_expr.span.clone(),
+                    type_arg_expr.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -259,7 +259,7 @@ impl<'a> super::TypeChecker<'a> {
                      homogeneous Vec of branches use collect_all_vec)",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -295,7 +295,7 @@ impl<'a> super::TypeChecker<'a> {
                             i + 1,
                             type_display(&arg_ty)
                         ),
-                        arg.value.span.clone(),
+                        arg.value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     Type::Error
@@ -317,7 +317,7 @@ impl<'a> super::TypeChecker<'a> {
                             i + 1,
                             type_display(&ret)
                         ),
-                        arg.value.span.clone(),
+                        arg.value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     Type::Error
@@ -360,7 +360,7 @@ impl<'a> super::TypeChecker<'a> {
                      available inside a `comptime` context (deferred.md § Comptime — Comptime \
                      stdlib surface)"
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             return Some(Type::Error);
@@ -371,7 +371,7 @@ impl<'a> super::TypeChecker<'a> {
             if arg_tys.len() != 1 {
                 this.type_error(
                     format!("`{what}` expects 1 argument, got {}", arg_tys.len()),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
             } else if !matches!(arg_tys[0], Type::Str | Type::Error) {
@@ -380,7 +380,7 @@ impl<'a> super::TypeChecker<'a> {
                         "`{what}` expects a `String` argument, got `{}`",
                         type_display(&arg_tys[0])
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -411,7 +411,7 @@ impl<'a> super::TypeChecker<'a> {
                         "`{module}` has no comptime member `{member}`; this slice supports \
                          `ast.expr(s)`, `ast.item(s)` and `compiler.error(msg)`"
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 Some(Type::Error)
@@ -696,7 +696,7 @@ impl<'a> super::TypeChecker<'a> {
         {
             if segments.len() == 2 && self.path_first_segment_is_value_binding(&segments[0]) {
                 let synth_object = Expr {
-                    span: callee.span.clone(),
+                    span: callee.span,
                     kind: ExprKind::Identifier(segments[0].clone()),
                 };
                 // No distinct close-paren leaf is reconstructed on this
@@ -737,7 +737,7 @@ impl<'a> super::TypeChecker<'a> {
                 });
                 if is_unit_variant {
                     let synth_object = Expr {
-                        span: callee.span.clone(),
+                        span: callee.span,
                         kind: ExprKind::Path {
                             segments: vec![segments[0].clone(), segments[1].clone()],
                             generic_args: None,
@@ -808,7 +808,7 @@ impl<'a> super::TypeChecker<'a> {
                             "error[E_LAYOUT_QUERY_TYPE_ARG_REQUIRED]: `{name}` requires \
                              a type argument — call shape is `{name}[T]()`"
                         ),
-                        callee.span.clone(),
+                        callee.span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     return Type::UInt(UIntSize::Usize);
@@ -968,7 +968,7 @@ impl<'a> super::TypeChecker<'a> {
                          (e.g. `let x: T = {}(...)`) or call as `T.{}(...)`",
                         name, name, name,
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::CannotInferAssocFn,
                 );
                 for arg in args {
@@ -996,7 +996,7 @@ impl<'a> super::TypeChecker<'a> {
                                     name,
                                     type_display(&arg_ty)
                                 ),
-                                args[0].value.span.clone(),
+                                args[0].value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -1004,7 +1004,7 @@ impl<'a> super::TypeChecker<'a> {
                     _ => {
                         self.type_error(
                             format!("{}() takes 0 or 1 argument(s), found {}", name, args.len()),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         for arg in args {
@@ -1128,7 +1128,7 @@ impl<'a> super::TypeChecker<'a> {
                 && args.len() == 2
             {
                 let n_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(&Type::Int(IntSize::I64), &n_ty, args[0].value.span.clone());
+                self.check_assignable(&Type::Int(IntSize::I64), &n_ty, args[0].value.span);
                 let elem_ty = self.infer_expr(&args[1].value);
                 let ty = Type::Named {
                     name: "Vec".to_string(),
@@ -1182,7 +1182,7 @@ impl<'a> super::TypeChecker<'a> {
                                  `Mutex[T]`, which can guard any type",
                                 type_display(&resolved)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::AtomicInvalidInnerType,
                         );
                     }
@@ -1218,11 +1218,7 @@ impl<'a> super::TypeChecker<'a> {
                 let collection = segments[0].as_str();
                 if collection == "Vec" || collection == "VecDeque" {
                     let cap_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(
-                        &Type::Int(IntSize::I64),
-                        &cap_ty,
-                        args[0].value.span.clone(),
-                    );
+                    self.check_assignable(&Type::Int(IntSize::I64), &cap_ty, args[0].value.span);
                     let ty = Type::Named {
                         name: collection.to_string(),
                         args: vec![self.env.fresh_type_var()],
@@ -1232,11 +1228,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 if collection == "String" {
                     let cap_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(
-                        &Type::Int(IntSize::I64),
-                        &cap_ty,
-                        args[0].value.span.clone(),
-                    );
+                    self.check_assignable(&Type::Int(IntSize::I64), &cap_ty, args[0].value.span);
                     self.record_expr_type(span, &Type::Str);
                     return Type::Str;
                 }
@@ -1337,7 +1329,7 @@ impl<'a> super::TypeChecker<'a> {
                             "CStr.from_ptr expects a `*const u8`, but got `{}`",
                             type_display(&arg_ty)
                         ),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1384,7 +1376,7 @@ impl<'a> super::TypeChecker<'a> {
                                     name,
                                     type_display(&arg_ty)
                                 ),
-                                args[0].value.span.clone(),
+                                args[0].value.span,
                                 TypeErrorKind::TraitBoundNotSatisfied,
                             );
                         }
@@ -1392,7 +1384,7 @@ impl<'a> super::TypeChecker<'a> {
                     _ => {
                         self.type_error(
                             format!("{}() takes 0 or 1 argument(s), found {}", name, args.len()),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                         for arg in args {
@@ -1487,7 +1479,7 @@ impl<'a> super::TypeChecker<'a> {
                             params.len(),
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     // Still type-check the args we have
@@ -1545,7 +1537,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => {
                 self.type_error(
                     format!("type '{}' is not callable", type_display(&callee_ty)),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::NotCallable,
                 );
                 for arg in args {
@@ -1609,7 +1601,7 @@ impl<'a> super::TypeChecker<'a> {
                      Write `mut <expr>`.",
                     type_display(param_ty)
                 ),
-                arg.span.clone(),
+                arg.span,
                 TypeErrorKind::MissingMutMarker,
             );
         }
@@ -1642,7 +1634,7 @@ impl<'a> super::TypeChecker<'a> {
     /// that covers the feature and one that covers the reported shape.
     fn emit_marker_deletion(&mut self, arg: &CallArg, message: String) {
         let Some(mut_span) = arg.mut_marker_span.as_ref() else {
-            self.type_error(message, arg.span.clone(), TypeErrorKind::InvalidMutMarker);
+            self.type_error(message, arg.span, TypeErrorKind::InvalidMutMarker);
             return;
         };
         let end = if arg.value.span.offset > mut_span.offset {
@@ -1650,11 +1642,11 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             mut_span.offset + mut_span.length
         };
-        let mut edit_span = mut_span.clone();
+        let mut edit_span = *mut_span;
         edit_span.length = end - mut_span.offset;
         self.type_error_with_fix_it(
             message,
-            arg.span.clone(),
+            arg.span,
             TypeErrorKind::InvalidMutMarker,
             FixIt {
                 span: edit_span,
@@ -1724,7 +1716,7 @@ impl<'a> super::TypeChecker<'a> {
                     "Tensor.from takes exactly 1 argument (a nested array literal), found {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -1740,7 +1732,7 @@ impl<'a> super::TypeChecker<'a> {
                  for runtime-shaped data use `Tensor.zeros(dims)` / `Tensor.full(dims, \
                  value)` plus indexed writes"
                     .to_string(),
-                data.span.clone(),
+                data.span,
                 TypeErrorKind::TypeMismatch,
             );
             self.infer_expr(data);
@@ -1870,7 +1862,7 @@ impl<'a> super::TypeChecker<'a> {
                     "Stats.{method} expects {nargs} argument(s), got {}",
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -1904,7 +1896,7 @@ impl<'a> super::TypeChecker<'a> {
                          '{}' — convert the elements to f64 or i64 first",
                         type_display(other_elem)
                     ),
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 for arg in args.iter().skip(1) {
@@ -1920,7 +1912,7 @@ impl<'a> super::TypeChecker<'a> {
                              found '{}'",
                             type_display(&arg_ty)
                         ),
-                        args[0].value.span.clone(),
+                        args[0].value.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1935,7 +1927,7 @@ impl<'a> super::TypeChecker<'a> {
         // runtime); an int literal coerces.
         if method == "percentile" {
             let p_ty = self.infer_expr(&args[1].value);
-            self.check_assignable(&f64_t, &p_ty, args[1].value.span.clone());
+            self.check_assignable(&f64_t, &p_ty, args[1].value.span);
         }
 
         // Record the element kind for codegen (the reduction's LLVM element
@@ -2031,7 +2023,7 @@ fn collect_tensor_literal<'e>(
                 depth,
                 dims.len()
             ),
-            expr.span.clone(),
+            expr.span,
         ));
     };
     if elements.is_empty() {
@@ -2039,7 +2031,7 @@ fn collect_tensor_literal<'e>(
             "cannot infer tensor dims from an empty literal level — \
              zero-size tensors go through `Tensor.zeros(dims)`"
                 .to_string(),
-            expr.span.clone(),
+            expr.span,
         ));
     }
     let len = elements.len() as i64;
@@ -2052,7 +2044,7 @@ fn collect_tensor_literal<'e>(
                 "ragged tensor literal: level at depth {} has {} element(s), expected {}",
                 depth, len, dims[depth]
             ),
-            expr.span.clone(),
+            expr.span,
         ));
     }
     let nested = if first_visit {
@@ -2067,7 +2059,7 @@ fn collect_tensor_literal<'e>(
         if any_array && !all_array {
             return Err((
                 "ragged tensor literal: level mixes scalar and nested elements".to_string(),
-                expr.span.clone(),
+                expr.span,
             ));
         }
         any_array
@@ -2087,7 +2079,7 @@ fn collect_tensor_literal<'e>(
                         depth + 1,
                         dims.len()
                     ),
-                    arr.span.clone(),
+                    arr.span,
                 ));
             }
         }

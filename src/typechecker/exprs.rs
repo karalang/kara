@@ -331,7 +331,7 @@ impl<'a> super::TypeChecker<'a> {
                 if self.in_defer {
                     self.type_error(
                         "'?' operator is not allowed inside defer/errdefer blocks".to_string(),
-                        expr.span.clone(),
+                        expr.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -378,7 +378,7 @@ impl<'a> super::TypeChecker<'a> {
                     Some(self.result_alloc_error_type(expected.clone()));
                 let actual = self.infer_expr(expr);
                 self.pending_unwrap_receiver_expectation = None;
-                self.check_assignable(expected, &actual, expr.span.clone());
+                self.check_assignable(expected, &actual, expr.span);
                 return actual;
             }
         }
@@ -411,7 +411,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(inner),
                         type_display(inner),
                     ),
-                    expr.span.clone(),
+                    expr.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 self.record_expr_type(&expr.span, &Type::Error);
@@ -660,7 +660,7 @@ impl<'a> super::TypeChecker<'a> {
                             self.check_assignable(
                                 &Type::Int(IntSize::I64),
                                 &cap_ty,
-                                args[0].value.span.clone(),
+                                args[0].value.span,
                             );
                             self.record_expr_type(&expr.span, expected);
                             return expected.clone();
@@ -688,7 +688,7 @@ impl<'a> super::TypeChecker<'a> {
                             self.check_assignable(
                                 &Type::Int(IntSize::I64),
                                 &cap_ty,
-                                args[0].value.span.clone(),
+                                args[0].value.span,
                             );
                             self.record_expr_type(&expr.span, expected);
                             return expected.clone();
@@ -719,7 +719,7 @@ impl<'a> super::TypeChecker<'a> {
                                 self.check_assignable(
                                     &Type::Int(IntSize::I64),
                                     &n_ty,
-                                    args[0].value.span.clone(),
+                                    args[0].value.span,
                                 );
                                 // Push the inner element type into the
                                 // fill arg so a nested `Vec.new()` /
@@ -765,7 +765,7 @@ impl<'a> super::TypeChecker<'a> {
                         };
                         if is_df {
                             let name_ty = self.infer_expr(&args[0].value);
-                            self.check_assignable(&Type::Str, &name_ty, args[0].value.span.clone());
+                            self.check_assignable(&Type::Str, &name_ty, args[0].value.span);
                             self.record_expr_type(&expr.span, expected);
                             return expected.clone();
                         }
@@ -826,7 +826,7 @@ impl<'a> super::TypeChecker<'a> {
                             elements.len(),
                             n
                         ),
-                        expr.span.clone(),
+                        expr.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -859,7 +859,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "repeat-literal count {} does not match expected array length {}",
                                 n, expected_size
                             ),
-                            count.span.clone(),
+                            count.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -868,7 +868,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     "Array[T, N] repeat-literal requires a non-negative integer literal count"
                         .to_string(),
-                    count.span.clone(),
+                    count.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 self.infer_expr(count);
@@ -945,7 +945,7 @@ impl<'a> super::TypeChecker<'a> {
                         if !self.is_irrefutable_pattern(&p.pattern, &ty) {
                             self.type_error(
                                 "refutable pattern in closure parameter; use `if let` or `match` for patterns that may not match".to_string(),
-                                p.pattern.span.clone(),
+                                p.pattern.span,
                                 TypeErrorKind::RefutablePattern,
                             );
                         }
@@ -991,7 +991,7 @@ impl<'a> super::TypeChecker<'a> {
                     param_types,
                     body_ty,
                 );
-                self.check_assignable(expected, &actual, expr.span.clone());
+                self.check_assignable(expected, &actual, expr.span);
                 // B-2026-07-02-12: record the closure literal's resolved
                 // `Fn` type at its own span. The lowering pass folds
                 // Function-typed `expr_types` entries into
@@ -1287,7 +1287,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
-        self.check_assignable(expected, &actual, expr.span.clone());
+        self.check_assignable(expected, &actual, expr.span);
         // B-2026-07-02-6: a collection literal admitted against a
         // differently-widthed scalar element context (`total([10, 20, 30])`
         // with `v: Vec[i32]` — call args, method args, struct fields,
@@ -1482,7 +1482,7 @@ impl<'a> super::TypeChecker<'a> {
                                  Use UFCS `Trait.{}(...)` to disambiguate.",
                                 name, target, trait_list, name,
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::AmbiguousAssocFn,
                         );
                         Some(Type::Error)
@@ -1535,7 +1535,7 @@ impl<'a> super::TypeChecker<'a> {
                                  Use `Trait.{}(...)` to disambiguate.",
                                 name, target_name, trait_list, name,
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::AmbiguousAssocFn,
                         );
                         Some(Type::Error)
@@ -1934,7 +1934,7 @@ impl<'a> super::TypeChecker<'a> {
                         &self.env.const_substitutions,
                         &const_id_to_name,
                     ));
-                    self.check_assignable(&resolved, arg_ty, arg.value.span.clone());
+                    self.check_assignable(&resolved, arg_ty, arg.value.span);
                     // B-2026-08-08-9 — a slot the EXPECTATION bound still owes
                     // the narrowing check. `check_assignable` is permissive
                     // between integer types, which is right when the slot was
@@ -2245,7 +2245,7 @@ impl<'a> super::TypeChecker<'a> {
                         concrete_ty,
                         bound,
                     );
-                    self.type_error(message, discharge_span.clone(), TypeErrorKind::TypeMismatch);
+                    self.type_error(message, *discharge_span, TypeErrorKind::TypeMismatch);
                     continue;
                 }
                 // B-2026-07-02-42: a PARAMETERIZED bound (`C: Reduce[i64]`) must
@@ -2301,7 +2301,7 @@ impl<'a> super::TypeChecker<'a> {
                                     trait_name,
                                     render(&want),
                                 ),
-                                discharge_span.clone(),
+                                *discharge_span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -2559,7 +2559,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(&resolved),
                         trait_name
                     ),
-                    discharge_span.clone(),
+                    *discharge_span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -2633,7 +2633,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(arg),
                         trait_name,
                     ),
-                    discharge_span.clone(),
+                    *discharge_span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -2681,7 +2681,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(arg_ty),
                             trait_name,
                         ),
-                        discharge_span.clone(),
+                        *discharge_span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2889,7 +2889,7 @@ impl<'a> super::TypeChecker<'a> {
                             "const constraint violated: predicate is false{}",
                             bindings_str
                         ),
-                        discharge_span.clone(),
+                        *discharge_span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2925,7 +2925,7 @@ impl<'a> super::TypeChecker<'a> {
                     sig.params.len(),
                     args.len()
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
             for arg in args {
@@ -2935,7 +2935,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         for (arg, param_ty) in args.iter().zip(sig.params.iter()) {
             let arg_ty = self.infer_expr(&arg.value);
-            self.check_assignable(param_ty, &arg_ty, arg.value.span.clone());
+            self.check_assignable(param_ty, &arg_ty, arg.value.span);
         }
         sig.return_type.clone()
     }
@@ -3013,7 +3013,7 @@ impl<'a> super::TypeChecker<'a> {
                 type_display(&src_ty),
                 target_name
             ),
-            expr.span.clone(),
+            expr.span,
             TypeErrorKind::TypeMismatch,
         );
         self.record_expr_type(&expr.span, &Type::Error);
@@ -3130,7 +3130,7 @@ impl<'a> super::TypeChecker<'a> {
                 type_display(&src_ty),
                 target_name
             ),
-            expr.span.clone(),
+            expr.span,
             TypeErrorKind::TypeMismatch,
         );
         self.record_expr_type(&expr.span, &Type::Error);
@@ -3160,7 +3160,7 @@ impl<'a> super::TypeChecker<'a> {
                 "closure mixes `?` on Result and `?` on Option; its return type \
                  cannot be both"
                     .to_string(),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             return ret;
@@ -3176,7 +3176,7 @@ impl<'a> super::TypeChecker<'a> {
                              return `Option`, found '{}'",
                             type_display(other)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return ret;
@@ -3200,7 +3200,7 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(cur),
                             type_display(&e)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return ret;
@@ -3226,7 +3226,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(&e_final),
                                 type_display(other)
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                         ret
@@ -3241,7 +3241,7 @@ impl<'a> super::TypeChecker<'a> {
                          return `Result`, found '{}'",
                         type_display(other)
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 ret
@@ -3334,7 +3334,7 @@ impl<'a> super::TypeChecker<'a> {
                     max
                 )
             };
-            self.type_error(msg, span.clone(), TypeErrorKind::TypeMismatch);
+            self.type_error(msg, *span, TypeErrorKind::TypeMismatch);
             return false;
         }
         true
@@ -3469,7 +3469,7 @@ impl<'a> super::TypeChecker<'a> {
                 type_display(&target),
                 type_display(&target),
             ),
-            expr.span.clone(),
+            expr.span,
             TypeErrorKind::TypeMismatch,
         );
     }
@@ -3544,7 +3544,7 @@ impl<'a> super::TypeChecker<'a> {
                 type_display(&target),
                 type_display(&target),
             ),
-            expr.span.clone(),
+            expr.span,
             TypeErrorKind::TypeMismatch,
         );
     }
@@ -3626,7 +3626,7 @@ impl<'a> super::TypeChecker<'a> {
         match &expr.kind {
             // Literals
             ExprKind::Integer(n, sfx) => {
-                let ty = self.type_from_int_suffix(*sfx, expr.span.clone());
+                let ty = self.type_from_int_suffix(*sfx, expr.span);
                 // B-2026-07-02-7: a SUFFIXED literal's own suffix defines its
                 // range — `300u8` was admitted and silently diverged (interp
                 // printed 300, codegen truncated to 44). Unsuffixed literals
@@ -3669,7 +3669,7 @@ impl<'a> super::TypeChecker<'a> {
                                      cannot interpolate in f-string",
                                     type_display(&ty)
                                 ),
-                                inner_expr.span.clone(),
+                                inner_expr.span,
                                 TypeErrorKind::TraitBoundNotSatisfied,
                             );
                         }
@@ -3681,7 +3681,7 @@ impl<'a> super::TypeChecker<'a> {
                                 if let Err(msg) = check_format_spec_for_type(spec_raw, &ty) {
                                     self.type_error(
                                         msg,
-                                        inner_expr.span.clone(),
+                                        inner_expr.span,
                                         TypeErrorKind::TraitBoundNotSatisfied,
                                     );
                                 }
@@ -3731,7 +3731,7 @@ impl<'a> super::TypeChecker<'a> {
                     if let Some(msg) = self.type_name_in_value_position_message(name) {
                         self.type_error(
                             msg,
-                            expr.span.clone(),
+                            expr.span,
                             crate::typechecker::TypeErrorKind::NotCallable,
                         );
                     }
@@ -3755,7 +3755,7 @@ impl<'a> super::TypeChecker<'a> {
                 let saved_neg_key = self.neg_validated_suffixed_literal;
                 if matches!(op, UnaryOp::Neg) {
                     if let ExprKind::Integer(n, Some(sfx)) = &operand.kind {
-                        let ty = self.type_from_int_suffix(Some(*sfx), operand.span.clone());
+                        let ty = self.type_from_int_suffix(Some(*sfx), operand.span);
                         self.check_int_literal_fits(-(*n as i128), &ty, &expr.span);
                         // The negated value ruled; suppress the Integer arm's
                         // positive-operand check for this operand (`-128i8` —
@@ -3775,7 +3775,7 @@ impl<'a> super::TypeChecker<'a> {
                 if self.in_defer {
                     self.type_error(
                         "'?' operator is not allowed inside defer/errdefer blocks".to_string(),
-                        expr.span.clone(),
+                        expr.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -3794,7 +3794,7 @@ impl<'a> super::TypeChecker<'a> {
                 if l_ty != Type::Error && r_ty != Type::Error {
                     if let Type::Named { name, args } = &l_ty {
                         if name == "Option" && args.len() == 1 {
-                            self.check_assignable(&args[0], &r_ty, right.span.clone());
+                            self.check_assignable(&args[0], &r_ty, right.span);
                             return args[0].clone();
                         }
                     }
@@ -3848,7 +3848,7 @@ impl<'a> super::TypeChecker<'a> {
                                     idx,
                                     types.len()
                                 ),
-                                expr.span.clone(),
+                                expr.span,
                                 TypeErrorKind::InvalidTupleIndex,
                             );
                             Type::Error
@@ -3858,7 +3858,7 @@ impl<'a> super::TypeChecker<'a> {
                     _ => {
                         self.type_error(
                             format!("tuple index on non-tuple type '{}'", type_display(&obj_ty)),
-                            expr.span.clone(),
+                            expr.span,
                             TypeErrorKind::InvalidTupleIndex,
                         );
                         Type::Error
@@ -3997,9 +3997,7 @@ impl<'a> super::TypeChecker<'a> {
                                                      integers, found '{}'",
                                                     type_display(part_ty)
                                                 ),
-                                                part_expr
-                                                    .map(|e| e.span.clone())
-                                                    .unwrap_or_else(|| index.span.clone()),
+                                                part_expr.map(|e| e.span).unwrap_or(index.span),
                                                 TypeErrorKind::TypeMismatch,
                                             );
                                         }
@@ -4015,7 +4013,7 @@ impl<'a> super::TypeChecker<'a> {
                                              found '{}'",
                                             type_display(&idx_ty)
                                         ),
-                                        index.span.clone(),
+                                        index.span,
                                         TypeErrorKind::TypeMismatch,
                                     );
                                     None
@@ -4035,7 +4033,7 @@ impl<'a> super::TypeChecker<'a> {
                                             dims.len(),
                                             arity
                                         ),
-                                        index.span.clone(),
+                                        index.span,
                                         TypeErrorKind::TypeMismatch,
                                     );
                                 } else if splice_free {
@@ -4060,7 +4058,7 @@ impl<'a> super::TypeChecker<'a> {
                                                          (size {})",
                                                         i, pos, d
                                                     ),
-                                                    span.clone(),
+                                                    *span,
                                                     TypeErrorKind::TypeMismatch,
                                                 );
                                             }
@@ -4097,7 +4095,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "column index must be an integer, found '{}'",
                                     type_display(&idx_ty)
                                 ),
-                                index.span.clone(),
+                                index.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -4149,7 +4147,7 @@ impl<'a> super::TypeChecker<'a> {
                             other => other.clone(),
                         };
                         if key_ty != Type::Error {
-                            self.check_assignable(&k_ty, &key_ty, index.span.clone());
+                            self.check_assignable(&k_ty, &key_ty, index.span);
                         }
                         // `V` for BOTH a read (`x = m[k]`, panics if missing)
                         // and an assignment target (`m[k] = v`, inserts /
@@ -4176,7 +4174,7 @@ impl<'a> super::TypeChecker<'a> {
                             "index must be an integer or range, found '{}'",
                             type_display(&idx_ty)
                         ),
-                        index.span.clone(),
+                        index.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -4225,7 +4223,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "range indexing requires a Vec, Array, or Slice; found '{}'",
                                     type_display(&obj_ty)
                                 ),
-                                expr.span.clone(),
+                                expr.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             Type::Error
@@ -4258,7 +4256,7 @@ impl<'a> super::TypeChecker<'a> {
                          — it returns Option[char], so match it or unwrap it,\n        \
                          or s.bytes()[i] for raw byte access (O(1))"
                             .to_string(),
-                        expr.span.clone(),
+                        expr.span,
                         TypeErrorKind::StringNotIndexable,
                     );
                     return Type::Error;
@@ -4415,7 +4413,7 @@ impl<'a> super::TypeChecker<'a> {
                             "condition must be 'bool', found '{}'",
                             type_display(&cond_ty)
                         ),
-                        condition.span.clone(),
+                        condition.span,
                         TypeErrorKind::ConditionNotBool,
                     );
                 }
@@ -4438,7 +4436,7 @@ impl<'a> super::TypeChecker<'a> {
                                         type_display(&then_ty),
                                         type_display(&else_ty)
                                     ),
-                                    expr.span.clone(),
+                                    expr.span,
                                     TypeErrorKind::BranchTypeMismatch,
                                 );
                             }
@@ -4489,7 +4487,7 @@ impl<'a> super::TypeChecker<'a> {
                                         type_display(&then_ty),
                                         type_display(&else_ty)
                                     ),
-                                    expr.span.clone(),
+                                    expr.span,
                                     TypeErrorKind::BranchTypeMismatch,
                                 );
                             }
@@ -4513,7 +4511,7 @@ impl<'a> super::TypeChecker<'a> {
                             "while condition must be 'bool', found '{}'",
                             type_display(&cond_ty)
                         ),
-                        condition.span.clone(),
+                        condition.span,
                         TypeErrorKind::ConditionNotBool,
                     );
                 }
@@ -4619,7 +4617,7 @@ impl<'a> super::TypeChecker<'a> {
                         if !self.is_irrefutable_pattern(&p.pattern, &ty) {
                             self.type_error(
                                 "refutable pattern in closure parameter; use `if let` or `match` for patterns that may not match".to_string(),
-                                p.pattern.span.clone(),
+                                p.pattern.span,
                                 TypeErrorKind::RefutablePattern,
                             );
                         }
@@ -4678,7 +4676,7 @@ impl<'a> super::TypeChecker<'a> {
                                         type_display(cur),
                                         type_display(&t)
                                     ),
-                                    expr.span.clone(),
+                                    expr.span,
                                     TypeErrorKind::ReturnTypeMismatch,
                                 );
                             }
@@ -4724,10 +4722,7 @@ impl<'a> super::TypeChecker<'a> {
                         Some(ref expr) => self.infer_expr(expr),
                         None => Type::Unit,
                     };
-                    let span = inner
-                        .as_ref()
-                        .map(|e| e.span.clone())
-                        .unwrap_or_else(|| expr.span.clone());
+                    let span = inner.as_ref().map(|e| e.span).unwrap_or_else(|| expr.span);
                     self.closure_return_types
                         .last_mut()
                         .expect("checked non-empty above")
@@ -4745,7 +4740,7 @@ impl<'a> super::TypeChecker<'a> {
                     if *ret_ty != Type::Unit && *ret_ty != Type::Error {
                         self.type_error(
                             format!("expected return value of type '{}'", type_display(ret_ty)),
-                            expr.span.clone(),
+                            expr.span,
                             TypeErrorKind::ReturnTypeMismatch,
                         );
                     }
@@ -4910,7 +4905,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(s),
                                 type_display(e)
                             ),
-                            expr.span.clone(),
+                            expr.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -4963,7 +4958,7 @@ impl<'a> super::TypeChecker<'a> {
                      — extract the body into a helper function returning \
                      Result for now"
                         .to_string(),
-                    expr.span.clone(),
+                    expr.span,
                     TypeErrorKind::TypeMismatch,
                 );
                 Type::Error
@@ -5055,7 +5050,7 @@ impl<'a> super::TypeChecker<'a> {
                 let inner = match inner {
                     Ok(t) => t,
                     Err(msg) => {
-                        self.type_error(msg, expr.span.clone(), TypeErrorKind::LockTargetNotMutex);
+                        self.type_error(msg, expr.span, TypeErrorKind::LockTargetNotMutex);
                         Type::Error
                     }
                 };
@@ -5071,7 +5066,7 @@ impl<'a> super::TypeChecker<'a> {
                             "a `lock` on a field (e.g. `lock self.state`) requires an alias: \
                              write `lock self.state s { … }` and use `s` for the inner value"
                                 .to_string(),
-                            expr.span.clone(),
+                            expr.span,
                             TypeErrorKind::LockTargetNotMutex,
                         );
                         None
@@ -5144,7 +5139,7 @@ impl<'a> super::TypeChecker<'a> {
                     let first_ty = self.infer_expr(&elements[0]);
                     for elem in &elements[1..] {
                         let elem_ty = self.infer_expr(elem);
-                        self.check_assignable(&first_ty, &elem_ty, elem.span.clone());
+                        self.check_assignable(&first_ty, &elem_ty, elem.span);
                     }
                     Type::Named {
                         name: "Vec".to_string(),
@@ -5180,7 +5175,7 @@ impl<'a> super::TypeChecker<'a> {
                         let first_ty = self.infer_expr(&items[0]);
                         for item in &items[1..] {
                             let ty = self.infer_expr(item);
-                            self.check_assignable(&first_ty, &ty, item.span.clone());
+                            self.check_assignable(&first_ty, &ty, item.span);
                         }
                         Type::Array {
                             element: Box::new(first_ty),
@@ -5191,7 +5186,7 @@ impl<'a> super::TypeChecker<'a> {
                         let first_ty = self.infer_expr(&items[0]);
                         for item in &items[1..] {
                             let ty = self.infer_expr(item);
-                            self.check_assignable(&first_ty, &ty, item.span.clone());
+                            self.check_assignable(&first_ty, &ty, item.span);
                         }
                         Type::Named {
                             name: "Vec".to_string(),
@@ -5202,7 +5197,7 @@ impl<'a> super::TypeChecker<'a> {
                         let first_ty = self.infer_expr(&items[0]);
                         for item in &items[1..] {
                             let ty = self.infer_expr(item);
-                            self.check_assignable(&first_ty, &ty, item.span.clone());
+                            self.check_assignable(&first_ty, &ty, item.span);
                         }
                         Type::Named {
                             name: "Set".to_string(),
@@ -5243,7 +5238,7 @@ impl<'a> super::TypeChecker<'a> {
                             "repeat-literal count must be an integer, found '{}'",
                             type_display(&count_ty)
                         ),
-                        count.span.clone(),
+                        count.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -5256,7 +5251,7 @@ impl<'a> super::TypeChecker<'a> {
                                 self.type_error(
                                     "Array[v; n] requires n to be a non-negative integer literal"
                                         .to_string(),
-                                    count.span.clone(),
+                                    count.span,
                                     TypeErrorKind::TypeMismatch,
                                 );
                                 0
@@ -5282,7 +5277,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "{}[v; n] is not supported; repeat literals only apply to `Vec` and `Array`",
                                 other
                             ),
-                            expr.span.clone(),
+                            expr.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         Type::Error
@@ -5297,8 +5292,8 @@ impl<'a> super::TypeChecker<'a> {
                 for (k, v) in &entries[1..] {
                     let kt = self.infer_expr(k);
                     let vt = self.infer_expr(v);
-                    self.check_assignable(&key_ty, &kt, k.span.clone());
-                    self.check_assignable(&val_ty, &vt, v.span.clone());
+                    self.check_assignable(&key_ty, &kt, k.span);
+                    self.check_assignable(&val_ty, &vt, v.span);
                 }
                 // `Map`, not `HashMap`. `HashMap` is the RUST representation
                 // (design.md § type mapping: `Map[K, V]` -> `HashMap<K, V>`),
@@ -5319,7 +5314,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     "'_' placeholder is only valid inside a pipe expression argument list"
                         .to_string(),
-                    expr.span.clone(),
+                    expr.span,
                     TypeErrorKind::InvalidPipePlaceholder,
                 );
                 Type::Error

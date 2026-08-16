@@ -74,7 +74,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "'iter_mut' takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -92,7 +92,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{}' takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -127,7 +127,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "clone() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -244,7 +244,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !is_str {
                     self.type_error(
                         format!("Vec.{method}() requires String elements"),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     for arg in args {
@@ -259,7 +259,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Vec.{method}() expects {expected_args} argument(s), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -269,7 +269,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 if method == "join" {
                     let sep_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(&Type::Str, &sep_ty, args[0].value.span.clone());
+                    self.check_assignable(&Type::Str, &sep_ty, args[0].value.span);
                 }
                 return Some(Type::Str);
             }
@@ -292,7 +292,7 @@ impl<'a> super::TypeChecker<'a> {
                          adaptors/terminals at v1; iterate directly with `for line in <iter>` and \
                          filter/map inside the loop body (each item is `Result[String, IoError]`)"
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::NoMethodFound,
                 );
                 for arg in args {
@@ -334,7 +334,7 @@ impl<'a> super::TypeChecker<'a> {
                              failure: MemoryOrdering) — 4 arguments, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -345,9 +345,9 @@ impl<'a> super::TypeChecker<'a> {
                     // the two ordering args are inferred for recording (their
                     // `MemoryOrdering.X` shape is validated at codegen).
                     let old_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(&inner, &old_ty, args[0].value.span.clone());
+                    self.check_assignable(&inner, &old_ty, args[0].value.span);
                     let new_ty = self.infer_expr(&args[1].value);
-                    self.check_assignable(&inner, &new_ty, args[1].value.span.clone());
+                    self.check_assignable(&inner, &new_ty, args[1].value.span);
                     self.infer_expr(&args[2].value);
                     self.infer_expr(&args[3].value);
                 }
@@ -421,7 +421,7 @@ impl<'a> super::TypeChecker<'a> {
                             if want == 1 { "" } else { "s" },
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::AtomicMissingOrdering,
                     );
                     for arg in args {
@@ -436,7 +436,7 @@ impl<'a> super::TypeChecker<'a> {
                     // atomic's inner type `T`; the trailing ordering is inferred.
                     // (`swap` accepts any `T`, including `Atomic[bool]`.)
                     let val_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(&inner, &val_ty, args[0].value.span.clone());
+                    self.check_assignable(&inner, &val_ty, args[0].value.span);
                     self.infer_expr(&args[1].value);
                 }
                 let ret = if method == "store" { Type::Unit } else { inner };

@@ -62,7 +62,7 @@ impl<'a> super::TypeChecker<'a> {
             .unwrap_or_else(|| "this type".to_string());
         self.type_error(
             format!("no field '{field}' on type '{ty_name}'"),
-            span.clone(),
+            *span,
             TypeErrorKind::TypeMismatch,
         );
         Type::Error
@@ -159,7 +159,7 @@ impl<'a> super::TypeChecker<'a> {
                      supported — pass the reference to a foreign function declared \
                      in the same `unsafe extern {{ }}` block instead"
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
             return Type::Error;
@@ -242,7 +242,7 @@ impl<'a> super::TypeChecker<'a> {
                              unconditionally safe and does not require \
                              unsafe."
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                 } else {
@@ -256,7 +256,7 @@ impl<'a> super::TypeChecker<'a> {
                              bytes is valid. Field *assignment* (`u.{field} = ...`) \
                              is unconditionally safe and does not require unsafe."
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -277,7 +277,7 @@ impl<'a> super::TypeChecker<'a> {
                     type_name,
                     available.join(", ")
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::UndefinedField,
             );
             return Type::Error;
@@ -335,7 +335,7 @@ impl<'a> super::TypeChecker<'a> {
                             format!(
                                 "shared struct field '{type_name}.{field}' is not declared mut"
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::SharedFieldNotMut,
                         );
                     }
@@ -375,7 +375,7 @@ impl<'a> super::TypeChecker<'a> {
                     type_name,
                     available.join(", ")
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::UndefinedField,
             );
             Type::Error
@@ -454,7 +454,7 @@ impl<'a> super::TypeChecker<'a> {
                 "private field '{}' of struct '{}' is not visible outside its defining module",
                 field, struct_name,
             ),
-            span.clone(),
+            *span,
             TypeErrorKind::PrivateTypeInPublicSignature,
         );
     }
@@ -494,7 +494,7 @@ impl<'a> super::TypeChecker<'a> {
                         struct_name,
                         available.join(", ")
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::UndefinedField,
                 );
                 return Type::Error;
@@ -509,7 +509,7 @@ impl<'a> super::TypeChecker<'a> {
                     "private field '{}' of struct '{}' is not visible outside its defining module",
                     field, struct_name,
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::PrivateTypeInPublicSignature,
             );
         }
@@ -573,7 +573,7 @@ impl<'a> super::TypeChecker<'a> {
                      fields from base' is meaningless. Write `{union_name} \
                      {{ <field>: <expr> }}` with exactly one field instead."
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
         }
@@ -593,7 +593,7 @@ impl<'a> super::TypeChecker<'a> {
                     n = fields.len(),
                     avail = avail.join(", "),
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TypeMismatch,
             );
         }
@@ -620,7 +620,7 @@ impl<'a> super::TypeChecker<'a> {
                             union_name,
                             avail.join(", ")
                         ),
-                        f.span.clone(),
+                        f.span,
                         TypeErrorKind::UndefinedField,
                     );
                     self.infer_expr(&f.value);
@@ -732,7 +732,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     self.type_error(
                         format!("'{}' is not a struct", struct_name),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::NotAStruct,
                     );
                     return Type::Error;
@@ -775,7 +775,7 @@ impl<'a> super::TypeChecker<'a> {
                      Evolvable Public Types.",
                     name = struct_name
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::NonExhaustiveCrossPackageLiteral,
             );
         }
@@ -792,7 +792,7 @@ impl<'a> super::TypeChecker<'a> {
             if !provided_fields.contains(fname.as_str()) {
                 self.type_error(
                     format!("missing field '{}' in struct '{}'", fname, struct_name),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::MissingField,
                 );
             }
@@ -803,7 +803,7 @@ impl<'a> super::TypeChecker<'a> {
             if !expected_fields.contains(f.name.as_str()) {
                 self.type_error(
                     format!("unknown field '{}' in struct '{}'", f.name, struct_name),
-                    f.span.clone(),
+                    f.span,
                     TypeErrorKind::ExtraField,
                 );
             }
@@ -962,7 +962,7 @@ impl<'a> super::TypeChecker<'a> {
                                         super::types::type_display(&rslot),
                                         struct_name,
                                     ),
-                                    f.span.clone(),
+                                    f.span,
                                     TypeErrorKind::TypeMismatch,
                                 );
                             }
@@ -1104,7 +1104,7 @@ impl<'a> super::TypeChecker<'a> {
             if !provided.contains(fname.as_str()) {
                 self.type_error(
                     format!("missing field '{fname}' in enum variant '{enum_name}.{variant}'"),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::MissingField,
                 );
             }
@@ -1118,7 +1118,7 @@ impl<'a> super::TypeChecker<'a> {
                         "unknown field '{}' in enum variant '{enum_name}.{variant}'",
                         f.name
                     ),
-                    f.span.clone(),
+                    f.span,
                     TypeErrorKind::ExtraField,
                 );
                 self.infer_expr(&f.value);

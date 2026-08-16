@@ -1771,7 +1771,7 @@ fn baked_item_for(name: &str) -> Option<Item> {
 
 fn stub_struct(name: &str, span: &Span) -> Item {
     Item::StructDef(StructDef {
-        span: span.clone(),
+        span: *span,
         attributes: Vec::new(),
         doc_comment: None,
         is_pub: true,
@@ -1784,7 +1784,7 @@ fn stub_struct(name: &str, span: &Span) -> Item {
         // a `ConcurrentPlainStruct` diagnostic resolves to the matching
         // StructDef, which never happens for prelude stubs (they don't
         // appear in user `par` blocks).
-        struct_keyword_span: span.clone(),
+        struct_keyword_span: *span,
         kind_keyword_span: None,
         no_rc: false,
         name: name.to_string(),
@@ -1818,12 +1818,12 @@ fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
         _ => return None,
     };
     Some(GenericParams {
-        span: span.clone(),
+        span: *span,
         effect_params: Vec::new(),
         params: params
             .iter()
             .map(|p| GenericParam {
-                span: span.clone(),
+                span: *span,
                 name: (*p).to_string(),
                 bounds: Vec::new(),
                 is_const: false,
@@ -1838,7 +1838,7 @@ fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
 
 fn stub_trait(name: &str, span: &Span) -> Item {
     Item::TraitDef(TraitDef {
-        span: span.clone(),
+        span: *span,
         attributes: Vec::new(),
         doc_comment: None,
         is_pub: true,
@@ -1859,7 +1859,7 @@ fn stub_trait(name: &str, span: &Span) -> Item {
 
 fn stub_function(name: &str, span: &Span) -> Item {
     Item::Function(Function {
-        span: span.clone(),
+        span: *span,
         attributes: Vec::new(),
         doc_comment: None,
         is_pub: true,
@@ -1879,7 +1879,7 @@ fn stub_function(name: &str, span: &Span) -> Item {
         body: Block {
             stmts: Vec::new(),
             final_expr: None,
-            span: span.clone(),
+            span: *span,
         },
         stdlib_origin: true,
         deprecation: None,

@@ -121,7 +121,7 @@ impl<'a> super::TypeChecker<'a> {
                     "condition must be 'bool', found '{}'",
                     type_display(&cond_ty)
                 ),
-                condition.span.clone(),
+                condition.span,
                 TypeErrorKind::ConditionNotBool,
             );
         }
@@ -142,7 +142,7 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             // No else: the if returns Unit. Surface the standard
             // assignability diagnostic if the caller expected non-Unit.
-            self.check_assignable(expected, &Type::Unit, span.clone());
+            self.check_assignable(expected, &Type::Unit, *span);
             self.record_expr_type(span, &Type::Unit);
             Type::Unit
         }
@@ -182,7 +182,7 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(span, &result_ty);
             result_ty
         } else {
-            self.check_assignable(expected, &Type::Unit, span.clone());
+            self.check_assignable(expected, &Type::Unit, *span);
             self.record_expr_type(span, &Type::Unit);
             Type::Unit
         }
@@ -222,7 +222,7 @@ impl<'a> super::TypeChecker<'a> {
                             "match guard must be 'bool', found '{}'",
                             type_display(&guard_ty)
                         ),
-                        guard.span.clone(),
+                        guard.span,
                         TypeErrorKind::ConditionNotBool,
                     );
                 }
@@ -239,7 +239,7 @@ impl<'a> super::TypeChecker<'a> {
         // `dispatch_ty`, NOT `scrut_ty` — the same peeled type the arms above
         // were checked against (B-2026-08-15-11). See `infer_match`'s twin.
         if !scrutinee_mismatch {
-            self.check_exhaustiveness(&dispatch_ty, arms, span.clone());
+            self.check_exhaustiveness(&dispatch_ty, arms, *span);
         }
         let result_ty = arm_types
             .iter()
@@ -272,7 +272,7 @@ impl<'a> super::TypeChecker<'a> {
                             "match guard must be 'bool', found '{}'",
                             type_display(&guard_ty)
                         ),
-                        guard.span.clone(),
+                        guard.span,
                         TypeErrorKind::ConditionNotBool,
                     );
                 }
@@ -310,7 +310,7 @@ impl<'a> super::TypeChecker<'a> {
         // so all of them were equally dark on a borrowed scrutinee and all of
         // them come back with this.
         if !scrutinee_mismatch {
-            self.check_exhaustiveness(&dispatch_ty, arms, span.clone());
+            self.check_exhaustiveness(&dispatch_ty, arms, *span);
         }
 
         // Fold the (non-Never, non-Error) arm types into their least-upper-
@@ -341,7 +341,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(&result_ty),
                                 type_display(arm_ty)
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::BranchTypeMismatch,
                         );
                         reported = true;
@@ -385,7 +385,7 @@ impl<'a> super::TypeChecker<'a> {
                                  element patterns or add a `..` marker",
                                 if used == 1 { "" } else { "s" },
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return (Type::Error, Type::Error);
@@ -398,7 +398,7 @@ impl<'a> super::TypeChecker<'a> {
                                  marker if the remaining positions should \
                                  match anything"
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return ((**element).clone(), Type::Error);
@@ -416,7 +416,7 @@ impl<'a> super::TypeChecker<'a> {
                          a compile-time literal; const-parameter array \
                          sizes are not yet supported in pattern position"
                             .to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     ((**element).clone(), Type::Error)
@@ -445,7 +445,7 @@ impl<'a> super::TypeChecker<'a> {
                      string content, convert to `Slice[u8]` with `.bytes()` \
                      or `Iterator[char]` with `.chars()` first"
                         .to_string(),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 (Type::Error, Type::Error)
@@ -457,7 +457,7 @@ impl<'a> super::TypeChecker<'a> {
                          and `Slice[T]`; cannot match a value of type `{}`",
                         type_display(scrutinee_type)
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
                 (Type::Error, Type::Error)
@@ -580,7 +580,7 @@ impl<'a> super::TypeChecker<'a> {
                  a field; use 'ref {outer}' to borrow, or omit one of the \
                  two bindings"
             ),
-            inner_span.clone(),
+            *inner_span,
             TypeErrorKind::AtBindingDoubleConsume,
         );
     }
@@ -756,7 +756,7 @@ impl<'a> super::TypeChecker<'a> {
                                  Evolvable Public Types.",
                                 name = struct_name
                             ),
-                            pattern.span.clone(),
+                            pattern.span,
                             TypeErrorKind::NonExhaustiveCrossPackagePattern,
                             fix_it,
                         );
@@ -820,7 +820,7 @@ impl<'a> super::TypeChecker<'a> {
                             // its sub-pattern; this brings shorthand to parity.
                             let synthetic = Pattern {
                                 kind: PatternKind::Binding(field.name.clone()),
-                                span: field.span.clone(),
+                                span: field.span,
                             };
                             self.check_pattern_against(&synthetic, &field_ty, mode);
                         }
@@ -887,7 +887,7 @@ impl<'a> super::TypeChecker<'a> {
                     // `inner` via the recursion below).
                     self.report_at_binding_double_consume(name, &pattern.span);
                     self.owned_at_binding_outers
-                        .push((name.clone(), pattern.span.clone()));
+                        .push((name.clone(), pattern.span));
                 }
                 self.check_pattern_against(inner, expected, effective_mode);
                 if consuming_outer {
@@ -1020,7 +1020,7 @@ impl<'a> super::TypeChecker<'a> {
                  `{variant_name}` variant",
                 ty = type_display(expected),
             ),
-            span.clone(),
+            *span,
             TypeErrorKind::PatternScrutineeMismatch,
         );
     }
@@ -1053,7 +1053,7 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(&lo.1),
                         type_display(&hi.1),
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -1064,7 +1064,7 @@ impl<'a> super::TypeChecker<'a> {
                         "range pattern lower bound ({}) must not exceed its upper bound ({})",
                         lo.0, hi.0,
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
             } else if !inclusive && lo.0 == hi.0 {
@@ -1074,7 +1074,7 @@ impl<'a> super::TypeChecker<'a> {
                          ({}); use '..=' for an inclusive range or widen the bounds",
                         lo.0, hi.0,
                     ),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -1114,7 +1114,7 @@ impl<'a> super::TypeChecker<'a> {
                             generic_args: None,
                         }
                     },
-                    span: span.clone(),
+                    span: *span,
                 };
                 let resolved = self
                     .eval_const_expr(&expr, scrut_ty)
@@ -1133,7 +1133,7 @@ impl<'a> super::TypeChecker<'a> {
                                  integer or char const",
                                 segments.join("."),
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::RangePatternBoundNotConst,
                         );
                         None
@@ -1148,7 +1148,7 @@ impl<'a> super::TypeChecker<'a> {
         for idx in unreachable_arms(scrutinee_type, arms, &self.env) {
             self.type_lint_warning(
                 "unreachable match arm: pattern is fully covered by an earlier arm".to_string(),
-                arms[idx].pattern.span.clone(),
+                arms[idx].pattern.span,
                 TypeErrorKind::UnreachableArm,
                 "unreachable_arm",
             );
@@ -1176,7 +1176,7 @@ impl<'a> super::TypeChecker<'a> {
                     width + 1,
                     cap = crate::exhaustive::MAX_REFINEMENT_FINITE_DOMAIN,
                 ),
-                span.clone(),
+                span,
                 TypeErrorKind::RefinementDomainTooWide,
                 "refinement_domain_too_wide",
             );
@@ -1222,7 +1222,7 @@ impl<'a> super::TypeChecker<'a> {
                              See design.md § `#[non_exhaustive]` for \
                              Evolvable Public Types."
                         ),
-                        span.clone(),
+                        span,
                         TypeErrorKind::NonExhaustiveCrossPackageMatch,
                         fix_it,
                     );
@@ -1302,9 +1302,9 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     Some(args.into_iter().map(GenericArg::Type).collect())
                 },
-                span: span.clone(),
+                span,
             }),
-            span: span.clone(),
+            span,
         };
         match ty {
             Type::Int(IntSize::I8) => path("i8", vec![]),
@@ -1347,7 +1347,7 @@ impl<'a> super::TypeChecker<'a> {
                                 .iter()
                                 .map(|d| Self::dim_arg_to_shape_dim(d, &span))
                                 .collect(),
-                            span: span.clone(),
+                            span,
                         }),
                         other => GenericArg::Type(Self::type_to_type_expr(other)),
                     })
@@ -1360,7 +1360,7 @@ impl<'a> super::TypeChecker<'a> {
                         } else {
                             Some(generic_args)
                         },
-                        span: span.clone(),
+                        span,
                     }),
                     span,
                 }
@@ -1377,7 +1377,7 @@ impl<'a> super::TypeChecker<'a> {
                     element: Box::new(Self::type_to_type_expr(element)),
                     size: Box::new(Expr {
                         kind: ExprKind::Integer(size.as_literal().unwrap_or(0), None),
-                        span: span.clone(),
+                        span,
                     }),
                 },
                 span,
@@ -1452,22 +1452,22 @@ impl<'a> super::TypeChecker<'a> {
         match d {
             DimArg::Const(ConstArg::Literal(v)) => ShapeDim::Const(Box::new(Expr {
                 kind: ExprKind::Integer(*v, None),
-                span: span.clone(),
+                span: *span,
             })),
             DimArg::Const(ConstArg::ConstParam(name)) => ShapeDim::Const(Box::new(Expr {
                 kind: ExprKind::Identifier(name.clone()),
-                span: span.clone(),
+                span: *span,
             })),
             DimArg::Splice(name) => ShapeDim::Splice {
                 name: name.clone(),
-                span: span.clone(),
+                span: *span,
             },
             DimArg::SpliceVar(_) => ShapeDim::Splice {
                 name: "_splice".to_string(),
-                span: span.clone(),
+                span: *span,
             },
             // ConstVar / DynamicDim / Dynamic — all runtime dims.
-            _ => ShapeDim::Dynamic { span: span.clone() },
+            _ => ShapeDim::Dynamic { span: *span },
         }
     }
 
@@ -1900,7 +1900,7 @@ impl<'a> super::TypeChecker<'a> {
                                 patterns.len(),
                                 types.len()
                             ),
-                            pattern.span.clone(),
+                            pattern.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         for pat in patterns {
@@ -1914,7 +1914,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else if *ty != Type::Error {
                     self.type_error(
                         format!("tuple pattern used but type is `{}`", type_display(ty)),
-                        pattern.span.clone(),
+                        pattern.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     for pat in patterns {
@@ -1959,7 +1959,7 @@ impl<'a> super::TypeChecker<'a> {
                                  Types.",
                                 name = struct_name
                             ),
-                            pattern.span.clone(),
+                            pattern.span,
                             TypeErrorKind::NonExhaustiveCrossPackagePattern,
                             fix_it,
                         );
@@ -1976,7 +1976,7 @@ impl<'a> super::TypeChecker<'a> {
                                 struct_name,
                                 type_display(ty)
                             ),
-                            pattern.span.clone(),
+                            pattern.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         None
@@ -1990,7 +1990,7 @@ impl<'a> super::TypeChecker<'a> {
                             struct_name,
                             type_display(ty)
                         ),
-                        pattern.span.clone(),
+                        pattern.span,
                         TypeErrorKind::TypeMismatch,
                     );
                     None
@@ -2010,7 +2010,7 @@ impl<'a> super::TypeChecker<'a> {
                                         "no field `{}` found on struct `{}`",
                                         field.name, sname
                                     ),
-                                    field.span.clone(),
+                                    field.span,
                                     TypeErrorKind::UndefinedField,
                                 );
                                 Type::Error
@@ -2137,7 +2137,7 @@ impl<'a> super::TypeChecker<'a> {
         if !self.is_irrefutable_pattern(&param.pattern, ty) {
             self.type_error(
                 "refutable pattern in function parameter; use `if let` or `match` for patterns that may not match".to_string(),
-                param.pattern.span.clone(),
+                param.pattern.span,
                 TypeErrorKind::RefutablePattern,
             );
         }

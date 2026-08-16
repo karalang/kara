@@ -493,14 +493,14 @@ impl Parser {
                         },
                         stmt_span,
                     ) => Some(ModuleBinding {
-                        span: stmt_span.clone(),
+                        span: *stmt_span,
                         attributes: Vec::new(),
                         doc_comment: None,
                         is_pub: false,
                         is_private: false,
                         is_mut: *is_mut,
                         name: name.clone(),
-                        name_span: name_span.clone(),
+                        name_span: *name_span,
                         ty: ty.clone(),
                         value: value.clone(),
                         deprecation: None,
@@ -523,17 +523,17 @@ impl Parser {
                 "top-level statements are not allowed in this context — only item \
                  declarations (fn, struct, enum, trait, impl, use); script mode \
                  applies only to a root source file",
-                script_stmts[0].span.clone(),
+                script_stmts[0].span,
             );
         } else if !script_stmts.is_empty() {
             // Ambiguity rule (design.md § Script mode > Rejecting ambiguous
             // files): top-level statements + an explicit `fn main` is a
             // compile error with one obvious fix in each direction.
             let explicit_main = items.iter().find_map(|it| match it {
-                Item::Function(f) if f.name == "main" => Some(f.span.clone()),
+                Item::Function(f) if f.name == "main" => Some(f.span),
                 _ => None,
             });
-            let first_span = script_stmts[0].span.clone();
+            let first_span = script_stmts[0].span;
             if let Some(main_span) = explicit_main {
                 self.error_at(
                     &format!(
@@ -553,7 +553,7 @@ impl Parser {
                 // top-level `?` reports the ordinary ?-in-unit-fn
                 // diagnostic. Effects are inferred exactly as for a
                 // user-written private `fn main()`.
-                let last_span = script_stmts.last().map(|s| s.span.clone()).unwrap();
+                let last_span = script_stmts.last().map(|s| s.span).unwrap();
                 let body_span = Span {
                     line: first_span.line,
                     column: first_span.column,
@@ -561,7 +561,7 @@ impl Parser {
                     length: (last_span.offset + last_span.length).saturating_sub(first_span.offset),
                 };
                 items.push(Item::Function(Function {
-                    span: first_span.clone(),
+                    span: first_span,
                     attributes: Vec::new(),
                     doc_comment: None,
                     is_pub: false,
@@ -683,9 +683,9 @@ impl Parser {
 
     fn current_span(&self) -> Span {
         if self.pos < self.tokens.len() {
-            self.tokens[self.pos].span.clone()
+            self.tokens[self.pos].span
         } else if !self.tokens.is_empty() {
-            self.tokens.last().unwrap().span.clone()
+            self.tokens.last().unwrap().span
         } else {
             Span {
                 line: 1,

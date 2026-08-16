@@ -144,7 +144,7 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(msg) = Self::wasm_export_boundary_violation(&p.ty, "parameter") {
                 self.type_error(
                     format!("wasm export '{}': {msg}", f.name),
-                    p.span.clone(),
+                    p.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -153,7 +153,7 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(msg) = Self::wasm_export_boundary_violation(rt, "return") {
                 self.type_error(
                     format!("wasm export '{}': {msg}", f.name),
-                    rt.span.clone(),
+                    rt.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -192,7 +192,7 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(msg) = self.host_boundary_violation(&p.ty, "parameter") {
                 self.type_error(
                     format!("host fn '{}': {msg}", e.name),
-                    p.span.clone(),
+                    p.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -201,7 +201,7 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(msg) = self.host_boundary_violation(rt, "return") {
                 self.type_error(
                     format!("host fn '{}': {msg}", e.name),
-                    rt.span.clone(),
+                    rt.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -330,7 +330,7 @@ impl<'a> super::TypeChecker<'a> {
             if let TraitItem::Method(method) = item {
                 if let Some(ref body) = method.body {
                     let synthesized = Function {
-                        span: method.span.clone(),
+                        span: method.span,
                         attributes: Vec::new(),
                         doc_comment: None,
                         is_pub: false,
@@ -514,7 +514,7 @@ impl<'a> super::TypeChecker<'a> {
                 "error[{}]: `{}` is not a valid {} type for the foreign import '{}': {}",
                 code, spelled, position, owner, remedy
             ),
-            ty.span.clone(),
+            ty.span,
             TypeErrorKind::ExternSignatureInvalid,
         );
     }
@@ -555,7 +555,7 @@ impl<'a> super::TypeChecker<'a> {
                             "private type '{}' leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
                             last, context, owner
                         ),
-                        ty.span.clone(),
+                        ty.span,
                         TypeErrorKind::PrivateTypeInPublicSignature,
                     );
                 }
@@ -613,7 +613,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "private type '{}' leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
                                     last, context, owner
                                 ),
-                                ty.span.clone(),
+                                ty.span,
                                 TypeErrorKind::PrivateTypeInPublicSignature,
                             );
                         }
@@ -640,7 +640,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "private type '{}' leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
                                     last, context, owner
                                 ),
-                                ty.span.clone(),
+                                ty.span,
                                 TypeErrorKind::PrivateTypeInPublicSignature,
                             );
                         }
@@ -976,7 +976,7 @@ impl<'a> super::TypeChecker<'a> {
                              field storage, or channel send",
                             last, context, owner
                         ),
-                        ty.span.clone(),
+                        ty.span,
                         TypeErrorKind::ScopeLocalEscape,
                     );
                 }
@@ -1228,14 +1228,14 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Float(f, sfx) => match sfx {
                 Some(crate::token::FloatSuffix::F32) => Ok(ConstValue::F32(*f as f32)),
                 Some(crate::token::FloatSuffix::F64) => Ok(ConstValue::F64(*f)),
-                Some(_) => Err(ConstEvalError::NonConstShape(expr.span.clone())),
+                Some(_) => Err(ConstEvalError::NonConstShape(expr.span)),
                 None => match target_ty {
                     Type::Float(crate::typechecker::types::FloatSize::F32) => {
                         Ok(ConstValue::F32(*f as f32))
                     }
                     Type::Float(crate::typechecker::types::FloatSize::F16)
                     | Type::Float(crate::typechecker::types::FloatSize::BF16) => {
-                        Err(ConstEvalError::NonConstShape(expr.span.clone()))
+                        Err(ConstEvalError::NonConstShape(expr.span))
                     }
                     _ => Ok(ConstValue::F64(*f)),
                 },
@@ -1249,7 +1249,7 @@ impl<'a> super::TypeChecker<'a> {
                     chain_with_self.push(name.clone());
                     return Err(ConstEvalError::CyclicConstDef {
                         chain: chain_with_self,
-                        span: expr.span.clone(),
+                        span: expr.span,
                     });
                 }
                 for item in &self.program.items {
@@ -1277,7 +1277,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Err(ConstEvalError::UndefinedConst {
                     name: name.clone(),
-                    span: expr.span.clone(),
+                    span: expr.span,
                 })
             }
             ExprKind::Path { segments, .. } if segments.len() == 2 => {
@@ -1287,7 +1287,7 @@ impl<'a> super::TypeChecker<'a> {
                     for (discriminant, (vname, vkind)) in info.variants.iter().enumerate() {
                         if vname == variant_name {
                             if !matches!(vkind, VariantTypeInfo::Unit) {
-                                return Err(ConstEvalError::NonConstShape(expr.span.clone()));
+                                return Err(ConstEvalError::NonConstShape(expr.span));
                             }
                             return Ok(ConstValue::EnumVariant {
                                 enum_name: enum_name.clone(),
@@ -1299,7 +1299,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Err(ConstEvalError::UndefinedConst {
                     name: format!("{}.{}", enum_name, variant_name),
-                    span: expr.span.clone(),
+                    span: expr.span,
                 })
             }
             ExprKind::Unary { op, operand } => {
@@ -1333,7 +1333,7 @@ impl<'a> super::TypeChecker<'a> {
                             return Err(ConstEvalError::LogicalOnNonBool {
                                 ty: const_value_type(&lhs),
                                 op: op.clone(),
-                                span: left.span.clone(),
+                                span: left.span,
                             });
                         }
                     }
@@ -1344,7 +1344,7 @@ impl<'a> super::TypeChecker<'a> {
                 let rhs = self.eval_const_expr_with_chain(right, &operand_target, chain)?;
                 apply_binary(op.clone(), lhs, rhs, &expr.span)
             }
-            _ => Err(ConstEvalError::NonConstShape(expr.span.clone())),
+            _ => Err(ConstEvalError::NonConstShape(expr.span)),
         }
     }
 
@@ -1434,8 +1434,8 @@ impl<'a> super::TypeChecker<'a> {
         let span = f
             .return_type
             .as_ref()
-            .map(|t| t.span.clone())
-            .unwrap_or_else(|| f.span.clone());
+            .map(|t| t.span)
+            .unwrap_or_else(|| f.span);
 
         // A return type that already carries an error elsewhere (e.g. an
         // undefined error-type name the resolver already flagged) must not
@@ -1680,7 +1680,7 @@ impl<'a> super::TypeChecker<'a> {
                      parameter `comptime` or the function `comptime fn` (deferred.md § Comptime \
                      — Types as first-class values)"
                         .to_string(),
-                    param.ty.span.clone(),
+                    param.ty.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -1868,7 +1868,7 @@ impl<'a> super::TypeChecker<'a> {
                  `intN`) — `transparent` IS the layout claim, so another repr would \
                  either contradict it or duplicate the inner type's claim"
                     .to_string(),
-                span.clone(),
+                *span,
                 TypeErrorKind::ReprTransparentInvalid,
             );
         }
@@ -1935,7 +1935,7 @@ impl<'a> super::TypeChecker<'a> {
                  struct must have exactly one non-zero-sized field whose layout becomes \
                  the whole struct's layout; this struct has none"
                     .to_string(),
-                s.span.clone(),
+                s.span,
                 TypeErrorKind::ReprTransparentInvalid,
             ),
             1 => {
@@ -1948,7 +1948,7 @@ impl<'a> super::TypeChecker<'a> {
                              indeterminate; wrap a concrete or `Sized`-known type instead",
                             data_fields[0].name
                         ),
-                        data_fields[0].span.clone(),
+                        data_fields[0].span,
                         TypeErrorKind::ReprTransparentInvalid,
                     );
                 }
@@ -1959,7 +1959,7 @@ impl<'a> super::TypeChecker<'a> {
                  zero-sized, alignment-one companions like `PhantomData[T]` / `()` / \
                  `[T; 0]`); this struct has more than one data field"
                     .to_string(),
-                s.span.clone(),
+                s.span,
                 TypeErrorKind::ReprTransparentInvalid,
             ),
         }
@@ -1983,7 +1983,7 @@ impl<'a> super::TypeChecker<'a> {
                  discriminant-position marker with no runtime tag); multi-variant or \
                  payload-less enums are rejected"
                     .to_string(),
-                e.span.clone(),
+                e.span,
                 TypeErrorKind::ReprTransparentInvalid,
             );
         }
@@ -2126,19 +2126,19 @@ impl<'a> super::TypeChecker<'a> {
                     value: None,
                     has_payload,
                     explicit: false,
-                    span: v.span.clone(),
+                    span: v.span,
                 }),
                 Some(expr) => {
                     let value = Self::fold_int_const(expr, &consts, &mut Vec::new());
                     if value.is_none() {
-                        nonconst.push(expr.span.clone());
+                        nonconst.push(expr.span);
                     }
                     folded.push(Folded {
                         name: v.name.clone(),
                         value,
                         has_payload,
                         explicit: true,
-                        span: expr.span.clone(),
+                        span: expr.span,
                     });
                 }
             }
@@ -2168,7 +2168,7 @@ impl<'a> super::TypeChecker<'a> {
                      does not)",
                     e.name, fe.name, fi.name
                 ),
-                fe.span.clone(),
+                fe.span,
                 TypeErrorKind::DiscriminantInvalid,
             );
         }
@@ -2190,7 +2190,7 @@ impl<'a> super::TypeChecker<'a> {
                          unreachable (variant '{}')",
                         f.name
                     ),
-                    f.span.clone(),
+                    f.span,
                     TypeErrorKind::DiscriminantInvalid,
                 );
             }
@@ -2213,7 +2213,7 @@ impl<'a> super::TypeChecker<'a> {
                                  variant '{}' does not fit in '{range_name}' (range '[{lo}, {hi}]')",
                                 f.name
                             ),
-                            f.span.clone(),
+                            f.span,
                             TypeErrorKind::DiscriminantInvalid,
                         );
                     }
@@ -2234,7 +2234,7 @@ impl<'a> super::TypeChecker<'a> {
                              discriminant value '{val}' as variant '{}'",
                             f.name, prev
                         ),
-                        f.span.clone(),
+                        f.span,
                         TypeErrorKind::DiscriminantInvalid,
                     );
                 } else {
@@ -2253,7 +2253,7 @@ impl<'a> super::TypeChecker<'a> {
              permitted on a `union` — unions already give untagged byte reuse, so \
              layering `transparent` on top is incoherent"
                 .to_string(),
-            u.span.clone(),
+            u.span,
             TypeErrorKind::ReprTransparentInvalid,
         );
     }
@@ -2277,7 +2277,7 @@ impl<'a> super::TypeChecker<'a> {
                         _ => String::new(),
                     }
                 ),
-                d.base_type.span.clone(),
+                d.base_type.span,
                 TypeErrorKind::ReprTransparentInvalid,
             );
         }
@@ -2342,7 +2342,7 @@ impl<'a> super::TypeChecker<'a> {
                         field = f.name,
                         ty = crate::formatter::render_type_expr(&f.ty),
                     ),
-                    f.ty.span.clone(),
+                    f.ty.span,
                     TypeErrorKind::ParFieldNotConcurrent,
                 );
                 continue;
@@ -2352,10 +2352,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             // Anchor at the `mut` keyword when the parser captured its span
             // (always present for `mut` fields), else the field type.
-            let span = f
-                .mut_keyword_span
-                .clone()
-                .unwrap_or_else(|| f.ty.span.clone());
+            let span = f.mut_keyword_span.unwrap_or(f.ty.span);
             self.type_error(
                 format!(
                     "`mut` field `{field}` of `par {kind} {type_name}` must be \
@@ -2513,7 +2510,7 @@ impl<'a> super::TypeChecker<'a> {
                      time the postcondition runs; capture its pre-state with `old(self)` or \
                      `old(self.field)`"
                         .to_string(),
-                    ens.body.span.clone(),
+                    ens.body.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -2673,7 +2670,7 @@ impl<'a> super::TypeChecker<'a> {
                              '{trait_name}' cannot contain methods or items; \
                              the body must be empty"
                         ),
-                        imp.span.clone(),
+                        imp.span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -2693,7 +2690,7 @@ impl<'a> super::TypeChecker<'a> {
                          '{trait_name}'; implement each component trait \
                          separately: `{bound_list}`"
                     ),
-                    imp.span.clone(),
+                    imp.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
@@ -2713,7 +2710,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "impl of trait '{}' is missing associated type '{}'",
                                 trait_name, required
                             ),
-                            imp.span.clone(),
+                            imp.span,
                             TypeErrorKind::MissingField,
                         );
                     }
@@ -2737,7 +2734,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "impl {} for {} requires impl {} for {}",
                                 trait_name, type_name, supertrait, type_name
                             ),
-                            imp.span.clone(),
+                            imp.span,
                             TypeErrorKind::MissingSupertrait,
                         );
                     }
@@ -2828,7 +2825,7 @@ impl<'a> super::TypeChecker<'a> {
                                 m = method.name,
                                 tn = type_name,
                             ),
-                            method.span.clone(),
+                            method.span,
                             TypeErrorKind::ParMutSelfReceiver,
                         );
                     }
@@ -2876,7 +2873,7 @@ impl<'a> super::TypeChecker<'a> {
                                         binding.name,
                                         bound_trait,
                                     ),
-                                    binding.span.clone(),
+                                    binding.span,
                                     TypeErrorKind::TypeMismatch,
                                 );
                             }
@@ -2923,7 +2920,7 @@ impl<'a> super::TypeChecker<'a> {
     fn check_const_decl(&mut self, c: &ConstDecl) {
         let declared_ty = self.lower_type_expr(&c.ty, &[]);
         let value_ty = self.infer_expr(&c.value);
-        self.check_assignable(&declared_ty, &value_ty, c.value.span.clone());
+        self.check_assignable(&declared_ty, &value_ty, c.value.span);
     }
 
     /// Slice 4 + 5 of design.md § Module-Level Bindings (§1280-1297,
@@ -2957,7 +2954,7 @@ impl<'a> super::TypeChecker<'a> {
                         b.name,
                         crate::formatter::render_type_expr(ty_expr),
                     ),
-                    ty_expr.span.clone(),
+                    ty_expr.span,
                     TypeErrorKind::CrossTaskUnsafeCapture,
                 );
                 return;
@@ -2986,19 +2983,15 @@ impl<'a> super::TypeChecker<'a> {
                 if matches!(b.value.kind, ExprKind::StringLit(_)) {
                     self.type_error_with_fix_it(
                         message,
-                        ty_expr.span.clone(),
+                        ty_expr.span,
                         TypeErrorKind::ModuleBindingHeapType,
                         crate::typechecker::FixIt {
-                            span: ty_expr.span.clone(),
+                            span: ty_expr.span,
                             replacement: "StringSlice".to_string(),
                         },
                     );
                 } else {
-                    self.type_error(
-                        message,
-                        ty_expr.span.clone(),
-                        TypeErrorKind::ModuleBindingHeapType,
-                    );
+                    self.type_error(message, ty_expr.span, TypeErrorKind::ModuleBindingHeapType);
                 }
                 return;
             }
@@ -3041,7 +3034,7 @@ impl<'a> super::TypeChecker<'a> {
                          `OnceLock.new()`",
                         b.name,
                     ),
-                    b.value.span.clone(),
+                    b.value.span,
                     TypeErrorKind::CrossTaskUnsafeCapture,
                 );
                 return;
@@ -3071,23 +3064,19 @@ impl<'a> super::TypeChecker<'a> {
                 if matches!(b.value.kind, ExprKind::StringLit(_)) {
                     self.type_error_with_fix_it(
                         message,
-                        b.value.span.clone(),
+                        b.value.span,
                         TypeErrorKind::ModuleBindingHeapType,
                         crate::typechecker::FixIt {
                             span: Span {
                                 offset: b.name_span.offset + b.name_span.length,
                                 length: 0,
-                                ..b.name_span.clone()
+                                ..b.name_span
                             },
                             replacement: ": StringSlice".to_string(),
                         },
                     );
                 } else {
-                    self.type_error(
-                        message,
-                        b.value.span.clone(),
-                        TypeErrorKind::ModuleBindingHeapType,
-                    );
+                    self.type_error(message, b.value.span, TypeErrorKind::ModuleBindingHeapType);
                 }
                 return;
             }
@@ -3133,7 +3122,7 @@ impl<'a> super::TypeChecker<'a> {
                 if b.name == *name {
                     found = true;
                     is_mut = b.is_mut;
-                    decl_span = Some(b.span.clone());
+                    decl_span = Some(b.span);
                     break;
                 }
             }
@@ -3152,7 +3141,7 @@ impl<'a> super::TypeChecker<'a> {
                  declaration to `let mut {}: ...` if mutation is required.",
                 name, decl_hint, name,
             ),
-            target.span.clone(),
+            target.span,
             TypeErrorKind::ReassignToImmutableModuleBinding,
         );
     }
@@ -3447,7 +3436,7 @@ impl<'a> super::TypeChecker<'a> {
                  'Vec.new()', 'VecDeque.new()', 'Map.new()', 'Set.new()'",
                 binding_name, what,
             ),
-            e.span.clone(),
+            e.span,
             TypeErrorKind::ModuleBindingEffectfulInit,
         );
     }
@@ -3507,7 +3496,7 @@ impl<'a> super::TypeChecker<'a> {
                     "cannot infer type parameter '{}'; add a type annotation to this binding",
                     name
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::CannotInferTypeParam,
             );
         }
@@ -3529,7 +3518,7 @@ impl<'a> super::TypeChecker<'a> {
                      (e.g. `f[..., 8](...)`) or add a type annotation to this binding",
                     name
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::CannotInferTypeParam,
             );
         }
@@ -3623,7 +3612,7 @@ impl<'a> super::TypeChecker<'a> {
                         "refutable pattern in `let` binding; use `let ... else { ... }`, \
                          `if let`, or `match` for patterns that may not match"
                             .to_string(),
-                        pattern.span.clone(),
+                        pattern.span,
                         TypeErrorKind::RefutablePattern,
                     );
                 }
@@ -3684,7 +3673,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(
                         "let...else block must diverge (return, break, continue, or panic)"
                             .to_string(),
-                        else_block.span.clone(),
+                        else_block.span,
                         TypeErrorKind::BranchTypeMismatch,
                     );
                 }
@@ -3733,7 +3722,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.type_error(
                             "cannot assign through a shared reference ('ref T'); use 'mut ref T'"
                                 .to_string(),
-                            target.span.clone(),
+                            target.span,
                             TypeErrorKind::InvalidUnaryOp,
                         );
                     }
@@ -4021,7 +4010,7 @@ fn collect_old_calls(expr: &Expr, out: &mut Vec<(Span, Expr)>) {
         ExprKind::Call { callee, args } => {
             if let ExprKind::Identifier(n) = &callee.kind {
                 if n == "old" && args.len() == 1 {
-                    out.push((expr.span.clone(), args[0].value.clone()));
+                    out.push((expr.span, args[0].value.clone()));
                     return;
                 }
             }

@@ -1585,7 +1585,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let obj_ref: &Expr = if matches!(object.kind, ExprKind::SelfValue) {
                         self_norm = Expr {
                             kind: ExprKind::Identifier("self".to_string()),
-                            span: object.span.clone(),
+                            span: object.span,
                         };
                         &self_norm
                     } else {
@@ -4165,7 +4165,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::Tuple(inner) = &e.kind {
             return TypeExpr {
                 kind: TypeKind::Tuple(inner.iter().map(|x| self.infer_arg_elem_te(x)).collect()),
-                span: e.span.clone(),
+                span: e.span,
             };
         }
         let name = self
@@ -4177,9 +4177,9 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: TypeKind::Path(crate::ast::PathExpr {
                 segments: vec![name],
                 generic_args: None,
-                span: e.span.clone(),
+                span: e.span,
             }),
-            span: e.span.clone(),
+            span: e.span,
         }
     }
 

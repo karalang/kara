@@ -453,7 +453,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         reasons,
                         &root,
                         WholeRootCaptureReason::Index {
-                            call_span: expr.span.clone(),
+                            call_span: expr.span,
                         },
                     );
                 } else {
@@ -485,7 +485,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         &root,
                         WholeRootCaptureReason::MethodCall {
                             method_name: method.clone(),
-                            call_span: expr.span.clone(),
+                            call_span: expr.span,
                         },
                     );
                 } else {
@@ -516,7 +516,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         reasons,
                         &root,
                         WholeRootCaptureReason::Deref {
-                            call_span: expr.span.clone(),
+                            call_span: expr.span,
                         },
                     );
                 } else {
@@ -713,7 +713,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     reasons,
                     n,
                     WholeRootCaptureReason::ByValuePass {
-                        call_span: call_span.clone(),
+                        call_span: *call_span,
                     },
                 );
             }

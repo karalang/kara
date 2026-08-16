@@ -115,11 +115,11 @@ impl<'a> super::OwnershipChecker<'a> {
                 };
             notes.push(OwnershipError {
                 message,
-                span: entry.other_use_span.clone(),
+                span: entry.other_use_span,
                 kind: OwnershipErrorKind::RcFallbackNote,
                 suggestion,
                 replacement: None,
-                consume_span: Some(entry.consume_span.clone()),
+                consume_span: Some(entry.consume_span),
             });
         }
         self.notes.extend(notes);
@@ -157,7 +157,7 @@ impl<'a> super::OwnershipChecker<'a> {
                          explicit '?'-propagation",
                         entry.binding,
                     ),
-                    span: entry.other_use_span.clone(),
+                    span: entry.other_use_span,
                     kind: OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile,
                     suggestion: Some(
                         "remove the RC fallback (single ownership path / `shared` type / lifetime \
@@ -165,7 +165,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             .to_string(),
                     ),
                     replacement: None,
-                    consume_span: Some(entry.consume_span.clone()),
+                    consume_span: Some(entry.consume_span),
                 });
             }
         }
@@ -194,7 +194,7 @@ impl<'a> super::OwnershipChecker<'a> {
             }
             if let Some(reason) = reasons.get(binding) {
                 if let Some(span) = self.closure_spans.get(closure_key) {
-                    return Some((span.clone(), reason.clone()));
+                    return Some((*span, reason.clone()));
                 }
             }
         }
@@ -331,7 +331,7 @@ impl<'a> super::OwnershipChecker<'a> {
         for item in &self.program.items {
             match item {
                 Item::Function(f) if has_attr(&f.attributes, "no_rc") => {
-                    strict_fns.push((f.name.clone(), f.span.clone()));
+                    strict_fns.push((f.name.clone(), f.span));
                 }
                 Item::ImplBlock(imp) => {
                     let type_name = match &imp.target_type.kind {
@@ -341,8 +341,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     for it in &imp.items {
                         if let ImplItem::Method(m) = it {
                             if has_attr(&m.attributes, "no_rc") {
-                                strict_fns
-                                    .push((format!("{}.{}", type_name, m.name), m.span.clone()));
+                                strict_fns.push((format!("{}.{}", type_name, m.name), m.span));
                             }
                         }
                     }
@@ -365,7 +364,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             binding,
                             entry.trigger.label(),
                         ),
-                        span: entry.other_use_span.clone(),
+                        span: entry.other_use_span,
                         kind: OwnershipErrorKind::NoRcViolation,
                         suggestion: Some(format!(
                             "restructure '{}' so that consume and reuse lie on a single ownership path, or remove #[no_rc]",
@@ -391,7 +390,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             binding,
                             entry.trigger.label(),
                         ),
-                        span: entry.other_use_span.clone(),
+                        span: entry.other_use_span,
                         kind: OwnershipErrorKind::NoRcViolation,
                         suggestion: Some(format!(
                             "restructure to keep '{}' on a single ownership path, or drop @no_rc on '{}'",
@@ -448,7 +447,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     max,
                     contributing.len(),
                 ),
-                span: attr.span.clone(),
+                span: attr.span,
                 kind: OwnershipErrorKind::RcBudgetExceeded {
                     budget: max,
                     observed: contributing.len(),

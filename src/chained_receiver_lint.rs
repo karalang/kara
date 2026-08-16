@@ -130,7 +130,7 @@ fn diagnostic(receiver: &Expr, ctx: &str) -> TypeError {
              (The tree-walk interpreter accepts this shape — `-A {LINT_NAME}` if the program \
              is only ever run with `--interp`.)"
         ),
-        span: receiver.span.clone(),
+        span: receiver.span,
         kind: TypeErrorKind::TypeMismatch,
         lint_name: Some(LINT_NAME.to_string()),
         // No `fix_it`: the hoist codegen prescribes is not semantics-preserving

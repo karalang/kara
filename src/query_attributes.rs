@@ -242,7 +242,7 @@ fn emit_attrs(
             path: attr.path.clone(),
             args: attr.args.iter().map(arg_to_record).collect(),
             attached_to: attached_to.to_string(),
-            span: attr.span.clone(),
+            span: attr.span,
         });
     }
 }
@@ -251,7 +251,7 @@ fn arg_to_record(a: &AttrArg) -> AttributeQueryArg {
     AttributeQueryArg {
         name: a.name.clone(),
         value: a.value.as_ref().map(|e| classify_value(&e.kind)),
-        span: a.span.clone(),
+        span: a.span,
     }
 }
 

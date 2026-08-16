@@ -1735,15 +1735,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 let tmp = format!("__srt_{}", uid);
                 let ident = |n: &str| Expr {
                     kind: ExprKind::Identifier(n.to_string()),
-                    span: sp.clone(),
+                    span: sp,
                 };
                 let vec_te = TypeExpr {
                     kind: TypeKind::Path(PathExpr {
                         segments: vec!["Vec".to_string()],
                         generic_args: Some(vec![GenericArg::Type(elem_te)]),
-                        span: sp.clone(),
+                        span: sp,
                     }),
-                    span: sp.clone(),
+                    span: sp,
                 };
                 let clone_call = Expr {
                     kind: ExprKind::MethodCall {
@@ -1751,21 +1751,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         method: "clone".to_string(),
                         turbofish: None,
                         args: vec![],
-                        args_close_span: sp.clone(),
+                        args_close_span: sp,
                     },
-                    span: sp.clone(),
+                    span: sp,
                 };
                 let let_tmp = Stmt {
                     kind: StmtKind::Let {
                         is_mut: true,
                         pattern: Pattern {
                             kind: PatternKind::Binding(tmp.clone()),
-                            span: sp.clone(),
+                            span: sp,
                         },
                         ty: Some(vec_te),
                         value: clone_call,
                     },
-                    span: sp.clone(),
+                    span: sp,
                 };
                 let sort_call = Stmt {
                     kind: StmtKind::Expr(Expr {
@@ -1774,19 +1774,19 @@ impl<'ctx> super::Codegen<'ctx> {
                             method: "sort".to_string(),
                             turbofish: None,
                             args: vec![],
-                            args_close_span: sp.clone(),
+                            args_close_span: sp,
                         },
-                        span: sp.clone(),
+                        span: sp,
                     }),
-                    span: sp.clone(),
+                    span: sp,
                 };
                 let block = Expr {
                     kind: ExprKind::Block(Block {
                         stmts: vec![let_tmp, sort_call],
                         final_expr: Some(Box::new(ident(&tmp))),
-                        span: sp.clone(),
+                        span: sp,
                     }),
-                    span: sp.clone(),
+                    span: sp,
                 };
                 self.compile_expr(&block)
             }
@@ -1869,15 +1869,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 let tmp = format!("__srtb_{}_{}", inner, uid);
                 let ident = |n: &str| Expr {
                     kind: ExprKind::Identifier(n.to_string()),
-                    span: sp.clone(),
+                    span: sp,
                 };
                 let vec_te = TypeExpr {
                     kind: TypeKind::Path(PathExpr {
                         segments: vec!["Vec".to_string()],
                         generic_args: Some(vec![GenericArg::Type(elem_te)]),
-                        span: sp.clone(),
+                        span: sp,
                     }),
-                    span: sp.clone(),
+                    span: sp,
                 };
                 let clone_call = Expr {
                     kind: ExprKind::MethodCall {
@@ -1885,21 +1885,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         method: "clone".to_string(),
                         turbofish: None,
                         args: vec![],
-                        args_close_span: sp.clone(),
+                        args_close_span: sp,
                     },
-                    span: sp.clone(),
+                    span: sp,
                 };
                 let let_tmp = Stmt {
                     kind: StmtKind::Let {
                         is_mut: true,
                         pattern: Pattern {
                             kind: PatternKind::Binding(tmp.clone()),
-                            span: sp.clone(),
+                            span: sp,
                         },
                         ty: Some(vec_te),
                         value: clone_call,
                     },
-                    span: sp.clone(),
+                    span: sp,
                 };
                 let sort_call = Stmt {
                     kind: StmtKind::Expr(Expr {
@@ -1908,19 +1908,19 @@ impl<'ctx> super::Codegen<'ctx> {
                             method: inner.to_string(),
                             turbofish: None,
                             args: vec![args[0].clone()],
-                            args_close_span: sp.clone(),
+                            args_close_span: sp,
                         },
-                        span: sp.clone(),
+                        span: sp,
                     }),
-                    span: sp.clone(),
+                    span: sp,
                 };
                 let block = Expr {
                     kind: ExprKind::Block(Block {
                         stmts: vec![let_tmp, sort_call],
                         final_expr: Some(Box::new(ident(&tmp))),
-                        span: sp.clone(),
+                        span: sp,
                     }),
-                    span: sp.clone(),
+                    span: sp,
                 };
                 self.compile_expr(&block)
             }

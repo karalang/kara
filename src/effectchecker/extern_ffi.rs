@@ -53,7 +53,7 @@ impl<'a> super::EffectChecker<'a> {
                         verb: EffectVerbKind::Blocks,
                         resource: String::new(),
                     },
-                    EffectOrigin::Direct(builtin_span.clone()),
+                    EffectOrigin::Direct(builtin_span),
                 );
             }
             "C" => {}
@@ -64,7 +64,7 @@ impl<'a> super::EffectChecker<'a> {
                             verb: EffectVerbKind::Blocks,
                             resource: String::new(),
                         },
-                        EffectOrigin::Direct(builtin_span.clone()),
+                        EffectOrigin::Direct(builtin_span),
                     );
                 }
                 // panics is always included for C-unwind (throws across FFI boundary).
@@ -110,7 +110,7 @@ impl<'a> super::EffectChecker<'a> {
                 if let Some(forbidden_reason) = self.profile_forbids(&te.effect, &e.name, &e.abi) {
                     self.errors.push(EffectError {
                         message: forbidden_reason,
-                        span: e.span.clone(),
+                        span: e.span,
                         kind: EffectErrorKind::ProfileViolation,
                         subtype_trace: None,
                         replacement: None,
@@ -124,7 +124,7 @@ impl<'a> super::EffectChecker<'a> {
 
         self.declared_effects.insert(e.name.clone(), final_decl);
         self.function_visibility.insert(e.name.clone(), true);
-        self.function_spans.insert(e.name.clone(), e.span.clone());
+        self.function_spans.insert(e.name.clone(), e.span);
         // Seed inferred_effects from the merged set so callers accumulate
         // the correct leaf effects (ABI defaults + programmer annotations).
         if let Some(DeclaredEffects::Explicit(ref set)) = self.declared_effects.get(&e.name) {
@@ -203,7 +203,7 @@ impl<'a> super::EffectChecker<'a> {
                      effect list (or `@noblock` to confirm it is non-blocking in this context)",
                     symbol
                 ),
-                span: span.clone(),
+                span: *span,
                 kind: EffectErrorKind::FfiLintHint,
                 subtype_trace: None,
                 replacement: None,
@@ -248,7 +248,7 @@ impl<'a> super::EffectChecker<'a> {
                      to its effect list{}",
                     symbol, decl_note
                 ),
-                span: span.clone(),
+                span: *span,
                 kind: EffectErrorKind::FfiLintHint,
                 subtype_trace: None,
                 replacement: None,

@@ -94,7 +94,7 @@ impl<'a> super::EffectChecker<'a> {
                 b.name.clone(),
                 ModBindingInfo {
                     resource_name,
-                    decl_span: b.span.clone(),
+                    decl_span: b.span,
                     is_concurrency_primitive,
                 },
             );
@@ -435,7 +435,7 @@ impl<'a> super::EffectChecker<'a> {
                     verb: EffectVerbKind::Reads,
                     resource: resource.clone(),
                 },
-                EffectOrigin::Direct(builtin_span.clone()),
+                EffectOrigin::Direct(*builtin_span),
             );
             let mut write_set = EffectSet::new();
             write_set.add(
@@ -443,7 +443,7 @@ impl<'a> super::EffectChecker<'a> {
                     verb: EffectVerbKind::Writes,
                     resource,
                 },
-                EffectOrigin::Direct(builtin_span.clone()),
+                EffectOrigin::Direct(*builtin_span),
             );
             self.inferred_effects.insert(read_key, read_set);
             self.inferred_effects.insert(write_key, write_set);
@@ -557,7 +557,7 @@ impl<'a> super::EffectChecker<'a> {
                     "module-level let mut '{}' cannot be written from inside par {{ }} — wrap in Atomic[T], Mutex[T], or use #[thread_local] for per-task state (binding declared at line {})",
                     name_owned, decl_line
                 ),
-                span: par_span.clone(),
+                span: *par_span,
                 kind: super::EffectErrorKind::ModuleBindingWriteInPar,
                 subtype_trace: None,
                 replacement: None,
@@ -633,7 +633,7 @@ impl<'a> super::EffectChecker<'a> {
                             "local let mut '{}' cannot be written from inside par {{ }} — each branch runs on its own thread, so the write races and is dropped under codegen (the interpreter merges only the last branch); wrap it in Atomic[T], Mutex[T], RwLock[T], or Arc[shared struct S], or use #[thread_local] for per-task state",
                             root
                         ),
-                        span: par_span.clone(),
+                        span: par_span,
                         kind: super::EffectErrorKind::ModuleBindingWriteInPar,
                         subtype_trace: None,
                         replacement: None,
@@ -725,7 +725,7 @@ impl<'a> super::EffectChecker<'a> {
                          resources, or set public_effects = \"inferred\" in kara.toml",
                         name, verb, te.effect.resource, binding_name, decl_line,
                     ),
-                    span: span.clone(),
+                    span,
                     kind: super::EffectErrorKind::PubFnSyntheticResource,
                     subtype_trace: None,
                     replacement: None,
@@ -1021,7 +1021,7 @@ fn collect_par_in_stmt(stmt: &Stmt, out: &mut Vec<(Block, Span)>) {
 fn collect_par_in_expr(expr: &Expr, out: &mut Vec<(Block, Span)>) {
     match &expr.kind {
         ExprKind::Par(block) => {
-            out.push((block.clone(), expr.span.clone()));
+            out.push((block.clone(), expr.span));
             // Walk INTO the par-block's branches so nested par blocks
             // are caught too.
             for s in &block.stmts {
@@ -1273,14 +1273,14 @@ impl<'a> ModBindingSynthWalker<'a> {
     fn record_read(&mut self, name: &str, span: &Span) {
         if self.is_let_mut_binding(name) && !self.is_shadowed(name) {
             self.calls
-                .push((format!("{}{}", MODBIND_READ_PREFIX, name), span.clone()));
+                .push((format!("{}{}", MODBIND_READ_PREFIX, name), *span));
         }
     }
 
     fn record_write(&mut self, name: &str, span: &Span) {
         if self.is_let_mut_binding(name) && !self.is_shadowed(name) {
             self.calls
-                .push((format!("{}{}", MODBIND_WRITE_PREFIX, name), span.clone()));
+                .push((format!("{}{}", MODBIND_WRITE_PREFIX, name), *span));
         }
     }
 

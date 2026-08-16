@@ -65,9 +65,9 @@ fn expr_as_type_expr_interp(expr: &Expr) -> Option<TypeExpr> {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![name.clone()],
                 generic_args: None,
-                span: expr.span.clone(),
+                span: expr.span,
             }),
-            span: expr.span.clone(),
+            span: expr.span,
         }),
         ExprKind::Path {
             segments,
@@ -76,9 +76,9 @@ fn expr_as_type_expr_interp(expr: &Expr) -> Option<TypeExpr> {
             kind: TypeKind::Path(PathExpr {
                 segments: segments.clone(),
                 generic_args: generic_args.clone(),
-                span: expr.span.clone(),
+                span: expr.span,
             }),
-            span: expr.span.clone(),
+            span: expr.span,
         }),
         _ => None,
     }

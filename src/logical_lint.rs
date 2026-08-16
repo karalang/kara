@@ -135,7 +135,7 @@ fn walk_expr(expr: &Expr, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
         if is_comparison(op) && (is_not_unary(left) || is_not_unary(right)) {
             diags.push(LintDiagnostic {
                 level,
-                span: expr.span.clone(),
+                span: expr.span,
                 message: "`not` binds tighter than comparison operators; \
                     `not x == y` parses as `(not x) == y`. \
                     Add parentheses to disambiguate: \

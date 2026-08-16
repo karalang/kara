@@ -27,9 +27,9 @@ pub(super) fn expr_as_type_expr_codegen(expr: &Expr) -> Option<TypeExpr> {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![name.clone()],
                 generic_args: None,
-                span: expr.span.clone(),
+                span: expr.span,
             }),
-            span: expr.span.clone(),
+            span: expr.span,
         }),
         ExprKind::Path {
             segments,
@@ -38,9 +38,9 @@ pub(super) fn expr_as_type_expr_codegen(expr: &Expr) -> Option<TypeExpr> {
             kind: TypeKind::Path(PathExpr {
                 segments: segments.clone(),
                 generic_args: generic_args.clone(),
-                span: expr.span.clone(),
+                span: expr.span,
             }),
-            span: expr.span.clone(),
+            span: expr.span,
         }),
         _ => None,
     }
@@ -358,7 +358,7 @@ pub(super) fn rewrite_self_in_type_expr(te: &TypeExpr, type_name: &str) -> TypeE
                 TypeKind::Path(PathExpr {
                     segments: vec![type_name.to_string()],
                     generic_args: None,
-                    span: p.span.clone(),
+                    span: p.span,
                 })
             } else {
                 TypeKind::Path(PathExpr {
@@ -373,7 +373,7 @@ pub(super) fn rewrite_self_in_type_expr(te: &TypeExpr, type_name: &str) -> TypeE
                             })
                             .collect()
                     }),
-                    span: p.span.clone(),
+                    span: p.span,
                 })
             }
         }
@@ -423,7 +423,7 @@ pub(super) fn rewrite_self_in_type_expr(te: &TypeExpr, type_name: &str) -> TypeE
     };
     TypeExpr {
         kind,
-        span: te.span.clone(),
+        span: te.span,
     }
 }
 
@@ -456,7 +456,7 @@ pub(super) fn subst_type_params_in_type_expr(
                         })
                         .collect()
                 }),
-                span: p.span.clone(),
+                span: p.span,
             })
         }
         TypeKind::Tuple(elems) => TypeKind::Tuple(
@@ -505,7 +505,7 @@ pub(super) fn subst_type_params_in_type_expr(
     };
     TypeExpr {
         kind,
-        span: te.span.clone(),
+        span: te.span,
     }
 }
 
@@ -522,7 +522,7 @@ pub(super) fn make_impl_method_function(
         f.return_type = Some(rewrite_self_in_type_expr(rt, type_name));
     }
     if let Some(self_kind) = method.self_param.as_ref() {
-        let span = method.span.clone();
+        let span = method.span;
         // S6c-12: for a CONCRETE handle-backed container target
         // (`impl Trait for Column[i64]` / `Tensor[i64, [n]]`), keep the
         // element args on `self` so the container-typed-param registration
@@ -549,23 +549,23 @@ pub(super) fn make_impl_method_function(
             kind: TypeKind::Path(PathExpr {
                 segments: vec![type_name.to_string()],
                 generic_args: self_generic_args,
-                span: span.clone(),
+                span,
             }),
-            span: span.clone(),
+            span,
         };
         let ty = match self_kind {
             SelfParam::Owned => base,
             SelfParam::Ref => TypeExpr {
                 kind: TypeKind::Ref(Box::new(base)),
-                span: span.clone(),
+                span,
             },
             SelfParam::MutRef => TypeExpr {
                 kind: TypeKind::MutRef(Box::new(base)),
-                span: span.clone(),
+                span,
             },
         };
         let self_param = Param {
-            span: span.clone(),
+            span,
             pattern: Pattern {
                 kind: PatternKind::Binding("self".to_string()),
                 span,
@@ -624,7 +624,7 @@ pub(super) fn make_generic_impl_method_function(imp: &ImplBlock, method: &Functi
         f.return_type = Some(rewrite_self_in_type_expr(rt, &type_name));
     }
     if let Some(self_kind) = method.self_param.as_ref() {
-        let span = method.span.clone();
+        let span = method.span;
         // The impl's target type expr carries the generic args (`Box[T]`),
         // so unification against the receiver's concrete instantiation binds
         // the impl's type params.
@@ -633,15 +633,15 @@ pub(super) fn make_generic_impl_method_function(imp: &ImplBlock, method: &Functi
             SelfParam::Owned => base,
             SelfParam::Ref => TypeExpr {
                 kind: TypeKind::Ref(Box::new(base)),
-                span: span.clone(),
+                span,
             },
             SelfParam::MutRef => TypeExpr {
                 kind: TypeKind::MutRef(Box::new(base)),
-                span: span.clone(),
+                span,
             },
         };
         let self_param = Param {
-            span: span.clone(),
+            span,
             pattern: Pattern {
                 kind: PatternKind::Binding("self".to_string()),
                 span,
@@ -678,7 +678,7 @@ pub(super) fn make_generic_impl_method_function(imp: &ImplBlock, method: &Functi
             Some(GenericParams {
                 params,
                 effect_params,
-                span: ig.span.clone(),
+                span: ig.span,
             })
         }
     };

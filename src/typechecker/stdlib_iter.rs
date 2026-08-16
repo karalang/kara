@@ -27,7 +27,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Iterator.next() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -54,7 +54,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("Iterator.map() expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -86,7 +86,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("Iterator.filter() expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -121,7 +121,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.filter_map() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -149,7 +149,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "Iterator.filter_map() closure must return Option[U], found {:?}",
                                     other
                                 ),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             Type::Error
@@ -199,7 +199,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("Iterator.{method}() takes no arguments"),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -216,7 +216,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Iterator.collect() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -252,7 +252,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.partition() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -277,7 +277,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 2 {
                     self.type_error(
                         format!("Iterator.fold() expects 2 arguments, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -313,7 +313,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("Iterator.{method}() takes no arguments"),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -327,7 +327,7 @@ impl<'a> super::TypeChecker<'a> {
                             method,
                             type_display(item)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -346,7 +346,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("Iterator.reduce() expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -382,7 +382,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("Iterator.{method}() takes no arguments"),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -413,7 +413,7 @@ impl<'a> super::TypeChecker<'a> {
                             method,
                             type_display(item)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -464,7 +464,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.for_each() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -491,7 +491,7 @@ impl<'a> super::TypeChecker<'a> {
                             method,
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -517,7 +517,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.position() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -547,7 +547,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("Iterator.find() expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -587,7 +587,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.find_map() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -615,7 +615,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "Iterator.find_map() closure must return Option[U], found {:?}",
                                     other
                                 ),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             Type::Error
@@ -653,7 +653,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Iterator.last() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -674,7 +674,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("Iterator.nth() expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -696,7 +696,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Iterator.enumerate() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -719,7 +719,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Iterator.rev() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -742,7 +742,7 @@ impl<'a> super::TypeChecker<'a> {
                             method,
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -771,7 +771,7 @@ impl<'a> super::TypeChecker<'a> {
                             method,
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -806,7 +806,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.flat_map() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -834,7 +834,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "Iterator.flat_map() closure must return Iterator[U], found {:?}",
                                     other
                                 ),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             Type::Error
@@ -863,7 +863,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.flatten() takes no arguments, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -888,7 +888,7 @@ impl<'a> super::TypeChecker<'a> {
                              but the element type is '{}'",
                             type_display(item)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     Type::Error
@@ -910,7 +910,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.step_by() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -935,7 +935,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Iterator.cycle() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -957,7 +957,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.inspect() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -986,7 +986,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 2 {
                     self.type_error(
                         format!("Iterator.scan() expects 2 arguments, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -1011,7 +1011,7 @@ impl<'a> super::TypeChecker<'a> {
                         } if name == "Option" && opt_args.len() == 1 => match opt_args.remove(0) {
                             Type::Tuple(mut tuple_args) if tuple_args.len() == 2 => {
                                 let actual_acc = tuple_args.remove(0);
-                                self.check_assignable(&acc_ty, &actual_acc, span.clone());
+                                self.check_assignable(&acc_ty, &actual_acc, *span);
                                 tuple_args.remove(0)
                             }
                             other => {
@@ -1020,7 +1020,7 @@ impl<'a> super::TypeChecker<'a> {
                                         "Iterator.scan() closure must return Option<(A, U)>, found Option<{:?}>",
                                         other
                                     ),
-                                    span.clone(),
+                                    *span,
                                     TypeErrorKind::TypeMismatch,
                                 );
                                 Type::Error
@@ -1032,7 +1032,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "Iterator.scan() closure must return Option<(A, U)>, found {:?}",
                                     other
                                 ),
-                                span.clone(),
+                                *span,
                                 TypeErrorKind::TypeMismatch,
                             );
                             Type::Error
@@ -1065,7 +1065,7 @@ impl<'a> super::TypeChecker<'a> {
                             method,
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -1080,11 +1080,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let arg_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(
-                    &Type::Int(IntSize::I64),
-                    &arg_ty,
-                    args[0].value.span.clone(),
-                );
+                self.check_assignable(&Type::Int(IntSize::I64), &arg_ty, args[0].value.span);
                 Type::Named {
                     name: "Iterator".to_string(),
                     args: vec![Type::Named {
@@ -1108,7 +1104,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.chunk_by() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -1143,7 +1139,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("Iterator.chain() expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -1173,7 +1169,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("Iterator.zip() expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -1195,7 +1191,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "Iterator.zip() expects an Iterator argument, found {:?}",
                                 other_ty
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                         Type::Error
@@ -1217,7 +1213,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Iterator.peekable() takes no arguments, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -1240,7 +1236,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(
                         "peek() is only available on Peekable[T] (call .peekable() first)"
                             .to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     for arg in args {
@@ -1251,7 +1247,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Peekable.peek() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {

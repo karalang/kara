@@ -134,7 +134,7 @@ pub fn expand_proto_schemas(program: &mut Program) -> Vec<ComptimeError> {
     // valid. Each `#[proto_schema]` const is replaced by the items it expands to.
     let mut planned_items: Vec<(usize, Vec<Item>)> = Vec::new();
     for (idx, value) in planned_consts {
-        let site = value.span.clone();
+        let site = value.span;
         if let Some(items) = folder.eval_schema_const(&value, &site) {
             planned_items.push((idx, items));
         } else {
@@ -754,7 +754,7 @@ impl Folder<'_> {
     /// Evaluate a `comptime { ... }` node and replace it with the folded
     /// constant literal, recording a diagnostic on any failure.
     fn eval_and_splice(&mut self, expr: &mut Expr) {
-        let span = expr.span.clone();
+        let span = expr.span;
         let block = match &expr.kind {
             ExprKind::Comptime(b) => b.clone(),
             _ => return,
@@ -765,7 +765,7 @@ impl Folder<'_> {
         // entry point — same eval path the defensive `Comptime` arm uses).
         let wrapped = Expr {
             kind: ExprKind::Block(block),
-            span: span.clone(),
+            span,
         };
 
         // Reset per-evaluation interpreter state and arm the wall-clock guard.
@@ -874,8 +874,8 @@ impl Folder<'_> {
         let mut planned: Vec<(usize, Vec<Item>)> = Vec::new();
         for (idx, item) in program.items.iter().enumerate() {
             let (type_name, attributes, site) = match item {
-                Item::StructDef(s) => (s.name.clone(), &s.attributes, s.span.clone()),
-                Item::EnumDef(e) => (e.name.clone(), &e.attributes, e.span.clone()),
+                Item::StructDef(s) => (s.name.clone(), &s.attributes, s.span),
+                Item::EnumDef(e) => (e.name.clone(), &e.attributes, e.span),
                 _ => continue,
             };
             let traits = ordered_derived_traits(attributes);
@@ -924,7 +924,7 @@ impl Folder<'_> {
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
                     kind: ExprKind::Identifier(fn_name.to_string()),
-                    span: site.clone(),
+                    span: *site,
                 }),
                 args: vec![CallArg {
                     label: None,
@@ -932,12 +932,12 @@ impl Folder<'_> {
                     mut_marker_span: None,
                     value: Expr {
                         kind: ExprKind::Identifier(type_name.to_string()),
-                        span: site.clone(),
+                        span: *site,
                     },
-                    span: site.clone(),
+                    span: *site,
                 }],
             },
-            span: site.clone(),
+            span: *site,
         };
         self.run_items_call(&call, &format!("derive `{fn_name}`"), site)
     }
@@ -952,17 +952,17 @@ impl Folder<'_> {
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
                     kind: ExprKind::Identifier("proto_parse_schema".to_string()),
-                    span: site.clone(),
+                    span: *site,
                 }),
                 args: vec![CallArg {
                     label: None,
                     mut_marker: false,
                     mut_marker_span: None,
                     value: value.clone(),
-                    span: site.clone(),
+                    span: *site,
                 }],
             },
-            span: site.clone(),
+            span: *site,
         };
         self.run_items_call(&call, "proto schema", site)
     }
@@ -1004,7 +1004,7 @@ impl Folder<'_> {
                      within {}s (deferred.md § Comptime — Resource limits)",
                     COMPTIME_WALL_CLOCK_LIMIT.as_secs()
                 ),
-                span: site.clone(),
+                span: *site,
             });
             return None;
         }
@@ -1018,7 +1018,7 @@ impl Folder<'_> {
                 .unwrap_or_else(|| "evaluation failed".to_string());
             self.errors.push(ComptimeError {
                 message: format!("error[E_COMPTIME_PANIC]: {what} panicked: {detail}"),
-                span: site.clone(),
+                span: *site,
             });
             return None;
         }
@@ -1047,7 +1047,7 @@ impl Folder<'_> {
                          list of `ast.item(...)` values), got `{}`",
                         other.variant_name()
                     ),
-                    span: site.clone(),
+                    span: *site,
                 });
                 return None;
             }
@@ -1062,7 +1062,7 @@ impl Folder<'_> {
                              that is not an `Item` (expected `ast.item(...)`), got `{}`",
                             other.variant_name()
                         ),
-                        span: site.clone(),
+                        span: *site,
                     });
                     return None;
                 }
@@ -1203,10 +1203,7 @@ fn value_to_expr(value: &Value, ty: Option<&Type>, span: &Span) -> Result<Expr, 
             ))
         }
     };
-    Ok(Expr {
-        kind,
-        span: span.clone(),
-    })
+    Ok(Expr { kind, span: *span })
 }
 
 /// A short tag for the runtime `Value` variant, for diagnostic text.

@@ -586,7 +586,7 @@ impl Analyzer<'_> {
                     ty: b.ty_render.clone(),
                     scope_id: b.scope_id,
                     reason: DropReason::ScopeExit,
-                    span: b.span.clone(),
+                    span: b.span,
                 });
                 self.bindings[idx].state = PlaceState::Dead;
             }
@@ -651,7 +651,7 @@ impl Analyzer<'_> {
             ty_render,
             state,
             scope_id,
-            span: span.clone(),
+            span: *span,
             heap,
         });
         if let Some((_, top)) = self.scopes.last_mut() {
@@ -1262,7 +1262,7 @@ impl Analyzer<'_> {
                     kind: ViolationKind::UseAfterMove,
                     place: name.to_string(),
                     message: format!("`{name}` is used after being moved out"),
-                    span: span.clone(),
+                    span: *span,
                 });
             }
             PlaceState::Dead => {
@@ -1279,7 +1279,7 @@ impl Analyzer<'_> {
                             message: format!(
                                 "`{name}` is read before initialization or after drop"
                             ),
-                            span: span.clone(),
+                            span: *span,
                         });
                     }
                 }

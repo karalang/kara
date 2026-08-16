@@ -121,7 +121,7 @@ impl<'a> super::TypeChecker<'a> {
                     method,
                     type_display(&resolved_k)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TraitBoundNotSatisfied,
             );
         }
@@ -138,7 +138,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{method}' takes no arguments"),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -157,7 +157,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "'to_cstring' takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -196,7 +196,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "'len' takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -206,7 +206,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "'is_empty' takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -220,7 +220,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "'char_count' takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -234,7 +234,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'char_at' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -248,7 +248,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'char_at' expects an integer index, found '{}'",
                                 type_display(&arg_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -264,7 +264,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'contains' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -278,7 +278,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'contains' expects a String substring, found '{}'",
                                 type_display(&arg_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -300,7 +300,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'cmp' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -314,7 +314,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'cmp' expects a String argument, found '{}'",
                                 type_display(&arg_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -328,7 +328,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "'sorted' takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -339,7 +339,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'sorted_by' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -359,7 +359,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "'chars' takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -381,7 +381,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "'bytes' takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -403,7 +403,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'split' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -417,7 +417,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'split' expects a String or char separator, found '{}'",
                                 type_display(&arg_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -454,7 +454,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'{method}' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -468,7 +468,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'{method}' expects a String argument, found '{}'",
                                 type_display(&arg_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -486,7 +486,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 && args.len() != 2 {
                     self.type_error(
                         format!("'substring' expects 1 or 2 arguments, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -501,7 +501,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "'substring' expects integer byte indices, found '{}'",
                                     type_display(&arg_ty)
                                 ),
-                                arg.value.span.clone(),
+                                arg.value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -520,7 +520,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'repeat' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -534,7 +534,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'repeat' expects an integer count, found '{}'",
                                 type_display(&arg_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -555,7 +555,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{method}' takes no arguments, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -576,7 +576,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'replace' expects 2 arguments (from, to), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -591,7 +591,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "'replace' expects String arguments, found '{}'",
                                     type_display(&arg_ty)
                                 ),
-                                arg.value.span.clone(),
+                                arg.value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -611,7 +611,7 @@ impl<'a> super::TypeChecker<'a> {
                             "'replacen' expects 3 arguments (from, to, n), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -627,7 +627,7 @@ impl<'a> super::TypeChecker<'a> {
                                         "'replacen' expects String arguments, found '{}'",
                                         type_display(&arg_ty)
                                     ),
-                                    arg.value.span.clone(),
+                                    arg.value.span,
                                     TypeErrorKind::TypeMismatch,
                                 );
                             }
@@ -637,7 +637,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "'replacen' expects an integer count, found '{}'",
                                     type_display(&arg_ty)
                                 ),
-                                arg.value.span.clone(),
+                                arg.value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -656,7 +656,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'{method}' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -670,7 +670,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'{method}' expects a String argument, found '{}'",
                                 type_display(&arg_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -690,7 +690,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'push_str' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -704,7 +704,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'push_str' expects a String argument, found '{}'",
                                 type_display(&arg_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -723,7 +723,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'push' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -737,7 +737,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'push' expects a Char argument, found '{}'",
                                 type_display(&arg_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -753,7 +753,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("'find' expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -767,7 +767,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "'find' expects a String or char needle, found '{}'",
                                 type_display(&arg_ty)
                             ),
-                            args[0].value.span.clone(),
+                            args[0].value.span,
                             TypeErrorKind::TypeMismatch,
                         );
                     }
@@ -788,7 +788,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 2 {
                     self.type_error(
                         format!("'slice' expects 2 arguments, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -803,7 +803,7 @@ impl<'a> super::TypeChecker<'a> {
                                     "'slice' expects integer byte indices, found '{}'",
                                     type_display(&arg_ty)
                                 ),
-                                arg.value.span.clone(),
+                                arg.value.span,
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
@@ -868,7 +868,7 @@ impl<'a> super::TypeChecker<'a> {
             if !args.is_empty() {
                 s.type_error(
                     format!("'{}' takes no arguments", name),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
             }
@@ -975,7 +975,7 @@ impl<'a> super::TypeChecker<'a> {
             if !args.is_empty() {
                 s.type_error(
                     format!("'{}' takes no arguments", name),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
             }
@@ -1055,7 +1055,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Slice.len() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -1065,7 +1065,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Slice.is_empty() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -1075,7 +1075,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("Slice.{}() takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -1084,7 +1084,7 @@ impl<'a> super::TypeChecker<'a> {
             "get" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 option_elem
             }
@@ -1099,7 +1099,7 @@ impl<'a> super::TypeChecker<'a> {
             "get_unchecked" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 elem
             }
@@ -1137,7 +1137,7 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
                         other => other.clone(),
                     };
-                    self.check_assignable(&elem, &probe_at, arg.value.span.clone());
+                    self.check_assignable(&elem, &probe_at, arg.value.span);
                 }
                 Type::Bool
             }
@@ -1157,7 +1157,7 @@ impl<'a> super::TypeChecker<'a> {
                     // an unconverted `Int` needle never matches a `Float`
                     // element.
                     self.record_float_coercion(&arg.value, &elem, &at);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                    self.check_assignable(&elem, &at, arg.value.span);
                 }
                 // B-2026-08-11-7 — binary search is only meaningful over a
                 // total order (and over data sorted by it). Not named in the
@@ -1168,7 +1168,7 @@ impl<'a> super::TypeChecker<'a> {
             "split_at" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 Type::Tuple(vec![slice_elem.clone(), slice_elem])
             }
@@ -1187,13 +1187,13 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(
                         "Slice.split_at_mut() requires a mutable slice (`mut Slice[T]`)"
                             .to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 let mut_slice = Type::Slice {
                     element: Box::new(elem.clone()),
@@ -1204,7 +1204,7 @@ impl<'a> super::TypeChecker<'a> {
             "chunks" | "windows" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 vec_slice
             }
@@ -1221,7 +1221,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Slice.to_vec() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -1238,14 +1238,14 @@ impl<'a> super::TypeChecker<'a> {
                             "Slice.{}() requires a mutable slice (`mut Slice[T]`)",
                             method
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
                 if !args.is_empty() {
                     self.type_error(
                         format!("Slice.{}() takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -1262,7 +1262,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !mutable {
                     self.type_error(
                         "Slice.sort_by() requires a mutable slice (`mut Slice[T]`)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1272,7 +1272,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Slice.sort_by() expects 1 argument (comparator closure), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -1287,7 +1287,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !mutable {
                     self.type_error(
                         "Slice.sort_by_key() requires a mutable slice (`mut Slice[T]`)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1297,7 +1297,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Slice.sort_by_key() expects 1 argument (key closure), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -1312,7 +1312,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !mutable {
                     self.type_error(
                         "Slice.fill() requires a mutable slice (`mut Slice[T]`)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
@@ -1331,7 +1331,7 @@ impl<'a> super::TypeChecker<'a> {
                     // an unconverted `Int` needle never matches a `Float`
                     // element.
                     self.record_float_coercion(&arg.value, &elem, &at);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                    self.check_assignable(&elem, &at, arg.value.span);
                 }
                 Type::Unit
             }
@@ -1339,13 +1339,13 @@ impl<'a> super::TypeChecker<'a> {
                 if !mutable {
                     self.type_error(
                         "Slice.swap() requires a mutable slice (`mut Slice[T]`)".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 Type::Unit
             }
@@ -1359,7 +1359,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("Slice.{}() takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -1474,7 +1474,7 @@ impl<'a> super::TypeChecker<'a> {
             "get" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 option_elem
             }
@@ -1512,7 +1512,7 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
                         other => other.clone(),
                     };
-                    self.check_assignable(&elem, &probe_at, arg.value.span.clone());
+                    self.check_assignable(&elem, &probe_at, arg.value.span);
                 }
                 Type::Bool
             }
@@ -1532,7 +1532,7 @@ impl<'a> super::TypeChecker<'a> {
                     // an unconverted `Int` needle never matches a `Float`
                     // element.
                     self.record_float_coercion(&arg.value, &elem, &at);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                    self.check_assignable(&elem, &at, arg.value.span);
                 }
                 // B-2026-08-11-7 — binary search is only meaningful over a
                 // total order (and over data sorted by it). Not named in the
@@ -1543,7 +1543,7 @@ impl<'a> super::TypeChecker<'a> {
             "split_at" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 Type::Tuple(vec![slice_elem.clone(), slice_elem])
             }
@@ -1555,7 +1555,7 @@ impl<'a> super::TypeChecker<'a> {
             "split_at_mut" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 let mut_slice = Type::Slice {
                     element: Box::new(elem.clone()),
@@ -1566,7 +1566,7 @@ impl<'a> super::TypeChecker<'a> {
             "chunks" | "windows" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 vec_slice
             }
@@ -1605,7 +1605,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Vec.truncate expects 1 argument (new length), found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -1613,11 +1613,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let at = self.infer_expr(&args[0].value);
-                    self.check_assignable(
-                        &Type::Int(IntSize::I64),
-                        &at,
-                        args[0].value.span.clone(),
-                    );
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
                 }
                 Type::Unit
             }
@@ -1642,14 +1638,14 @@ impl<'a> super::TypeChecker<'a> {
                     // an unconverted `Int` needle never matches a `Float`
                     // element.
                     self.record_float_coercion(&arg.value, &elem, &at);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                    self.check_assignable(&elem, &at, arg.value.span);
                 }
                 Type::Unit
             }
             "swap" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
                 }
                 Type::Unit
             }
@@ -1665,7 +1661,7 @@ impl<'a> super::TypeChecker<'a> {
         if !args.is_empty() {
             self.type_error(
                 format!("{}() takes no arguments", what),
-                span.clone(),
+                *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
         }

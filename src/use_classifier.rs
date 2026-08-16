@@ -330,7 +330,7 @@ impl<'a> UseClassifier<'a> {
             .entry(closure_key)
             .or_default()
             .entry(binding.to_string())
-            .or_insert_with(|| span.clone());
+            .or_insert_with(|| *span);
     }
 
     fn mark_sink_arg(&mut self, span: &crate::token::Span) {

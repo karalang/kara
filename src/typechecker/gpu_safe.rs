@@ -126,21 +126,21 @@ impl<'a> super::TypeChecker<'a> {
                 if let Type::Named { name, args } = &ty {
                     if name == "Vec" && args.len() == 1 {
                         if let Some(bad) = self.gpu_unsafe_reason(&args[0]) {
-                            self.emit_gpu_not_safe(&bad, param.ty.span.clone(), "parameter");
+                            self.emit_gpu_not_safe(&bad, param.ty.span, "parameter");
                         }
                         continue;
                     }
                 }
             }
             if let Some(bad) = self.gpu_unsafe_reason(&ty) {
-                self.emit_gpu_not_safe(&bad, param.ty.span.clone(), "parameter");
+                self.emit_gpu_not_safe(&bad, param.ty.span, "parameter");
             }
         }
         // Return type.
         if let Some(ret) = &f.return_type {
             let ty = self.lower_type_expr(ret, generic_scope);
             if let Some(bad) = self.gpu_unsafe_reason(&ty) {
-                self.emit_gpu_not_safe(&bad, ret.span.clone(), "return type");
+                self.emit_gpu_not_safe(&bad, ret.span, "return type");
             }
         }
     }
@@ -181,7 +181,7 @@ impl<'a> super::TypeChecker<'a> {
         match &s.kind {
             StmtKind::Let { value, ty, .. } => {
                 if let Some(bty) = self.binding_ty_for(value, ty.as_ref()) {
-                    out.push((s.span.clone(), bty));
+                    out.push((s.span, bty));
                 }
                 self.collect_let_in_expr(value, out);
             }
@@ -192,14 +192,14 @@ impl<'a> super::TypeChecker<'a> {
                 ..
             } => {
                 if let Some(bty) = self.binding_ty_for(value, ty.as_ref()) {
-                    out.push((s.span.clone(), bty));
+                    out.push((s.span, bty));
                 }
                 self.collect_let_in_expr(value, out);
                 self.collect_gpu_let_bindings(else_block, out);
             }
             // Uninitialised `let x: T;` — no value to consult, so the
             // annotation is the binding type (lowered in the emit pass).
-            StmtKind::LetUninit { ty, .. } => out.push((s.span.clone(), BindingTy::Annot(ty))),
+            StmtKind::LetUninit { ty, .. } => out.push((s.span, BindingTy::Annot(ty))),
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
                 self.collect_gpu_let_bindings(body, out)
             }
@@ -288,7 +288,7 @@ impl<'a> super::TypeChecker<'a> {
         let mut found: Vec<(String, GpuUnsafe)> = Vec::new();
         self.gpu_collect_captures(body, outer_bindings, &mut shadows, &mut seen, &mut found);
         for (name, bad) in found {
-            self.emit_gpu_host_capture(closure_span.clone(), &name, &bad);
+            self.emit_gpu_host_capture(*closure_span, &name, &bad);
         }
     }
 

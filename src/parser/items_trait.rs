@@ -205,7 +205,7 @@ impl super::Parser {
                                   associated-type declarations at v1; \
                                   remove the attribute"
                             .to_string(),
-                        span: item_attributes[0].span.clone(),
+                        span: item_attributes[0].span,
                     });
                 }
                 let item = self.parse_assoc_type_decl()?;
@@ -394,7 +394,7 @@ impl super::Parser {
                  only — move the `with {joined}` clause to the carrying method's \
                  generic-parameter list instead",
             ),
-            span: gp.span.clone(),
+            span: gp.span,
         });
     }
 
@@ -604,7 +604,7 @@ impl super::Parser {
                                           impl item is supported only on a method with a `self` \
                                           receiver, not an associated function"
                                     .to_string(),
-                                span: mv.span.clone(),
+                                span: mv.span,
                             });
                         }
                     }

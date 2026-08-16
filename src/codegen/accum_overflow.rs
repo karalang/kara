@@ -330,7 +330,7 @@ fn sole_increment_site(body: &Block, name: &str) -> Option<Span> {
             if matches!(&target.kind, ExprKind::Identifier(t) if t == name)
                 && add_of_identifier_and_literal(value, name) == Some(1)
             {
-                found = Some(stmt.span.clone());
+                found = Some(stmt.span);
             }
         }
     });

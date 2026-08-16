@@ -108,7 +108,7 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
         return Vec::new();
     }
     let base = f.name.clone();
-    let sp = f.span.clone();
+    let sp = f.span;
     // Forward each (non-self) param to the variant by name. `self` is carried
     // implicitly by the `self.name$feat(...)` receiver on the method path.
     let fwd: Vec<CallArg> = f
@@ -122,8 +122,8 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
                 label: None,
                 mut_marker: false,
                 mut_marker_span: None,
-                value: mv_ident(n, sp.clone()),
-                span: sp.clone(),
+                value: mv_ident(n, sp),
+                span: sp,
             }
         })
         .collect();
@@ -138,7 +138,7 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
         .retain(|a| !a.is_bare("multiversion"));
     baseline_fn
         .attributes
-        .push(mv_allow_undocumented_unsafe_attr(sp.clone()));
+        .push(mv_allow_undocumented_unsafe_attr(sp));
     synthesized.push(baseline_fn);
 
     // Per-feature clone: unsafe + `#[target_feature(enable = "<feat>")]`.
@@ -147,9 +147,8 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
         vf.name = format!("{base}${feat}");
         vf.is_unsafe = true;
         vf.attributes.retain(|a| !a.is_bare("multiversion"));
-        vf.attributes.push(mv_target_feature_attr(feat, sp.clone()));
-        vf.attributes
-            .push(mv_allow_undocumented_unsafe_attr(sp.clone()));
+        vf.attributes.push(mv_target_feature_attr(feat, sp));
+        vf.attributes.push(mv_allow_undocumented_unsafe_attr(sp));
         synthesized.push(vf);
     }
 
@@ -158,20 +157,19 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
     // listed order) wraps the accumulator, so the LAST-listed feature ends
     // up outermost = checked first (list narrowest→widest per the design).
     f.attributes.retain(|a| !a.is_bare("multiversion"));
-    f.attributes
-        .push(mv_allow_undocumented_unsafe_attr(sp.clone()));
+    f.attributes.push(mv_allow_undocumented_unsafe_attr(sp));
     let variant_call = |name: &str| -> Expr {
         match host {
-            MvHost::Free => mv_call(name, &fwd, sp.clone()),
-            MvHost::SelfMethod => mv_self_method_call(name, &fwd, sp.clone()),
+            MvHost::Free => mv_call(name, &fwd, sp),
+            MvHost::SelfMethod => mv_self_method_call(name, &fwd, sp),
         }
     };
     let mut acc = variant_call(&format!("{base}$baseline"));
     for (i, feat) in features.iter().enumerate() {
         let feat_call = variant_call(&format!("{base}${feat}"));
         let unsafe_call = Expr {
-            kind: ExprKind::Unsafe(mv_block(feat_call, sp.clone())),
-            span: sp.clone(),
+            kind: ExprKind::Unsafe(mv_block(feat_call, sp)),
+            span: sp,
         };
         // Each `cpu.supports(...)` probe gets a DISTINCT span. In a generic body
         // the ownership checker tracks the namespace receiver `cpu` as an ordinary
@@ -184,13 +182,13 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
         acc = Expr {
             kind: ExprKind::If {
                 condition: Box::new(mv_cpu_supports(feat, mv_distinct_span(&sp, i))),
-                then_block: mv_block(unsafe_call, sp.clone()),
+                then_block: mv_block(unsafe_call, sp),
                 else_branch: Some(Box::new(acc)),
             },
-            span: sp.clone(),
+            span: sp,
         };
     }
-    f.body = mv_block(acc, sp.clone());
+    f.body = mv_block(acc, sp);
     synthesized
 }
 
@@ -218,7 +216,7 @@ fn mv_ident(name: &str, span: Span) -> Expr {
 fn mv_call(name: &str, args: &[CallArg], span: Span) -> Expr {
     Expr {
         kind: ExprKind::Call {
-            callee: Box::new(mv_ident(name, span.clone())),
+            callee: Box::new(mv_ident(name, span)),
             args: args.to_vec(),
         },
         span,
@@ -234,12 +232,12 @@ fn mv_self_method_call(method: &str, args: &[CallArg], span: Span) -> Expr {
         kind: ExprKind::MethodCall {
             object: Box::new(Expr {
                 kind: ExprKind::SelfValue,
-                span: span.clone(),
+                span,
             }),
             method: method.to_string(),
             turbofish: None,
             args: args.to_vec(),
-            args_close_span: span.clone(),
+            args_close_span: span,
         },
         span,
     }
@@ -256,7 +254,7 @@ fn mv_block(tail: Expr, span: Span) -> Block {
 fn mv_cpu_supports(feat: &str, span: Span) -> Expr {
     Expr {
         kind: ExprKind::MethodCall {
-            object: Box::new(mv_ident("cpu", span.clone())),
+            object: Box::new(mv_ident("cpu", span)),
             method: "supports".to_string(),
             turbofish: None,
             args: vec![CallArg {
@@ -265,11 +263,11 @@ fn mv_cpu_supports(feat: &str, span: Span) -> Expr {
                 mut_marker_span: None,
                 value: Expr {
                     kind: ExprKind::StringLit(feat.to_string()),
-                    span: span.clone(),
+                    span,
                 },
-                span: span.clone(),
+                span,
             }],
-            args_close_span: span.clone(),
+            args_close_span: span,
         },
         span,
     }
@@ -285,15 +283,15 @@ fn mv_cpu_supports(feat: &str, span: Span) -> Expr {
 /// kernel whose whole point is the unsafe SIMD path.)
 fn mv_allow_undocumented_unsafe_attr(span: Span) -> Attribute {
     Attribute {
-        span: span.clone(),
+        span,
         path: vec!["allow".to_string()],
         args: vec![AttrArg {
             name: None,
             value: Some(Expr {
                 kind: ExprKind::Identifier("undocumented_unsafe".to_string()),
-                span: span.clone(),
+                span,
             }),
-            span: span.clone(),
+            span,
         }],
         string_value: None,
     }
@@ -301,15 +299,15 @@ fn mv_allow_undocumented_unsafe_attr(span: Span) -> Attribute {
 
 fn mv_target_feature_attr(feat: &str, span: Span) -> Attribute {
     Attribute {
-        span: span.clone(),
+        span,
         path: vec!["target_feature".to_string()],
         args: vec![AttrArg {
             name: Some("enable".to_string()),
             value: Some(Expr {
                 kind: ExprKind::StringLit(feat.to_string()),
-                span: span.clone(),
+                span,
             }),
-            span: span.clone(),
+            span,
         }],
         string_value: None,
     }
@@ -525,7 +523,7 @@ pub(crate) fn subst_type_expr(
                     // Substitute the whole node, keeping the reference's span.
                     return TypeExpr {
                         kind: replacement.kind.clone(),
-                        span: te.span.clone(),
+                        span: te.span,
                     };
                 }
             }
@@ -539,7 +537,7 @@ pub(crate) fn subst_type_expr(
                         })
                         .collect()
                 }),
-                span: p.span.clone(),
+                span: p.span,
             })
         }
         TypeKind::Tuple(elems) => {
@@ -574,7 +572,7 @@ pub(crate) fn subst_type_expr(
     };
     TypeExpr {
         kind,
-        span: te.span.clone(),
+        span: te.span,
     }
 }
 
@@ -945,7 +943,7 @@ pub(crate) fn subst_expr(expr: &mut Expr, subst: &std::collections::HashMap<Stri
 /// whose `body` is `Some`.
 fn trait_method_to_function(m: &TraitMethod, stdlib_origin: bool) -> Function {
     Function {
-        span: m.span.clone(),
+        span: m.span,
         attributes: m.attributes.clone(),
         doc_comment: m.doc_comment.clone(),
         is_pub: false,
@@ -1131,7 +1129,7 @@ fn synthesize_default_impls(program: &mut Program) {
                     && !has_user_default.contains(&s.name) =>
             {
                 if let Some(body) = struct_default_body(s, &defaultable) {
-                    synthesized.push(make_default_impl(&s.name, body, s.span.clone()));
+                    synthesized.push(make_default_impl(&s.name, body, s.span));
                 }
             }
             Item::EnumDef(e)
@@ -1140,7 +1138,7 @@ fn synthesize_default_impls(program: &mut Program) {
                     && !has_user_default.contains(&e.name) =>
             {
                 if let Some(body) = enum_default_body(e) {
-                    synthesized.push(make_default_impl(&e.name, body, e.span.clone()));
+                    synthesized.push(make_default_impl(&e.name, body, e.span));
                 }
             }
             _ => {}
@@ -1172,7 +1170,7 @@ fn default_field_expr(
     ty: &TypeExpr,
     defaultable: &std::collections::HashSet<String>,
 ) -> Option<Expr> {
-    let span = ty.span.clone();
+    let span = ty.span;
     let name = type_leaf_name(ty)?;
     let kind = match name.as_str() {
         "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
@@ -1187,7 +1185,7 @@ fn default_field_expr(
                     segments: vec![other.to_string(), "default".to_string()],
                     generic_args: None,
                 },
-                span: span.clone(),
+                span,
             }),
             args: Vec::new(),
         },
@@ -1209,7 +1207,7 @@ fn struct_default_body(
             name: f.name.clone(),
             value,
             shorthand: false,
-            span: f.span.clone(),
+            span: f.span,
         });
     }
     Some(Expr {
@@ -1218,7 +1216,7 @@ fn struct_default_body(
             fields,
             spread: None,
         },
-        span: s.span.clone(),
+        span: s.span,
     })
 }
 
@@ -1249,7 +1247,7 @@ fn enum_default_body(e: &EnumDef) -> Option<Expr> {
             segments: vec![e.name.clone(), variant.name.clone()],
             generic_args: None,
         },
-        span: e.span.clone(),
+        span: e.span,
     })
 }
 
@@ -1263,12 +1261,12 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
         kind: TypeKind::Path(PathExpr {
             segments: vec![type_name.to_string()],
             generic_args: None,
-            span: span.clone(),
+            span,
         }),
-        span: span.clone(),
+        span,
     };
     let func = Function {
-        span: span.clone(),
+        span,
         attributes: Vec::new(),
         doc_comment: None,
         is_pub: false,
@@ -1288,7 +1286,7 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
         body: Block {
             stmts: Vec::new(),
             final_expr: Some(Box::new(body)),
-            span: span.clone(),
+            span,
         },
         stdlib_origin: false,
         deprecation: None,
@@ -1302,7 +1300,7 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
         abi: None,
     };
     Item::ImplBlock(ImplBlock {
-        span: span.clone(),
+        span,
         attributes: Vec::new(),
         generic_params: None,
         trait_name: None,
@@ -1386,10 +1384,10 @@ fn walk_stmt(stmt: &mut Stmt) {
         }
         StmtKind::Expr(e) => walk_expr(e),
         StmtKind::MultiAssign { .. } => {
-            let span = stmt.span.clone();
+            let span = stmt.span;
             let placeholder = StmtKind::Expr(Expr {
                 kind: ExprKind::Error,
-                span: span.clone(),
+                span,
             });
             let StmtKind::MultiAssign {
                 mut targets,
@@ -1420,10 +1418,10 @@ fn expand_multi_assign(targets: Vec<Expr>, values: Vec<Expr>, span: Span) -> Stm
     let mut temp_names: Vec<String> = Vec::with_capacity(n);
     for (i, value) in values.into_iter().enumerate() {
         let name = format!("__karac_pa_{}_{}", span.offset, i);
-        let vspan = value.span.clone();
+        let vspan = value.span;
         temp_names.push(name.clone());
         stmts.push(Stmt {
-            span: vspan.clone(),
+            span: vspan,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
@@ -1436,9 +1434,9 @@ fn expand_multi_assign(targets: Vec<Expr>, values: Vec<Expr>, span: Span) -> Stm
         });
     }
     for (target, name) in targets.into_iter().zip(temp_names) {
-        let tspan = target.span.clone();
+        let tspan = target.span;
         stmts.push(Stmt {
-            span: tspan.clone(),
+            span: tspan,
             kind: StmtKind::Assign {
                 target,
                 value: Expr {
@@ -1452,7 +1450,7 @@ fn expand_multi_assign(targets: Vec<Expr>, values: Vec<Expr>, span: Span) -> Stm
         kind: ExprKind::Block(Block {
             stmts,
             final_expr: None,
-            span: span.clone(),
+            span,
         }),
         span,
     })
@@ -1691,7 +1689,7 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
             } else {
                 Some(args.clone())
             },
-            span: impl_trait_span.clone(),
+            span: *impl_trait_span,
         };
         synthetic_params.push(GenericParam {
             name: synthetic_name.clone(),
@@ -1701,15 +1699,15 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
             variance: Variance::Invariant,
             variance_span: None,
             is_variadic_shape: false,
-            span: impl_trait_span.clone(),
+            span: *impl_trait_span,
         });
 
-        let original_span = param.ty.span.clone();
+        let original_span = param.ty.span;
         param.ty = TypeExpr {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![synthetic_name],
                 generic_args: None,
-                span: original_span.clone(),
+                span: original_span,
             }),
             span: original_span,
         };
@@ -1724,7 +1722,7 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
         None => {
             let span = synthetic_params
                 .first()
-                .map(|p| p.span.clone())
+                .map(|p| p.span)
                 .unwrap_or_else(|| Span {
                     line: 0,
                     column: 0,

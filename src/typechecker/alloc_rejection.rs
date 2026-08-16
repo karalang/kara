@@ -126,7 +126,7 @@ impl<'a> super::TypeChecker<'a> {
             StmtKind::CompoundAssign { target, value, op } => {
                 if matches!(op, CompoundOp::Add) && self.expr_is_string(target) {
                     out.push(AllocSite {
-                        span: s.span.clone(),
+                        span: s.span,
                         subject: "`String` `+=` concatenation".to_string(),
                         companion: None,
                     });
@@ -157,7 +157,7 @@ impl<'a> super::TypeChecker<'a> {
                         .get(&SpanKey::from_span(&e.span))
                     {
                         out.push(AllocSite {
-                            span: e.span.clone(),
+                            span: e.span,
                             subject: format!("`{coll}.{method}`"),
                             companion: Some(format!("{coll}.try_{method}")),
                         });
@@ -175,7 +175,7 @@ impl<'a> super::TypeChecker<'a> {
                         && matches!(segments[0].as_str(), "Vec" | "VecDeque" | "String")
                     {
                         out.push(AllocSite {
-                            span: e.span.clone(),
+                            span: e.span,
                             subject: format!("`{}.{}`", segments[0], segments[1]),
                             companion: Some(format!("{}.try_{}", segments[0], segments[1])),
                         });
@@ -190,7 +190,7 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::ArrayLiteral(items) => {
                 if !items.is_empty() {
                     out.push(AllocSite {
-                        span: e.span.clone(),
+                        span: e.span,
                         subject: "a `[...]` Vec literal".to_string(),
                         companion: None,
                     });
@@ -202,7 +202,7 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::PrefixCollectionLiteral { type_name, items } => {
                 if !items.is_empty() && matches!(type_name.as_str(), "Vec" | "Set") {
                     out.push(AllocSite {
-                        span: e.span.clone(),
+                        span: e.span,
                         subject: format!("a `{type_name}[...]` collection literal"),
                         companion: None,
                     });
@@ -214,7 +214,7 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::MapLiteral(pairs) => {
                 if !pairs.is_empty() {
                     out.push(AllocSite {
-                        span: e.span.clone(),
+                        span: e.span,
                         subject: "a `{ k: v }` Map literal".to_string(),
                         companion: None,
                     });
@@ -233,7 +233,7 @@ impl<'a> super::TypeChecker<'a> {
                 // `Array[v; n]` is a fixed stack array — not a heap alloc.
                 if !matches!(type_name.as_deref(), Some("Array")) {
                     out.push(AllocSite {
-                        span: e.span.clone(),
+                        span: e.span,
                         subject: "a `[v; n]` Vec repeat-literal".to_string(),
                         companion: None,
                     });
@@ -247,7 +247,7 @@ impl<'a> super::TypeChecker<'a> {
                     .any(|p| matches!(p, ParsedInterpolationPart::Expr(_, _)))
                 {
                     out.push(AllocSite {
-                        span: e.span.clone(),
+                        span: e.span,
                         subject: "an f-string interpolation".to_string(),
                         companion: None,
                     });
@@ -261,7 +261,7 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Binary { op, left, right } => {
                 if matches!(op, BinOp::Add) && self.expr_is_string(left) {
                     out.push(AllocSite {
-                        span: e.span.clone(),
+                        span: e.span,
                         subject: "`String` `+` concatenation".to_string(),
                         companion: None,
                     });

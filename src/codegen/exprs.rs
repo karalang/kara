@@ -24,7 +24,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Map missing key, slice range) emit their guard inside *this*
         // `compile_expr` call, so the span is exact for them. Cheap: a Span is
         // four `usize`s; this just stores a clone of the current node's span.
-        self.tracing.current_span = Some(expr.span.clone());
+        self.tracing.current_span = Some(expr.span);
         // Level 2 crash diagnostics — Part 2: stamp the DWARF source location
         // for the instructions this expression is about to emit (no-op unless
         // debug info is enabled, and self-guarded so it only attaches inside
@@ -424,7 +424,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // neither of which can overflow — while `--interp` blamed
                     // the binary expression. Restoring the node's own span makes
                     // the AOT/JIT column match the interpreter's.
-                    self.tracing.current_span = Some(expr.span.clone());
+                    self.tracing.current_span = Some(expr.span);
                     // Vector binops aren't lowered to primitive method calls
                     // (only primitives are), so they reach here as raw
                     // `ExprKind::Binary` with no signedness context. Recover the
@@ -745,7 +745,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // any trap — see the Binary arm above for the full rationale
                 // (`-iN::MIN` traps `integer overflow` through the same
                 // `emit_checked_int_arith` path).
-                self.tracing.current_span = Some(expr.span.clone());
+                self.tracing.current_span = Some(expr.span);
                 self.compile_unaryop(op, val)
             }
             ExprKind::Call { callee, args } => self.compile_call(callee, args, &expr.span),
@@ -1613,12 +1613,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 || self.mod_bindings.module_bindings.contains_key(&segments[0]))
         {
             let mut obj = Expr {
-                span: span.clone(),
+                span: *span,
                 kind: ExprKind::Identifier(segments[0].clone()),
             };
             for member in &segments[1..] {
                 obj = Expr {
-                    span: span.clone(),
+                    span: *span,
                     kind: ExprKind::FieldAccess {
                         object: Box::new(obj),
                         field: member.clone(),
@@ -3175,7 +3175,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 mut_marker: false,
                 mut_marker_span: None,
                 value: elem.clone(),
-                span: elem.span.clone(),
+                span: elem.span,
             };
             self.compile_soa_method(var_name, soa, slot, "push", std::slice::from_ref(&arg))?;
         }
@@ -3502,9 +3502,9 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
                 segments: vec![struct_name.clone()],
                 generic_args: None,
-                span: value.span.clone(),
+                span: value.span,
             }),
-            span: value.span.clone(),
+            span: value.span,
         };
         let elem_llvm = self.llvm_type_for_type_expr(&elem_te);
         self.var_types

@@ -1894,7 +1894,7 @@ fn detect_par_block_conflicts(
 
     for (branch_idx, uses) in per_branch.iter().enumerate() {
         for (name, use_entry) in &uses.uses {
-            let (name, use_span) = (name.clone(), use_entry.span.clone());
+            let (name, use_span) = (name.clone(), use_entry.span);
             if reported.contains(&name) {
                 continue;
             }
@@ -1958,8 +1958,8 @@ fn detect_par_block_conflicts(
                     let err = build_concurrent_struct_error(
                         &name,
                         binding,
-                        use_span.clone(),
-                        prev_span.clone(),
+                        use_span,
+                        *prev_span,
                         type_is_user_declared(&binding.type_name, program_items),
                     );
                     let mut edits =
@@ -4470,7 +4470,7 @@ fn collect_identifier_uses_in_expr(
         ExprKind::Identifier(name) => {
             // Direct tracked-binding reference.
             if tracked.contains_key(name) {
-                record_use(out, name.clone(), expr.span.clone(), true);
+                record_use(out, name.clone(), expr.span, true);
             }
             // Indirect reference via a let-bound closure that captures
             // tracked bindings — `let f = || use(c);` followed by a
@@ -4481,7 +4481,7 @@ fn collect_identifier_uses_in_expr(
             // the per-branch identifier walk.
             for cap in expand_through_closure_bindings(name, closure_bindings) {
                 if tracked.contains_key(&cap) {
-                    record_use(out, cap, expr.span.clone(), true);
+                    record_use(out, cap, expr.span, true);
                 }
             }
         }
@@ -4498,11 +4498,11 @@ fn collect_identifier_uses_in_expr(
             if let Some(captures) = closure_captures.get(&key) {
                 for (cap_name, _) in captures {
                     if tracked.contains_key(cap_name) {
-                        record_use(out, cap_name.clone(), expr.span.clone(), true);
+                        record_use(out, cap_name.clone(), expr.span, true);
                     }
                     for chained in expand_through_closure_bindings(cap_name, closure_bindings) {
                         if tracked.contains_key(&chained) {
-                            record_use(out, chained, expr.span.clone(), true);
+                            record_use(out, chained, expr.span, true);
                         }
                     }
                 }
@@ -4731,7 +4731,7 @@ fn collect_identifier_uses_in_expr(
                     .get(base)
                     .is_some_and(|b| b.readonly_scalar_fields.contains(field))
                 {
-                    record_use(out, base.clone(), expr.span.clone(), false);
+                    record_use(out, base.clone(), expr.span, false);
                     return;
                 }
             }

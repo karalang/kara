@@ -5117,7 +5117,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(elem_te) = self.mapset.set_elem_type_exprs.get(name).cloned() {
             let unit_te = TypeExpr {
                 kind: TypeKind::Tuple(Vec::new()),
-                span: elem_te.span.clone(),
+                span: elem_te.span,
             };
             return Some(self.emit_map_clone_fn(&elem_te, &unit_te));
         }

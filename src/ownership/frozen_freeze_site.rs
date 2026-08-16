@@ -99,7 +99,7 @@ impl super::OwnershipChecker<'_> {
         // function, where `self_is_frozen` is never set.
         let receiver = f
             .self_is_frozen
-            .then(|| impl_type.map(|t| (Some(t.to_string()), f.span.clone())))
+            .then(|| impl_type.map(|t| (Some(t.to_string()), f.span)))
             .flatten();
         // `false` — a PARAMETER freeze site never carries the stage-3b
         // uniqueness proof, and this is a deliberate asymmetry rather than a
@@ -113,7 +113,7 @@ impl super::OwnershipChecker<'_> {
             .params
             .iter()
             .filter(|p| p.is_frozen)
-            .map(|p| (frozen_type_name(&p.ty), p.span.clone(), FreezeSite::Param))
+            .map(|p| (frozen_type_name(&p.ty), p.span, FreezeSite::Param))
             .chain(receiver.map(|(n, s)| (n, s, FreezeSite::Param)))
             .collect();
         self.report_freeze_sites(sites);

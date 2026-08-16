@@ -2155,7 +2155,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         // value half (matches the clone-fn Set arm).
                                         let unit_te = TypeExpr {
                                             kind: TypeKind::Tuple(Vec::new()),
-                                            span: elem.span.clone(),
+                                            span: elem.span,
                                         };
                                         (elem, unit_te)
                                     })

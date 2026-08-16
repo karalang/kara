@@ -32,7 +32,7 @@ impl super::Parser {
         // section?), so the spec mandates a single merged list instead.
         let mut target_attrs = attrs.iter().filter(|a| a.is_bare("target"));
         if let (Some(_), Some(second)) = (target_attrs.next(), target_attrs.next()) {
-            let span = second.span.clone();
+            let span = second.span;
             self.errors.push(super::ParseError {
                 kind: crate::parser::ParseErrorKind::Syntax,
                 message: "multiple `#[target(...)]` attributes on one item — merge the \
@@ -297,7 +297,7 @@ impl super::Parser {
                                      the v1 target set is closed: {}",
                                     crate::target::V1_TARGETS.join(", "),
                                 ),
-                                span: arg.span.clone(),
+                                span: arg.span,
                             });
                         }
                         if negated {
@@ -313,7 +313,7 @@ impl super::Parser {
                                       target name or `not(<target>)`; no general boolean \
                                       logic is supported (syntax.md § 8)"
                                 .to_string(),
-                            span: arg.span.clone(),
+                            span: arg.span,
                         });
                     }
                 }

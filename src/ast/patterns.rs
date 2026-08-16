@@ -120,7 +120,7 @@ impl Pattern {
 
     fn collect_binding_name_spans(&self, out: &mut Vec<(String, Span)>) {
         match &self.kind {
-            PatternKind::Binding(name) => out.push((name.clone(), self.span.clone())),
+            PatternKind::Binding(name) => out.push((name.clone(), self.span)),
             PatternKind::Tuple(patterns) => {
                 for p in patterns {
                     p.collect_binding_name_spans(out);
@@ -131,7 +131,7 @@ impl Pattern {
                     if let Some(ref sub) = f.pattern {
                         sub.collect_binding_name_spans(out);
                     } else {
-                        out.push((f.name.clone(), f.span.clone()));
+                        out.push((f.name.clone(), f.span));
                     }
                 }
             }
@@ -146,7 +146,7 @@ impl Pattern {
                 }
             }
             PatternKind::AtBinding { name, pattern, .. } => {
-                out.push((name.clone(), self.span.clone()));
+                out.push((name.clone(), self.span));
                 pattern.collect_binding_name_spans(out);
             }
             PatternKind::Slice {
@@ -158,7 +158,7 @@ impl Pattern {
                     p.collect_binding_name_spans(out);
                 }
                 if let Some(RestPattern::Bound(name)) = rest {
-                    out.push((name.clone(), self.span.clone()));
+                    out.push((name.clone(), self.span));
                 }
                 for p in suffix {
                     p.collect_binding_name_spans(out);

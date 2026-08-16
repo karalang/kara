@@ -688,7 +688,7 @@ mod once_fn_slot_rejection_tests {
         assert_eq!(once_hits.len(), 1);
         // The TypeMismatch kind may still appear for unrelated reasons,
         // but not for the same span as the OnceFn slot violation.
-        let once_span = once_hits[0].span.clone();
+        let once_span = once_hits[0].span;
         for tm in &mismatch_hits {
             assert!(
                 tm.span != once_span,

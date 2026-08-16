@@ -192,7 +192,7 @@ fn walk_expr(
                 if let Some(fn_name) = is_ffi_float_call(left, ffi_fns) {
                     diags.push(FfiFloatEqDiagnostic {
                         level,
-                        span: expr.span.clone(),
+                        span: expr.span,
                         extern_fn: fn_name.clone(),
                         message: format!(
                             "comparing result of FFI float function `{}` with `{}` is unreliable; use an epsilon comparison",
@@ -203,7 +203,7 @@ fn walk_expr(
                 } else if let Some(fn_name) = is_ffi_float_call(right, ffi_fns) {
                     diags.push(FfiFloatEqDiagnostic {
                         level,
-                        span: expr.span.clone(),
+                        span: expr.span,
                         extern_fn: fn_name.clone(),
                         message: format!(
                             "comparing result of FFI float function `{}` with `{}` is unreliable; use an epsilon comparison",

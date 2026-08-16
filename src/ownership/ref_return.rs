@@ -165,7 +165,7 @@ impl<'a> super::OwnershipChecker<'a> {
             };
             self.errors.push(OwnershipError {
                 message,
-                span: e.span.clone(),
+                span: e.span,
                 kind: OwnershipErrorKind::BorrowReturnNotSourcePinned { shape },
                 suggestion,
                 replacement: None,
@@ -337,7 +337,7 @@ impl<'a> super::OwnershipChecker<'a> {
                               function-local storage; the element's source is dropped when the \
                               function returns, leaving the collection's borrows dangling"
                         .to_string(),
-                    span: e.span.clone(),
+                    span: e.span,
                     kind: OwnershipErrorKind::BorrowReturnNotSourcePinned {
                         shape: BorrowReturnShape::DanglingSource,
                     },
@@ -380,11 +380,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 for (i, arg) in args.iter().enumerate() {
                     if self.arg_is_borrow_position(callee, i) {
                         if let Some(place) = self.place_expr_root(&arg.value) {
-                            self.push_active_borrow(
-                                BorrowKind::ImmRef,
-                                place,
-                                arg.value.span.clone(),
-                            );
+                            self.push_active_borrow(BorrowKind::ImmRef, place, arg.value.span);
                         }
                     }
                 }
@@ -403,7 +399,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 );
                 if is_ref {
                     if let Some(place) = self.place_expr_root(object) {
-                        self.push_active_borrow(BorrowKind::ImmRef, place, value.span.clone());
+                        self.push_active_borrow(BorrowKind::ImmRef, place, value.span);
                     }
                 }
             }

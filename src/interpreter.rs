@@ -856,10 +856,10 @@ impl<'a> Interpreter<'a> {
             .stdlib_wrapper_call_spans
             .first()
             .cloned()
-            .unwrap_or_else(|| span.clone());
+            .unwrap_or(*span);
         self.runtime_errors.push(RuntimeError {
             message: message.into(),
-            span: span.clone(),
+            span,
             left: None,
             right: None,
         });
@@ -1283,7 +1283,7 @@ impl<'a> Interpreter<'a> {
     ) -> Value {
         self.runtime_errors.push(RuntimeError {
             message: message.into(),
-            span: span.clone(),
+            span: *span,
             left: Some(left),
             right: Some(right),
         });
@@ -1826,7 +1826,7 @@ impl<'a> Interpreter<'a> {
             let mut patterns: Vec<Pattern> = Vec::new();
             if method.self_param.is_some() {
                 patterns.push(Pattern {
-                    span: method.span.clone(),
+                    span: method.span,
                     kind: PatternKind::Binding("self".to_string()),
                 });
             }
@@ -2610,10 +2610,10 @@ impl<'a> Interpreter<'a> {
                                 object: container.clone(),
                                 index: Box::new(Expr {
                                     kind: ExprKind::Integer(i, None),
-                                    span: index.span.clone(),
+                                    span: index.span,
                                 }),
                             },
-                            span: object.span.clone(),
+                            span: object.span,
                         };
                         &materialized
                     }

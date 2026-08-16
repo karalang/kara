@@ -229,7 +229,7 @@ impl<'a> super::EffectChecker<'a> {
                     None => {
                         let mut seed = EffectSet::new();
                         for e in &arg_concrete {
-                            seed.add(e.clone(), EffectOrigin::Direct(arg.value.span.clone()));
+                            seed.add(e.clone(), EffectOrigin::Direct(arg.value.span));
                         }
                         binding = Some((idx, seed));
                     }
@@ -264,7 +264,7 @@ impl<'a> super::EffectChecker<'a> {
                                     idx,
                                     var_name,
                                 ),
-                                span: arg.value.span.clone(),
+                                span: arg.value.span,
                                 kind: EffectErrorKind::EffectVariableConflict,
                                 subtype_trace: None,
                                 replacement: None,

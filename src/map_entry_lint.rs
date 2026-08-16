@@ -344,11 +344,11 @@ fn check_match(expr: &Expr, typed: &TypeCheckResult, src: &str) -> Option<TypeEr
              map's own slot, so `{}` appends in place and nothing is copied",
             occupied.method
         ),
-        span: expr.span.clone(),
+        span: expr.span,
         kind: TypeErrorKind::TypeMismatch,
         lint_name: Some(LINT_NAME.to_string()),
         fix_it: Some(FixIt {
-            span: expr.span.clone(),
+            span: expr.span,
             replacement,
         }),
         class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),

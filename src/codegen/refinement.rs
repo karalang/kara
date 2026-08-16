@@ -193,9 +193,9 @@ impl<'ctx> super::Codegen<'ctx> {
             mut_marker_span: None,
             value: Expr {
                 kind: ExprKind::Identifier(REFINE_SELF.to_string()),
-                span: span.clone(),
+                span: *span,
             },
-            span: span.clone(),
+            span: *span,
         };
         let ok_val = self
             .try_compile_enum_variant("Ok", Some("Result"), std::slice::from_ref(&ok_arg))?
@@ -220,9 +220,9 @@ impl<'ctx> super::Codegen<'ctx> {
             mut_marker_span: None,
             value: Expr {
                 kind: ExprKind::StringLit(format!("value does not satisfy refinement `{rname}`")),
-                span: span.clone(),
+                span: *span,
             },
-            span: span.clone(),
+            span: *span,
         };
         let err_val = self
             .try_compile_enum_variant("Err", Some("Result"), std::slice::from_ref(&err_arg))?

@@ -84,7 +84,7 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(referent),
                     type_display(referent),
                 ),
-                arg.value.span.clone(),
+                arg.value.span,
                 TypeErrorKind::TypeMismatch,
             );
             self.record_expr_type(&arg.value.span, &Type::Error);
@@ -131,7 +131,7 @@ impl<'a> super::TypeChecker<'a> {
             &mut self.env.const_substitutions,
         );
         let resolved_slot = resolve_type_var_top(slot, &self.env.substitutions);
-        self.check_assignable(&resolved_slot, &arg_ty, arg.value.span.clone());
+        self.check_assignable(&resolved_slot, &arg_ty, arg.value.span);
     }
 
     /// Infer the return type of a method call on `Map[K, V]`.
@@ -161,7 +161,7 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(key),
                     missing
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TraitBoundNotSatisfied,
             );
         }
@@ -190,7 +190,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Map.len() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -200,7 +200,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Map.is_empty() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -300,7 +300,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Map.keys() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -310,7 +310,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Map.values() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -320,7 +320,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Map.entries() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -329,7 +329,7 @@ impl<'a> super::TypeChecker<'a> {
             "merge" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&map_kv, &at, arg.value.span.clone());
+                    self.check_assignable(&map_kv, &at, arg.value.span);
                 }
                 map_kv
             }
@@ -337,7 +337,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Map.clear() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -351,7 +351,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("Map.entry() expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -359,7 +359,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let kt = self.infer_expr(&args[0].value);
-                    self.check_assignable(&k, &kt, args[0].value.span.clone());
+                    self.check_assignable(&k, &kt, args[0].value.span);
                 }
                 Type::Named {
                     name: "Entry".to_string(),
@@ -425,7 +425,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("Entry.or_insert() expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -447,7 +447,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Entry.or_insert_with() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -473,7 +473,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Entry.and_modify() expects 1 argument, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -518,7 +518,7 @@ impl<'a> super::TypeChecker<'a> {
                      or structs/enums with `#[derive(Ord)]`) can be SortedSet elements",
                     type_display(element)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TraitBoundNotSatisfied,
             );
         }
@@ -537,7 +537,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "SortedSet.len() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -547,7 +547,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "SortedSet.is_empty() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -570,7 +570,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-12 — the float-narrowing sibling.
                     self.check_float_narrowing_coercion(&arg.value, &elem, &at);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                    self.check_assignable(&elem, &at, arg.value.span);
                 }
                 Type::Bool
             }
@@ -578,7 +578,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("SortedSet.{}() takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -587,7 +587,7 @@ impl<'a> super::TypeChecker<'a> {
             "union" | "intersection" | "difference" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&sorted_set_elem, &at, arg.value.span.clone());
+                    self.check_assignable(&sorted_set_elem, &at, arg.value.span);
                 }
                 sorted_set_elem
             }
@@ -635,7 +635,7 @@ impl<'a> super::TypeChecker<'a> {
                      or structs/enums with `#[derive(Ord)]`) can be SortedMap keys",
                     type_display(key)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TraitBoundNotSatisfied,
             );
         }
@@ -668,7 +668,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "SortedMap.len() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -678,7 +678,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "SortedMap.is_empty() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -778,7 +778,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "SortedMap.keys() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -788,7 +788,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "SortedMap.values() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -798,7 +798,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "SortedMap.entries() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -807,7 +807,7 @@ impl<'a> super::TypeChecker<'a> {
             "merge" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&sorted_map_kv, &at, arg.value.span.clone());
+                    self.check_assignable(&sorted_map_kv, &at, arg.value.span);
                 }
                 sorted_map_kv
             }
@@ -815,7 +815,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "SortedMap.clear() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -825,7 +825,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         format!("SortedMap.{}() takes no arguments", method),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -839,13 +839,13 @@ impl<'a> super::TypeChecker<'a> {
                             method,
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&k, &at, arg.value.span.clone());
+                    self.check_assignable(&k, &at, arg.value.span);
                 }
                 option_kv
             }
@@ -856,13 +856,13 @@ impl<'a> super::TypeChecker<'a> {
                             "SortedMap.range() expects 2 arguments, found {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&k, &at, arg.value.span.clone());
+                    self.check_assignable(&k, &at, arg.value.span);
                 }
                 vec_kv
             }
@@ -876,7 +876,7 @@ impl<'a> super::TypeChecker<'a> {
                 if args.len() != 1 {
                     self.type_error(
                         format!("SortedMap.entry() expects 1 argument, found {}", args.len()),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -938,7 +938,7 @@ impl<'a> super::TypeChecker<'a> {
                      or structs/enums with `#[derive(Hash, Eq)]`) can be Set elements",
                     type_display(element)
                 ),
-                span.clone(),
+                *span,
                 TypeErrorKind::TraitBoundNotSatisfied,
             );
         }
@@ -953,7 +953,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Set.len() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -963,7 +963,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !args.is_empty() {
                     self.type_error(
                         "Set.is_empty() takes no arguments".to_string(),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
@@ -986,14 +986,14 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-12 — the float-narrowing sibling.
                     self.check_float_narrowing_coercion(&arg.value, &elem, &at);
-                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                    self.check_assignable(&elem, &at, arg.value.span);
                 }
                 Type::Bool
             }
             "union" | "intersection" | "difference" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&set_elem, &at, arg.value.span.clone());
+                    self.check_assignable(&set_elem, &at, arg.value.span);
                 }
                 set_elem
             }

@@ -3,7 +3,12 @@
 //! Defines the tokens produced by the Kāra lexer.
 
 /// Source location attached to every token.
-#[derive(Debug, Clone, PartialEq, Default)]
+///
+/// `Copy` on purpose: four words of plain position data, cloned at ~1,800
+/// call sites before the derive landed (project-review-2026-08-16 item 9a).
+/// Keep it `Copy` — a future non-`Copy` field here would silently reintroduce
+/// a clone obligation across every phase.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Span {
     pub line: usize,
     pub column: usize,

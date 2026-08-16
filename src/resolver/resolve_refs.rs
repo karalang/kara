@@ -139,7 +139,7 @@ impl<'a> super::Resolver<'a> {
                 let id = sym.id;
                 self.record_resolution(&path.span, id);
             } else {
-                self.error_undefined_type(first, path.span.clone());
+                self.error_undefined_type(first, path.span);
             }
         }
         // Resolve generic args
@@ -204,7 +204,7 @@ impl<'a> super::Resolver<'a> {
             };
             match self
                 .table
-                .define(param.name.clone(), kind, param.span.clone(), false)
+                .define(param.name.clone(), kind, param.span, false)
             {
                 Ok(id) => {
                     self.table.record_generic_bounds(id, &param.bounds);
@@ -280,7 +280,7 @@ impl<'a> super::Resolver<'a> {
                 let _ = self.table.define(
                     name.clone(),
                     SymbolKind::Variable { is_mut: false },
-                    pattern.span.clone(),
+                    pattern.span,
                     false,
                 );
             }
@@ -297,7 +297,7 @@ impl<'a> super::Resolver<'a> {
                         let id = sym.id;
                         self.record_resolution(&pattern.span, id);
                     } else {
-                        self.error_undefined_name(first, pattern.span.clone());
+                        self.error_undefined_name(first, pattern.span);
                     }
                 }
                 // Define field bindings
@@ -309,7 +309,7 @@ impl<'a> super::Resolver<'a> {
                         let _ = self.table.define(
                             field.name.clone(),
                             SymbolKind::Variable { is_mut: false },
-                            field.span.clone(),
+                            field.span,
                             false,
                         );
                     }
@@ -322,7 +322,7 @@ impl<'a> super::Resolver<'a> {
                         let id = sym.id;
                         self.record_resolution(&pattern.span, id);
                     } else {
-                        self.error_undefined_name(first, pattern.span.clone());
+                        self.error_undefined_name(first, pattern.span);
                     }
                 }
                 for p in patterns {
@@ -346,7 +346,7 @@ impl<'a> super::Resolver<'a> {
                 let _ = self.table.define(
                     name.clone(),
                     SymbolKind::Variable { is_mut: false },
-                    pattern.span.clone(),
+                    pattern.span,
                     false,
                 );
                 self.resolve_pattern(pattern);
@@ -363,7 +363,7 @@ impl<'a> super::Resolver<'a> {
                     let _ = self.table.define(
                         name.clone(),
                         SymbolKind::Variable { is_mut: false },
-                        pattern.span.clone(),
+                        pattern.span,
                         false,
                     );
                 }
@@ -446,7 +446,7 @@ impl<'a> super::Resolver<'a> {
     ) {
         match &pattern.kind {
             PatternKind::Binding(name) => {
-                self.define_binding_leaf(name, is_mut, pattern.span.clone(), allow_shadow, bound);
+                self.define_binding_leaf(name, is_mut, pattern.span, allow_shadow, bound);
             }
             PatternKind::Struct {
                 path,
@@ -459,7 +459,7 @@ impl<'a> super::Resolver<'a> {
                         let id = sym.id;
                         self.record_resolution(&pattern.span, id);
                     } else {
-                        self.error_undefined_name(first, pattern.span.clone());
+                        self.error_undefined_name(first, pattern.span);
                     }
                 }
                 for field in fields {
@@ -474,7 +474,7 @@ impl<'a> super::Resolver<'a> {
                         self.define_binding_leaf(
                             &field.name,
                             is_mut,
-                            field.span.clone(),
+                            field.span,
                             allow_shadow,
                             bound,
                         );
@@ -487,7 +487,7 @@ impl<'a> super::Resolver<'a> {
                         let id = sym.id;
                         self.record_resolution(&pattern.span, id);
                     } else {
-                        self.error_undefined_name(first, pattern.span.clone());
+                        self.error_undefined_name(first, pattern.span);
                     }
                 }
                 for p in patterns {
@@ -507,7 +507,7 @@ impl<'a> super::Resolver<'a> {
                 }
             }
             PatternKind::AtBinding { name, pattern, .. } => {
-                self.define_binding_leaf(name, is_mut, pattern.span.clone(), allow_shadow, bound);
+                self.define_binding_leaf(name, is_mut, pattern.span, allow_shadow, bound);
                 self.define_pattern_bindings_inner(pattern, is_mut, allow_shadow, bound);
             }
             PatternKind::Slice {
@@ -519,13 +519,7 @@ impl<'a> super::Resolver<'a> {
                     self.define_pattern_bindings_inner(p, is_mut, allow_shadow, bound);
                 }
                 if let Some(RestPattern::Bound(name)) = rest {
-                    self.define_binding_leaf(
-                        name,
-                        is_mut,
-                        pattern.span.clone(),
-                        allow_shadow,
-                        bound,
-                    );
+                    self.define_binding_leaf(name, is_mut, pattern.span, allow_shadow, bound);
                 }
                 for p in suffix {
                     self.define_pattern_bindings_inner(p, is_mut, allow_shadow, bound);
@@ -547,7 +541,7 @@ impl<'a> super::Resolver<'a> {
                         let id = sym.id;
                         self.record_resolution(&effects.span, id);
                     } else {
-                        self.error_undefined_name(name, effects.span.clone());
+                        self.error_undefined_name(name, effects.span);
                     }
                 }
                 EffectItem::Polymorphic => {}
@@ -602,7 +596,7 @@ impl<'a> super::Resolver<'a> {
                             "'{}' is not an effect resource (it is {}); declare `effect resource {};` or import one (e.g. `import std.web.{};`)",
                             name, kind_label, first, first
                         ),
-                        span: resource.span.clone(),
+                        span: resource.span,
                         kind: ResolveErrorKind::UndefinedName,
                         suggestion: None,
                         replacement: None,
@@ -622,7 +616,7 @@ impl<'a> super::Resolver<'a> {
                         "undefined effect resource '{}'; declare `effect resource {};` or import one (e.g. `import std.web.{};`)",
                         name, first, first
                     ),
-                    span: resource.span.clone(),
+                    span: resource.span,
                     kind: ResolveErrorKind::UndefinedName,
                     suggestion: None,
                     replacement: None,

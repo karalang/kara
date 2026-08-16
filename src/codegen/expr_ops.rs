@@ -2837,10 +2837,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 object: Box::new(object.clone()),
                 index: Box::new(Expr {
                     kind: ExprKind::Identifier(synth.clone()),
-                    span: index.span.clone(),
+                    span: index.span,
                 }),
             },
-            span: expr.span.clone(),
+            span: expr.span,
         };
         let placed = match self.field_chain_place_ptr(&rewritten) {
             Some(p) => Some(p),
@@ -6944,7 +6944,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 TypeKind::Path(PathExpr {
                     segments,
                     generic_args,
-                    span: p.span.clone(),
+                    span: p.span,
                 })
             }
             TypeKind::Tuple(elems) => TypeKind::Tuple(
@@ -6969,7 +6969,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         TypeExpr {
             kind,
-            span: ty.span.clone(),
+            span: ty.span,
         }
     }
 
@@ -7002,7 +7002,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 TypeKind::Path(PathExpr {
                     segments: p.segments.clone(),
                     generic_args,
-                    span: p.span.clone(),
+                    span: p.span,
                 })
             }
             TypeKind::Tuple(elems) => TypeKind::Tuple(
@@ -7025,7 +7025,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         TypeExpr {
             kind,
-            span: ty.span.clone(),
+            span: ty.span,
         }
     }
 

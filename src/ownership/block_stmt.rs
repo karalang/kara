@@ -110,7 +110,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         self.errors.push(OwnershipError {
                             message: "slice from temporary value escapes the enclosing statement"
                                 .to_string(),
-                            span: value.span.clone(),
+                            span: value.span,
                             kind: OwnershipErrorKind::SliceFromTemporaryEscapes,
                             suggestion: Some(
                                 "bind the receiver to a local first, then take a slice into it"
@@ -172,7 +172,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 states.insert(
                     name.clone(),
                     ValueState::Uninit {
-                        let_span: stmt.span.clone(),
+                        let_span: stmt.span,
                         is_mut: *is_mut,
                     },
                 );
@@ -245,7 +245,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             states.insert(
                                 name.clone(),
                                 ValueState::InitOnce {
-                                    first_assign: target.span.clone(),
+                                    first_assign: target.span,
                                 },
                             );
                         }
@@ -259,7 +259,7 @@ impl<'a> super::OwnershipChecker<'a> {
                                     "cannot reassign `{}` — declared without `mut` (first assignment at line {}:{})",
                                     name, first_assign.line, first_assign.column
                                 ),
-                                span: target.span.clone(),
+                                span: target.span,
                                 kind: OwnershipErrorKind::ReassignToImmutable,
                                 suggestion: Some(format!(
                                     "change the declaration to `let mut {}: ...;`",

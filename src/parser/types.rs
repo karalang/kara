@@ -307,7 +307,7 @@ impl super::Parser {
                     kind: TypeKind::Dyn {
                         trait_path: trait_path_clean,
                         args,
-                        span: span.clone(),
+                        span,
                     },
                     span,
                 })
@@ -349,7 +349,7 @@ impl super::Parser {
                     self.errors.push(crate::parser::ParseError {
                         kind: crate::parser::ParseErrorKind::Syntax,
                         message: msg,
-                        span: impl_kw_span.clone(),
+                        span: impl_kw_span,
                     });
                 }
 
@@ -411,7 +411,7 @@ impl super::Parser {
                         trait_path: trait_path_clean,
                         args,
                         use_effects,
-                        span: span.clone(),
+                        span,
                     },
                     span,
                 })

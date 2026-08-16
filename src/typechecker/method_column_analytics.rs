@@ -87,7 +87,7 @@ impl<'a> super::TypeChecker<'a> {
                             "{container}.zip_with expects 2 arguments (other, closure), got {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -108,7 +108,7 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
                     _ => other_ty_raw,
                 };
-                self.check_assignable(&self_ty, &other_ty, args[0].value.span.clone());
+                self.check_assignable(&self_ty, &other_ty, args[0].value.span);
                 let f_ty = Type::Function {
                     params: vec![elem.clone(), elem.clone()],
                     return_type: Box::new(elem),
@@ -153,7 +153,7 @@ impl<'a> super::TypeChecker<'a> {
                             "{container}.{method} expects 0 arguments, got {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -167,7 +167,7 @@ impl<'a> super::TypeChecker<'a> {
                             "{container}.{method} requires a numeric element type, found '{}'",
                             type_display(&elem)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     return Some(Type::Error);
@@ -246,7 +246,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Column.{method} expects {nargs} argument(s), got {}",
                             args.len()
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                     for arg in args {
@@ -263,7 +263,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "Column.corr requires an f64 column, found '{}'",
                                 type_display(&elem)
                             ),
-                            span.clone(),
+                            *span,
                             TypeErrorKind::TypeMismatch,
                         );
                         self.infer_expr(&args[0].value);
@@ -274,7 +274,7 @@ impl<'a> super::TypeChecker<'a> {
                         name: "Column".to_string(),
                         args: vec![Type::Float(FloatSize::F64)],
                     };
-                    self.check_assignable(&expected, &arg_ty, args[0].value.span.clone());
+                    self.check_assignable(&expected, &arg_ty, args[0].value.span);
                     return Some(Type::Float(FloatSize::F64));
                 }
                 if !is_numeric(&elem) && !self.type_param_has_numeric_bound(&elem) {
@@ -283,7 +283,7 @@ impl<'a> super::TypeChecker<'a> {
                             "Column.{method} requires a numeric element type, found '{}'",
                             type_display(&elem)
                         ),
-                        span.clone(),
+                        *span,
                         TypeErrorKind::TypeMismatch,
                     );
                     for arg in args {
@@ -295,11 +295,7 @@ impl<'a> super::TypeChecker<'a> {
                 // runtime, since it isn't a compile-time constant in general).
                 if method == "quantile" {
                     let q_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(
-                        &Type::Float(FloatSize::F64),
-                        &q_ty,
-                        args[0].value.span.clone(),
-                    );
+                    self.check_assignable(&Type::Float(FloatSize::F64), &q_ty, args[0].value.span);
                 }
                 return Some(match method {
                     "sum" | "min" | "max" | "range" => elem,
@@ -347,7 +343,7 @@ impl<'a> super::TypeChecker<'a> {
             if args.len() != want {
                 self.type_error(
                     format!("{method} expects {want} argument(s), got {}", args.len()),
-                    span.clone(),
+                    *span,
                     TypeErrorKind::WrongNumberOfArgs,
                 );
                 return Some(Type::Error);
@@ -359,7 +355,7 @@ impl<'a> super::TypeChecker<'a> {
             // limitation) — accepted as-is.
             let arg_tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
             if matches!(method, "column" | "has_column" | "insert" | "write_csv") {
-                self.check_assignable(&Type::Str, &arg_tys[0], args[0].value.span.clone());
+                self.check_assignable(&Type::Str, &arg_tys[0], args[0].value.span);
             } else if method == "select" {
                 self.check_assignable(
                     &Type::Named {
@@ -367,7 +363,7 @@ impl<'a> super::TypeChecker<'a> {
                         args: vec![Type::Str],
                     },
                     &arg_tys[0],
-                    args[0].value.span.clone(),
+                    args[0].value.span,
                 );
             }
             return Some(match method {

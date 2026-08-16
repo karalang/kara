@@ -48,9 +48,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         Some(args.into_iter().map(GenericArg::Type).collect())
                     },
-                    span: span_zero.clone(),
+                    span: span_zero,
                 }),
-                span: span_zero.clone(),
+                span: span_zero,
             }
         };
 
@@ -316,9 +316,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         Some(args.into_iter().map(GenericArg::Type).collect())
                     },
-                    span: span_zero.clone(),
+                    span: span_zero,
                 }),
-                span: span_zero.clone(),
+                span: span_zero,
             }
         };
         if let Some(te) = self.type_decls.enum_inst_var_types.get(name) {
