@@ -10345,10 +10345,37 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_compare(inkwell::IntPredicate::SGT, d_m5, d_t2, "d.bl")
             .unwrap();
-        let d_mode = self
-            .builder
-            .build_select(d_bl, one, zero, "d.mode")
-            .unwrap();
+        // `KARAC_SORT_FORCE=branchy|branchless` pins the kernel instead of
+        // letting the probe pick. Default behaviour is UNCHANGED; this exists
+        // because the probe's calibration is x86-derived and re-measuring it on
+        // another microarch needs an A/B that does not require patching the
+        // compiler (B-2026-08-15-30).
+        //
+        // WHAT IT FOUND ON ARM64, and why the default is nonetheless untouched.
+        // Isolated 150k x 25-round kernel over six patterns, each kernel forced
+        // (branchless/branchy, cycles): random 1.28x, sorted 1.07x, reverse
+        // 1.01x, few-unique 0.98x, sawtooth 7.98x, nearly-sorted 5.44x — so on
+        // this host branchless loses almost everywhere, the reverse of the x86
+        // result the 40% threshold encodes. Pinning branchy corpus-wide is
+        // still NOT a win: measured against a same-commit control over every
+        // kata that sorts, with binary-hash gating to exclude the untouched,
+        //
+        //   #252 0.815x   #253 0.865x   #1665 0.976x   #40 0.996x   #47 0.996x
+        //   #18  1.010x   #15  1.031x   #16   1.037x   #56 1.042x
+        //
+        // — two large wins against four real regressions, median ~flat. And the
+        // obvious discriminator is wrong: #56 sorts `(i64,i64)` exactly as #252
+        // does and moves the other way, so element type does not separate them
+        // either. Until something does, a blanket arch gate trades one set of
+        // katas for another, which is not an improvement.
+        let d_mode = match std::env::var("KARAC_SORT_FORCE").as_deref() {
+            Ok("branchless") => one.into(),
+            Ok("branchy") => zero.into(),
+            _ => self
+                .builder
+                .build_select(d_bl, one, zero, "d.mode")
+                .unwrap(),
+        };
         self.builder.build_store(blmode_a, d_mode).unwrap();
         self.builder
             .build_unconditional_branch(p2_mode_pick)
