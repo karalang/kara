@@ -7949,9 +7949,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// then parks at the final suspend whose destroy edge is free-only — or is
     /// destroyed at a park, reaching this drain), so nothing runs twice.
     pub(super) fn emit_coro_destroy_edge_cleanup(&mut self) {
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         self.emit_scope_cleanup_for_error_path();
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
     }
 
     /// Error-exit drain. Per design.md § *Drop ordering within a branch*,

@@ -888,13 +888,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get_function(&name)
                 .expect("coroutine ramp fn declared in declare_function");
             // A2 slice 5a — non-blocking spawn: inside a `__spawn_coro_wrap`
-            // body (`self.coro_spawn_slot` is `Some`), the runtime owns the
+            // body (`self.conc.coro_spawn_slot` is `Some`), the runtime owns the
             // completion slot and binds it to the `TaskHandle`. We hand that
             // slot to the ramp and return *without* waiting — the worker is
             // freed while the coroutine stays parked. Otherwise (the inline
             // drive) the caller owns the slot: allocate it, ramp, block on it,
             // free it.
-            let spawn_slot = self.coro_spawn_slot;
+            let spawn_slot = self.conc.coro_spawn_slot;
             let slot = match spawn_slot {
                 Some(s) => s,
                 None => {
@@ -1045,8 +1045,14 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return Ok(self.context.i64_type().const_int(0, false).into());
         }
-        if let Some(ctor_fn) = self.state_machine_state_constructors.get(&name).copied() {
+        if let Some(ctor_fn) = self
+            .conc
+            .state_machine_state_constructors
+            .get(&name)
+            .copied()
+        {
             let poll_fn = self
+                .conc
                 .state_machine_poll_fns
                 .get(&name)
                 .copied()
@@ -1098,6 +1104,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // through `coerce_to_slice` to synthesize the
             // `{ ptr, i64 }` header at the call site.
             let state_struct = self
+                .conc
                 .state_struct_types
                 .get(&name)
                 .copied()
@@ -1228,8 +1235,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // terminal field's index is the state struct's last field:
             // `1 + N` where N is the captured-local count.
             let call_result =
-                if let Some(ret_ty) = self.state_machine_return_types.get(&name).copied() {
+                if let Some(ret_ty) = self.conc.state_machine_return_types.get(&name).copied() {
                     let state_struct = self
+                        .conc
                         .state_struct_types
                         .get(&name)
                         .copied()
@@ -2223,7 +2231,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // FFI extern decls, and intrinsic / runtime calls take the
         // direct path below — slots are only minted for user-defined
         // pub fn declarations.
-        let call = if let Some(slot) = self.hot_swap_slots.get(&name).copied() {
+        let call = if let Some(slot) = self.conc.hot_swap_slots.get(&name).copied() {
             self.build_hot_swap_indirect_call(func, slot, &compiled_args)
         } else {
             self.builder
@@ -4394,7 +4402,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> CallSiteValue<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_ty = self.context.i64_type();
-        let n = self.hot_swap_fns.len() as u32;
+        let n = self.conc.hot_swap_fns.len() as u32;
         let arr_ty = ptr_ty.array_type(n);
         let table = self
             .module

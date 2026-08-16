@@ -1124,7 +1124,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.compile_ref_return_ptr(e)
                     };
-                    if let Some(ctx) = self.coro_ctx {
+                    if let Some(ctx) = self.conc.coro_ctx {
                         // B-2026-06-19: carry the non-unit return value to the
                         // inline-drive caller via the completion slot before
                         // branching to the shared signal+suspend block (where
@@ -1191,7 +1191,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the implicit end-of-`main` return-zero in
                     // `compile_function`. Non-`main` void fns keep `ret void`.
                     // (phase-7-codegen.md — return-in-main fix.)
-                    if let Some(ctx) = self.coro_ctx {
+                    if let Some(ctx) = self.conc.coro_ctx {
                         // A2 2b.3: valueless `return;` inside a coroutine →
                         // completion block (same as the value case).
                         self.builder

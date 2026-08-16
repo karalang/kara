@@ -8230,7 +8230,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Clear the par-branch cancel pointer for the thunk body (B-2026-06-18-10):
         // the comparator is a separate fn, so a method call in it (e.g. `a.cmp(b)`)
         // must not load the enclosing par-branch's `cancel_flag` arg.
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
 
         // 5. Build thunk body.
         self.current_fn = Some(thunk_fn);
@@ -8675,7 +8675,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
         self.pending_closure_fn_type = saved_pct;
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -8944,7 +8944,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Clear the par-branch cancel pointer for the thunk body (B-2026-06-18-10):
         // the comparator is a separate fn, so a method call in it (e.g. `a.cmp(b)`)
         // must not load the enclosing par-branch's `cancel_flag` arg.
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
 
         // 5. Build thunk body.
         self.current_fn = Some(thunk_fn);
@@ -9073,7 +9073,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
         self.pending_closure_fn_type = saved_pct;
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -9336,7 +9336,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (B-2026-06-18-10): the comparison this routine inlines must not
         // load the enclosing par-branch's `cancel_flag` arg — `%1` here is
         // the i64 length, not a cancel pointer.
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
 
         self.current_fn = Some(sort_fn);
 
@@ -11028,7 +11028,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
         self.pending_closure_fn_type = saved_pct;
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -11122,7 +11122,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         self.current_fn = Some(qpart_fn);
 
         let data = qpart_fn.get_nth_param(0).unwrap().into_pointer_value();
@@ -11697,7 +11697,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
         self.pending_closure_fn_type = saved_pct;
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(b) = saved_bb {
             self.builder.position_at_end(b);
         }
@@ -11747,7 +11747,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         self.current_fn = Some(probe_fn);
 
         let data = probe_fn.get_nth_param(0).unwrap().into_pointer_value();
@@ -11928,7 +11928,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
         self.pending_closure_fn_type = saved_pct;
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(b) = saved_bb {
             self.builder.position_at_end(b);
         }

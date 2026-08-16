@@ -764,10 +764,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // bodies and synthesized clone/drop helpers do not flow through
         // this path — they're emitted via separate `add_function` calls
         // in `closures.rs` / `clone_drop.rs`.
-        if self.hot_swap_enabled && func.is_pub {
-            let slot = self.hot_swap_fns.len() as u32;
-            self.hot_swap_slots.insert(func.name.clone(), slot);
-            self.hot_swap_fns.push((slot, fn_val));
+        if self.conc.hot_swap_enabled && func.is_pub {
+            let slot = self.conc.hot_swap_fns.len() as u32;
+            self.conc.hot_swap_slots.insert(func.name.clone(), slot);
+            self.conc.hot_swap_fns.push((slot, fn_val));
         }
 
         Ok(fn_val)
@@ -1260,8 +1260,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // A2 slice 2b.3: drain any prior function's coroutine context. A
         // coroutine fn's `emit_coro_ramp` sets it; `emit_coro_finish` clears it
         // — this reset is the belt-and-suspenders for an early-error exit.
-        self.coro_ctx = None;
-        self.coro_park_counter = 0;
+        self.conc.coro_ctx = None;
+        self.conc.coro_park_counter = 0;
         self.variables.clear();
         self.var_type_names.clear();
         // Per-binding layout carrier (slice 5): function-scoped like
@@ -1527,8 +1527,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // runs), hence the explicit `auto_par_disabled` check.
         let mut head_index_names = self.mapset.deque_head_locals.get(&func.name).cloned();
         if let Some(names) = head_index_names.as_mut() {
-            if !self.auto_par_disabled {
-                if let Some(dec) = self.concurrency_decisions.get(&func.name) {
+            if !self.conc.auto_par_disabled {
+                if let Some(dec) = self.conc.concurrency_decisions.get(&func.name) {
                     // Groups with a captured-container mutation are skipped:
                     // codegen unconditionally runs those sequentially
                     // (B-2026-07-15-2 — the branch would mutate its by-value
@@ -1607,7 +1607,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // A2 slice 2b.3: for a coroutine-compiled network-boundary fn, emit the
         // coro ramp prologue (coro.id/begin + completion slot + shared exit
         // blocks) at the top of entry, before param allocas — this sets
-        // `self.coro_ctx`, so the leaf parks in the body lower to `coro.suspend`
+        // `self.conc.coro_ctx`, so the leaf parks in the body lower to `coro.suspend`
         // and the body returns route to the completion block. `emit_coro_finish`
         // closes it out after the body.
         if self.is_coroutine_compiled(&func.name) {
@@ -2809,7 +2809,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // free-walk). Runs after the scope cleanup and after the
             // return value (`dummy.<link>`) is already in `result`.
             self.emit_headerless_reshaper_dummy_free(&func.name);
-            if let Some(ctx) = self.coro_ctx {
+            if let Some(ctx) = self.conc.coro_ctx {
                 // A2 slice 2b.3: a coroutine body's normal completion routes to
                 // the signal + final-suspend block, not a `ret` (the ramp's
                 // `ptr` return is emitted in the shared suspend-return block).
@@ -2969,9 +2969,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // suspend_ret = end + ret slot) now that every park in the body has
         // wired its suspend switch to them. Copy the context out (it's `Copy`)
         // and drain it so it can't leak into the next function.
-        if let Some(ctx) = self.coro_ctx {
+        if let Some(ctx) = self.conc.coro_ctx {
             self.emit_coro_finish(&ctx);
-            self.coro_ctx = None;
+            self.conc.coro_ctx = None;
         }
 
         self.drop_rc.scope_cleanup_actions.clear();

@@ -890,7 +890,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // never lands in `state_struct_layouts`. Emit it here when its
         // declaration is present in the program, with a layout
         // synthesised from its declared parameters.
-        if !self.state_struct_types.contains_key(KARAC_PARK_ON_FD) {
+        if !self.conc.state_struct_types.contains_key(KARAC_PARK_ON_FD) {
             if let Some(layout) = synthesize_park_on_fd_layout(program) {
                 self.emit_state_struct_type_for_key(
                     program,
@@ -1021,7 +1021,8 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(ret_te) = &fn_ast.return_type {
                 if let Some(ret_ty) = state_machine_return_type_for(self, ret_te) {
                     fields.push(ret_ty);
-                    self.state_machine_return_types
+                    self.conc
+                        .state_machine_return_types
                         .insert(emit_key.to_string(), ret_ty);
                 }
             }
@@ -1073,7 +1074,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let anchor = self.module.add_global(st, None, &anchor_name);
         anchor.set_linkage(Linkage::Private);
         anchor.set_initializer(&st.const_zero());
-        self.state_struct_types.insert(emit_key.to_string(), st);
+        self.conc
+            .state_struct_types
+            .insert(emit_key.to_string(), st);
     }
 
     // ── State-machine poll-function emission (line 26 slice 6) ────────
@@ -1128,8 +1131,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // (state_0 = register_fd + Pending; state_1 = take_wakeups +
         // Ready) instead of running the body-split walker against the
         // empty kara-source body.
-        if self.state_struct_types.contains_key(KARAC_PARK_ON_FD)
-            && !self.state_machine_poll_fns.contains_key(KARAC_PARK_ON_FD)
+        if self.conc.state_struct_types.contains_key(KARAC_PARK_ON_FD)
+            && !self
+                .conc
+                .state_machine_poll_fns
+                .contains_key(KARAC_PARK_ON_FD)
         {
             self.emit_state_machine_poll_fn_for_key(program, KARAC_PARK_ON_FD, KARAC_PARK_ON_FD);
         }
@@ -1164,7 +1170,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ],
             false,
         );
-        let state_struct = match self.state_struct_types.get(emit_key) {
+        let state_struct = match self.conc.state_struct_types.get(emit_key) {
             Some(st) => *st,
             // Defensive: layout entry without a corresponding LLVM
             // struct type means slice-5 emit didn't run or the key
@@ -1202,7 +1208,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // on `take_wakeups` and returns Ready when a wakeup arrives.
         if emit_key == KARAC_PARK_ON_FD {
             self.emit_park_on_fd_poll_body(poll_fn, state_struct);
-            self.state_machine_poll_fns
+            self.conc
+                .state_machine_poll_fns
                 .insert(emit_key.to_string(), poll_fn);
             return;
         }
@@ -1895,7 +1902,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // index in the state struct is `1 + N` where N is
                 // the captured-local count (tag at 0, captures at
                 // 1..=N, terminal at N+1).
-                if let Some(&ret_ty) = self.state_machine_return_types.get(emit_key) {
+                if let Some(&ret_ty) = self.conc.state_machine_return_types.get(emit_key) {
                     let terminal_idx = (layout.fields.len() + 1) as u32;
                     let terminal_ptr = self
                         .builder
@@ -1950,7 +1957,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
 
-        self.state_machine_poll_fns
+        self.conc
+            .state_machine_poll_fns
             .insert(emit_key.to_string(), poll_fn);
     }
 
@@ -2243,7 +2251,11 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   field 3: ptr  parked.state   (constructor fills: self-pointer)
     ///   field 4: ptr  slot           (state_0 allocs the completion slot)
     pub(super) fn emit_park_on_timer_family(&mut self) {
-        if self.state_struct_types.contains_key(KARAC_PARK_ON_TIMER) {
+        if self
+            .conc
+            .state_struct_types
+            .contains_key(KARAC_PARK_ON_TIMER)
+        {
             return;
         }
         let i8_ty = self.context.i8_type();
@@ -2272,7 +2284,8 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         anchor.set_linkage(Linkage::Private);
         anchor.set_initializer(&st.const_zero());
-        self.state_struct_types
+        self.conc
+            .state_struct_types
             .insert(KARAC_PARK_ON_TIMER.to_string(), st);
 
         // 2. Poll-fn (`i8 fn(ptr state, ptr cancel)` — KaracParkedTask ABI).
@@ -2284,7 +2297,8 @@ impl<'ctx> super::Codegen<'ctx> {
             f
         });
         self.emit_park_on_timer_poll_body(poll_fn, st);
-        self.state_machine_poll_fns
+        self.conc
+            .state_machine_poll_fns
             .insert(KARAC_PARK_ON_TIMER.to_string(), poll_fn);
 
         // 3. Constructor: malloc, tag=0, fill the parked record (poll_fn +
@@ -2339,7 +2353,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
-        self.state_machine_state_constructors
+        self.conc
+            .state_machine_state_constructors
             .insert(KARAC_PARK_ON_TIMER.to_string(), ctor_fn);
     }
 
@@ -2540,8 +2555,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // Phase 6 line 17 slice 6: emit the constructor for the leaf
         // parking primitive. Matches the synthetic state-struct
         // emission above.
-        if self.state_struct_types.contains_key(KARAC_PARK_ON_FD)
+        if self.conc.state_struct_types.contains_key(KARAC_PARK_ON_FD)
             && !self
+                .conc
                 .state_machine_state_constructors
                 .contains_key(KARAC_PARK_ON_FD)
         {
@@ -2558,7 +2574,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let i32_ty = self.context.i32_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let ctor_fn_type = ptr_ty.fn_type(&[], false);
-        let state_struct = match self.state_struct_types.get(emit_key) {
+        let state_struct = match self.conc.state_struct_types.get(emit_key) {
             Some(st) => *st,
             None => return,
         };
@@ -2656,7 +2672,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
 
-        self.state_machine_state_constructors
+        self.conc
+            .state_machine_state_constructors
             .insert(emit_key.to_string(), ctor_fn);
     }
 
@@ -2803,7 +2820,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let void_ty = self.context.void_type();
         let vec_ty = self.vec_struct_type();
         let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
-        let state_struct = match self.state_struct_types.get(emit_key) {
+        let state_struct = match self.conc.state_struct_types.get(emit_key) {
             Some(st) => *st,
             None => return,
         };
@@ -3051,7 +3068,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
 
-        self.state_machine_state_destructors
+        self.conc
+            .state_machine_state_destructors
             .insert(emit_key.to_string(), drop_fn);
     }
 
@@ -3091,7 +3109,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // already exists for this `mono_key`. The four helpers all
         // emit-and-insert atomically per call, so the poll-fn's
         // presence implies all four are emitted.
-        if self.state_machine_poll_fns.contains_key(mono_key) {
+        if self.conc.state_machine_poll_fns.contains_key(mono_key) {
             return;
         }
         let program = match self.program_snapshot.as_ref() {

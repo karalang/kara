@@ -67,6 +67,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<(inkwell::types::BasicTypeEnum<'ctx>, u64), String> {
         let te = self
+            .conc
             .channel_elem_types
             .get(&(call_span.offset, call_span.length))
             .cloned()
@@ -108,6 +109,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // is idempotent, so emitting it per-send is fine. `emit_drop_fn_for_type_expr`
         // restores the builder position, so the send emission below is unaffected.
         if let Some(elem_te) = self
+            .conc
             .channel_elem_types
             .get(&(call_span.offset, call_span.length))
             .cloned()

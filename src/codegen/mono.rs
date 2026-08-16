@@ -1843,7 +1843,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // → "Referring to an argument in another function" + a `ret void`
             // in a value-returning fn. Reset for the body, restore the
             // caller's value below (re-entrant, like `variables`).
-            let saved_cancel_ptr = self.branch_cancel_ptr.take();
+            let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
             let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
             let saved_subst = std::mem::replace(&mut self.mono_state.type_subst, subst.clone());
             // Name-level twin of `type_subst` (B-2026-07-03-11): thread the
@@ -1917,7 +1917,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mono_state.type_subst_names = saved_subst_names;
             self.mono_state.type_subst_type_exprs = saved_subst_type_exprs;
             self.fn_ctx.loop_stack = saved_loop_stack;
-            self.branch_cancel_ptr = saved_cancel_ptr;
+            self.conc.branch_cancel_ptr = saved_cancel_ptr;
             self.drop_rc.scope_cleanup_actions = saved_cleanup;
             self.restore_var_side_tables(saved_side_tables);
             self.accel.tensor_var_infos = saved_tensor_infos;
@@ -1967,17 +1967,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // were emitted earlier (by this or an earlier call site of
         // the same mono).
         let ctor_fn_opt = if use_state_machine {
-            self.state_machine_state_constructors.get(&mangled).copied()
+            self.conc
+                .state_machine_state_constructors
+                .get(&mangled)
+                .copied()
         } else {
             None
         };
         if let Some(ctor_fn) = ctor_fn_opt {
             let poll_fn = self
+                .conc
                 .state_machine_poll_fns
                 .get(&mangled)
                 .copied()
                 .expect("poll-fn co-emitted with state-machine constructor");
             let state_struct = self
+                .conc
                 .state_struct_types
                 .get(&mangled)
                 .copied()
@@ -2137,7 +2142,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // resolved to a `state_machine_return_types`-eligible
             // type), load the terminal field BEFORE freeing.
             let call_result =
-                if let Some(ret_ty) = self.state_machine_return_types.get(&mangled).copied() {
+                if let Some(ret_ty) = self.conc.state_machine_return_types.get(&mangled).copied() {
                     let n_fields = state_struct.count_fields();
                     let terminal_idx = n_fields - 1;
                     let terminal_ptr = self
@@ -2459,7 +2464,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Full var-side-table isolation — see `SavedVarSideTables`.
         let saved_side_tables = self.take_var_side_tables();
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         // Name-subst twin (B-2026-07-03-11): isolate the layout-mono body from a
@@ -2508,7 +2513,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mono_state.type_subst_names = saved_subst_names;
         self.mono_state.type_subst_type_exprs = saved_subst_type_exprs;
         self.fn_ctx.loop_stack = saved_loop_stack;
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.restore_var_side_tables(saved_side_tables);
         self.accel.tensor_var_infos = saved_tensor_infos;

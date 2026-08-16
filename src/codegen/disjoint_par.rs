@@ -80,7 +80,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the ones reached from `compile_block` rather than the parallel-group
         // dispatch. This is the differential harness's A/B lever, so it has to
         // be honoured before anything else runs.
-        if self.auto_par_disabled {
+        if self.conc.auto_par_disabled {
             return Ok(None);
         }
 
@@ -395,8 +395,8 @@ impl<'ctx> super::Codegen<'ctx> {
         const_int_captures: &[(String, i64, Option<crate::token::IntSuffix>)],
         has_lo: bool,
     ) -> Result<FunctionValue<'ctx>, String> {
-        let worker_id = self.par_counter;
-        self.par_counter += 1;
+        let worker_id = self.conc.par_counter;
+        self.conc.par_counter += 1;
         let name = format!("__karac_disjoint_worker_{worker_id}");
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -425,7 +425,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
 
         self.current_fn = Some(worker_fn);
@@ -620,7 +620,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_scope_cleanup();
         self.builder.build_return(None).unwrap();
 
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
@@ -804,8 +804,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let spawn_site_id = self
             .context
             .i32_type()
-            .const_int(self.par_counter as u64, false);
-        self.par_counter += 1;
+            .const_int(self.conc.par_counter as u64, false);
+        self.conc.par_counter += 1;
 
         self.builder
             .build_call(

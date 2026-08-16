@@ -184,7 +184,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // back to the plain sequential loop for every PARALLEL reduction; the
         // sequential tabulate (a `reduction.seq` Collect) is not a fan-out, so
         // it stays — AUTO_PAR=0 drops parallelism, not sequential optimizations.
-        if self.auto_par_disabled && !(reduction.op == ReductionOp::Collect && reduction.seq) {
+        if self.conc.auto_par_disabled && !(reduction.op == ReductionOp::Collect && reduction.seq) {
             return Ok(None);
         }
 
@@ -799,8 +799,8 @@ impl<'ctx> super::Codegen<'ctx> {
         const_int_captures: &[(String, i64, Option<IntSuffix>)],
         has_lo: bool,
     ) -> Result<FunctionValue<'ctx>, String> {
-        let worker_id = self.par_counter;
-        self.par_counter += 1;
+        let worker_id = self.conc.par_counter;
+        self.conc.par_counter += 1;
         let name = format!("__karac_reduce_worker_{worker_id}");
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -826,7 +826,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
 
         self.current_fn = Some(worker_fn);
@@ -1194,7 +1194,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(None).unwrap();
 
         // Restore outer state.
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
@@ -1405,8 +1405,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let spawn_site_id = self
             .context
             .i32_type()
-            .const_int(self.par_counter as u64, false);
-        self.par_counter += 1;
+            .const_int(self.conc.par_counter as u64, false);
+        self.conc.par_counter += 1;
 
         self.builder
             .build_call(
@@ -2003,8 +2003,8 @@ impl<'ctx> super::Codegen<'ctx> {
         tabulate_elem_size: Option<u64>,
         alias_read_vecs: &[String],
     ) -> Result<FunctionValue<'ctx>, String> {
-        let worker_id = self.par_counter;
-        self.par_counter += 1;
+        let worker_id = self.conc.par_counter;
+        self.conc.par_counter += 1;
         let name = if tabulate_elem_size.is_some() {
             format!("__karac_reduce_worker_collect_tab_{worker_id}")
         } else {
@@ -2036,7 +2036,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         let saved_elem_types = std::mem::take(&mut self.vec_elem_types);
         // The enclosing function may itself be inside a tabulate loop —
         // its alias scopes are declared in THAT function and must not
@@ -2436,7 +2436,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Restore outer state.
         self.tabulate_alias_scopes = saved_tab_md;
         self.vec_elem_types = saved_elem_types;
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
@@ -2802,8 +2802,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let spawn_site_id = self
             .context
             .i32_type()
-            .const_int(self.par_counter as u64, false);
-        self.par_counter += 1;
+            .const_int(self.conc.par_counter as u64, false);
+        self.conc.par_counter += 1;
 
         self.builder
             .build_call(
@@ -2931,8 +2931,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self
             .current_fn
             .expect("alias-scope setup must run inside a function");
-        let site_id = self.par_counter;
-        self.par_counter += 1;
+        let site_id = self.conc.par_counter;
+        self.conc.par_counter += 1;
         let domain = self.context.metadata_node(&[self
             .context
             .metadata_string(&format!("karac.tab.domain.{site_id}"))

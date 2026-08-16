@@ -2173,11 +2173,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     call_args.push(val.into());
                 }
                 // Hidden trailing completion slot. A2 slice 5a — inside a
-                // `__spawn_coro_wrap` body (`self.coro_spawn_slot` is `Some`)
+                // `__spawn_coro_wrap` body (`self.conc.coro_spawn_slot` is `Some`)
                 // the runtime owns the slot and binds it to the `TaskHandle`;
                 // we ramp and return (worker freed). Otherwise the caller owns
                 // it: allocate, ramp, block, free (the inline drive).
-                let spawn_slot = self.coro_spawn_slot;
+                let spawn_slot = self.conc.coro_spawn_slot;
                 let slot = match spawn_slot {
                     Some(s) => s,
                     None => {
@@ -2215,13 +2215,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 return Ok(self.context.i64_type().const_int(0, false).into());
             }
-            if let Some(ctor_fn) = self.state_machine_state_constructors.get(key).copied() {
+            if let Some(ctor_fn) = self.conc.state_machine_state_constructors.get(key).copied() {
                 let poll_fn = self
+                    .conc
                     .state_machine_poll_fns
                     .get(key)
                     .copied()
                     .expect("poll-fn co-emitted with state-machine constructor");
                 let state_struct = self
+                    .conc
                     .state_struct_types
                     .get(key)
                     .copied()
@@ -2396,7 +2398,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // state struct is freed, the field is no longer
                 // dereferenceable.
                 let call_result =
-                    if let Some(ret_ty) = self.state_machine_return_types.get(key).copied() {
+                    if let Some(ret_ty) = self.conc.state_machine_return_types.get(key).copied() {
                         let n_fields = state_struct.count_fields();
                         let terminal_idx = n_fields - 1;
                         let terminal_ptr = self
@@ -6045,6 +6047,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // statement-hoisting pre-pass binds channel ends then resets
         // `var_type_names` before this method-call pass runs).
         if self
+            .conc
             .channel_elem_types
             .contains_key(&(call_span.offset, call_span.length))
         {

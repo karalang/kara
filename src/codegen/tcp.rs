@@ -75,21 +75,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // return the builder is positioned at this park's resume edge, so the
         // caller's post-park syscall (`karac_runtime_tcp_read`/`accept`/`write`)
         // lands there verbatim — same separation the thread-block path uses.
-        if let Some(ctx) = self.coro_ctx {
+        if let Some(ctx) = self.conc.coro_ctx {
             self.emit_coro_park_suspend(fd, direction, &ctx);
             return;
         }
         let ctor_fn = self
-            .state_machine_state_constructors
+            .conc
+                .state_machine_state_constructors
             .get(KARAC_PARK_ON_FD)
             .copied()
             .expect("karac_park_on_fd state-machine constructor must be emitted before codegen-side compose");
         let poll_fn = self
+            .conc
             .state_machine_poll_fns
             .get(KARAC_PARK_ON_FD)
             .copied()
             .expect("karac_park_on_fd poll-fn must be emitted before codegen-side compose");
         let state_struct = self
+            .conc
             .state_struct_types
             .get(KARAC_PARK_ON_FD)
             .copied()
@@ -262,16 +265,19 @@ impl<'ctx> super::Codegen<'ctx> {
         duration_nanos: inkwell::values::IntValue<'ctx>,
     ) {
         let ctor_fn = self
+            .conc
             .state_machine_state_constructors
             .get(KARAC_PARK_ON_TIMER)
             .copied()
             .expect("karac_park_on_timer constructor must be emitted before sleep_ms compose");
         let poll_fn = self
+            .conc
             .state_machine_poll_fns
             .get(KARAC_PARK_ON_TIMER)
             .copied()
             .expect("karac_park_on_timer poll-fn must be emitted before sleep_ms compose");
         let state_struct = self
+            .conc
             .state_struct_types
             .get(KARAC_PARK_ON_TIMER)
             .copied()

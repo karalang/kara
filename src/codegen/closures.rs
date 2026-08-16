@@ -3012,7 +3012,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // of the wrong function ("referring to an argument in another
         // function"). Clear it for the body and restore after, exactly as the
         // par/reduce/task-group emitters do at their function boundaries.
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         // Isolate the owned-Vec/String PARAM set (B-2026-07-15-9). A closure's
         // owned heap params are caller-retained exactly like a function's: the
         // CALLER frees the arg buffer (materialized at the closure call site),
@@ -3442,7 +3442,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pending_closure_fn_type = saved_pct;
         self.last_fstr_acc = saved_fstr_acc;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         // Restore the outer fn's owned-param set BEFORE the env is built below
         // (the capture defensive-copy at env-build time keys off the OUTER fn's
         // `owned_vecstr_params` to decide whether a captured Vec/String is a

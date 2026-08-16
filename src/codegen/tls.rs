@@ -343,7 +343,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // where blocking the dispatcher would be worse — an unusual shape, left
         // on its existing (park) path until the handshake-pool gets an explicit
         // completion-readiness signal (task #21).
-        if self.coro_ctx.is_some() {
+        if self.conc.coro_ctx.is_some() {
             let direction = self.context.i8_type().const_int(0, false);
             self.emit_state_machine_invocation_for_park_on_fd(listener_fd, direction);
         }

@@ -301,7 +301,7 @@ impl CoroIntrinsics {
 /// completion target.
 ///
 /// All fields are `Copy` (raw refs + inkwell handle types), so the leaf can copy
-/// the whole context out of `self.coro_ctx` and emit through it without holding
+/// the whole context out of `self.conc.coro_ctx` and emit through it without holding
 /// a borrow on `self`.
 #[derive(Clone, Copy)]
 pub(crate) struct CoroContext<'ctx> {
@@ -728,7 +728,7 @@ pub(super) unsafe fn build_demo_park_coroutine<'ctx>(
 //   * `emit_coro_ramp`    — entry prologue: coro.id/begin + completion slot +
 //                           the shared exit blocks; returns the CoroContext.
 //   * `emit_coro_park_suspend` — one park → suspend (called from the tcp.rs
-//                           leaf when self.coro_ctx is Some).
+//                           leaf when self.conc.coro_ctx is Some).
 //   * `emit_coro_finish`  — fills the shared exit blocks after the body.
 //
 // The frame-lifetime topology is the load-bearing, correctness-sensitive part:
@@ -744,7 +744,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `presplitcoroutine`, emits `coro.id`/`coro.begin`, allocates the caller's
     /// completion slot, and appends the three shared exit blocks (filled later
     /// by [`Self::emit_coro_finish`]). Stores the populated context in
-    /// `self.coro_ctx` and resets the per-function park counter; also returns it.
+    /// `self.conc.coro_ctx` and resets the per-function park counter; also returns it.
     pub(super) fn emit_coro_ramp(
         &mut self,
         fn_val: FunctionValue<'ctx>,
@@ -796,14 +796,14 @@ impl<'ctx> super::Codegen<'ctx> {
             cleanup_bb,
             suspend_ret_bb,
         };
-        self.coro_ctx = Some(ctx);
-        self.coro_park_counter = 0;
+        self.conc.coro_ctx = Some(ctx);
+        self.conc.coro_park_counter = 0;
         ctx
     }
 
     /// Emit one network park as a coroutine suspend at the current builder
     /// position. Called from `tcp.rs`'s
-    /// `emit_state_machine_invocation_for_park_on_fd` when `self.coro_ctx` is
+    /// `emit_state_machine_invocation_for_park_on_fd` when `self.conc.coro_ctx` is
     /// `Some`. Builds a frame-resident parked record `{ @__kara_coro_resume,
     /// hdl, token }`, ensures the dispatcher is running, registers the fd,
     /// `coro.suspend`s, and wires the suspend switch to the shared exit blocks
@@ -820,8 +820,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let i8_ty = self.context.i8_type();
         let i64_ty = self.context.i64_type();
 
-        let n = self.coro_park_counter;
-        self.coro_park_counter += 1;
+        let n = self.conc.coro_park_counter;
+        self.conc.coro_park_counter += 1;
         let fn_val = self
             .builder
             .get_insert_block()
@@ -1120,7 +1120,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// return (`store_result` is also a no-op for `size == 0`), and for the
     /// non-blocking spawn drive (nobody reads the slot result there — harmless).
     pub(super) fn emit_coro_return_value_store(&mut self, v: BasicValueEnum<'ctx>) {
-        let Some(ctx) = self.coro_ctx else { return };
+        let Some(ctx) = self.conc.coro_ctx else {
+            return;
+        };
         // A `-> ref T` coroutine returns a borrow pointer, not a value through
         // the slot; the inline-drive caller does not currently read it, so leave
         // that path alone.

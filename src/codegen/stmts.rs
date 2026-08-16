@@ -947,7 +947,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // vs sequential codegen on the same workload. The default
         // (auto-par on) is unchanged — gate-on programs continue to
         // hit the parallel-group dispatch path below.
-        if self.auto_par_disabled {
+        if self.conc.auto_par_disabled {
             return self.compile_block(body);
         }
 
@@ -962,7 +962,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // that fails module verification. Semantically a coroutine owns its
         // frame and suspends on the dispatcher; its body can't be sharded onto
         // pool workers. Fall back to sequential `compile_block` for the body.
-        if self.coro_ctx.is_some() {
+        if self.conc.coro_ctx.is_some() {
             return self.compile_block(body);
         }
 
@@ -2968,7 +2968,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // away its `TaskHandle`, so no join will ever free the runtime handle.
         // Flag it (cleared unconditionally so a prior statement never bleeds
         // through) for `lower_spawn_shared` to mark detached → eager-reaped.
-        self.pending_spawn_detach = Self::stmt_is_discarded_spawn(stmt);
+        self.conc.pending_spawn_detach = Self::stmt_is_discarded_spawn(stmt);
         match &stmt.kind {
             // Slice 5 (general owned-temp tracking): `let _ = make();` /
             // `let _ = { make() };` discards a fresh owned temp with no

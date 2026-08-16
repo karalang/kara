@@ -2106,7 +2106,7 @@ pub(super) fn read_runtime_debug_metadata_env() -> bool {
 ///
 /// Returns `true` iff auto-par dispatch is enabled. The
 /// `Codegen::auto_par_disabled` field is `!return_value` so the
-/// compile-time check reads naturally as `if self.auto_par_disabled`.
+/// compile-time check reads naturally as `if self.conc.auto_par_disabled`.
 pub(super) fn read_auto_par_env() -> bool {
     // Delegates so codegen and `karac query concurrency` cannot disagree about
     // whether auto-par is on at all (B-2026-08-05-13).

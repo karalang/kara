@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use accel::Accel;
 use bce_state::BceState;
+use conc_state::ConcState;
 use contract_state::ContractState;
 use display::Display;
 use drop_rc::DropRc;
@@ -31,7 +32,7 @@ use tracing::Tracing;
 
 use crate::ast::*;
 use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency};
-use crate::ownership::{CapturePath, OwnershipCheckResult, OwnershipMode, ParCaptureMode};
+use crate::ownership::{CapturePath, OwnershipCheckResult, OwnershipMode};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
@@ -55,6 +56,7 @@ mod clone_drop;
 mod closures;
 mod collections;
 mod column;
+mod conc_state;
 mod consume_class;
 mod contract_state;
 mod control_flow;
@@ -1134,6 +1136,7 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) conc: ConcState<'ctx>,
     pub(crate) bce: BceState,
     pub(crate) fn_ctx: FnCtx<'ctx>,
     pub(crate) drop_rc: DropRc<'ctx>,
@@ -1438,37 +1441,6 @@ pub(super) struct Codegen<'ctx> {
     /// fields always have full annotations recorded there, so no parallel
     /// table is needed for the struct case.
     pub(crate) atomic_var_inner_is_bool: HashSet<String>,
-    /// A2 slice 2b.3 gate. When `true`, network-boundary functions (keys in
-    /// `coro_fn_keys`) compile as LLVM coroutines (ramp + `coro.suspend` parks +
-    /// dispatcher-driven slot-wait drive) instead of the degenerate
-    /// `emit_state_machine_poll_fn_for_key` body-splitter. Default `false` (set
-    /// via [`Codegen::set_coro_enabled`]) so the existing poll-fn / drive tests
-    /// stay green; the new coroutine path is opt-in until the flip-the-default +
-    /// delete-degenerate-path slice. See
-    /// docs/spikes/network-async-coroutine-transform.md § 6¾.
-    pub(crate) coro_enabled: bool,
-    /// The network-boundary function keys compiled as coroutines this run
-    /// (populated from `program.state_struct_layouts`, minus generics, only when
-    /// `coro_enabled`). Read by `declare_function` (→ `ptr` return type),
-    /// `emit_state_machine_poll_fns` (→ skip the degenerate poll-fn), and the
-    /// call-site intercepts (→ slot-wait drive instead of the poll-loop).
-    pub(crate) coro_fn_keys: HashSet<String>,
-    /// Set by `emit_coro_ramp` for the duration of a coroutine-compiled
-    /// function's body emission; consulted by the tcp.rs leaf-park branch and
-    /// the body-return routing; drained (`None`) at the top of every
-    /// `compile_function`. `Some` ⇒ "currently emitting inside a coroutine".
-    pub(crate) coro_ctx: Option<coro::CoroContext<'ctx>>,
-    /// Per-coroutine-function counter for unique park resume-block names; reset
-    /// by `emit_coro_ramp`, bumped by each `emit_coro_park_suspend`.
-    pub(crate) coro_park_counter: u32,
-    /// A2 slice 5a — non-blocking spawn drive. Set to `Some(slot)` only while
-    /// compiling a `__spawn_coro_wrap_N` wrapper body (task_group.rs): the
-    /// `is_coroutine_compiled` call-site intercept then emits `ramp(args,
-    /// slot)` and returns **without** `park_slot_new`/`wait`/`free` — the
-    /// runtime owns the slot and binds it to the `TaskHandle`, so the wrapper
-    /// ramps and returns, freeing the worker. `None` (the default) is the
-    /// inline blocking drive (allocate slot, ramp, wait, free).
-    pub(crate) coro_spawn_slot: Option<PointerValue<'ctx>>,
     pub(crate) current_fn: Option<FunctionValue<'ctx>>,
     /// The libc `FILE*` globals for stdout / stderr, used as the `fwrite`
     /// stream argument. The symbol name is platform-specific (`__stdoutp` /
@@ -1503,69 +1475,6 @@ pub(super) struct Codegen<'ctx> {
     /// Box[T] { type Item = T }`, where the RHS references the impl's params)
     /// are a follow-on — only concrete bindings are recorded here.
     pub(crate) assoc_type_bindings: HashMap<(String, String), crate::ast::TypeExpr>,
-    /// State-struct LLVM types for the network-event-loop state-machine
-    /// transform (phase 6 line 26). Key: network-boundary function key
-    /// (`name` for free fns, `Type.method` for impl methods — same shape
-    /// as `Program.state_struct_layouts`). Value: `%kara.state.<fn_key>`
-    /// LLVM struct type with field 0 = `i32` yield-point tag, fields 1..n
-    /// = one slot per captured local from the function's `StateStructLayout`
-    /// (sized via the typechecker-recorded `type_name` through the
-    /// existing `llvm_type_for_name` API; `None` type names fall back to
-    /// `i64`). Populated by `emit_state_struct_types` immediately after
-    /// `declare_enums`, before any function-body lowering — so the
-    /// slice-6+ state-machine transform passes can look up the struct
-    /// type at body-rewrite time. Empty when no network-boundary
-    /// functions exist (the common case for non-network programs).
-    pub(crate) state_struct_types: HashMap<String, StructType<'ctx>>,
-    /// State-machine poll functions for the network-event-loop transform
-    /// (phase 6 line 26 slice 6). Key: same function key shape as
-    /// `state_struct_types` (`name` / `Type.method`). Value:
-    /// `define internal i8 @__kara_poll_<fn_key>(ptr %state, ptr %cancel)`
-    /// FunctionValue carrying the poll-fn ABI per `KaracParkedTask.poll_fn`
-    /// (state-struct pointer + cancel `AtomicBool` pointer; returns the
-    /// `KaracPollResult` discriminant `0=Pending / 1=Ready / 2=Err`).
-    /// Slice 6 ships only the **stub body** (loads the tag via GEP into
-    /// the state struct's field 0, unconditionally returns Pending) —
-    /// the actual switch-on-tag dispatch + per-yield-arm lowering land
-    /// in subsequent sub-slices. The stub already makes the ABI concrete
-    /// in the IR so caller-side allocate-state-struct-then-invoke-poll
-    /// work in slice 7+ can wire against a stable signature. Populated
-    /// by `emit_state_machine_poll_fns` immediately after
-    /// `emit_state_struct_types`. Empty when no network-boundary
-    /// functions exist.
-    pub(crate) state_machine_poll_fns: HashMap<String, FunctionValue<'ctx>>,
-    /// State-struct constructor helpers (phase 6 line 26 slice 8c). Key:
-    /// same function key shape as `state_struct_types`. Value:
-    /// `define internal ptr @__kara_state_new_<fn_key>()` — a no-arg
-    /// helper that `malloc`s a fresh state struct of the right size,
-    /// initializes the i32 yield-point tag (field 0) to 0 so the next
-    /// poll-fn invocation routes to the entry arm `state_0`, and
-    /// returns the heap pointer. Slice 8d's caller-side wiring replaces
-    /// each direct call to a network-boundary fn with a call to this
-    /// constructor followed by an initial poll-fn invocation; future
-    /// slices add the loop-until-Ready and the `free` of the state
-    /// struct when the caller observes Ready/Err. Populated by
-    /// `emit_state_machine_state_constructors` after the poll-fn pass.
-    /// Empty when no network-boundary functions exist.
-    pub(crate) state_machine_state_constructors: HashMap<String, FunctionValue<'ctx>>,
-    /// State-struct destructor helpers (phase 6 line 26 slice 8u). Key:
-    /// same function key shape as `state_struct_types`. Value:
-    /// `define internal void @__kara_state_drop_<fn_key>(ptr %state)` —
-    /// walks the captured-local fields and frees any heap-bearing ones
-    /// (Vec/String `cap > 0 ? free(data)` pattern; shared-struct fields
-    /// `emit_refcount_dec` against the slot's loaded handle). The
-    /// state struct's own heap allocation is the *caller's* responsibility
-    /// to `free` after invoking the destructor — matches the constructor's
-    /// caller-allocates / caller-frees discipline (slice 8c). Slice 8u
-    /// ships the destructor as the unified unwind primitive both the
-    /// future `?`-error-propagation path (post-yield arm prologue when
-    /// the resumed call returned `Err`) and the cooperative-cancel path
-    /// (poll-fn's per-arm `*cancel == true` check) will share — neither
-    /// use site lands in slice 8u itself. Empty when no network-boundary
-    /// functions exist; also empty when none of the captured-local fields
-    /// has a heap-bearing type (the destructor would have an empty body
-    /// — skipped to avoid IR bloat).
-    pub(crate) state_machine_state_destructors: HashMap<String, FunctionValue<'ctx>>,
     /// Slice 8v Phase 2: cached `Program` snapshot used by the per-mono
     /// state-machine emission path. `compile_generic_call` (in
     /// `src/codegen/mono.rs`) needs access to the polymorphic
@@ -1582,25 +1491,6 @@ pub(super) struct Codegen<'ctx> {
     /// (for the per-key emission helpers). Always populated for the
     /// duration of `compile_program`; left `None` outside that scope.
     pub(crate) program_snapshot: Option<Rc<Program>>,
-    /// Non-unit return-type marker for network-boundary functions
-    /// (phase 6 line 26 slice 8i). Key: same function key shape as
-    /// `state_struct_types`. Value: the LLVM type of the function's
-    /// return value (slice-8i v1 records `i64` only; unit-returning
-    /// fns have no entry; other types are deferred to a follow-on
-    /// slice and also have no entry). When an entry exists:
-    /// - The state struct (slice 5) gains a terminal field of this
-    ///   type appended after the captured-local fields;
-    /// - The poll-fn's terminal arm (slice 8b) writes a placeholder
-    ///   into the terminal field ahead of returning Ready (the
-    ///   actual user-level return-expression value lands later when
-    ///   body-splitting completes for non-trivial bodies);
-    /// - Caller-side intercepts (slices 8d / 8g) load the terminal
-    ///   field after the `kara.poll_done` block and use the loaded
-    ///   value as the call's return value, replacing the unconditional
-    ///   `i64 0` from earlier slices.
-    ///
-    /// Absent entries preserve the v1 unit-return behavior.
-    pub(crate) state_machine_return_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Field names in declaration order (struct name → field names).
     pub(crate) struct_field_names: HashMap<String, Vec<String>>,
     /// Field type-names in declaration order (struct name → per-field
@@ -1870,15 +1760,6 @@ pub(super) struct Codegen<'ctx> {
     /// `|a, b|` closures so tuple receivers don't collapse to bare `i64`.
     /// Taken once and cleared on entry to `compile_closure`.
     pub(crate) pending_closure_param_hints: Option<Vec<BasicTypeEnum<'ctx>>>,
-    /// B-2026-06-17-2 — set by `compile_stmt` when the statement being lowered
-    /// is a discarded `spawn(...)` / `tg.spawn(...)` (a bare expression-
-    /// statement or `let _ = …`), whose result `TaskHandle` is never bound or
-    /// joined. Consumed (read + cleared) inside `lower_spawn_shared`, which
-    /// emits a `karac_runtime_task_detach(handle)` call so the runtime
-    /// eager-reaps the handle instead of leaking it. Set false unconditionally
-    /// at the top of `compile_stmt` so a prior statement's value never bleeds
-    /// into an unrelated spawn lowered as a subexpression.
-    pub(crate) pending_spawn_detach: bool,
     /// Staging slot — set by `compile_expr`'s `InterpolatedStringLit` arm
     /// to the f-string's accumulator alloca. The Let / Assign handlers
     /// consume it when the RHS is an f-string AND the LHS is a tracked
@@ -2434,21 +2315,9 @@ pub(super) struct Codegen<'ctx> {
     /// a later same-named binding overwrites; a non-iterator `let` never
     /// registers here.
     pub(crate) iter_let_bindings: HashMap<String, Expr>,
-    /// Per-channel-op MethodCall → element `TypeExpr` side-table — populated
-    /// from `Program.channel_elem_types`. Key: `(span.offset, span.length)`
-    /// of the `Sender.send` / `Receiver.recv` / `Receiver.try_recv`
-    /// MethodCall. Value: the channel element `T`. The channel-op arm of
-    /// `compile_method_call` lowers `T` to its LLVM shape to size the
-    /// `karac_runtime_channel_*` transfer and shape the recv out slot.
-    pub(crate) channel_elem_types: HashMap<(usize, usize), TypeExpr>,
     /// `Stats.<fn>` call-span -> slice element `TypeExpr` (`i64` | `f64`),
     /// from `Program.stats_elem_types` (S5). Missing entry = `f64`.
     pub(crate) stats_elem_types: HashMap<(usize, usize), TypeExpr>,
-    /// `TaskHandle[T].join()` MethodCall span → result type `T`, from
-    /// `Program.task_join_return_types`. The join arm of `compile_method_call`
-    /// lowers `T` to its LLVM shape so the cross-task result transfer (and the
-    /// join out-slot) is sized for a non-scalar return; absent ⇒ `i64` default.
-    pub(crate) task_join_return_types: HashMap<(usize, usize), TypeExpr>,
     /// Inner type of every borrow-typed (`ref T`) expression, keyed by span
     /// — populated from `Program.ref_return_inner_types`. Lets the `let` arm
     /// recognise that a method-call RHS (`let n = u.name()`) returns a
@@ -2746,17 +2615,6 @@ pub(super) struct Codegen<'ctx> {
     /// consumer: the `.kara_jit_template` manifest emitted by
     /// `emit_jit_template_section` (phase-7 line 14).
     pub(crate) used_data_globals: Vec<inkwell::values::GlobalValue<'ctx>>,
-    /// When compiling a par-branch function body, holds the LLVM pointer
-    /// to the runtime's `AtomicBool` cancel flag (the second parameter
-    /// passed by `karac_par_run`). `compile_call` reads this to emit a
-    /// cooperative cancel check before each call site, implementing
-    /// mid-branch cooperative cancellation per `design.md § Effect-boundary
-    /// cooperative cancellation`. Conservatively fires before ANY call —
-    /// the spec narrows the requirement to effectful calls (reads/writes/
-    /// sends/receives) but the over-approximation is sound and avoids
-    /// threading the `EffectCheckResult` through codegen for v1.
-    /// `None` outside par branches.
-    pub(crate) branch_cancel_ptr: Option<PointerValue<'ctx>>,
     /// Borrow-elision for read-only `let r = v[i]` indexed-element bindings
     /// (B-2026-06-19-6, clone-elision). Per-function set of the RHS index
     /// expression's `SpanKey` for each `let r = v[i]` whose binding `r` is
@@ -2841,17 +2699,6 @@ pub(super) struct Codegen<'ctx> {
     /// path and any codegen-only tests that don't run the ownership
     /// pass).
     pub(crate) closure_capture_paths: HashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
-    /// Per-`par {}` block capture modes — phase-7 L227. Threaded from
-    /// `OwnershipCheckResult::par_capture_modes`. Keyed by the par
-    /// expression's `SpanKey`. Consumed in `emit_par_branch_fn`'s
-    /// capture-unpack loop: a `(name, ParCaptureMode::SharedRc)`
-    /// entry triggers atomic rc_inc + `track_rc_var` registration so
-    /// the branch's scope-exit cleanup decs the heap pointer. Names
-    /// absent from this map (or par blocks absent from the outer
-    /// map) fall through to today's by-value-through-env copy
-    /// behavior. Empty when codegen runs without an ownership pass
-    /// (e.g. `compile_to_ir` invoked without an `OwnershipCheckResult`).
-    pub(crate) par_capture_modes: HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
     /// B-2026-08-01-33 mechanism 2 — `shared` type names the ownership pass
     /// promoted to atomic refcounting. Read by `heap_type_uses_atomic_rc`, the
     /// funnel all four refcount dispatchers share. Empty unless a multi-branch
@@ -2876,12 +2723,6 @@ pub(super) struct Codegen<'ctx> {
     /// Reset per function, because the hint set is span-keyed and
     /// program-wide while these names are not unique across functions.
     pub(crate) frozen_elem_vec_owners: HashSet<String>,
-    /// Per-function parallelization decisions populated from `ConcurrencyAnalysis`.
-    /// Function name → `FunctionConcurrency` (parallel groups + total stmt count).
-    /// Threaded in by `load_concurrency_analysis`; consumed in slice 2 by the
-    /// auto-par lowering path that emits `karac_par_run` for inferred groups
-    /// outside explicit `par {}` blocks. Empty when no analysis was supplied.
-    pub(crate) concurrency_decisions: HashMap<String, FunctionConcurrency>,
     /// `#[track_caller]` slice 4: names of functions declared `#[track_caller]`
     /// that received the hidden caller-location parameter triple (populated in
     /// `declare_function`). A call site consults this to decide whether to
@@ -2894,21 +2735,6 @@ pub(super) struct Codegen<'ctx> {
     /// `None` (the default) makes every `di_*` hook a cheap early-return so the
     /// standard codegen path is byte-for-byte unchanged. See `debug_info.rs`.
     pub(crate) debug_info: Option<debug_info::DebugInfo<'ctx>>,
-    // ── Par block runtime ─────────────────────────────────────────
-    /// Monotonic counter used to generate unique par-branch function names.
-    /// Also serves as the `SpawnSiteId` for each `par {}` block — the value
-    /// at the time `emit_par_run` records a spawn site is the ID written
-    /// into the `KARAC_SPAWN_SITES` metadata table (slice 3 of the
-    /// Debugger Contract; see `SpawnSiteRecord`).
-    pub(crate) par_counter: u32,
-    /// Runtime struct `KaracBranch { ptr func, ptr ctx }` — shared across par blocks.
-    pub(crate) karac_branch_ty: StructType<'ctx>,
-    // ── Debugger contract: SpawnSiteId metadata (slice 3) ─────────
-    /// One entry per `par {}` block (explicit or inferred). Populated by
-    /// `record_spawn_site`; emitted as the `KARAC_SPAWN_SITES` global by
-    /// `emit_spawn_sites_metadata` at the end of compilation. The order
-    /// matches `SpawnSiteId` order (entry 0 → ID 0, entry 1 → ID 1, …).
-    pub(crate) spawn_sites: Vec<SpawnSiteRecord>,
     /// Whether `KARAC_SPAWN_SITES` and friends emit populated. Driven by
     /// the `KARAC_RUNTIME_DEBUG_METADATA` env var read at `Codegen::new`
     /// time:
@@ -2929,28 +2755,6 @@ pub(super) struct Codegen<'ctx> {
     /// gate-on / gate-off boundary. See `phase-8-stdlib-floor.md`
     /// § Auto-Concurrency Codegen — Debugger Contract slice 3.
     pub(crate) runtime_debug_metadata_enabled: bool,
-    /// Slice 6 (Parallax-lite workload) — when true,
-    /// `compile_function_body` skips its parallel-group dispatch path
-    /// entirely and falls through to plain sequential `compile_block`,
-    /// disabling auto-par codegen. Read once from the `KARAC_AUTO_PAR`
-    /// env var at `Codegen` construction (see `read_auto_par_env`); the
-    /// default is `false` (auto-par on). Used to support side-by-side
-    /// wall-clock benchmarking of auto-par vs sequential codegen on the
-    /// same workload without changing source. The user-facing
-    /// `--sequential` CLI flag is a Phase 8.5 Track 2 deliverable; in
-    /// v1, `KARAC_AUTO_PAR=0` is the only way to flip the gate. See
-    /// `phase-8-stdlib-floor.md` § "Auto-Concurrency Codegen —
-    /// Parallax-lite Workload".
-    ///
-    /// Also forced on for wasm targets (phase-10 "WASM concurrency
-    /// lowering — sequential default"): the target is single-threaded,
-    /// so an auto-par fan-out is pure overhead (branch-fn synthesis +
-    /// runtime dispatch) with no parallelism to buy — the untransformed
-    /// sequential program *is* the sequential lowering. Explicit
-    /// `par {}` blocks are unaffected: they still lower through
-    /// `karac_par_run` (sequential in the wasm runtime archive) so
-    /// their cancellation/result-slot semantics are preserved.
-    pub(crate) auto_par_disabled: bool,
     /// Active sequential-tabulate alias-scope context (reduce.rs §
     /// seq tabulate). While `Some` AND `current_fn` matches the stored
     /// function, `compile_vec_index` tags element loads of the listed
@@ -3146,15 +2950,6 @@ pub(super) struct Codegen<'ctx> {
     /// which we want to avoid in the (common) path where no layout
     /// intrinsic is invoked.
     pub(crate) target_data: Option<TargetData>,
-    // ── Hot-swap codegen (phase-7 line 5) ─────────────────────────
-    /// Set by `compile_to_*_with_hot_swap` from the CLI's
-    /// `--enable-hot-swap` flag. When `true`, every call to a
-    /// user-defined `pub fn` (extern-public module symbol) is emitted
-    /// as a load-from-table + indirect-call shape so post-v1 reload
-    /// can replace the table entry without recompiling callers. Off by
-    /// default; the artifact-format reservation is per `deferred.md
-    /// § Continuous PGO with Shared-Object Hot-Swap`.
-    pub(crate) hot_swap_enabled: bool,
     /// Slice c-repl.B.4: free-fn names whose bodies should NOT be
     /// emitted in this module — only the LLVM `declare` (signature
     /// without body) is emitted, so the JIT resolves calls to these
@@ -3207,16 +3002,6 @@ pub(super) struct Codegen<'ctx> {
     /// resolver / typechecker need it to typecheck downstream uses
     /// — but codegen never lowers the original `<expr>`.
     pub(crate) snapshot_replay: HashMap<String, SnapshotPrimKind>,
-    /// Per-pub-fn slot index in `@karac_hotswap_table`, populated as
-    /// pub function declarations are emitted. The slot list is also
-    /// kept ordered in `hot_swap_fns` so the module-init ctor can
-    /// store function pointers in the matching order.
-    pub(crate) hot_swap_slots: HashMap<String, u32>,
-    /// Ordered list of `(slot_index, function_value)` for every
-    /// pub-fn definition that received an indirection slot. The
-    /// finalize step emits a ctor that writes each function's address
-    /// into its slot in the table.
-    pub(crate) hot_swap_fns: Vec<(u32, FunctionValue<'ctx>)>,
 }
 
 /// Apply the malloc-family allocator attributes to an alloc/realloc wrapper
@@ -6809,12 +6594,32 @@ impl<'ctx> Codegen<'ctx> {
             shared_type_names: std::collections::HashSet::new(),
             declared_generic_param_names: std::collections::HashSet::new(),
             assoc_type_bindings: HashMap::new(),
-            state_struct_types: HashMap::new(),
-            state_machine_poll_fns: HashMap::new(),
-            state_machine_state_constructors: HashMap::new(),
-            state_machine_state_destructors: HashMap::new(),
+            conc: ConcState {
+                state_struct_types: HashMap::new(),
+                state_machine_poll_fns: HashMap::new(),
+                state_machine_state_constructors: HashMap::new(),
+                state_machine_state_destructors: HashMap::new(),
+                state_machine_return_types: HashMap::new(),
+                pending_spawn_detach: false,
+                channel_elem_types: HashMap::new(),
+                task_join_return_types: HashMap::new(),
+                branch_cancel_ptr: None,
+                par_capture_modes: HashMap::new(),
+                concurrency_decisions: HashMap::new(),
+                par_counter: 0,
+                karac_branch_ty,
+                spawn_sites: Vec::new(),
+                auto_par_disabled: !read_auto_par_env() || crate::target::active_target_is_wasm(),
+                hot_swap_enabled: false,
+                hot_swap_slots: HashMap::new(),
+                hot_swap_fns: Vec::new(),
+                coro_enabled: false,
+                coro_fn_keys: HashSet::new(),
+                coro_ctx: None,
+                coro_park_counter: 0,
+                coro_spawn_slot: None,
+            },
             program_snapshot: None,
-            state_machine_return_types: HashMap::new(),
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
             struct_field_type_exprs: HashMap::new(),
@@ -6911,7 +6716,6 @@ impl<'ctx> Codegen<'ctx> {
                 set_elem_type_exprs: HashMap::new(),
                 map_mono_methods: HashMap::new(),
             },
-            pending_spawn_detach: false,
             last_fstr_acc: None,
             block_tail_shared_transfer: false,
             freshtemp_field_access_slot: None,
@@ -7041,9 +6845,7 @@ impl<'ctx> Codegen<'ctx> {
             iter_terminal_elem_types: HashMap::new(),
             iter_terminal_acc_types: HashMap::new(),
             iter_let_bindings: HashMap::new(),
-            channel_elem_types: HashMap::new(),
             stats_elem_types: HashMap::new(),
-            task_join_return_types: HashMap::new(),
             ref_return_inner_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             user_ref_method_inner: std::collections::HashMap::new(),
@@ -7081,7 +6883,6 @@ impl<'ctx> Codegen<'ctx> {
             source_text: None,
             used_symbols: Vec::new(),
             used_data_globals: Vec::new(),
-            branch_cancel_ptr: None,
             vec_index_borrow_spans: HashSet::new(),
             vec_index_cloned_sites: HashSet::new(),
             elided_bindings: HashMap::new(),
@@ -7092,22 +6893,16 @@ impl<'ctx> Codegen<'ctx> {
             conditional_adopted_roots: HashMap::new(),
             borrowed_param_skips: HashMap::new(),
             closure_capture_paths: HashMap::new(),
-            par_capture_modes: HashMap::new(),
             atomic_promoted_types: HashSet::new(),
             frozen_alias_bindings: HashSet::new(),
             frozen_element_containers: HashSet::new(),
             frozen_elem_vec_owners: HashSet::new(),
-            concurrency_decisions: HashMap::new(),
             track_caller_fns: std::collections::HashSet::new(),
             debug_info: None,
-            par_counter: 0,
-            karac_branch_ty,
-            spawn_sites: Vec::new(),
             runtime_debug_metadata_enabled: read_runtime_debug_metadata_env(),
             // Env gate OR wasm target — see the field doc-comment
             // (auto-par fan-out is pure overhead on a single-threaded
             // target; phase-10 sequential default).
-            auto_par_disabled: !read_auto_par_env() || crate::target::active_target_is_wasm(),
             tabulate_alias_scopes: None,
             provider_state: ProviderState {
                 provider_resource_ids: HashMap::new(),
@@ -7135,19 +6930,11 @@ impl<'ctx> Codegen<'ctx> {
             cstr_vars: HashSet::new(),
             http_shim_cache: HashMap::new(),
             target_data: init_target_data,
-            hot_swap_enabled: false,
             declare_only_fns: std::collections::HashSet::new(),
             main_symbol_override: None,
             force_external_linkage: false,
             snapshot_capture: HashMap::new(),
             snapshot_replay: HashMap::new(),
-            hot_swap_slots: HashMap::new(),
-            hot_swap_fns: Vec::new(),
-            coro_enabled: false,
-            coro_fn_keys: HashSet::new(),
-            coro_ctx: None,
-            coro_park_counter: 0,
-            coro_spawn_slot: None,
         }
     }
 
@@ -7318,7 +7105,7 @@ impl<'ctx> Codegen<'ctx> {
         // absent from the inner Vec fall through to `Copy` semantics
         // (today's behavior).
         for (k, v) in &ow.par_capture_modes {
-            self.par_capture_modes.insert(*k, v.clone());
+            self.conc.par_capture_modes.insert(*k, v.clone());
         }
         // Phase C2b: headerless-T candidates (reconciled in
         // `compile_program` once coro keys + struct layouts exist).
@@ -7362,7 +7149,7 @@ impl<'ctx> Codegen<'ctx> {
     /// during emission, and call sites to those callees are lowered as
     /// load + indirect call. See [`compile_to_object_with_hot_swap`].
     fn set_hot_swap_enabled(&mut self, enabled: bool) {
-        self.hot_swap_enabled = enabled;
+        self.conc.hot_swap_enabled = enabled;
     }
 
     /// Override the contract-stripping decision (design.md § Contracts:
@@ -7390,7 +7177,7 @@ impl<'ctx> Codegen<'ctx> {
     /// (no process-global env), mirroring `set_strip_contracts`. See
     /// docs/spikes/network-async-coroutine-transform.md § 6¾.
     pub(crate) fn set_coro_enabled(&mut self, enabled: bool) {
-        self.coro_enabled = enabled;
+        self.conc.coro_enabled = enabled;
     }
 
     /// Mark this compile as the **threaded pass** of a `--features
@@ -7407,7 +7194,7 @@ impl<'ctx> Codegen<'ctx> {
     /// `compile_program` (it only re-derives the construction-time
     /// field; nothing reads `auto_par_disabled` earlier).
     pub(crate) fn set_wasm_threaded_pass(&mut self, threaded: bool) {
-        self.auto_par_disabled =
+        self.conc.auto_par_disabled =
             !read_auto_par_env() || (crate::target::active_target_is_wasm() && !threaded);
     }
 
@@ -7418,7 +7205,7 @@ impl<'ctx> Codegen<'ctx> {
     /// in `declare_function`, poll-fn skip in `emit_state_machine_poll_fns`, and
     /// the slot-wait call-site drive.
     pub(crate) fn is_coroutine_compiled(&self, fn_key: &str) -> bool {
-        self.coro_enabled && self.coro_fn_keys.contains(fn_key)
+        self.conc.coro_enabled && self.conc.coro_fn_keys.contains(fn_key)
     }
 
     /// Mint a fresh `SpawnSiteId` and record a `SpawnSiteRecord` for the
@@ -7434,8 +7221,8 @@ impl<'ctx> Codegen<'ctx> {
     /// the emitted globals are populated. See `Codegen::spawn_sites` and
     /// the slice 3 plan in `phase-8-stdlib-floor.md`.
     fn record_spawn_site(&mut self, span: &Span, worker_count: Option<u32>) -> u32 {
-        let id = self.par_counter;
-        self.par_counter += 1;
+        let id = self.conc.par_counter;
+        self.conc.par_counter += 1;
         let (line, col) = match self.source_text.as_deref() {
             Some(src) => {
                 let (l, c) = crate::byte_offset_to_line_col(src, span.offset);
@@ -7444,7 +7231,7 @@ impl<'ctx> Codegen<'ctx> {
             None => (span.line as u32, span.column as u32),
         };
         let file = self.source_filename.clone().unwrap_or_default();
-        self.spawn_sites.push(SpawnSiteRecord {
+        self.conc.spawn_sites.push(SpawnSiteRecord {
             id,
             file,
             line,
@@ -7699,7 +7486,8 @@ impl<'ctx> Codegen<'ctx> {
     fn load_concurrency_analysis(&mut self, analysis: Option<&ConcurrencyAnalysis>) {
         let Some(an) = analysis else { return };
         for (fn_name, decision) in &an.function_decisions {
-            self.concurrency_decisions
+            self.conc
+                .concurrency_decisions
                 .insert(fn_name.clone(), decision.clone());
         }
     }
@@ -7712,10 +7500,12 @@ impl<'ctx> Codegen<'ctx> {
     /// `karac_par_run` for compiler-inferred parallel groups outside
     /// explicit `par {}` blocks.
     fn parallel_groups_for_current_fn(&self) -> Option<&FunctionConcurrency> {
-        if self.concurrency_decisions.is_empty() {
+        if self.conc.concurrency_decisions.is_empty() {
             return None;
         }
-        self.concurrency_decisions.get(&self.fn_ctx.current_fn_name)
+        self.conc
+            .concurrency_decisions
+            .get(&self.fn_ctx.current_fn_name)
     }
 
     /// Look up the recognized reduction (if any) for the loop statement at
@@ -7738,6 +7528,7 @@ impl<'ctx> Codegen<'ctx> {
         // recur across sibling/nested blocks — the source line is what
         // makes the pair unique per loop.
         let decision = self
+            .conc
             .concurrency_decisions
             .get(&self.fn_ctx.current_fn_name)?;
         decision
@@ -7764,6 +7555,7 @@ impl<'ctx> Codegen<'ctx> {
         loop_span: &crate::token::Span,
     ) -> Option<&crate::concurrency::DisjointWriteLoop> {
         let decision = self
+            .conc
             .concurrency_decisions
             .get(&self.fn_ctx.current_fn_name)?;
         decision.disjoint_write_loops.iter().find(|d| {
@@ -8136,7 +7928,7 @@ impl<'ctx> Codegen<'ctx> {
         // naturally excluded. This must run before `declare_function` so the
         // `ptr`-return signature toggle sees the right set. Drives all three
         // coupled toggles via `is_coroutine_compiled`.
-        if self.coro_enabled {
+        if self.conc.coro_enabled {
             // `Server.serve_ws` ws-handler exclusion (phase-8 line 170): a fn
             // passed as the third arg of `Server.serve_ws(addr, handler,
             // ws_handler)` is invoked through the runtime's `extern "C"
@@ -8162,7 +7954,7 @@ impl<'ctx> Codegen<'ctx> {
                     && !ws_handler_names.contains(key)
                     && !declarations::is_generic_fn_key(program, key)
                 {
-                    self.coro_fn_keys.insert(key.clone());
+                    self.conc.coro_fn_keys.insert(key.clone());
                 }
             }
         }
@@ -8374,10 +8166,10 @@ impl<'ctx> Codegen<'ctx> {
         self.temp_recv_len_elem_types = program.temp_recv_len_elem_types.clone();
         self.iter_terminal_elem_types = program.iter_terminal_elem_types.clone();
         self.iter_terminal_acc_types = program.iter_terminal_acc_types.clone();
-        self.channel_elem_types = program.channel_elem_types.clone();
+        self.conc.channel_elem_types = program.channel_elem_types.clone();
         self.stats_elem_types = program.stats_elem_types.clone();
         self.accel.gpu_dispatch_wgsl = program.gpu_dispatch_wgsl.clone();
-        self.task_join_return_types = program.task_join_return_types.clone();
+        self.conc.task_join_return_types = program.task_join_return_types.clone();
         self.ref_return_inner_types = program.ref_return_inner_types.clone();
         self.contract_state.secret_inner_types = program.secret_inner_types.clone();
         self.display.display_option_result_types = program.display_option_result_types.clone();
@@ -9744,7 +9536,7 @@ impl<'ctx> Codegen<'ctx> {
                     &mut self.temp_recv_len_elem_types,
                     &mut t_temp_recv_len_elem_types,
                 );
-                std::mem::swap(&mut self.channel_elem_types, &mut t_channel_elem_types);
+                std::mem::swap(&mut self.conc.channel_elem_types, &mut t_channel_elem_types);
                 std::mem::swap(
                     &mut self.ref_return_inner_types,
                     &mut t_ref_return_inner_types,
@@ -9888,11 +9680,11 @@ impl<'ctx> Codegen<'ctx> {
     /// body pass in `compile_program`. No-op when `hot_swap_enabled`
     /// is `false` or no pub-fn declarations were registered.
     pub(crate) fn pre_emit_hot_swap_table(&mut self) {
-        if !self.hot_swap_enabled || self.hot_swap_fns.is_empty() {
+        if !self.conc.hot_swap_enabled || self.conc.hot_swap_fns.is_empty() {
             return;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let n = self.hot_swap_fns.len() as u32;
+        let n = self.conc.hot_swap_fns.len() as u32;
         let arr_ty = ptr_ty.array_type(n);
         let table = self.module.add_global(arr_ty, None, "karac_hotswap_table");
         table.set_initializer(&arr_ty.const_zero());
@@ -9908,13 +9700,13 @@ impl<'ctx> Codegen<'ctx> {
     /// function addresses so dispatch behavior is unchanged; the
     /// indirection only exists to make post-v1 reload non-breaking.
     fn finalize_hot_swap_table(&mut self) {
-        if !self.hot_swap_enabled || self.hot_swap_fns.is_empty() {
+        if !self.conc.hot_swap_enabled || self.conc.hot_swap_fns.is_empty() {
             return;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i32_ty = self.context.i32_type();
         let i64_ty = self.context.i64_type();
-        let n = self.hot_swap_fns.len() as u32;
+        let n = self.conc.hot_swap_fns.len() as u32;
         let arr_ty = ptr_ty.array_type(n);
         let table = self
             .module
@@ -9932,7 +9724,7 @@ impl<'ctx> Codegen<'ctx> {
         let entry = self.context.append_basic_block(ctor, "entry");
         let prev = self.builder.get_insert_block();
         self.builder.position_at_end(entry);
-        for (slot, fn_val) in self.hot_swap_fns.clone() {
+        for (slot, fn_val) in self.conc.hot_swap_fns.clone() {
             let fn_ptr = fn_val.as_global_value().as_pointer_value();
             let gep = unsafe {
                 self.builder.build_in_bounds_gep(
@@ -10244,7 +10036,7 @@ impl<'ctx> Codegen<'ctx> {
         // `has_debug_metadata() == false`).
         let emit_entries = self.runtime_debug_metadata_enabled;
         let len_value = if emit_entries {
-            self.spawn_sites.len() as u32
+            self.conc.spawn_sites.len() as u32
         } else {
             0
         };
@@ -10253,7 +10045,7 @@ impl<'ctx> Codegen<'ctx> {
         // file path) and remember each as a pointer-to-first-byte.
         let mut file_globals: HashMap<String, PointerValue<'ctx>> = HashMap::new();
         if emit_entries {
-            for record in &self.spawn_sites {
+            for record in &self.conc.spawn_sites {
                 if file_globals.contains_key(&record.file) {
                     continue;
                 }
@@ -10275,7 +10067,8 @@ impl<'ctx> Codegen<'ctx> {
 
         // Construct the array initializer.
         let entries_init: Vec<_> = if emit_entries {
-            self.spawn_sites
+            self.conc
+                .spawn_sites
                 .iter()
                 .map(|r| {
                     let file_ptr = file_globals

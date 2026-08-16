@@ -964,6 +964,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // into a local Vec so the borrow doesn't conflict with
         // mutable codegen state during the branch-fn loop.
         let par_modes: Option<Vec<(String, crate::ownership::ParCaptureMode)>> = self
+            .conc
             .par_capture_modes
             .get(&crate::resolver::SpanKey::from_span(span))
             .cloned();
@@ -1010,11 +1011,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // 5. Build the KaracBranch array on the stack, one entry per branch.
         let i64_type = self.context.i64_type();
-        let branches_ty = self.karac_branch_ty.array_type(stmts.len() as u32);
+        let branches_ty = self.conc.karac_branch_ty.array_type(stmts.len() as u32);
         let branches_alloca =
             self.create_entry_alloca(outer_fn, "__par_branches", branches_ty.into());
         for (i, fn_ptr) in branch_fn_ptrs.iter().enumerate() {
-            let mut entry = self.karac_branch_ty.get_undef();
+            let mut entry = self.conc.karac_branch_ty.get_undef();
             entry = self
                 .builder
                 .build_insert_value(entry, *fn_ptr, 0, "__par_branch_fn")
@@ -1043,7 +1044,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //    `KaracFrame::spawn_site_id` for slice 5's enumeration surface.
         //    `parent_cancel` (phase-6 line 475) is the *enclosing* branch's
         //    cancel flag when this `par` is nested inside another parallel
-        //    region — `self.branch_cancel_ptr` is still the enclosing
+        //    region — `self.conc.branch_cancel_ptr` is still the enclosing
         //    branch's pointer here (the inner branch fns saved/restored it
         //    around their own bodies in `emit_par_branch_fn` above). The
         //    runtime's join loop polls it so an outer cancel cascades into
@@ -1051,7 +1052,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let count = i64_type.const_int(stmts.len() as u64, false);
         let par_id_val = self.context.i32_type().const_int(par_id as u64, false);
         let ptr_type = self.context.ptr_type(AddressSpace::default());
-        let parent_cancel = match self.branch_cancel_ptr {
+        let parent_cancel = match self.conc.branch_cancel_ptr {
             Some(p) => p,
             None => ptr_type.const_null(),
         };
@@ -1216,7 +1217,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
-        let branch_size = self.karac_branch_ty.size_of().unwrap();
+        let branch_size = self.conc.karac_branch_ty.size_of().unwrap();
         let branches_bytes = self
             .builder
             .build_int_mul(n, branch_size, "cav.branches.bytes")
@@ -1308,7 +1309,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let branch_ep = unsafe {
             self.builder
                 .build_gep(
-                    self.karac_branch_ty,
+                    self.conc.karac_branch_ty,
                     branches_ptr,
                     &[i_cur],
                     "cav.branch.ep",
@@ -1317,14 +1318,14 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let bf0 = self
             .builder
-            .build_struct_gep(self.karac_branch_ty, branch_ep, 0, "cav.branch.fn")
+            .build_struct_gep(self.conc.karac_branch_ty, branch_ep, 0, "cav.branch.fn")
             .unwrap();
         self.builder
             .build_store(bf0, trampoline.as_global_value().as_pointer_value())
             .unwrap();
         let bf1 = self
             .builder
-            .build_struct_gep(self.karac_branch_ty, branch_ep, 1, "cav.branch.ctx")
+            .build_struct_gep(self.conc.karac_branch_ty, branch_ep, 1, "cav.branch.ctx")
             .unwrap();
         self.builder.build_store(bf1, ctx_ep).unwrap();
         let i_next = self
@@ -1342,7 +1343,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //    in any branch still aborts under v1 panic=abort.
         let par_id = self.record_spawn_site(call_span, None);
         let par_id_val = self.context.i32_type().const_int(par_id as u64, false);
-        let parent_cancel = match self.branch_cancel_ptr {
+        let parent_cancel = match self.conc.branch_cancel_ptr {
             Some(p) => p,
             None => ptr_ty.const_null(),
         };
@@ -1456,7 +1457,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Fixed-size stack arrays (N known at compile time).
         let slots_arr_ty = result_ty.array_type(n as u32);
         let ctxs_arr_ty = ctx_ty.array_type(n as u32);
-        let branches_arr_ty = self.karac_branch_ty.array_type(n as u32);
+        let branches_arr_ty = self.conc.karac_branch_ty.array_type(n as u32);
         let slots = self.create_entry_alloca(outer_fn, "ca.slots", slots_arr_ty.into());
         let ctxs = self.create_entry_alloca(outer_fn, "ca.ctxs", ctxs_arr_ty.into());
         let branches = self.create_entry_alloca(outer_fn, "ca.branches", branches_arr_ty.into());
@@ -1508,12 +1509,12 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let bf0 = self
                 .builder
-                .build_struct_gep(self.karac_branch_ty, branch_ep, 0, "ca.branch.fn")
+                .build_struct_gep(self.conc.karac_branch_ty, branch_ep, 0, "ca.branch.fn")
                 .unwrap();
             self.builder.build_store(bf0, tramp_ptr).unwrap();
             let bf1 = self
                 .builder
-                .build_struct_gep(self.karac_branch_ty, branch_ep, 1, "ca.branch.ctx")
+                .build_struct_gep(self.conc.karac_branch_ty, branch_ep, 1, "ca.branch.ctx")
                 .unwrap();
             self.builder.build_store(bf1, ctx_ep).unwrap();
         }
@@ -1531,7 +1532,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let par_id = self.record_spawn_site(call_span, Some(n as u32));
         let par_id_val = self.context.i32_type().const_int(par_id as u64, false);
-        let parent_cancel = match self.branch_cancel_ptr {
+        let parent_cancel = match self.conc.branch_cancel_ptr {
             Some(p) => p,
             None => ptr_ty.const_null(),
         };
@@ -1738,7 +1739,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (sometimes) other frames pushed by nested control flow;
         // the normal-completion path runs at branch root.
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
 
         self.current_fn = Some(branch_fn);
         let entry = self.context.append_basic_block(branch_fn, "entry");
@@ -1748,7 +1749,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let cancel_ptr = branch_fn.get_nth_param(1).unwrap().into_pointer_value();
         // Stash the cancel pointer so subsequent `compile_call` invocations
         // can emit mid-branch cooperative cancel checks before each callee.
-        self.branch_cancel_ptr = Some(cancel_ptr);
+        self.conc.branch_cancel_ptr = Some(cancel_ptr);
         let i8_ty = self.context.i8_type();
         let cancel_val = self
             .builder
@@ -2041,7 +2042,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `array_index` recorded in its `ResultSlot` (assigned by
         // `compile_par_block`'s detection pass). Cancel-flag pointer is
         // the branch fn's second parameter, captured into
-        // `self.branch_cancel_ptr` during the entry-time setup above.
+        // `self.conc.branch_cancel_ptr` during the entry-time setup above.
         if stmt_ok {
             if let (Some(slot), Some(rty)) = (branch_result_slot.as_ref(), result_slot_struct_ty) {
                 if let Some(local) = self.variables.get(&slot.binding_name).copied() {
@@ -2101,7 +2102,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // is-err arm; sibling branches' next cooperative
                     // cancel check observes the flip.
                     if let (BasicValueEnum::StructValue(sv), Some(cancel_ptr)) =
-                        (val, self.branch_cancel_ptr)
+                        (val, self.conc.branch_cancel_ptr)
                     {
                         let tag = self
                             .builder
@@ -2570,14 +2571,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // semantics to enforce. Save + null + restore the cancel
             // pointer to suppress nested cancel-checks during the
             // drain.
-            let inner_saved_cancel_ptr = self.branch_cancel_ptr.take();
+            let inner_saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
             self.emit_scope_cleanup();
-            self.branch_cancel_ptr = inner_saved_cancel_ptr;
+            self.conc.branch_cancel_ptr = inner_saved_cancel_ptr;
             self.builder.build_return(None).unwrap();
         }
 
         // Restore outer state.
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
@@ -2607,7 +2608,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// cancellation cannot observe a partial side effect via this call.
     /// `None` (or an unknown name) preserves the conservative MVP behavior.
     pub(super) fn emit_branch_cancel_check(&mut self, label: &str, callee: Option<&str>) {
-        let Some(cancel_ptr) = self.branch_cancel_ptr else {
+        let Some(cancel_ptr) = self.conc.branch_cancel_ptr else {
             return;
         };
         if let Some(name) = callee {
@@ -2668,9 +2669,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // re-cancel inside cleanup bodies. Save + null + restore the
         // cancel pointer to suppress nested cancel-checks during this
         // drain.
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         self.emit_scope_cleanup_for_error_path();
-        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.builder.build_return(None).unwrap();
         self.builder.position_at_end(cont_bb);
     }

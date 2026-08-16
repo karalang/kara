@@ -147,7 +147,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // body is lowered into the wrapper, so a `spawn` nested in the body
         // doesn't inherit this site's detach. Emitted after the handle is
         // created and (for `tg.spawn`) registered.
-        let detach_handle = std::mem::take(&mut self.pending_spawn_detach);
+        let detach_handle = std::mem::take(&mut self.conc.pending_spawn_detach);
         let (params, body) = match &closure_expr.kind {
             ExprKind::Closure { params, body, .. } => (params.as_slice(), body.as_ref()),
             _ => {
@@ -286,7 +286,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // verification ("argument in another function"). Clear it for the
         // wrapper body; restore below. (Surfaced flipping coroutines on by
         // default — `tg.spawn(coro); stmt` in a straight-line fn.)
-        let saved_cancel = self.branch_cancel_ptr.take();
+        let saved_cancel = self.conc.branch_cancel_ptr.take();
 
         // Build wrapper body.
         self.current_fn = Some(wrapper_fn);
@@ -454,12 +454,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // non-blocking coroutine spawn, flip the call-site intercept into
         // "ramp with this runtime-owned slot, don't wait" mode for the
         // duration of the body emission (`result_out` here IS the slot).
-        let saved_spawn_slot = self.coro_spawn_slot;
+        let saved_spawn_slot = self.conc.coro_spawn_slot;
         if use_coro_spawn {
-            self.coro_spawn_slot = Some(result_out);
+            self.conc.coro_spawn_slot = Some(result_out);
         }
         let result = self.compile_expr(body)?;
-        self.coro_spawn_slot = saved_spawn_slot;
+        self.conc.coro_spawn_slot = saved_spawn_slot;
 
         // Store the result into *result_out (ordinary spawn only). A coroutine
         // spawn returns unit and `result_out` is the completion slot, not a
@@ -516,7 +516,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
-        self.branch_cancel_ptr = saved_cancel;
+        self.conc.branch_cancel_ptr = saved_cancel;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -742,6 +742,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> BasicTypeEnum<'ctx> {
         if let Some(te) = self
+            .conc
             .task_join_return_types
             .get(&(call_span.offset, call_span.length))
         {
