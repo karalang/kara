@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 122 | 0 |
-| codegen-gap | 112 | 0 |
+| codegen-gap | 113 | 1 |
 | missing-feature | 96 | 0 |
 | perf | 71 | 1 |
 | false-positive | 67 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 893 | 1 |
+| codegen | 894 | 2 |
 | typecheck | 174 | 0 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
-| autopar | 46 | 0 |
+| autopar | 47 | 1 |
 | other | 42 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1238 surfaced · 1 open · 1223 fixed · 4 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1239 surfaced · 2 open · 1223 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-30 | 2026-08-15 | codegen | medium | The shuffled-uniform `sort_by` residual closed as `wontfix` in B-2026-08-11-28 at ~1.6x Rust is MATERIALLY LARGER on the canonical Apple-silicon host: 3.70x on kata #252 and 2.04x on kata #253, measured on M5 Pro with 50a50e8 IN the compiler. The disposition was reached entirely on a shared x86 cloud container, and `wontfix` was argued from a residual roughly half this size. Not a regression of 50a50e8 -- that fix is present and the ordered-input win it bought is not in question -- but the remaining gap is bigger than the number the wontfix was decided against, so the disposition deserves re-deciding on this host rather than inheriting. | mono sort_by lowering (natural-run merge sort, 50a50e8) -- shuffled-uniform residual, on arm64 |
+| B-2026-08-16-1 | 2026-08-16 | autopar+codegen | high | AUTO-PAR FORKS TWO INDEPENDENT `let`s AND THEN CODEGEN CANNOT SEE THEIR BINDINGS: two locals initialized from calls returning a heap collection, gathered into a collection literal `[a, b]`, fail the DEFAULT build with `codegen failed: Undefined variable 'a'`. The same program compiles and runs under `KARAC_AUTO_PAR=0` and under `--interp`. | The auto-par fork lowering's handling of a parallel group's `let` bindings in the CONTINUATION. The group is formed correctly (`--concurrency-report` shows both statements grouped, `reason: no data or effect dependencies`); what breaks is that a later collection literal referencing the forked bindings cannot resolve them. Only the collection-literal consumer is affected — `.len()` arithmetic, `push(a)`, and tuples all resolve fine. |
 
 ### Wontfix (4)
 
