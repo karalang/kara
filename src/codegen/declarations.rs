@@ -580,14 +580,16 @@ impl<'ctx> super::Codegen<'ctx> {
             match it {
                 Item::StructDef(s) => {
                     for f in &s.fields {
-                        collect_weak_targets(&f.ty, &mut self.weak_targeted_types);
+                        collect_weak_targets(&f.ty, &mut self.rc_elision.weak_targeted_types);
                     }
                 }
-                Item::Function(f) => collect_weak_targets_in_fn(f, &mut self.weak_targeted_types),
+                Item::Function(f) => {
+                    collect_weak_targets_in_fn(f, &mut self.rc_elision.weak_targeted_types)
+                }
                 Item::ImplBlock(b) => {
                     for it in &b.items {
                         if let ImplItem::Method(m) = it {
-                            collect_weak_targets_in_fn(m, &mut self.weak_targeted_types);
+                            collect_weak_targets_in_fn(m, &mut self.rc_elision.weak_targeted_types);
                         }
                     }
                 }
@@ -703,7 +705,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // a deferred slice, so a `par struct` never gets the weak header
                 // here (a `weak <par T>` target is rejected upstream until then);
                 // this keeps the atomic `emit_arc_dec` free path untouched.
-                let has_weak_header = !s.is_par && self.weak_targeted_types.contains(&s.name);
+                let has_weak_header =
+                    !s.is_par && self.rc_elision.weak_targeted_types.contains(&s.name);
                 let mut heap_fields: Vec<BasicTypeEnum<'ctx>> =
                     vec![self.context.i64_type().into()]; // strong refcount
                 if has_weak_header {

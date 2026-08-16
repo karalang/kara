@@ -29,6 +29,7 @@ use mono_state::MonoState;
 use pattern_state::PatternState;
 use payload_vars::PayloadVars;
 use provider_state::ProviderState;
+use rc_elision::RcElision;
 use runtime_fns::RuntimeFns;
 use target_abi::TargetAbi;
 use tracing::Tracing;
@@ -115,6 +116,7 @@ mod pool;
 mod process;
 mod provider;
 mod provider_state;
+mod rc_elision;
 mod reduce;
 mod refinement;
 mod runtime;
@@ -1146,6 +1148,7 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) rc_elision: RcElision,
     pub(crate) type_decls: TypeDecls<'ctx>,
     pub(crate) fn_sig: FnSig<'ctx>,
     pub(crate) payload_vars: PayloadVars<'ctx>,
@@ -1953,55 +1956,6 @@ pub(super) struct Codegen<'ctx> {
     /// value's LLVM type, so "not borrow-elided" is strictly wider than "cloned".
     /// Accumulates across the module; `SpanKey`s are source-unique.
     pub(crate) vec_index_cloned_sites: HashSet<SpanKey>,
-    /// RC elision phase A (`src/ownership/elision.rs`; design record in
-    /// phase-7-codegen.md): per-function sets of shared bindings whose
-    /// refcount provably never exceeds 1. The let-site queues a
-    /// `FreeSharedElided` cleanup (unconditional null-guarded free)
-    /// instead of `RcDec` for these. Keyed by fn key (bare name /
-    /// `Type.method`), matching `current_fn_name`.
-    pub(crate) elided_bindings: HashMap<String, HashSet<String>>,
-    /// Phase B1 cluster roots: fn key → root binding → (member struct
-    /// name, link user-field index). The let-site swaps the root's
-    /// cleanup for `FreeClusterWalk`. Cursors and fresh nodes keep
-    /// their standard cleanups (drop-side-only consumption).
-    pub(crate) elided_cluster_roots:
-        HashMap<String, HashMap<String, (String, usize, crate::ownership::ReturnedChain)>>,
-    /// Phase B2 build-side elision: fn key → cluster binding →
-    /// role/cluster record. Populated only for clusters whose analysis
-    /// `b2` flag is set (displacement-free canonical shapes). Consulted
-    /// by the let-site shared/option arms, both Assign arms, and the
-    /// dedicated link-store fast path.
-    pub(crate) elided_b2_bindings: HashMap<String, HashMap<String, state::B2Binding>>,
-    /// Phase C1c caller adoption: fn key → adopted root binding →
-    /// (member type, link user-field index), for clusters whose
-    /// analysis `adopted` flag is set. The root is an `Option[shared
-    /// T]` binding born from a fresh-return builder call; its let-site
-    /// queues a `FreeClusterWalkOption` cleanup instead of the
-    /// `RcDecOption` dec-walk (and skips `var_option_shared_heap`
-    /// registration — adopted roots are never reassigned, the analysis
-    /// poisons that). Kept separate from `elided_cluster_roots` so the
-    /// literal-cluster let-site/transfer paths never see adopted roots.
-    pub(crate) adopted_cluster_roots: HashMap<String, HashMap<String, (String, usize)>>,
-    /// Whole-program set of shared types that are the target of any `weak T`
-    /// field. Computed in `build_struct_types` by scanning every struct field
-    /// for `TypeKind::Weak(inner)`. Members are force-headed (excluded from
-    /// `headerless_types` at reconcile) and get the two-word `{ strong, weak,
-    /// fields… }` control box; `shared_gep_layout` returns base 2 for them and
-    /// the box free routes through `karac_weak_box_strong_zero_release`. Empty
-    /// for all code today (`weak` fields are declaration-only until the codegen
-    /// store/read slices), so this whole layout path is inert. See
-    /// `docs/spikes/weak-refs.md` (B-2026-07-19-8).
-    pub(crate) weak_targeted_types: HashSet<String>,
-    /// Phase C2b: adopted families that used the sanctioned-arg channel
-    /// — active ONLY when their member type is in `headerless_types`
-    /// (otherwise the binding falls back to full RC and the ordinary
-    /// arg-inc / exit-dec balance applies).
-    pub(crate) conditional_adopted_roots: HashMap<String, HashMap<String, (String, usize)>>,
-    /// Phase C2b: borrowed-param records per fn — (param name, position,
-    /// member type). Drives the callee-side exit-dec skip (by name, in
-    /// `compile_function`) and the call-site arg-inc skip (by position,
-    /// in the direct-call arg loop) — both gated on `headerless_types`.
-    pub(crate) borrowed_param_skips: HashMap<String, Vec<(String, usize, String)>>,
     /// B-2026-08-01-33 mechanism 2 — `shared` type names the ownership pass
     /// promoted to atomic refcounting. Read by `heap_type_uses_atomic_rc`, the
     /// funnel all four refcount dispatchers share. Empty unless a multi-branch
@@ -6081,13 +6035,15 @@ impl<'ctx> Codegen<'ctx> {
             used_data_globals: Vec::new(),
             vec_index_borrow_spans: HashSet::new(),
             vec_index_cloned_sites: HashSet::new(),
-            elided_bindings: HashMap::new(),
-            elided_cluster_roots: HashMap::new(),
-            elided_b2_bindings: HashMap::new(),
-            adopted_cluster_roots: HashMap::new(),
-            weak_targeted_types: HashSet::new(),
-            conditional_adopted_roots: HashMap::new(),
-            borrowed_param_skips: HashMap::new(),
+            rc_elision: RcElision {
+                elided_bindings: HashMap::new(),
+                elided_cluster_roots: HashMap::new(),
+                elided_b2_bindings: HashMap::new(),
+                adopted_cluster_roots: HashMap::new(),
+                weak_targeted_types: HashSet::new(),
+                conditional_adopted_roots: HashMap::new(),
+                borrowed_param_skips: HashMap::new(),
+            },
             atomic_promoted_types: HashSet::new(),
             frozen_alias_bindings: HashSet::new(),
             frozen_element_containers: HashSet::new(),
@@ -6185,12 +6141,15 @@ impl<'ctx> Codegen<'ctx> {
         // RC elision phase A: per-fn elided-binding sets. Consulted by
         // the let-stmt shared arm via `is_elided_binding`.
         for (fn_name, names) in &ow.elided_bindings {
-            self.elided_bindings.insert(fn_name.clone(), names.clone());
+            self.rc_elision
+                .elided_bindings
+                .insert(fn_name.clone(), names.clone());
         }
         // RC elision phase B1: cluster roots → free-walk cleanup.
         // Phase B2: role records for displacement-free clusters.
         for (fn_name, clusters) in &ow.elided_clusters {
             let entry = self
+                .rc_elision
                 .elided_cluster_roots
                 .entry(fn_name.clone())
                 .or_default();
@@ -6204,9 +6163,9 @@ impl<'ctx> Codegen<'ctx> {
                     // CONDITIONAL — consulted only when the member
                     // type survives the headerless reconcile.
                     let target = if c.arg_sanctioned {
-                        &mut self.conditional_adopted_roots
+                        &mut self.rc_elision.conditional_adopted_roots
                     } else {
-                        &mut self.adopted_cluster_roots
+                        &mut self.rc_elision.adopted_cluster_roots
                     };
                     target
                         .entry(fn_name.clone())
@@ -6221,6 +6180,7 @@ impl<'ctx> Codegen<'ctx> {
                 // for the conditional residual-count skips.
                 if c.borrowed {
                     let recs = self
+                        .rc_elision
                         .borrowed_param_skips
                         .entry(fn_name.clone())
                         .or_default();
@@ -6238,7 +6198,11 @@ impl<'ctx> Codegen<'ctx> {
                 if !c.b2 {
                     continue;
                 }
-                let b2_entry = self.elided_b2_bindings.entry(fn_name.clone()).or_default();
+                let b2_entry = self
+                    .rc_elision
+                    .elided_b2_bindings
+                    .entry(fn_name.clone())
+                    .or_default();
                 let mk = |role: state::B2Role| state::B2Binding {
                     role,
                     member_type: c.member_type.clone(),
@@ -6437,7 +6401,8 @@ impl<'ctx> Codegen<'ctx> {
     /// never see elided names — the analysis blocks any candidate
     /// mentioned inside those regions.
     fn is_elided_binding(&self, name: &str) -> bool {
-        self.elided_bindings
+        self.rc_elision
+            .elided_bindings
             .get(&self.fn_ctx.current_fn_name)
             .is_some_and(|set| set.contains(name))
     }
@@ -6492,7 +6457,8 @@ impl<'ctx> Codegen<'ctx> {
         &self,
         name: &str,
     ) -> Option<(String, usize, crate::ownership::ReturnedChain)> {
-        self.elided_cluster_roots
+        self.rc_elision
+            .elided_cluster_roots
             .get(&self.fn_ctx.current_fn_name)
             .and_then(|m| m.get(name))
             .cloned()
@@ -6504,6 +6470,7 @@ impl<'ctx> Codegen<'ctx> {
     /// whose scope-exit cleanup is the option-guarded free-walk).
     fn adopted_root_info(&self, name: &str) -> Option<(String, usize)> {
         if let Some(info) = self
+            .rc_elision
             .adopted_cluster_roots
             .get(&self.fn_ctx.current_fn_name)
             .and_then(|m| m.get(name))
@@ -6514,7 +6481,8 @@ impl<'ctx> Codegen<'ctx> {
         // under the reconciled headerless set — otherwise the binding
         // falls back to full RC and the ordinary arg-inc / exit-dec
         // balance applies.
-        self.conditional_adopted_roots
+        self.rc_elision
+            .conditional_adopted_roots
             .get(&self.fn_ctx.current_fn_name)
             .and_then(|m| m.get(name))
             .filter(|(t, _)| self.target_abi.headerless_types.contains(t))
@@ -6526,7 +6494,7 @@ impl<'ctx> Codegen<'ctx> {
     /// a reconciled headerless type (the callee's exit dec is skipped
     /// symmetrically — see `compile_function`'s param registration).
     fn borrowed_arg_skip(&self, callee: &str, position: usize) -> bool {
-        self.borrowed_param_skips.get(callee).is_some_and(|recs| {
+        self.rc_elision.borrowed_param_skips.get(callee).is_some_and(|recs| {
             recs.iter()
                 .any(|(_, pos, t)| *pos == position && self.target_abi.headerless_types.contains(t))
         })
@@ -6545,7 +6513,7 @@ impl<'ctx> Codegen<'ctx> {
     /// is a borrowed-family param of a reconciled headerless type, so
     /// its exit `RcDecOption` is skipped (no caller inc ever happened).
     fn borrowed_param_dec_skip(&self, param_name: &str) -> bool {
-        self.borrowed_param_skips
+        self.rc_elision.borrowed_param_skips
             .get(&self.fn_ctx.current_fn_name)
             .is_some_and(|recs| {
                 recs.iter()
@@ -6563,7 +6531,8 @@ impl<'ctx> Codegen<'ctx> {
 
     /// Phase-B2 role lookup for the current function.
     fn b2_binding(&self, name: &str) -> Option<&state::B2Binding> {
-        self.elided_b2_bindings
+        self.rc_elision
+            .elided_b2_bindings
             .get(&self.fn_ctx.current_fn_name)
             .and_then(|m| m.get(name))
     }
@@ -7167,7 +7136,7 @@ impl<'ctx> Codegen<'ctx> {
             // "is the target alive?"), so it can never be headerless. The
             // whole-program weak-target set is computed in `build_struct_types`,
             // which runs before this reconcile. (`docs/spikes/weak-refs.md`.)
-            if self.weak_targeted_types.contains(&t) {
+            if self.rc_elision.weak_targeted_types.contains(&t) {
                 continue;
             }
             self.target_abi.headerless_types.insert(t);
