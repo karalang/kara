@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 60 | 0 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
-| other | 31 | 0 |
+| other | 32 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 892 | 1 |
+| codegen | 893 | 2 |
 | typecheck | 174 | 0 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1237 surfaced · 1 open · 1223 fixed · 3 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1238 surfaced · 2 open · 1223 fixed · 3 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-30 | 2026-08-15 | codegen | medium | The shuffled-uniform `sort_by` residual closed as `wontfix` in B-2026-08-11-28 at ~1.6x Rust is MATERIALLY LARGER on the canonical Apple-silicon host: 3.70x on kata #252 and 2.04x on kata #253, measured on M5 Pro with 50a50e8 IN the compiler. The disposition was reached entirely on a shared x86 cloud container, and `wontfix` was argued from a residual roughly half this size. Not a regression of 50a50e8 -- that fix is present and the ordered-input win it bought is not in question -- but the remaining gap is bigger than the number the wontfix was decided against, so the disposition deserves re-deciding on this host rather than inheriting. | mono sort_by lowering (natural-run merge sort, 50a50e8) -- shuffled-uniform residual, on arm64 |
+| B-2026-08-15-33 | 2026-08-15 | codegen | medium | `karac build` IS NOT REPRODUCIBLE: the SAME karac binary, on the SAME source, emits DIFFERENT executables across runs. Three consecutive builds of kata #253's min_meeting_rooms.kara gave two distinct sha256s (c909a866 / 76932c29 / c909a866); #252, #16 and #18 were stable across the same test, so it is program-dependent rather than universal. Sinks are unaffected -- the binaries are equivalent, not wrong -- so this is a build-reproducibility defect, not a miscompile. | karac build is not reproducible -- same compiler + same source can emit different binaries |
 
 ### Wontfix (3)
 
