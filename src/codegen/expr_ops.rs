@@ -1355,6 +1355,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `r` must be a heap-env struct owner and `field` one of its closure
         // fields — the same predicate the misuse guard sanctions.
         let is_closure_field = self
+            .closure_state
             .heap_env_aggregate_owners
             .get(rname)
             .is_some_and(|fs| fs.contains(field));
@@ -1392,7 +1393,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Binding-source copy co-owns the shared env — inc it; a fresh `make(j)`
         // already carries its +1.
         let rhs_is_binding_copy = matches!(&value.kind,
-            ExprKind::Identifier(n) if self.heap_env_closure_vars.contains(n));
+            ExprKind::Identifier(n) if self.closure_state.heap_env_closure_vars.contains(n));
         if rhs_is_binding_copy {
             self.emit_heap_closure_env_inc(new_val);
         }
@@ -1427,7 +1428,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(vname) = &object.kind else {
             return Ok(false);
         };
-        if !self.heap_env_vec_owners.contains(vname) {
+        if !self.closure_state.heap_env_vec_owners.contains(vname) {
             return Ok(false);
         }
         let vname = vname.clone();
@@ -1444,7 +1445,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Binding-source copy co-owns the shared env — inc it; a fresh `make(j)`
         // already carries its +1.
         let rhs_is_binding_copy = matches!(&value.kind,
-            ExprKind::Identifier(n) if self.heap_env_closure_vars.contains(n));
+            ExprKind::Identifier(n) if self.closure_state.heap_env_closure_vars.contains(n));
         if rhs_is_binding_copy {
             self.emit_heap_closure_env_inc(new_val);
         }

@@ -1311,6 +1311,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .as_ref()
                                     .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te));
                                 let is_heap_env_vec = self
+                                    .closure_state
                                     .heap_env_vec_owners
                                     .contains(slot.binding_name.as_str());
                                 // B-2026-08-14-27 — a BORROW-ELIDED slot owns
@@ -1773,7 +1774,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // that actually define an escaping closure so a closure-free
                 // program with a coincidental `{ptr, ptr}`-typed slot (e.g. a
                 // two-pointer tuple) is never de-parallelized.
-                if !self.fns_returning_heap_env.is_empty()
+                if !self.closure_state.fns_returning_heap_env.is_empty()
                     && llvm_ty == self.closure_value_type().into()
                 {
                     return None;
@@ -3203,7 +3204,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // pointer WITHOUT the inc (leaving the box under-counted →
                     // premature free / use-after-free).
                     if let ExprKind::Identifier(src) = &value.kind {
-                        if self.heap_env_closure_vars.contains(src) {
+                        if self.closure_state.heap_env_closure_vars.contains(src) {
                             let (src_ptr, src_ty) = {
                                 let s = &self.variables[src];
                                 (s.ptr, s.ty)
@@ -3223,15 +3224,20 @@ impl<'ctx> super::Codegen<'ctx> {
                                     ty: src_ty,
                                 },
                             );
-                            if let Some(ft) = self.closure_fn_types.get(src).copied() {
-                                self.closure_fn_types.insert(var_name.clone(), ft);
+                            if let Some(ft) = self.closure_state.closure_fn_types.get(src).copied()
+                            {
+                                self.closure_state
+                                    .closure_fn_types
+                                    .insert(var_name.clone(), ft);
                             }
                             if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                                 frame.push(super::state::CleanupAction::FreeClosureEnv {
                                     fat_alloca: alloca,
                                 });
                             }
-                            self.heap_env_closure_vars.insert(var_name.clone());
+                            self.closure_state
+                                .heap_env_closure_vars
+                                .insert(var_name.clone());
                             return Ok(());
                         }
                     }
@@ -3265,7 +3271,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ty: fat.get_type(),
                             },
                         );
-                        self.closure_fn_types.insert(var_name.clone(), fn_type);
+                        self.closure_state
+                            .closure_fn_types
+                            .insert(var_name.clone(), fn_type);
                         // B-2026-07-18-43: record the closure's returned `Vec[T]`
                         // type (a bare `|| v` / block tail naming a Vec visible in
                         // this outer scope) so an inline index of the call result
@@ -3298,7 +3306,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     fat_alloca: alloca,
                                 });
                             }
-                            self.heap_env_closure_vars.insert(var_name.clone());
+                            self.closure_state
+                                .heap_env_closure_vars
+                                .insert(var_name.clone());
                         }
                         return Ok(());
                     }
@@ -4306,7 +4316,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         None
                     });
-                self.pending_closure_fn_type = None;
+                self.closure_state.pending_closure_fn_type = None;
                 // Skip receive-side `rc_inc` when the RHS already delivers
                 // a freshly-owned ref:
                 //   * `StructLiteral` — `emit_rc_alloc` initializes rc=1.
@@ -5399,9 +5409,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     val
                 };
                 // Register closure function type under bound names.
-                if let Some(fn_type) = self.pending_closure_fn_type.take() {
+                if let Some(fn_type) = self.closure_state.pending_closure_fn_type.take() {
                     for bound_name in pattern.binding_names() {
-                        self.closure_fn_types.insert(bound_name, fn_type);
+                        self.closure_state
+                            .closure_fn_types
+                            .insert(bound_name, fn_type);
                     }
                 }
                 // B-2026-07-18-43: if the RHS is a closure whose body returns a
@@ -6259,8 +6271,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // the element envs leak; the guard rejects any escape
                                 // / non-heap-env push, so every live element is a
                                 // heap-env (or null-env) closure this Vec owns.
-                                let is_heap_env_vec =
-                                    self.heap_env_vec_owners.contains(var_name.as_str());
+                                let is_heap_env_vec = self
+                                    .closure_state
+                                    .heap_env_vec_owners
+                                    .contains(var_name.as_str());
                                 // B-2026-08-01-33 stage 3c — a FROZEN-ELEMENT
                                 // container. Every element is a non-counting
                                 // alias of something the ownership pass proved
@@ -8304,7 +8318,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // old) but mirrors the shared-T / `Option[shared]` setter
                     // arms below for one consistent shape. Sits ahead of those
                     // arms; a closure binding is in none of their type maps.
-                    if self.heap_env_closure_vars.contains(name) {
+                    if self.closure_state.heap_env_closure_vars.contains(name) {
                         if let Some(slot) = self.variables.get(name).copied() {
                             let old_fat = self
                                 .builder
@@ -8312,7 +8326,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .unwrap();
                             let rhs_is_binding_copy = matches!(&value.kind,
                                 ExprKind::Identifier(n)
-                                    if self.heap_env_closure_vars.contains(n));
+                                    if self.closure_state.heap_env_closure_vars.contains(n));
                             if rhs_is_binding_copy {
                                 self.emit_heap_closure_env_inc(val);
                             }

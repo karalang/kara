@@ -839,6 +839,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let closure_val = self.compile_expr(closure_expr)?;
         let fn_type = self
+            .closure_state
             .pending_closure_fn_type
             .take()
             .ok_or_else(|| "entry chain: inline closure missing fn_type".to_string())?;

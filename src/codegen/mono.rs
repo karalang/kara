@@ -1122,7 +1122,7 @@ impl<'ctx> super::Codegen<'ctx> {
             set_elem_type_exprs: std::mem::take(&mut self.mapset.set_elem_type_exprs),
             atomic_var_inner_is_bool: std::mem::take(&mut self.atomic_var_inner_is_bool),
             owned_vecstr_params: std::mem::take(&mut self.owned_vecstr_params),
-            closure_fn_types: std::mem::take(&mut self.closure_fn_types),
+            closure_fn_types: std::mem::take(&mut self.closure_state.closure_fn_types),
         }
     }
 
@@ -1146,7 +1146,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.set_elem_type_exprs = saved.set_elem_type_exprs;
         self.atomic_var_inner_is_bool = saved.atomic_var_inner_is_bool;
         self.owned_vecstr_params = saved.owned_vecstr_params;
-        self.closure_fn_types = saved.closure_fn_types;
+        self.closure_state.closure_fn_types = saved.closure_fn_types;
     }
 
     /// B-2026-08-15-7 — the CONTAINER sibling of
@@ -2966,7 +2966,9 @@ impl<'ctx> super::Codegen<'ctx> {
             } = &param.ty.kind
             {
                 let fn_type = self.closure_abi_fn_type(params, return_type.as_deref());
-                self.closure_fn_types.insert(param_name.clone(), fn_type);
+                self.closure_state
+                    .closure_fn_types
+                    .insert(param_name.clone(), fn_type);
             }
             self.variables.insert(
                 param_name,

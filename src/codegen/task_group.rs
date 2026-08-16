@@ -204,7 +204,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // single-owner case, which is all the old path supported).
         let borrow_roots: std::collections::HashSet<String> = {
             let key = SpanKey::from_span(&closure_expr.span);
-            match self.closure_capture_paths.get(&key) {
+            match self.closure_state.closure_capture_paths.get(&key) {
                 Some(path_modes) => {
                     let mut seen: std::collections::HashSet<&str> =
                         std::collections::HashSet::new();
@@ -253,8 +253,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let use_coro_spawn = self.spawn_coro_tail_fn_key(body).is_some();
 
         // 4. Synthesize `__spawn_wrap_N(env, result_out, cancel)`.
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let wrapper_name = format!("__spawn_wrap_{}", id);
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());

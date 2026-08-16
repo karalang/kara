@@ -561,7 +561,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // keep their existing dispatch via the later `closure_fn_types`
         // check, unchanged.
         if explicit_generic_args.is_none()
-            && self.closure_fn_types.contains_key(&name)
+            && self.closure_state.closure_fn_types.contains_key(&name)
             && self.variables.contains_key(name.as_str())
         {
             return self.compile_closure_call(&name, args);
@@ -824,7 +824,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Check if this is an indirect call through a closure variable.
-        if self.closure_fn_types.contains_key(&name) {
+        if self.closure_state.closure_fn_types.contains_key(&name) {
             return self.compile_closure_call(&name, args);
         }
 
@@ -5128,7 +5128,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// binding neutralizes only on its own path while a fall-through path that
     /// does NOT return it still frees it. No-op for a non-heap-env name.
     pub(super) fn neutralize_moved_closure_env_slot(&mut self, name: &str) {
-        if !self.heap_env_closure_vars.contains(name) {
+        if !self.closure_state.heap_env_closure_vars.contains(name) {
             return;
         }
         let Some(slot_ptr) = self.variables.get(name).map(|s| s.ptr) else {
@@ -5183,7 +5183,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let is_fresh = self.is_heap_env_producing_call(&f.value);
             let is_binding = matches!(
                 &f.value.kind,
-                ExprKind::Identifier(src) if self.heap_env_closure_vars.contains(src)
+                ExprKind::Identifier(src) if self.closure_state.heap_env_closure_vars.contains(src)
             );
             if !is_fresh && !is_binding {
                 continue;
@@ -5213,7 +5213,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // Record the owned field so `neutralize_moved_aggregate_env_slots` can
             // null this env slot if `var_name` is later moved out via a return
             // (aggregate-escape slice).
-            self.heap_env_owner_fields
+            self.closure_state
+                .heap_env_owner_fields
                 .entry(var_name.to_string())
                 .or_default()
                 .push((struct_name.to_string(), idx as u32));
@@ -5246,6 +5247,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return,
         };
         let Some(owned_fields) = self
+            .closure_state
             .fns_returning_heap_env_aggregate
             .get(&callee_name)
             .cloned()
@@ -5274,7 +5276,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     fat_alloca: field_gep,
                 });
             }
-            self.heap_env_owner_fields
+            self.closure_state
+                .heap_env_owner_fields
                 .entry(var_name.to_string())
                 .or_default()
                 .push((struct_name.to_string(), idx as u32));
@@ -5301,7 +5304,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(src) = &value.kind else {
             return;
         };
-        let Some(fields) = self.heap_env_owner_fields.get(src).cloned() else {
+        let Some(fields) = self.closure_state.heap_env_owner_fields.get(src).cloned() else {
             return;
         };
         for (struct_name, idx) in &fields {
@@ -5326,7 +5329,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
             }
         }
-        self.heap_env_owner_fields
+        self.closure_state
+            .heap_env_owner_fields
             .insert(var_name.to_string(), fields);
     }
 
@@ -5360,7 +5364,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let fat_ty = self.closure_value_type();
-        if let Some(idxs) = self.heap_env_tuple_owners.get(src).cloned() {
+        if let Some(idxs) = self.closure_state.heap_env_tuple_owners.get(src).cloned() {
             let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
                 return;
             };
@@ -5384,7 +5388,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     });
                 }
             }
-        } else if let Some(idxs) = self.heap_env_array_owners.get(src).cloned() {
+        } else if let Some(idxs) = self.closure_state.heap_env_array_owners.get(src).cloned() {
             let inkwell::types::BasicTypeEnum::ArrayType(arr_ty) = slot.ty else {
                 return;
             };
@@ -5441,7 +5445,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let is_fresh = self.is_heap_env_producing_call(elem);
             let is_binding = matches!(
                 &elem.kind,
-                ExprKind::Identifier(src) if self.heap_env_closure_vars.contains(src)
+                ExprKind::Identifier(src) if self.closure_state.heap_env_closure_vars.contains(src)
             );
             if !is_fresh && !is_binding {
                 continue;
@@ -5497,7 +5501,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let is_fresh = self.is_heap_env_producing_call(elem);
             let is_binding = matches!(
                 &elem.kind,
-                ExprKind::Identifier(src) if self.heap_env_closure_vars.contains(src)
+                ExprKind::Identifier(src) if self.closure_state.heap_env_closure_vars.contains(src)
             );
             if !is_fresh && !is_binding {
                 continue;
@@ -5537,7 +5541,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// compile-time queue removal — mirrors `neutralize_moved_closure_env_slot`.
     /// No-op for a name that owns no heap-env fields.
     pub(super) fn neutralize_moved_aggregate_env_slots(&mut self, name: &str) {
-        let Some(fields) = self.heap_env_owner_fields.get(name).cloned() else {
+        let Some(fields) = self.closure_state.heap_env_owner_fields.get(name).cloned() else {
             return;
         };
         let Some(slot_ptr) = self.variables.get(name).map(|s| s.ptr) else {
@@ -5582,7 +5586,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fat_ty = self.closure_value_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let null = ptr_ty.const_null();
-        if let Some(idxs) = self.heap_env_tuple_owners.get(name).cloned() {
+        if let Some(idxs) = self.closure_state.heap_env_tuple_owners.get(name).cloned() {
             let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
                 return;
             };
@@ -5597,7 +5601,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder.build_store(env_gep, null).unwrap();
             }
-        } else if let Some(idxs) = self.heap_env_array_owners.get(name).cloned() {
+        } else if let Some(idxs) = self.closure_state.heap_env_array_owners.get(name).cloned() {
             let inkwell::types::BasicTypeEnum::ArrayType(arr_ty) = slot.ty else {
                 return;
             };
@@ -5649,7 +5653,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(var_name).copied() else {
             return;
         };
-        if let Some(idxs) = self.fns_returning_heap_env_tuple.get(&callee_name).cloned() {
+        if let Some(idxs) = self
+            .closure_state
+            .fns_returning_heap_env_tuple
+            .get(&callee_name)
+            .cloned()
+        {
             let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
                 return;
             };
@@ -5666,7 +5675,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     });
                 }
             }
-        } else if let Some(idxs) = self.fns_returning_heap_env_array.get(&callee_name).cloned() {
+        } else if let Some(idxs) = self
+            .closure_state
+            .fns_returning_heap_env_array
+            .get(&callee_name)
+            .cloned()
+        {
             let inkwell::types::BasicTypeEnum::ArrayType(arr_ty) = slot.ty else {
                 return;
             };

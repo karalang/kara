@@ -340,13 +340,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // RC heap env the caller binding must free / own — routing the curry
         // call through this predicate reuses the whole free / owner / misuse
         // machinery unchanged.
-        self.is_heap_env_producing_call_in(e, &self.fns_returning_heap_env)
-            || self.is_heap_env_producing_call_in(e, &self.curry_closure_vars)
+        self.is_heap_env_producing_call_in(e, &self.closure_state.fns_returning_heap_env)
+            || self.is_heap_env_producing_call_in(e, &self.closure_state.curry_closure_vars)
     }
 
     /// As [`Self::is_heap_env_producing_call`] but against an EXPLICIT set —
     /// used inside `compute_fns_returning_heap_env`'s fixpoint, where
-    /// `self.fns_returning_heap_env` is not yet populated (the set is being
+    /// `self.closure_state.fns_returning_heap_env` is not yet populated (the set is being
     /// built up iteration by iteration).
     fn is_heap_env_producing_call_in(&self, e: &Expr, set: &HashSet<String>) -> bool {
         let ExprKind::Call { callee, .. } = &e.kind else {
@@ -418,7 +418,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // heap env, or (currying, B-2026-07-12-12) a local closure-value
         // binding whose call returns one. Either populates the misuse walk's
         // `is_heap_env_producing_call` recognition.
-        if self.fns_returning_heap_env.is_empty() && self.curry_closure_vars.is_empty() {
+        if self.closure_state.fns_returning_heap_env.is_empty()
+            && self.closure_state.curry_closure_vars.is_empty()
+        {
             return Ok(());
         }
         // Pass 1 — sanctioned top-level heap-env bindings and aggregate owners
@@ -427,24 +429,26 @@ impl<'ctx> super::Codegen<'ctx> {
         // (call sources + transitive copies). `owners`: struct locals owning one
         // or more heap-env fields (struct-literal stores OR an aggregate-returning
         // call result).
-        let (binds, owners) =
-            self.collect_heap_env_binds_and_owners(func, &self.fns_returning_heap_env_aggregate);
+        let (binds, owners) = self.collect_heap_env_binds_and_owners(
+            func,
+            &self.closure_state.fns_returning_heap_env_aggregate,
+        );
         // Stash for the exhaustive walk (read via `&self` from the arms below).
-        self.heap_env_aggregate_owners = owners;
+        self.closure_state.heap_env_aggregate_owners = owners;
         // Tuple / array owners (tuple/array-store + container-escape slices):
         // `let t = (make(..), ..)` / `(f, ..)`, `let a: Array[Fn,N] = [..]`, OR a
         // relay `let r = build(k)` where `build` returns a closure-owning tuple /
         // array (container-escape). Factored into `collect_tuple_array_owners`,
         // shared with the container-return detection fixpoint.
         let (tuple_owners, array_owners) = self.collect_tuple_array_owners(func, &binds);
-        self.heap_env_tuple_owners = tuple_owners;
-        self.heap_env_array_owners = array_owners;
+        self.closure_state.heap_env_tuple_owners = tuple_owners;
+        self.closure_state.heap_env_array_owners = array_owners;
         // Vec owners (Vec-store + Vec-escape slices): a `Vec[Fn]` local bound
         // `let v: Vec[Fn] = Vec.new()`/`Vec.with_capacity(..)` that receives >=1
         // heap-env push, OR a relay `let r = build(k)` where `build` returns a
         // closure-owning Vec (Vec-escape caller-adopt). Factored into
         // `collect_vec_owners`, shared with the Vec-return detection fixpoint.
-        self.heap_env_vec_owners = self.collect_vec_owners(func, &binds);
+        self.closure_state.heap_env_vec_owners = self.collect_vec_owners(func, &binds);
         // Pass 2 — walk for misuse, skipping the sanctioned `let f = <call>` RHS.
         let mut bad = false;
         for stmt in &func.body.stmts {
@@ -459,12 +463,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         && (self.is_heap_env_producing_call(value)
                             || matches!(&value.kind,
                                 ExprKind::Identifier(n) if binds.contains(n)));
-                    let is_owner = single && self.heap_env_aggregate_owners.contains_key(&names[0]);
-                    let is_tuple_owner =
-                        single && self.heap_env_tuple_owners.contains_key(&names[0]);
-                    let is_array_owner =
-                        single && self.heap_env_array_owners.contains_key(&names[0]);
-                    let is_vec_owner = single && self.heap_env_vec_owners.contains(&names[0]);
+                    let is_owner = single
+                        && self
+                            .closure_state
+                            .heap_env_aggregate_owners
+                            .contains_key(&names[0]);
+                    let is_tuple_owner = single
+                        && self
+                            .closure_state
+                            .heap_env_tuple_owners
+                            .contains_key(&names[0]);
+                    let is_array_owner = single
+                        && self
+                            .closure_state
+                            .heap_env_array_owners
+                            .contains_key(&names[0]);
+                    let is_vec_owner =
+                        single && self.closure_state.heap_env_vec_owners.contains(&names[0]);
                     if sanctioned {
                         false
                     } else if is_vec_owner {
@@ -577,10 +592,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Return(Some(inner)) = &e.kind {
                         if matches!(&inner.kind, ExprKind::Identifier(n)
                             if binds.contains(n)
-                                || self.heap_env_aggregate_owners.contains_key(n)
-                                || self.heap_env_tuple_owners.contains_key(n)
-                                || self.heap_env_array_owners.contains_key(n)
-                                || self.heap_env_vec_owners.contains(n))
+                                || self.closure_state.heap_env_aggregate_owners.contains_key(n)
+                                || self.closure_state.heap_env_tuple_owners.contains_key(n)
+                                || self.closure_state.heap_env_array_owners.contains_key(n)
+                                || self.closure_state.heap_env_vec_owners.contains(n))
                         {
                             false
                         } else {
@@ -627,10 +642,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // position is walked as usual.
                 let returnable = matches!(&tail.kind, ExprKind::Identifier(n)
                     if binds.contains(n)
-                        || self.heap_env_aggregate_owners.contains_key(n)
-                        || self.heap_env_tuple_owners.contains_key(n)
-                        || self.heap_env_array_owners.contains_key(n)
-                        || self.heap_env_vec_owners.contains(n));
+                        || self.closure_state.heap_env_aggregate_owners.contains_key(n)
+                        || self.closure_state.heap_env_tuple_owners.contains_key(n)
+                        || self.closure_state.heap_env_array_owners.contains_key(n)
+                        || self.closure_state.heap_env_vec_owners.contains(n));
                 bad = !returnable && self.expr_has_heap_env_misuse(tail, &binds);
             }
         }
@@ -791,13 +806,13 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(g) => binds.contains(g),
             ExprKind::FieldAccess { object, field } => {
                 matches!(&object.kind, ExprKind::Identifier(r)
-                    if self.heap_env_aggregate_owners
+                    if self.closure_state.heap_env_aggregate_owners
                         .get(r)
                         .is_some_and(|fs| fs.contains(field)))
             }
             ExprKind::Index { object, .. } => {
                 matches!(&object.kind, ExprKind::Identifier(v)
-                    if self.heap_env_vec_owners.contains(v))
+                    if self.closure_state.heap_env_vec_owners.contains(v))
             }
             _ => false,
         }
@@ -868,10 +883,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // are allowed, handled in `Call` / `FieldAccess`.
             ExprKind::Identifier(n) => {
                 binds.contains(n)
-                    || self.heap_env_aggregate_owners.contains_key(n)
-                    || self.heap_env_tuple_owners.contains_key(n)
-                    || self.heap_env_array_owners.contains_key(n)
-                    || self.heap_env_vec_owners.contains(n)
+                    || self.closure_state.heap_env_aggregate_owners.contains_key(n)
+                    || self.closure_state.heap_env_tuple_owners.contains_key(n)
+                    || self.closure_state.heap_env_array_owners.contains_key(n)
+                    || self.closure_state.heap_env_vec_owners.contains(n)
             }
             ExprKind::Call { callee, args } => {
                 // The one supported use: `f(args)` for a binding `f`. The callee
@@ -886,7 +901,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // env); only the args can still misuse.
                 if let ExprKind::FieldAccess { object, .. } = &callee.kind {
                     if let ExprKind::Identifier(n) = &object.kind {
-                        if self.heap_env_aggregate_owners.contains_key(n) {
+                        if self.closure_state.heap_env_aggregate_owners.contains_key(n) {
                             return any_args(args);
                         }
                     }
@@ -896,7 +911,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the env; only the args can still misuse.
                 if let ExprKind::TupleIndex { object, .. } = &callee.kind {
                     if let ExprKind::Identifier(n) = &object.kind {
-                        if self.heap_env_tuple_owners.contains_key(n) {
+                        if self.closure_state.heap_env_tuple_owners.contains_key(n) {
                             return any_args(args);
                         }
                     }
@@ -908,8 +923,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // appears in the args; the callee index occurrence itself is allowed.
                 if let ExprKind::Index { object, .. } = &callee.kind {
                     if let ExprKind::Identifier(n) = &object.kind {
-                        if self.heap_env_array_owners.contains_key(n)
-                            || self.heap_env_vec_owners.contains(n)
+                        if self.closure_state.heap_env_array_owners.contains_key(n)
+                            || self.closure_state.heap_env_vec_owners.contains(n)
                         {
                             return any_args(args);
                         }
@@ -959,10 +974,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                     && matches!(&a.value.kind,
                                         ExprKind::Identifier(n)
                                             if binds.contains(n)
-                                                || self.heap_env_aggregate_owners.contains_key(n)
-                                                || self.heap_env_tuple_owners.contains_key(n)
-                                                || self.heap_env_array_owners.contains_key(n)
-                                                || self.heap_env_vec_owners.contains(n))
+                                                || self.closure_state.heap_env_aggregate_owners.contains_key(n)
+                                                || self.closure_state.heap_env_tuple_owners.contains_key(n)
+                                                || self.closure_state.heap_env_array_owners.contains_key(n)
+                                                || self.closure_state.heap_env_vec_owners.contains(n))
                                     && self.fn_param_is_borrows_only(callee_fn, i);
                                 !borrowed && mis(&a.value)
                             });
@@ -988,7 +1003,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // drop loop frees unconditionally — rejected (the env would leak,
                 // double-free, or free a stack address).
                 if let ExprKind::Identifier(n) = &object.kind {
-                    if self.heap_env_vec_owners.contains(n) {
+                    if self.closure_state.heap_env_vec_owners.contains(n) {
                         let push_heap_env = matches!(method.as_str(), "push" | "push_back")
                             && args.len() == 1
                             && (self.is_heap_env_producing_call(&args[0].value)
@@ -1016,7 +1031,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // recurse into the object. A call form `(h.f)(x)` is sanctioned in
                 // the `Call` arm before reaching here.
                 if let ExprKind::Identifier(n) = &object.kind {
-                    if let Some(closure_fields) = self.heap_env_aggregate_owners.get(n) {
+                    if let Some(closure_fields) =
+                        self.closure_state.heap_env_aggregate_owners.get(n)
+                    {
                         return closure_fields.contains(field);
                     }
                 }
@@ -1028,7 +1045,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // non-closure element read (`t.1`) is fine; otherwise recurse. A
                 // call form `(t.0)(x)` is sanctioned in the `Call` arm before here.
                 if let ExprKind::Identifier(n) = &object.kind {
-                    if let Some(elem_idxs) = self.heap_env_tuple_owners.get(n) {
+                    if let Some(elem_idxs) = self.closure_state.heap_env_tuple_owners.get(n) {
                         return elem_idxs.contains(&(*index as usize));
                     }
                 }
@@ -1043,7 +1060,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // a non-closure element, so it is conservatively rejected. The index
                 // sub-expression is still walked for its own misuse.
                 if let ExprKind::Identifier(n) = &object.kind {
-                    if let Some(elem_idxs) = self.heap_env_array_owners.get(n) {
+                    if let Some(elem_idxs) = self.closure_state.heap_env_array_owners.get(n) {
                         let elem_escapes = match &index.kind {
                             ExprKind::Integer(c, _) => elem_idxs.contains(&(*c as usize)),
                             _ => true,
@@ -1588,7 +1605,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 break;
             }
         }
-        self.fns_returning_heap_env = set;
+        self.closure_state.fns_returning_heap_env = set;
     }
 
     /// `true` when `func` returns — as a bare-identifier TAIL or a top-level
@@ -1726,7 +1743,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 break;
             }
         }
-        self.fns_returning_heap_env_aggregate = map;
+        self.closure_state.fns_returning_heap_env_aggregate = map;
     }
 
     /// The owned-field set if `func` returns — as a bare-identifier TAIL or a
@@ -1848,13 +1865,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 _ => {
-                    if let Some(idxs) =
-                        self.container_call_owner_elems(value, &self.fns_returning_heap_env_tuple)
-                    {
+                    if let Some(idxs) = self.container_call_owner_elems(
+                        value,
+                        &self.closure_state.fns_returning_heap_env_tuple,
+                    ) {
                         tuple_owners.insert(b, idxs);
-                    } else if let Some(idxs) =
-                        self.container_call_owner_elems(value, &self.fns_returning_heap_env_array)
-                    {
+                    } else if let Some(idxs) = self.container_call_owner_elems(
+                        value,
+                        &self.closure_state.fns_returning_heap_env_array,
+                    ) {
                         array_owners.insert(b, idxs);
                     }
                 }
@@ -1904,8 +1923,14 @@ impl<'ctx> super::Codegen<'ctx> {
         loop {
             let mut changed = false;
             for func in &funcs {
-                let have_tuple = self.fns_returning_heap_env_tuple.contains_key(&func.name);
-                let have_array = self.fns_returning_heap_env_array.contains_key(&func.name);
+                let have_tuple = self
+                    .closure_state
+                    .fns_returning_heap_env_tuple
+                    .contains_key(&func.name);
+                let have_array = self
+                    .closure_state
+                    .fns_returning_heap_env_array
+                    .contains_key(&func.name);
                 if have_tuple && have_array {
                     continue;
                 }
@@ -1914,19 +1939,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // struct path.
                 let (binds, _) = self.collect_heap_env_binds_and_owners(
                     func,
-                    &self.fns_returning_heap_env_aggregate,
+                    &self.closure_state.fns_returning_heap_env_aggregate,
                 );
                 let (tuple_owners, array_owners) = self.collect_tuple_array_owners(func, &binds);
                 if !have_tuple {
                     if let Some(idxs) = self.func_returns_container_owner(func, &tuple_owners) {
-                        self.fns_returning_heap_env_tuple
+                        self.closure_state
+                            .fns_returning_heap_env_tuple
                             .insert(func.name.clone(), idxs);
                         changed = true;
                     }
                 }
                 if !have_array {
                     if let Some(idxs) = self.func_returns_container_owner(func, &array_owners) {
-                        self.fns_returning_heap_env_array
+                        self.closure_state
+                            .fns_returning_heap_env_array
                             .insert(func.name.clone(), idxs);
                         changed = true;
                     }
@@ -1950,7 +1977,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Path { segments, .. } if segments.len() == 1 => &segments[0],
             _ => return false,
         };
-        self.fns_returning_heap_env_vec.contains(name)
+        self.closure_state.fns_returning_heap_env_vec.contains(name)
     }
 
     /// Collect, for `func`, the `Vec[Fn]` OWNERS. An owner is (a) a fresh-ctor
@@ -2047,16 +2074,22 @@ impl<'ctx> super::Codegen<'ctx> {
         loop {
             let mut changed = false;
             for func in &funcs {
-                if self.fns_returning_heap_env_vec.contains(&func.name) {
+                if self
+                    .closure_state
+                    .fns_returning_heap_env_vec
+                    .contains(&func.name)
+                {
                     continue;
                 }
                 let (binds, _) = self.collect_heap_env_binds_and_owners(
                     func,
-                    &self.fns_returning_heap_env_aggregate,
+                    &self.closure_state.fns_returning_heap_env_aggregate,
                 );
                 let owners = self.collect_vec_owners(func, &binds);
                 if self.func_returns_vec_owner(func, &owners) {
-                    self.fns_returning_heap_env_vec.insert(func.name.clone());
+                    self.closure_state
+                        .fns_returning_heap_env_vec
+                        .insert(func.name.clone());
                     changed = true;
                 }
             }
@@ -2573,8 +2606,8 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Expr,
         closure_span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let fn_name = format!("__closure_{}", id);
 
         // 1. Collect free variables (names referenced in body, not in
@@ -2787,7 +2820,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //    dispatched through the declared-`Fn` ABI — an indirect-call
         //    signature mismatch that silently printed the String's pointer
         //    word as an integer.
-        let param_hints = self.pending_closure_param_hints.take();
+        let param_hints = self.closure_state.pending_closure_param_hints.take();
         let inferred_fn_te = self
             .fn_value_typed_exprs
             .get(&(closure_span.offset, closure_span.length))
@@ -2963,7 +2996,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
-        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
+        let saved_cfn = std::mem::take(&mut self.closure_state.closure_fn_types);
         // B-2026-07-15-8: a closure-VALUED free var (`let base = |x| x + 1;
         // let composed = |x| base(x) * 10;`) is captured into the env by value
         // (its `{fn_ptr, env_ptr}` fat pointer) and re-registered in
@@ -2980,10 +3013,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // `load_variable` in `compile_closure_call` resolves either way.
         for name in &free_vars {
             if let Some(ft) = saved_cfn.get(name).copied() {
-                self.closure_fn_types.insert(name.clone(), ft);
+                self.closure_state.closure_fn_types.insert(name.clone(), ft);
             }
         }
-        let saved_pct = self.pending_closure_fn_type.take();
+        let saved_pct = self.closure_state.pending_closure_fn_type.take();
         // Isolate the f-string accumulator staging slot. A closure body
         // may stage an `fstr.acc` alloca (e.g. an f-string moved into
         // `Result.Err(f"…")`); that alloca lives in the *closure* fn, so
@@ -3441,8 +3474,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
-        self.closure_fn_types = saved_cfn;
-        self.pending_closure_fn_type = saved_pct;
+        self.closure_state.closure_fn_types = saved_cfn;
+        self.closure_state.pending_closure_fn_type = saved_pct;
         self.last_fstr_acc = saved_fstr_acc;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
@@ -3616,7 +3649,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_struct_value();
 
         // 11. Stage the LLVM function type for the surrounding let binding.
-        self.pending_closure_fn_type = Some(fn_type);
+        self.closure_state.pending_closure_fn_type = Some(fn_type);
 
         Ok(fat.into())
     }
@@ -3770,7 +3803,7 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let fn_type = match self.closure_fn_types.get(name).copied() {
+        let fn_type = match self.closure_state.closure_fn_types.get(name).copied() {
             Some(t) => t,
             None => return Ok(self.context.i64_type().const_int(0, false).into()),
         };
@@ -3976,10 +4009,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // this call the ARGUMENT closure's signature. The slot is saved and
         // restored either way so an enclosing `let` still sees its own.
         let is_closure_literal = matches!(callee.kind, ExprKind::Closure { .. });
-        let saved_pending = self.pending_closure_fn_type.take();
+        let saved_pending = self.closure_state.pending_closure_fn_type.take();
         let fat_val = self.compile_expr(callee)?;
-        let emitted = self.pending_closure_fn_type.take();
-        self.pending_closure_fn_type = saved_pending;
+        let emitted = self.closure_state.pending_closure_fn_type.take();
+        self.closure_state.pending_closure_fn_type = saved_pending;
         let fn_type = if is_closure_literal {
             emitted.unwrap_or(fn_type)
         } else {
@@ -4256,7 +4289,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the callee's env-first `FunctionType` is visible here; its
                     // real return type is the closure's declared result. `None`
                     // return (a unit closure) keeps the i64 placeholder.
-                    if let Some(ft) = self.closure_fn_types.get(fname) {
+                    if let Some(ft) = self.closure_state.closure_fn_types.get(fname) {
                         if let Some(ret) = ft.get_return_type() {
                             return ret;
                         }
@@ -4414,7 +4447,7 @@ impl<'ctx> super::Codegen<'ctx> {
         free_vars: &[String],
     ) -> Option<CapturePathLayout<'ctx>> {
         let key = SpanKey::from_span(closure_span);
-        let path_modes = self.closure_capture_paths.get(&key)?;
+        let path_modes = self.closure_state.closure_capture_paths.get(&key)?;
 
         // Group paths by root, preserving the slice-2 list order so
         // multiple paths under the same root keep deterministic ordering.

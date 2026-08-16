@@ -97,7 +97,7 @@ impl<'ctx> super::Codegen<'ctx> {
             tuple_var_elem_type_names: self.var_types.tuple_var_elem_type_names.remove(name),
             tuple_var_elem_type_exprs: self.var_types.tuple_var_elem_type_exprs.remove(name),
             atomic_var_inner_is_bool: self.atomic_var_inner_is_bool.remove(name),
-            closure_fn_types: self.closure_fn_types.remove(name),
+            closure_fn_types: self.closure_state.closure_fn_types.remove(name),
             len_alias: self.bce.len_alias.remove(name),
             vec_elem_types: self.var_types.vec_elem_types.remove(name),
             slice_elem_types: self.var_types.slice_elem_types.remove(name),
@@ -150,7 +150,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.atomic_var_inner_is_bool.insert(key.clone());
         }
         if let Some(v) = snap.closure_fn_types {
-            self.closure_fn_types.insert(key.clone(), v);
+            self.closure_state.closure_fn_types.insert(key.clone(), v);
         }
         if let Some(v) = snap.len_alias {
             self.bce.len_alias.insert(key.clone(), v);
@@ -320,7 +320,7 @@ impl<'ctx> super::Codegen<'ctx> {
             tuple_var_elem_type_names: self.var_types.tuple_var_elem_type_names.clone(),
             tuple_var_elem_type_exprs: self.var_types.tuple_var_elem_type_exprs.clone(),
             atomic_var_inner_is_bool: self.atomic_var_inner_is_bool.clone(),
-            closure_fn_types: self.closure_fn_types.clone(),
+            closure_fn_types: self.closure_state.closure_fn_types.clone(),
             len_alias: self.bce.len_alias.clone(),
             vec_elem_types: self.var_types.vec_elem_types.clone(),
             slice_elem_types: self.var_types.slice_elem_types.clone(),
@@ -362,7 +362,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.tuple_var_elem_type_names = snap.tuple_var_elem_type_names;
         self.var_types.tuple_var_elem_type_exprs = snap.tuple_var_elem_type_exprs;
         self.atomic_var_inner_is_bool = snap.atomic_var_inner_is_bool;
-        self.closure_fn_types = snap.closure_fn_types;
+        self.closure_state.closure_fn_types = snap.closure_fn_types;
         self.bce.len_alias = snap.len_alias;
         self.var_types.vec_elem_types = snap.vec_elem_types;
         self.var_types.slice_elem_types = snap.slice_elem_types;

@@ -1208,16 +1208,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // transferred +1 (see the field doc + `track_rc_result_var`).
         self.result_shared_nonescaping_param_names =
             crate::result_escape::nonescaping_param_names(func);
-        self.heap_env_closure_vars.clear();
-        self.heap_env_owner_fields.clear();
-        self.heap_env_tuple_owners.clear();
-        self.heap_env_array_owners.clear();
-        self.heap_env_vec_owners.clear();
+        self.closure_state.heap_env_closure_vars.clear();
+        self.closure_state.heap_env_owner_fields.clear();
+        self.closure_state.heap_env_tuple_owners.clear();
+        self.closure_state.heap_env_array_owners.clear();
+        self.closure_state.heap_env_vec_owners.clear();
         // Currying (B-2026-07-12-12): the local closure-value bindings in this
         // function whose call returns a heap env (`let make = |n| |x| x + n`).
         // Populated before the misuse guard so a `make(..)` call is recognized
         // as heap-env-producing by the same machinery as a named heap-env fn.
-        self.curry_closure_vars = self.compute_curry_closure_vars(func);
+        self.closure_state.curry_closure_vars = self.compute_curry_closure_vars(func);
         // Slice 1 misuse guard (B-2026-06-22-2): a heap-env closure binding may
         // only be CALLED in its owning function. Reject returning / copying /
         // storing / passing it, or an unbound `make(..)`, with an honest error
@@ -1726,7 +1726,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 } = &param.ty.kind
                 {
                     let fn_type = self.closure_abi_fn_type(params, return_type.as_deref());
-                    self.closure_fn_types.insert(param_name.clone(), fn_type);
+                    self.closure_state
+                        .closure_fn_types
+                        .insert(param_name.clone(), fn_type);
                 }
                 // Register collection / String / struct side-tables for the
                 // parameter. Mirrors the let-binding registration in

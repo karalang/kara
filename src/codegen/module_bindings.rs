@@ -362,7 +362,9 @@ impl<'ctx> super::Codegen<'ctx> {
             } = &te.kind
             {
                 let fn_type = self.closure_abi_fn_type(params, return_type.as_deref());
-                self.closure_fn_types.insert(name.clone(), fn_type);
+                self.closure_state
+                    .closure_fn_types
+                    .insert(name.clone(), fn_type);
             }
         }
     }

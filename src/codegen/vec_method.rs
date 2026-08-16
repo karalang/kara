@@ -2694,9 +2694,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Vec's per-element drop loop both decrement it, so bump the
                 // refcount here. A fresh `v.push(make(k))` element is already rc 1
                 // (no inc). Mirrors the array/tuple binding-source store inc.
-                if self.heap_env_vec_owners.contains(var_name) {
+                if self.closure_state.heap_env_vec_owners.contains(var_name) {
                     if let ExprKind::Identifier(src) = &args[0].value.kind {
-                        if self.heap_env_closure_vars.contains(src) {
+                        if self.closure_state.heap_env_closure_vars.contains(src) {
                             self.emit_heap_closure_env_inc(elem_val);
                         }
                     }
@@ -5986,7 +5986,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         )?
                     }
                     ExprKind::Identifier(name) => {
-                        if let Some(&closure_fn_type) = self.closure_fn_types.get(name) {
+                        if let Some(&closure_fn_type) =
+                            self.closure_state.closure_fn_types.get(name)
+                        {
                             let closure_val = self.compile_expr(&args[0].value)?;
                             let outer_fn = self.current_fn.unwrap();
                             let fat_ty = self.closure_value_type();
@@ -6593,7 +6595,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     ExprKind::Identifier(name) => {
-                        if let Some(&closure_fn_type) = self.closure_fn_types.get(name) {
+                        if let Some(&closure_fn_type) =
+                            self.closure_state.closure_fn_types.get(name)
+                        {
                             // Closure-typed local: compile to fat pointer,
                             // spill into an alloca, thunk reads it back.
                             let closure_val = self.compile_expr(&args[0].value)?;
@@ -7882,8 +7886,8 @@ impl<'ctx> super::Codegen<'ctx> {
     fn emit_cmp_family_sort_thunk(&mut self, cmp_fn: FunctionValue<'ctx>) -> FunctionValue<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let name = format!("__sort_family_cmp_{}", id);
         let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let thunk_fn = self
@@ -7925,8 +7929,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let name = format!("__sort_default_cmp_{}", id);
         let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let thunk_fn = self
@@ -7994,8 +7998,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let vec_ty = self.vec_struct_type();
 
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let name = format!("__sort_default_strcmp_{}", id);
         let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let thunk_fn = self
@@ -8223,8 +8227,8 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // 3. Declare thunk: extern "C" fn(ctx, *a, *b) -> i64.
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let name = format!("__sort_by_key_inline_{}", id);
         let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let thunk_fn = self
@@ -8238,8 +8242,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
-        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
-        let saved_pct = self.pending_closure_fn_type.take();
+        let saved_cfn = std::mem::take(&mut self.closure_state.closure_fn_types);
+        let saved_pct = self.closure_state.pending_closure_fn_type.take();
         // Clear the par-branch cancel pointer for the thunk body (B-2026-06-18-10):
         // the comparator is a separate fn, so a method call in it (e.g. `a.cmp(b)`)
         // must not load the enclosing par-branch's `cancel_flag` arg.
@@ -8688,8 +8692,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
-        self.closure_fn_types = saved_cfn;
-        self.pending_closure_fn_type = saved_pct;
+        self.closure_state.closure_fn_types = saved_cfn;
+        self.closure_state.pending_closure_fn_type = saved_pct;
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
@@ -8939,8 +8943,8 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // 3. Declare thunk: extern "C" fn(ctx, *a, *b) -> i64.
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let name = format!("__sort_by_inline_{}", id);
         let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let thunk_fn = self
@@ -8954,8 +8958,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
-        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
-        let saved_pct = self.pending_closure_fn_type.take();
+        let saved_cfn = std::mem::take(&mut self.closure_state.closure_fn_types);
+        let saved_pct = self.closure_state.pending_closure_fn_type.take();
         // Clear the par-branch cancel pointer for the thunk body (B-2026-06-18-10):
         // the comparator is a separate fn, so a method call in it (e.g. `a.cmp(b)`)
         // must not load the enclosing par-branch's `cancel_flag` arg.
@@ -9087,8 +9091,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
-        self.closure_fn_types = saved_cfn;
-        self.pending_closure_fn_type = saved_pct;
+        self.closure_state.closure_fn_types = saved_cfn;
+        self.closure_state.pending_closure_fn_type = saved_pct;
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
@@ -9297,8 +9301,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // LinkOnceODR would risk silent body-mismatch across TUs sharing a
         // counter id). The elem-type token keeps mono symbols textually
         // distinct when counter ids collide across TUs.
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let elem_mangle = self.llvm_type_to_mangle_str(elem_ty);
         let name = format!("__vec_{}_sort_by_mono_{}", elem_mangle, id);
         // Third parameter: `allow_part`. Call sites pass 1; the partition
@@ -9346,8 +9350,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
-        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
-        let saved_pct = self.pending_closure_fn_type.take();
+        let saved_cfn = std::mem::take(&mut self.closure_state.closure_fn_types);
+        let saved_pct = self.closure_state.pending_closure_fn_type.take();
         // Clear the par-branch cancel pointer for the mono sort body
         // (B-2026-06-18-10): the comparison this routine inlines must not
         // load the enclosing par-branch's `cancel_flag` arg — `%1` here is
@@ -11042,8 +11046,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
-        self.closure_fn_types = saved_cfn;
-        self.pending_closure_fn_type = saved_pct;
+        self.closure_state.closure_fn_types = saved_cfn;
+        self.closure_state.pending_closure_fn_type = saved_pct;
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
@@ -11136,8 +11140,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
-        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
-        let saved_pct = self.pending_closure_fn_type.take();
+        let saved_cfn = std::mem::take(&mut self.closure_state.closure_fn_types);
+        let saved_pct = self.closure_state.pending_closure_fn_type.take();
         let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         self.current_fn = Some(qpart_fn);
 
@@ -11711,8 +11715,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
-        self.closure_fn_types = saved_cfn;
-        self.pending_closure_fn_type = saved_pct;
+        self.closure_state.closure_fn_types = saved_cfn;
+        self.closure_state.pending_closure_fn_type = saved_pct;
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(b) = saved_bb {
             self.builder.position_at_end(b);
@@ -11761,8 +11765,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
-        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
-        let saved_pct = self.pending_closure_fn_type.take();
+        let saved_cfn = std::mem::take(&mut self.closure_state.closure_fn_types);
+        let saved_pct = self.closure_state.pending_closure_fn_type.take();
         let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         self.current_fn = Some(probe_fn);
 
@@ -11942,8 +11946,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
-        self.closure_fn_types = saved_cfn;
-        self.pending_closure_fn_type = saved_pct;
+        self.closure_state.closure_fn_types = saved_cfn;
+        self.closure_state.pending_closure_fn_type = saved_pct;
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(b) = saved_bb {
             self.builder.position_at_end(b);
@@ -12023,8 +12027,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let name = format!("__sort_by_thunk_{}", id);
 
         let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
@@ -12129,8 +12133,8 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let name = format!("__sort_by_key_closure_thunk_{}", id);
         let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let thunk_fn = self
@@ -12252,8 +12256,8 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let name = format!("__sort_by_key_named_thunk_{}", id);
         let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let thunk_fn = self
@@ -12329,8 +12333,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        let id = self.closure_counter;
-        self.closure_counter += 1;
+        let id = self.closure_state.closure_counter;
+        self.closure_state.closure_counter += 1;
         let name = format!("__sort_by_named_thunk_{}", id);
         let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let thunk_fn = self
