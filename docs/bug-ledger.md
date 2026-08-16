@@ -98,8 +98,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 122 | 0 |
 | codegen-gap | 113 | 0 |
 | missing-feature | 96 | 0 |
-| perf | 71 | 1 |
-| false-positive | 67 | 0 |
+| perf | 72 | 1 |
+| false-positive | 68 | 0 |
 | diagnostics | 60 | 0 |
 | crash | 47 | 0 |
 | soundness | 46 | 0 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 894 | 1 |
+| codegen | 895 | 1 |
 | typecheck | 174 | 0 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
 | autopar | 47 | 0 |
-| other | 42 | 0 |
+| other | 43 | 0 |
 | cli | 30 | 0 |
 | runtime | 21 | 0 |
 | resolver | 19 | 0 |
@@ -124,13 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1239 surfaced · 1 open · 1224 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1241 surfaced · 1 open · 1226 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-15-30 | 2026-08-15 | codegen | medium | The shuffled-uniform `sort_by` residual closed as `wontfix` in B-2026-08-11-28 at ~1.6x Rust is MATERIALLY LARGER on the canonical Apple-silicon host: 3.70x on kata #252 and 2.04x on kata #253, measured on M5 Pro with 50a50e8 IN the compiler. The disposition was reached entirely on a shared x86 cloud container, and `wontfix` was argued from a residual roughly half this size. Not a regression of 50a50e8 -- that fix is present and the ordered-input win it bought is not in question -- but the remaining gap is bigger than the number the wontfix was decided against, so the disposition deserves re-deciding on this host rather than inheriting. | mono sort_by lowering (natural-run merge sort, 50a50e8) -- shuffled-uniform residual, on arm64 |
+| B-2026-08-16-3 | 2026-08-16 | codegen | low | Shuffled `sort_by` is still ~1.80x driftsort after B-2026-08-15-30 routed it to the partition; the one measured lead is the scatter kernel's shape | mono sort_by lowering (emit_sort_partition_body) |
 
 ### Wontfix (4)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1239 surfaced
 
 </details>
 
-### Fixed (1224)
+### Fixed (1226)
 
-<details><summary>1224 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1226 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9441,6 +9441,7 @@ two accepts and GREEN at both for the two controls.
 
 Gates: full `--features llvm` sweep of all 98 targets, 12563 tests, 0 failures;
 clippy `--all --all-targets` and fmt clean. |
+| B-2026-08-15-30 | codegen | medium | The shuffled-uniform `sort_by` residual closed as `wontfix` in B-2026-08-11-28 at ~1.6x Rust is MATERIALLY LARGER on the canonical Apple-silicon host… | FIXED by 93ea7a86. Routed high-cardinality shuffled input to the stable quicksort that was already in the emitter, by widening BOTH of its cardinality gates into an orderedness band around ord ~ 0.5. Isolated pure-sort cycles, `(i64,i64)`, n=150k x 25, same-commit control: random 545M -> 350M (0.64x), gap to Rust's driftsort 2.80x -> 1.80x, every other pattern unchanged (sorted 1.01x, reverse 1.01x, few-unique 1.00x, sawtooth 1.01x, nearly-sorted 1.02x). Whole-kata, the two katas that filed this row: #252 679M -> 465M (0.68x), gap to Rust 2.63x -> 1.80x; #253 892M -> 705M (0.79x), 1.61x -> 1.27x. The residual ~1.80x is tracked in its own row. |
 | B-2026-08-15-32 | ownership | low | An `OnceFn()` PARAMETER called twice is NOT reported — `fn run(g: OnceFn()) { g(); g(); }` passes clean, while the identical local (`let g = \|\| apply… | FIXED in eec3aa5. `once_callable_closures` is now seeded from `param_types` for
 every parameter whose declared type is `Type::OnceFunction`, alongside the
 existing `let`-binding inference.
@@ -9562,6 +9563,7 @@ VERIFIED on the 6-line repro and on kata 277's 5-element shape: `karac build`
 covers the bare literal, the explicit `Vec[a, b]` prefix form, the Map and
 repeat literals, the 5-element nested shape, and the `a.len() + b.len()`
 control; confirmed FAILING on the parent commit and passing with the fix. |
+| B-2026-08-16-2 | other | medium | `shared_ownership_matrix` CANNOT PASS ON macOS: 84529948 added an LSAN_OPTIONS env without the macOS guard ASAN_OPTIONS already had, so every cell ab… | FIXED by e953aae0. Guarded `LSAN_OPTIONS` on macOS the way `ASAN_OPTIONS` already was, and made the frontier ratchet Linux-only — both are needed, since the first change alone makes every cell read `Clean` and the assert then fails on every expected-`Leak` cell. Safety and value-correctness assertions still run everywhere and the grid still reports `0 skipped` on macOS, so use-after-free / double-free coverage is unchanged there. |
 
 </details>
 
