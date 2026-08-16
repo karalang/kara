@@ -283,11 +283,18 @@ mod memory_sanitizer_tests {
                     the emit silently produced nothing"
             );
         }
-        if let Err(e) =
-            link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"])
-        {
-            // Skip silently — runtime library absent or linker unavailable.
+        // Route through `link_or_skip` so this harness gets the same two
+        // discriminations as the codegen E2E suite: a stale archive
+        // (undefined symbol) panics with the rebuild recipe, and
+        // KARAC_REQUIRE_RUNTIME_ARCHIVE=1 forbids the soft-skip outright —
+        // this file's hand-rolled skip predated both and silently kept the
+        // vacuous-pass holes open here.
+        let link_res =
+            link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"]);
+        if let Err(e) = &link_res {
             eprintln!("[{label}] link_executable_with_sanitizer failed: {e}");
+        }
+        if super::common::link_or_skip(link_res).is_none() {
             let _ = std::fs::remove_file(&obj_path);
             return None;
         }
@@ -439,10 +446,14 @@ mod memory_sanitizer_tests {
                  Either fix the codegen gap, or mark the test `#[ignore = \"<gap>\"]`."
             );
         }
-        if let Err(e) =
-            link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"])
-        {
+        // Same link_or_skip routing as the primary harness: stale archive
+        // panics; KARAC_REQUIRE_RUNTIME_ARCHIVE=1 forbids the skip.
+        let link_res =
+            link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"]);
+        if let Err(e) = &link_res {
             eprintln!("[{label}] link_executable_with_sanitizer failed: {e}");
+        }
+        if super::common::link_or_skip(link_res).is_none() {
             let _ = std::fs::remove_file(&obj_path);
             return None;
         }
@@ -15091,10 +15102,14 @@ fn main() {
                     the emit silently produced nothing"
             );
         }
-        if let Err(e) =
-            link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"])
-        {
+        // Same link_or_skip routing as the primary harness: stale archive
+        // panics; KARAC_REQUIRE_RUNTIME_ARCHIVE=1 forbids the skip.
+        let link_res =
+            link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"]);
+        if let Err(e) = &link_res {
             eprintln!("[{label}] link_executable_with_sanitizer failed: {e}");
+        }
+        if super::common::link_or_skip(link_res).is_none() {
             let _ = std::fs::remove_file(&obj_path);
             return None;
         }
@@ -16826,10 +16841,14 @@ fn main() {
         if !Path::new(&obj_path).exists() {
             panic!("[{label}] object file missing after a SUCCESSFUL compile_to_object");
         }
-        if let Err(e) =
-            link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"])
-        {
+        // Same link_or_skip routing as the primary harness: stale archive
+        // panics; KARAC_REQUIRE_RUNTIME_ARCHIVE=1 forbids the skip.
+        let link_res =
+            link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"]);
+        if let Err(e) = &link_res {
             eprintln!("[{label}] link_executable_with_sanitizer failed: {e}");
+        }
+        if super::common::link_or_skip(link_res).is_none() {
             let _ = std::fs::remove_file(&obj_path);
             return None;
         }

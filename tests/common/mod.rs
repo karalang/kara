@@ -249,7 +249,13 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
 /// linker found the archive and it lacked a symbol — always a stale archive
 /// (or a genuine missing keep-list entry), never "this environment has no
 /// archive". Any other link error (archive absent, no linker, permissions)
-/// keeps the soft-skip.
+/// keeps the soft-skip — UNLESS `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`, which
+/// turns every soft-skip into a panic. The stale-archive fix (B-2026-07-28-1)
+/// closed only half the vacuous-pass hole: an ABSENT archive still
+/// green-skipped the ~1,560 tolerant `if let Some(out)` call sites in
+/// tests/codegen.rs alone. CI sets the variable on every archive-building
+/// codegen job, so a broken archive step fails the job instead of skipping
+/// the suite; set it locally to assert your run actually exercised binaries.
 ///
 /// Returns `Some(())` to continue; `None` to soft-skip (propagate with `?`).
 pub fn link_or_skip(result: Result<(), String>) -> Option<()> {
@@ -271,6 +277,15 @@ pub fn link_or_skip(result: Result<(), String>) -> Option<()> {
              \x20 cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a\n\
              \x20 cargo rustc -p karac-runtime --release --crate-type staticlib\n\n\
              linker error:\n{e}"
+        );
+    }
+    if std::env::var("KARAC_REQUIRE_RUNTIME_ARCHIVE").as_deref() == Ok("1") {
+        panic!(
+            "link failed and KARAC_REQUIRE_RUNTIME_ARCHIVE=1 forbids the soft-skip. \
+             In this mode a missing archive / linker is a hard failure so the E2E \
+             suite cannot report green while asserting nothing. Build the archives \
+             (CLAUDE.md § Commands, lean FIRST then full) or unset the variable to \
+             restore the skip.\n\nlinker error:\n{e}"
         );
     }
     None

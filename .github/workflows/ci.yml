@@ -388,6 +388,12 @@ jobs:
   codegen-e2e:
     name: Codegen E2E (LLVM 18)
     runs-on: ubuntu-latest
+    env:
+      # This job builds the runtime archives itself, so a link soft-skip here
+      # can only mean the archive step broke — fail loudly instead of green-
+      # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
+      # archive half of the B-2026-07-28-1 vacuous-pass hole).
+      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -573,6 +579,12 @@ jobs:
   codegen-e2e-macos:
     name: Codegen E2E (macOS arm64, LLVM 18)
     runs-on: macos-latest
+    env:
+      # This job builds the runtime archives itself, so a link soft-skip here
+      # can only mean the archive step broke — fail loudly instead of green-
+      # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
+      # archive half of the B-2026-07-28-1 vacuous-pass hole).
+      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -658,6 +670,12 @@ jobs:
   codegen-e2e-linux-arm64:
     name: Codegen E2E (Linux arm64, LLVM 18)
     runs-on: ubuntu-24.04-arm
+    env:
+      # This job builds the runtime archives itself, so a link soft-skip here
+      # can only mean the archive step broke — fail loudly instead of green-
+      # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
+      # archive half of the B-2026-07-28-1 vacuous-pass hole).
+      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -746,6 +764,12 @@ jobs:
   memory-sanitizer:
     name: Memory sanitizer (ASAN + LeakSanitizer)
     runs-on: ubuntu-latest
+    env:
+      # This job builds the runtime archives itself, so a link soft-skip here
+      # can only mean the archive step broke — fail loudly instead of green-
+      # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
+      # archive half of the B-2026-07-28-1 vacuous-pass hole).
+      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -789,6 +813,12 @@ jobs:
   memory-sanitizer-arm64:
     name: Memory sanitizer arm64 (ASAN + LeakSanitizer)
     runs-on: ubuntu-24.04-arm
+    env:
+      # This job builds the runtime archives itself, so a link soft-skip here
+      # can only mean the archive step broke — fail loudly instead of green-
+      # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
+      # archive half of the B-2026-07-28-1 vacuous-pass hole).
+      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -854,6 +884,12 @@ jobs:
   memory-sanitizer-o0:
     name: Memory sanitizer -O0 (unoptimized allocations)
     runs-on: ubuntu-latest
+    env:
+      # This job builds the runtime archives itself, so a link soft-skip here
+      # can only mean the archive step broke — fail loudly instead of green-
+      # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
+      # archive half of the B-2026-07-28-1 vacuous-pass hole).
+      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -903,6 +939,12 @@ jobs:
   bench-gate:
     name: Flagship demo bench gate (Demo 1)
     runs-on: ubuntu-latest
+    env:
+      # This job builds the runtime archives itself, so a link soft-skip here
+      # can only mean the archive step broke — fail loudly instead of green-
+      # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
+      # archive half of the B-2026-07-28-1 vacuous-pass hole).
+      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
 
     steps:
       - uses: actions/checkout@v4
