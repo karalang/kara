@@ -3960,10 +3960,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // this guard the tensor path would misread that Vec as a Tensor and fail
         // on `.iter()`. Decline so the iterator-chain sum/min/max intercept
         // (which handles the Vec source) gets it.
-        if self.iter_terminal_elem_types.contains_key(&key) {
+        if self.span_tables.iter_terminal_elem_types.contains_key(&key) {
             return Ok(None);
         }
-        let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() else {
+        let Some(elem_te) = self.span_tables.temp_recv_elem_types.get(&key).cloned() else {
             return Ok(None);
         };
         let elem = self.llvm_type_for_type_expr(&elem_te);

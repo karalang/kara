@@ -353,7 +353,8 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         head: &str,
     ) -> String {
-        self.method_impl_dispatch
+        self.span_tables
+            .method_impl_dispatch
             .get(&((call_span.offset, call_span.length), method.to_string()))
             .cloned()
             .unwrap_or_else(|| head.to_string())
@@ -405,6 +406,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         if let Some(callee) = self
+            .span_tables
             .method_callee_types
             .get(&(call_span.offset, call_span.length))
         {
@@ -478,6 +480,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `pointer_method_receiver_pointees`); a same-named user method on a
         // non-pointer receiver has no entry and falls through to normal dispatch.
         if !self
+            .span_tables
             .raw_pointer_pointee_types
             .contains_key(&(object.span.offset, object.span.length))
         {
@@ -494,6 +497,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(Some(is_null.into()));
         }
         let pointee_te = self
+            .span_tables
             .raw_pointer_pointee_types
             .get(&(object.span.offset, object.span.length))
             .cloned()
@@ -884,6 +888,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // method elides the check, mirroring the narrowing applied to
         // free-function calls in `compile_call`.
         let callee_key = self
+            .span_tables
             .method_callee_types
             .get(&(call_span.offset, call_span.length))
             .cloned();
@@ -1735,6 +1740,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // keeps it exact — an outer link with a name from that set would have
         // its own vector-typed receiver anyway.
         let vector_span_hit = self
+            .span_tables
             .vector_method_call_spans
             .contains(&(object.span.offset, object.span.length));
         let vector_key = dispatch_key
@@ -2606,6 +2612,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // a fresh OWNED String, not a view, and must keep its own path.
             if matches!(&index.kind, ExprKind::Range { .. })
                 && !self
+                    .span_tables
                     .string_typed_exprs
                     .contains(&(inner.span.offset, inner.span.length))
             {
@@ -7454,6 +7461,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // early Err here would preempt those later arms
             // (e2e_sorted_set_string_iter_min_max_codegen).
             let elem_head = self
+                .span_tables
                 .iter_terminal_elem_types
                 .get(&(call_span.offset, call_span.length))
                 .and_then(|te| match &te.kind {
@@ -7834,11 +7842,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // span-table entry — keep it loud with the twin's `karac run`
         // pointer rather than the generic fallthrough below.
         let key = (call_span.offset, call_span.length);
-        if self.method_callee_types.get(&key).is_some_and(|k| {
-            k.starts_with("LazyFrame.")
-                || k.starts_with("LazyExpr.")
-                || k.starts_with("LazyGroupBy.")
-        }) {
+        if self
+            .span_tables
+            .method_callee_types
+            .get(&key)
+            .is_some_and(|k| {
+                k.starts_with("LazyFrame.")
+                    || k.starts_with("LazyExpr.")
+                    || k.starts_with("LazyGroupBy.")
+            })
+        {
             return Err(format!(
                 "codegen: Lazy method '{method}' fell through dispatch (the codegen twin \
                  lowers the full LazyFrame/LazyExpr/LazyGroupBy surface; a landing here \
@@ -11199,6 +11212,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the value it is. The span is the RHS expr's own span (preserved across
         // `substitute_iter_let_receiver`, which clones the original span).
         if !self
+            .span_tables
             .iterator_typed_exprs
             .contains(&(e.span.offset, e.span.length))
         {
@@ -11881,6 +11895,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // accumulator is heap (`String`/`Vec`); a scalar fold (`fold(0, |a,x|
         // a+x)`) needs no tracking and stays on the un-annotated path.
         let acc_ty_ann = self
+            .span_tables
             .iter_terminal_acc_types
             .get(&(call_span.offset, call_span.length))
             .filter(|te| self.is_string_type_expr(te) || self.extract_vec_elem_type(te).is_some())
@@ -12020,6 +12035,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let Some(elem_te) = self
+            .span_tables
             .iter_terminal_elem_types
             .get(&(call_span.offset, call_span.length))
             .cloned()
@@ -12130,6 +12146,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let Some(elem_te) = self
+            .span_tables
             .iter_terminal_elem_types
             .get(&(call_span.offset, call_span.length))
             .cloned()
@@ -12881,6 +12898,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let Some(elem_te) = self
+            .span_tables
             .iter_terminal_elem_types
             .get(&(call_span.offset, call_span.length))
             .cloned()
@@ -13058,6 +13076,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `iter_terminal_elem_types` holds the *payload* type `U` for find_map
         // (the typechecker registers `new_item` there, not the source element).
         let Some(u_te) = self
+            .span_tables
             .iter_terminal_elem_types
             .get(&(call_span.offset, call_span.length))
             .cloned()
@@ -13267,6 +13286,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let Some(elem_te) = self
+            .span_tables
             .iter_terminal_elem_types
             .get(&(call_span.offset, call_span.length))
             .cloned()
@@ -13470,6 +13490,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let Some(elem_te) = self
+            .span_tables
             .iter_terminal_elem_types
             .get(&(call_span.offset, call_span.length))
             .cloned()
@@ -15022,7 +15043,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|k| k.rsplit_once('.'))
             .map(|(t, _)| t == "String")
             .unwrap_or(false)
-            || self.string_typed_exprs.contains(&span_key)
+            || self.span_tables.string_typed_exprs.contains(&span_key)
             // Third signal, and the one that carries a CHAIN. Both of the
             // above are span-keyed, and the parser gives a MethodCall its
             // RECEIVER's span — so in `(…).to_uppercase().len()` the inner
@@ -15486,7 +15507,12 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
         let span_key = (object.span.offset, object.span.length);
-        let Some(elem_te) = self.temp_recv_elem_types.get(&span_key).cloned() else {
+        let Some(elem_te) = self
+            .span_tables
+            .temp_recv_elem_types
+            .get(&span_key)
+            .cloned()
+        else {
             return Ok(None);
         };
         let cur_fn = self
@@ -15579,7 +15605,12 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         span_key: (usize, usize),
     ) -> bool {
-        let Some(elem_te) = self.temp_recv_len_elem_types.get(&span_key).cloned() else {
+        let Some(elem_te) = self
+            .span_tables
+            .temp_recv_len_elem_types
+            .get(&span_key)
+            .cloned()
+        else {
             return false;
         };
         if !self.llvm_ty_is_vec_struct(val.get_type()) {
@@ -18563,6 +18594,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let src_span = &args[0].value.span;
         let src_unsigned = self
+            .span_tables
             .unsigned_vector_exprs
             .contains(&(src_span.offset, src_span.length));
         // Target element signedness (for the float→int saturating lane) — read
@@ -19383,6 +19415,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     BinOp::Gt
                 };
                 let is_unsigned = self
+                    .span_tables
                     .unsigned_vector_exprs
                     .contains(&(object.span.offset, object.span.length));
                 let mut acc = lane(self, recv, 0)?;

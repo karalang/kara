@@ -4614,6 +4614,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let name = name.as_str();
         if !self
+            .span_tables
             .uam_consume_sites
             .contains(&(expr.span.offset, expr.span.length))
         {
@@ -4636,7 +4637,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_load(val.get_type(), slot, "uam.mapset.clone")
                 .unwrap();
-            self.uam_copied_sites
+            self.span_tables
+                .uam_copied_sites
                 .insert((expr.span.offset, expr.span.length));
             return cloned;
         }
@@ -4665,7 +4667,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_load(val.get_type(), slot, "uam.struct.clone")
                     .unwrap();
-                self.uam_copied_sites
+                self.span_tables
+                    .uam_copied_sites
                     .insert((expr.span.offset, expr.span.length));
                 return cloned;
             }
@@ -4684,7 +4687,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let copied = self.emit_vecstr_defensive_copy(val, elem_ty, elem_te.as_ref());
         // Record that this site really was copied — the disarm skip keys on
         // this, so the two halves cannot drift apart as the copy widens.
-        self.uam_copied_sites
+        self.span_tables
+            .uam_copied_sites
             .insert((expr.span.offset, expr.span.length));
         copied
     }
@@ -4713,6 +4717,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         if !self
+            .span_tables
             .uam_consume_sites
             .contains(&(expr.span.offset, expr.span.length))
         {
@@ -4783,7 +4788,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .builder
                         .build_load(val.get_type(), slot, "uam.fld.struct.clone")
                         .ok()?;
-                    self.uam_copied_sites
+                    self.span_tables
+                        .uam_copied_sites
                         .insert((expr.span.offset, expr.span.length));
                     return Some(cloned);
                 }
@@ -4814,7 +4820,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .extract_vec_elem_type(&fte)
             .unwrap_or_else(|| self.context.i8_type().into());
         let copied = self.emit_vecstr_defensive_copy(val, elem_ty, elem_te.as_ref());
-        self.uam_copied_sites
+        self.span_tables
+            .uam_copied_sites
             .insert((expr.span.offset, expr.span.length));
         Some(copied)
     }
@@ -4853,6 +4860,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         };
         if !self
+            .span_tables
             .uam_consume_sites
             .contains(&(arg_expr.span.offset, arg_expr.span.length))
         {
@@ -4952,7 +4960,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_else(|| self.context.i8_type().into());
         let copied = self.emit_vecstr_defensive_copy(cur, elem_ty, elem_te.as_ref());
         let _ = self.builder.build_store(field_ptr, copied);
-        self.uam_copied_sites
+        self.span_tables
+            .uam_copied_sites
             .insert((arg_expr.span.offset, arg_expr.span.length));
         true
     }
@@ -4984,6 +4993,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         if !self
+            .span_tables
             .uam_consume_sites
             .contains(&(expr.span.offset, expr.span.length))
         {
@@ -5031,7 +5041,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .builder
                         .build_load(val.get_type(), slot, "uam.tup.struct.clone")
                         .ok()?;
-                    self.uam_copied_sites
+                    self.span_tables
+                        .uam_copied_sites
                         .insert((expr.span.offset, expr.span.length));
                     return Some(cloned);
                 }
@@ -5059,7 +5070,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .extract_vec_elem_type(&ete)
             .unwrap_or_else(|| self.context.i8_type().into());
         let copied = self.emit_vecstr_defensive_copy(val, elem_ty, elem_te.as_ref());
-        self.uam_copied_sites
+        self.span_tables
+            .uam_copied_sites
             .insert((expr.span.offset, expr.span.length));
         Some(copied)
     }

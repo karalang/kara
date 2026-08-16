@@ -126,6 +126,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // bit-reinterpreting integer elements into denormal garbage
         // (B-2026-07-01-9). Missing entry (recovery paths) = f64.
         let is_int = self
+            .span_tables
             .stats_elem_types
             .get(&(call_span.offset, call_span.length))
             .map(|te| {

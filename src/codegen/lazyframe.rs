@@ -551,7 +551,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // matches THIS call (chained calls share one aliased key — see the
         // collision note in `method_call.rs`).
         let table_kind = || -> Option<&'static str> {
-            let k = self.method_callee_types.get(&span_key)?;
+            let k = self.span_tables.method_callee_types.get(&span_key)?;
             let (ty, m) = k.rsplit_once('.')?;
             if m != method {
                 return None;
@@ -568,7 +568,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // a USER method declared to return a Lazy value has no
             // caller-side release registration (rule 3 only covers free-fn
             // calls), so the escaping +1 would leak silently — bail.
-            if let Some(k) = self.method_callee_types.get(&span_key) {
+            if let Some(k) = self.span_tables.method_callee_types.get(&span_key) {
                 let matches_this_call = k.rsplit_once('.').is_some_and(|(_, m)| m == method);
                 if matches_this_call && self.declared_lazy_return_of_fn(k).is_some() {
                     return Err(format!(

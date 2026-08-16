@@ -4296,6 +4296,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn compile_volatile_read(&mut self, src: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
         let key = (src.span.offset, src.span.length);
         let pointee_te = self
+            .span_tables
             .raw_pointer_pointee_types
             .get(&key)
             .cloned()
@@ -4346,7 +4347,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // consults. Missing entry ⇒ fall back to the value's own type (a
         // best-effort store rather than a hard error).
         let key = (dst.span.offset, dst.span.length);
-        let v = if let Some(pointee_te) = self.raw_pointer_pointee_types.get(&key).cloned() {
+        let v = if let Some(pointee_te) = self
+            .span_tables
+            .raw_pointer_pointee_types
+            .get(&key)
+            .cloned()
+        {
             let pointee_ty = self.llvm_type_for_type_expr(&pointee_te);
             self.coerce_scalar_to_type(v, pointee_ty)
         } else {
@@ -7011,6 +7017,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // If a future path copies without consulting this set, it double-frees;
         // if it skips the disarm without copying, it leaks.
         if self
+            .span_tables
             .uam_copied_sites
             .contains(&(arg_expr.span.offset, arg_expr.span.length))
         {

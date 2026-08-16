@@ -3151,6 +3151,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // reason `suppress_source_vec_cleanup_for_arg_ex` is: skipping the
         // disarm where no copy was made leaves two owners of one buffer.
         if self
+            .span_tables
             .uam_copied_sites
             .contains(&(value.span.offset, value.span.length))
         {

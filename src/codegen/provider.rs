@@ -246,6 +246,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // retargeting derives the closure's Result shape from it
                 // (B-2026-07-31-19).
                 result_type_expr: self
+                    .span_tables
                     .wp_result_types
                     .get(&(call_span.offset, call_span.length))
                     .cloned(),

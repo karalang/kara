@@ -7163,6 +7163,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `uam_defensive_copy_tuple_elem`, and the two are inseparable by
         // construction because both key on this one set.
         if self
+            .span_tables
             .uam_copied_sites
             .contains(&(value.span.offset, value.span.length))
         {
@@ -7293,6 +7294,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `uam_defensive_copy_field` produced an independent buffer the source
         // is still the owner of its own and its cleanup must stay armed.
         if self
+            .span_tables
             .uam_copied_sites
             .contains(&(value.span.offset, value.span.length))
         {
@@ -8741,7 +8743,8 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         let key = crate::token::method_call_key(&value.span, args_close_span);
-        self.method_unwrap_inner_types
+        self.span_tables
+            .method_unwrap_inner_types
             .get(&key)
             .is_some_and(|inner_te| !super::vec_method::is_trivially_copyable_te(inner_te))
     }

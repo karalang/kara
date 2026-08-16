@@ -909,6 +909,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // head/element, so the nested call reaches the SAME element-aware symbol
         // as a direct call (correctly-strided body) instead of the erased one.
         let tokens = self
+            .span_tables
             .call_type_subs_mangle
             .get(&(call_span.offset, call_span.length));
         for param in &gp.params {
@@ -1352,7 +1353,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let arg_key = (a.value.span.offset, a.value.span.length);
             let is_fresh_string_temp = self.expr_yields_fresh_owned_temp(&a.value)
                 && self.llvm_ty_is_vec_struct(val.get_type())
-                && self.string_typed_exprs.contains(&arg_key)
+                && self.span_tables.string_typed_exprs.contains(&arg_key)
                 && !self.rhs_stages_fstr_acc(&a.value);
             // B-2026-08-11-3 — the `Vec` sibling of the arm above, and the
             // third leg B-2026-07-11-35 (mono.rs, the `owned_vecstr_params`
@@ -1429,7 +1430,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let is_fresh_vec_temp_for_owned_param = (self.expr_yields_fresh_owned_temp(&a.value)
                 || is_collection_literal_arg)
                 && self.llvm_ty_is_vec_struct(val.get_type())
-                && !self.string_typed_exprs.contains(&arg_key)
+                && !self.span_tables.string_typed_exprs.contains(&arg_key)
                 && !self.rhs_stages_fstr_acc(&a.value)
                 && (Self::generic_param_is_bare_type_param(&generic_fn, i)
                     || Self::generic_param_is_owned_container(&generic_fn, i)
@@ -1465,6 +1466,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // an outer param (mirrors the LLVM `type_subst` resolution just below).
         let mut subst_names: HashMap<String, String> = HashMap::new();
         if let Some(frame) = self
+            .span_tables
             .call_type_subs
             .get(&(call_span.offset, call_span.length))
             .cloned()

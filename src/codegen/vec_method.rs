@@ -8380,7 +8380,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_neg_one = i64_t.const_int((-1i64) as u64, true);
         let i64_pos_one = i64_t.const_int(1, false);
         let key_body_span = (body.span.offset, body.span.length);
-        let res = if self.string_typed_exprs.contains(&key_body_span) {
+        let res = if self.span_tables.string_typed_exprs.contains(&key_body_span) {
             match (key_a_val, key_b_val) {
                 (BasicValueEnum::StructValue(ka), BasicValueEnum::StructValue(kb)) => {
                     let a_ptr = self
@@ -8441,7 +8441,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
             }
-        } else if let Some(cmp_callee_key) = self.user_ord_typed_exprs.get(&key_body_span).cloned()
+        } else if let Some(cmp_callee_key) = self
+            .span_tables
+            .user_ord_typed_exprs
+            .get(&key_body_span)
+            .cloned()
         {
             // User `impl Ord for T` struct key — dispatch to the user's
             // compiled `Type.cmp` via direct call. Takes precedence over
@@ -8508,7 +8512,12 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder
                 .build_int_sub(tag, one, "user.cmp.shift")
                 .unwrap()
-        } else if let Some(struct_name) = self.expr_struct_type_names.get(&key_body_span).cloned() {
+        } else if let Some(struct_name) = self
+            .span_tables
+            .expr_struct_type_names
+            .get(&key_body_span)
+            .cloned()
+        {
             // Struct-typed key (`sort_by_key(|item| item)` where
             // `item: MyStruct`). Delegate to the recursive cascade helper —
             // it handles single-struct, mixed-int+String fields, and nested

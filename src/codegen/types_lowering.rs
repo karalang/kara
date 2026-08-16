@@ -327,10 +327,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(te) = self.enum_inst_type_from_span(e) {
             return Some(te);
         }
-        if let Some(te) = self.concrete_named_type_exprs.get(&key) {
+        if let Some(te) = self.span_tables.concrete_named_type_exprs.get(&key) {
             return Some(te.clone());
         }
-        if self.string_typed_exprs.contains(&key) {
+        if self.span_tables.string_typed_exprs.contains(&key) {
             return Some(TypeExpr {
                 kind: TypeKind::Path(crate::ast::PathExpr {
                     segments: vec!["String".to_string()],
@@ -3057,7 +3057,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if method == "unwrap" || method == "expect" {
                 let key = crate::token::method_call_key(&expr.span, args_close_span);
-                if let Some(te) = self.method_unwrap_inner_types.get(&key) {
+                if let Some(te) = self.span_tables.method_unwrap_inner_types.get(&key) {
                     if let TypeKind::Path(p) = &te.kind {
                         if let Some(seg) = p.segments.last() {
                             if let Some(info) =

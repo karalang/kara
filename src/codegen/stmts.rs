@@ -1903,6 +1903,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         matches!(&value.kind, ExprKind::Index { .. })
             && self
+                .span_tables
                 .vec_index_borrow_spans
                 .contains(&crate::resolver::SpanKey::from_span(&value.span))
     }
@@ -2278,6 +2279,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the existing conservative `None`.
                 let span_key = (expr.span.offset, expr.span.length);
                 if self
+                    .span_tables
                     .method_callee_types
                     .get(&span_key)
                     .is_some_and(|k| BUILTIN_LEN_CALLEES.contains(&k.as_str()))
@@ -3193,7 +3195,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // form of the same binding already compiles correctly, so
                 // this path is behavior-identical to `let s: T = wp(...)`.
                 let wp_implicit_ty = if ty.is_none() {
-                    self.wp_result_types
+                    self.span_tables
+                        .wp_result_types
                         .get(&(value.span.offset, value.span.length))
                         .cloned()
                 } else {
@@ -4568,6 +4571,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // unique owner (no double-free, no leak).
                 let borrow_elided = matches!(&value.kind, ExprKind::Index { .. })
                     && self
+                        .span_tables
                         .vec_index_borrow_spans
                         .contains(&crate::resolver::SpanKey::from_span(&value.span));
                 // B-2026-08-01-33 mechanism 3, stage 2.5 — `let k = n.kids[i];`
@@ -4626,6 +4630,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // needed.
                 let rhs_is_borrowed_payload_vec = matches!(&value.kind, ExprKind::Identifier(_))
                     && self
+                        .span_tables
                         .borrow_vec_typed_exprs
                         .contains(&(value.span.offset, value.span.length));
                 let borrow_elided = borrow_elided || rhs_is_borrowed_payload_vec;
@@ -7735,6 +7740,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let fresh_handle = fresh_handle
                         || (matches!(&value.kind, ExprKind::Index { .. })
                             && self
+                                .span_tables
                                 .vec_index_cloned_sites
                                 .contains(&crate::resolver::SpanKey::from_span(&value.span)));
                     if fresh_handle
@@ -9652,7 +9658,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // lowering side-table flags exactly the raw-pointer operands;
                     // mut-ref operands are absent and fall through below.
                     let key = (operand.span.offset, operand.span.length);
-                    if self.raw_pointer_pointee_types.contains_key(&key) {
+                    if self
+                        .span_tables
+                        .raw_pointer_pointee_types
+                        .contains_key(&key)
+                    {
                         let ptr = self.compile_expr(operand)?.into_pointer_value();
                         self.builder.build_store(ptr, val).unwrap();
                     } else if let ExprKind::Identifier(name) = &operand.kind {
@@ -12620,6 +12630,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::Index { object, index } = &expr.kind {
             if matches!(&index.kind, ExprKind::Range { .. }) {
                 return self
+                    .span_tables
                     .string_typed_exprs
                     .contains(&(object.span.offset, object.span.length));
             }
@@ -12685,6 +12696,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ExprKind::InterpolatedStringLit(_) => true,
                 ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => true,
                 ExprKind::Binary { .. } => self
+                    .span_tables
                     .string_typed_exprs
                     .contains(&(tail.span.offset, tail.span.length)),
                 _ => self.expr_yields_fresh_owned_temp(tail),
@@ -13330,6 +13342,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ..
             } if matches!(method.as_str(), "unwrap" | "expect")
                 && self
+                    .span_tables
                     .method_unwrap_inner_types
                     .contains_key(&crate::token::method_call_key(&expr.span, args_close_span)) =>
             {
@@ -13649,6 +13662,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let te = self
+            .span_tables
             .method_unwrap_inner_types
             .get(&crate::token::method_call_key(&value.span, args_close_span))?;
         match &te.kind {

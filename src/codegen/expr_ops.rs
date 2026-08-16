@@ -4216,7 +4216,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } = &expr.kind
                     {
                         let key = crate::token::method_call_key(&expr.span, args_close_span);
-                        if let Some(te) = self.method_unwrap_inner_types.get(&key) {
+                        if let Some(te) = self.span_tables.method_unwrap_inner_types.get(&key) {
                             if let TypeKind::Path(p) = &te.kind {
                                 if p.segments.last().map(|s| s.as_str()) == Some("char") {
                                     return true;
@@ -4326,7 +4326,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.expr_is_unsigned_int_syntactic(expr) {
             return true;
         }
-        self.unsigned_int_exprs
+        self.span_tables
+            .unsigned_int_exprs
             .contains(&(expr.span.offset, expr.span.length))
     }
 
@@ -4416,6 +4417,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     "unwrap" | "expect" | "unwrap_or" | "unwrap_or_else" | "unwrap_or_default"
                 ) {
                     if let Some(inner_te) = self
+                        .span_tables
                         .method_unwrap_inner_types
                         .get(&crate::token::method_call_key(&expr.span, args_close_span))
                     {
@@ -4455,6 +4457,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         | "reduce_xor"
                         | "dot"
                 ) && self
+                    .span_tables
                     .unsigned_vector_exprs
                     .contains(&(expr.span.offset, expr.span.length))
                 {
@@ -4645,9 +4648,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // span (`vector_method_receivers` → `unsigned_vector_exprs`
                 // via lowering.rs); the object span is checked too for the
                 // collided-span shape.
-                self.unsigned_vector_exprs
+                self.span_tables
+                    .unsigned_vector_exprs
                     .contains(&(expr.span.offset, expr.span.length))
                     || self
+                        .span_tables
                         .unsigned_vector_exprs
                         .contains(&(object.span.offset, object.span.length))
             }

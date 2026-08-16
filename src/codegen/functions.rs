@@ -2583,7 +2583,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_or(false);
             (v_elem_heap, r_elem_heap)
         };
-        self.vec_index_borrow_spans =
+        self.span_tables.vec_index_borrow_spans =
             crate::codegen::borrow_elision::compute_vec_index_borrow_spans(&func.body, &heap_elem);
         // B-2026-08-14-32 — which branch expressions have their value thrown
         // away. Per function, for the same reason the set above is: both are

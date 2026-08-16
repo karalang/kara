@@ -31,6 +31,7 @@ use payload_vars::PayloadVars;
 use provider_state::ProviderState;
 use rc_elision::RcElision;
 use runtime_fns::RuntimeFns;
+use span_tables::SpanTables;
 use target_abi::TargetAbi;
 use tracing::Tracing;
 use type_decls::TypeDecls;
@@ -123,6 +124,7 @@ mod runtime;
 mod runtime_fns;
 mod shadow;
 mod slice_alias;
+mod span_tables;
 mod sso;
 mod state;
 mod stats;
@@ -1148,6 +1150,7 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) span_tables: SpanTables,
     pub(crate) rc_elision: RcElision,
     pub(crate) type_decls: TypeDecls<'ctx>,
     pub(crate) fn_sig: FnSig<'ctx>,
@@ -1604,98 +1607,6 @@ pub(super) struct Codegen<'ctx> {
     /// `field_copy_supported`; false everywhere else.
     pub(crate) copy_support_for_loop_shared_mode: bool,
 
-    /// Cross-error-type conversion targets at `?` sites — populated from
-    /// `Program.question_conversions` (set by the lowering pass from the
-    /// typechecker's `question_conversions` map). Key: `(span.offset,
-    /// span.length)` of the `?` expression. Value: target type name (e.g.
-    /// `"AppError"`). When present, `compile_question` emits `Target.from(e)`
-    /// against the inner err payload before the propagation early-return.
-    pub(crate) question_conversions: HashMap<(usize, usize), String>,
-    /// `?` span → unwrapped Ok/Some payload `TypeExpr` — populated from
-    /// `Program.question_ok_payload_types`. `reconstruct_question_ok_payload`
-    /// reads it to rebuild a multi-word Ok payload of any shape (including a
-    /// genuine nested `Option[T]`/`Result[T,E]` payload) without the
-    /// span-collision wrapper ambiguity of `enum_inst_type_exprs`
-    /// (B-2026-07-13-19).
-    pub(crate) question_ok_payload_types: HashMap<(usize, usize), TypeExpr>,
-    /// `with_provider`-call `let`-RHS result types (from
-    /// `Program.wp_result_types`, lowering-pass derived). The Let arm reads
-    /// an entry as an implicit type annotation so a heap-typed wp-result
-    /// binding registers its method-dispatch metadata (B-2026-07-31-20).
-    pub(crate) wp_result_types: HashMap<(usize, usize), TypeExpr>,
-    /// Per-method-call → `Type.method` callee key side-table — populated
-    /// from `Program.method_callee_types` (set by the lowering pass from
-    /// `TypeCheckResult.expr_types`). Key: `(span.offset, span.length)` of
-    /// the `MethodCall` expression. Value: canonical `Type.method` string
-    /// usable as a lookup into `callee_effectful`. Lets
-    /// `compile_method_call` apply the same narrowing that `compile_call`
-    /// applies to free-function and `Type.assoc` calls.
-    pub(crate) method_callee_types: HashMap<(usize, usize), String>,
-    /// B-2026-08-13-8 — qualified dispatch segments for impls whose head name is
-    /// not a unique identity (`impl Zero for Vec[i64]` alongside `impl Zero for
-    /// Vec[String]`), keyed by the impl target's span. Computed here from the
-    /// program AST via the same shared helper the interpreter and the
-    /// typechecker call, so the symbol this module EMITS and the key those
-    /// phases expect cannot drift. Drives emission only.
-    pub(crate) impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames,
-    /// The dispatch half of the same row, snapshotted from
-    /// `Program.method_impl_dispatch`: per call site, the resolved impl's
-    /// qualified segment. Codegen cannot recompute it — `inferred_receiver_type`
-    /// only ever yields a head name — so the typechecker, which compared
-    /// `target_args` vector-wise at check time, supplies the winner.
-    pub(crate) method_impl_dispatch: HashMap<((usize, usize), String), String>,
-    /// Phase 6 line 26 slice 8ab: per-call-site effect-variable
-    /// substitutions, snapshotted from `Program.call_effect_subs`
-    /// (which `cli.rs::Pipeline` populates from
-    /// `EffectCheckResult.call_effect_subs` via
-    /// `build_call_effect_subs_table`). Slice 8y (entry 32) reads
-    /// this in `compile_generic_call` to gate per-mono state-machine
-    /// emission on whether the resolved per-call effects include any
-    /// network-yield verb. Empty when effectcheck didn't run or no
-    /// polymorphic-effect callees exist.
-    pub(crate) call_effect_subs: crate::ast::CallEffectSubsTable,
-    /// Per-`unwrap`/`expect`/`is_*` MethodCall → inner `TypeExpr` side-
-    /// table — populated from `Program.method_unwrap_inner_types` (set by
-    /// the lowering pass from `TypeCheckResult.method_unwrap_inner_types`).
-    /// Key: `(span.offset, span.length)` of the MethodCall expression.
-    /// Value: the `T` of `Option[T]` (or success-`T` of `Result[T, E]`).
-    /// Codegen's `unwrap` arm uses this to lower the inner type to its
-    /// LLVM shape and reconstitute the payload words back to a value.
-    pub(crate) method_unwrap_inner_types: HashMap<(usize, usize), TypeExpr>,
-    /// ERR (`E`) sibling of `method_unwrap_inner_types` — the Result forms of
-    /// the absent-closure combinators (`unwrap_or_else`/`map_or_else`/
-    /// `or_else`, B-2026-07-14-6) reconstruct the `Err` value at this type to
-    /// feed their closure. Same keying (MethodCall span).
-    pub(crate) method_unwrap_err_types: HashMap<(usize, usize), TypeExpr>,
-    /// Per-fresh-temp `Vec`/`VecDeque` receiver read-method (`get`/`first`/
-    /// `last`/`get_unchecked`/`contains`) MethodCall → scalar element
-    /// `TypeExpr` side-table — populated from `Program.temp_recv_elem_types`.
-    /// Key: `(span.offset, span.length)` of the MethodCall. Codegen
-    /// materializes the non-identifier receiver into a synth local, registers
-    /// this element type, and re-dispatches through `compile_vec_method`
-    /// (general-owned-temp-tracking spike, slice 3b).
-    pub(crate) temp_recv_elem_types: HashMap<(usize, usize), TypeExpr>,
-    /// Per fresh-temp `Vec` receiver of `len`/`is_empty`/`count` → the
-    /// receiver's heap-bearing element `TypeExpr` — populated from
-    /// `Program.temp_recv_len_elem_types`. The intercept's drop-track uses it
-    /// to walk the elements instead of freeing only the outer buffer
-    /// (B-2026-07-31-43). Separate from `temp_recv_elem_types` on purpose: at
-    /// a span-collided chain the two tables describe different receivers.
-    pub(crate) temp_recv_len_elem_types: HashMap<(usize, usize), TypeExpr>,
-    /// Per numeric iterator-terminal MethodCall (`Iterator.sum()` /
-    /// `Iterator.reduce(f)`) → yielded element `TypeExpr` side-table —
-    /// populated from `Program.iter_terminal_elem_types`. Key:
-    /// `(span.offset, span.length)` of the MethodCall. `try_compile_iter_chain_sum`
-    /// reads it to seed the fused-loop accumulator with a correctly-typed zero
-    /// so `acc = acc + x` type-checks for every numeric width (B-2026-07-11-19).
-    pub(crate) iter_terminal_elem_types: HashMap<(usize, usize), TypeExpr>,
-    /// Per `Iterator.fold(init, f)` MethodCall → accumulator `TypeExpr`
-    /// side-table — populated from `Program.iter_terminal_acc_types`. Key:
-    /// `(span.offset, span.length)` of the MethodCall. `try_compile_iter_chain_fold`
-    /// reads it to stamp a type annotation on the synthetic accumulator `let`,
-    /// so a heap (`String`/`Vec`) accumulator registers as a tracked binding and
-    /// the Assign move-machinery fires instead of double-freeing (B-2026-07-13-18).
-    pub(crate) iter_terminal_acc_types: HashMap<(usize, usize), TypeExpr>,
     /// Materialized iterator bindings (B-2026-07-11-19): a `let it =
     /// <iter-chain>` whose RHS is a fusable iterator chain (`v.iter()...`, a
     /// range) is NOT codegen'd as a value (codegen has no runtime iterator);
@@ -1705,9 +1616,6 @@ pub(super) struct Codegen<'ctx> {
     /// a later same-named binding overwrites; a non-iterator `let` never
     /// registers here.
     pub(crate) iter_let_bindings: HashMap<String, Expr>,
-    /// `Stats.<fn>` call-span -> slice element `TypeExpr` (`i64` | `f64`),
-    /// from `Program.stats_elem_types` (S5). Missing entry = `f64`.
-    pub(crate) stats_elem_types: HashMap<(usize, usize), TypeExpr>,
     /// Inner type of every borrow-typed (`ref T`) expression, keyed by span
     /// — populated from `Program.ref_return_inner_types`. Lets the `let` arm
     /// recognise that a method-call RHS (`let n = u.name()`) returns a
@@ -1725,112 +1633,6 @@ pub(super) struct Codegen<'ctx> {
     /// `ref_return_inner_types` it survives the parser's chained-call span
     /// aliasing — see the population site (B-2026-07-29-12).
     pub(crate) user_ref_method_inner: std::collections::HashMap<String, TypeExpr>,
-    /// Set of `(span.offset, span.length)` keys for every expression whose
-    /// Kāra type is `String`. Populated from `Program.string_typed_exprs`
-    /// (which the lowering pass derives from `TypeCheckResult.expr_types`).
-    /// Lets codegen distinguish `String` from `Vec[T]` and other 3-word
-    /// `{ptr, i64, i64}` types whose LLVM struct shape is identical.
-    /// First consumer: `emit_sort_by_key_inline_thunk`'s String-key
-    /// dispatch arm — `String` and `Vec[u8]` are indistinguishable from
-    /// the LLVM value alone, so the span-set is what tells them apart.
-    pub(crate) string_typed_exprs: HashSet<(usize, usize)>,
-    /// Spans of every expression typed `Ref`/`MutRef` of a `Vec`/`VecDeque`/
-    /// `Slice` (from `Program.borrow_vec_typed_exprs`). The Let path consults
-    /// it so a whole-collection re-borrow (`let ps = params`, `params: ref
-    /// Vec[T]`) binds `ps` as an alias with no scope-exit free instead of a
-    /// second owner that double-frees the container's buffer (B-2026-07-18-4).
-    pub(crate) borrow_vec_typed_exprs: HashSet<(usize, usize)>,
-    /// Spans of every `Iterator[..]`-typed expression (from
-    /// `Program.iterator_typed_exprs`) — the sound gate for materializing an
-    /// iterator-let binding (B-2026-07-11-19).
-    pub(crate) iterator_typed_exprs: HashSet<(usize, usize)>,
-    /// Per-expression `Fn(..)` / `OnceFn(..)` signature (as a `FnType`
-    /// TypeExpr), from `Program.fn_value_typed_exprs` (lowering pass, from
-    /// `TypeCheckResult.expr_types`). Keyed by the expression's
-    /// `(span.offset, span.length)`. Lets `let_binding_fn_value_type` register
-    /// an un-annotated fn-value binding (`let g = h.f;`) in `closure_fn_types`
-    /// so `g(x)` lowers to an indirect call (B-2026-06-21-3).
-    pub(crate) fn_value_typed_exprs: HashMap<(usize, usize), TypeExpr>,
-    /// Per-generic-call-site resolved type-arg substitution
-    /// (`{ formal-param-name -> concrete-type-name }`), keyed by the call
-    /// expression's `(span.offset, span.length)`. From
-    /// `Program.call_type_subs` (lowering pass, from
-    /// `TypeCheckResult.call_type_subs`). `compile_generic_call` consults it
-    /// to bind type params the LLVM-type-based `infer_type_args` can't — a
-    /// container element type (`ref Vec[T]`) is element-erased in its
-    /// `{ptr,len,cap}` LLVM shape, so two element instantiations would share
-    /// one monomorph without this (B-2026-07-02-41). Concrete names resolve
-    /// through the active `type_subst` (via `llvm_type_for_name`), so a
-    /// nested generic call inside a mono flattens transitively.
-    pub(crate) call_type_subs: HashMap<(usize, usize), HashMap<String, String>>,
-    /// Element-aware mono-mangle tokens per call site (`T` → `"Vec_i64"` /
-    /// `"Vec_String"` / `"String"`), the sibling of `call_type_subs` (head-only).
-    /// Consulted by `compile_generic_call` to give a generic fn's mono a distinct
-    /// symbol per builtin-collection whole-type-param instantiation — String /
-    /// Vec[i64] / Vec[String] all lower to `{ptr,i64,i64}` and would otherwise
-    /// collide on one `$struct` symbol, sharing an element-erased body
-    /// (B-2026-07-11-35 return-owned-param leg).
-    pub(crate) call_type_subs_mangle: HashMap<(usize, usize), HashMap<String, String>>,
-    /// B-2026-08-14-38 — the `Vec[T]` / `VecDeque[T]` `TypeExpr` of an `Index`
-    /// RECEIVER that is a method call (`Program.index_recv_vec_types`). The Vec
-    /// twin of `tensor_index_recv_types`: same key, same collision (the parser
-    /// stamps a postfix expression with its receiver's span, so `expr_types`
-    /// holds the index's ELEMENT type there). `compile_index` reads it to
-    /// materialize the nameless temporary into a synth Vec local and lower the
-    /// read through the identifier-keyed Vec path.
-    pub(crate) index_recv_vec_types: HashMap<(usize, usize), TypeExpr>,
-    /// Set of `(span.offset, span.length)` keys for every expression whose
-    /// Kāra type is a `Vector[T, N]` with an unsigned-integer element.
-    /// Populated from `Program.unsigned_vector_exprs`. The LLVM `<N x iX>`
-    /// lane type is signless, so `compile_vector_method`'s `reduce_min`/
-    /// `reduce_max` arm consults this (keyed by the receiver-vector span)
-    /// to pick the unsigned compare predicate (`ult`/`ugt`) over the signed
-    /// default. Shared infra for the slice-3 mask comparisons.
-    pub(crate) unsigned_vector_exprs: HashSet<(usize, usize)>,
-    /// B-2026-08-14-3 — scalar sibling of `unsigned_vector_exprs`. Populated
-    /// from `Program::unsigned_int_exprs`; see that field for why the
-    /// syntactic walk in `expr_is_unsigned_int` needs a fallback and why this
-    /// one is consulted last.
-    pub(crate) unsigned_int_exprs: HashSet<(usize, usize)>,
-    /// B-2026-08-14-3 — spans of `x as T` whose SOURCE is unsigned. See
-    /// `Program::cast_source_unsigned` for why the span-keyed type table
-    /// cannot answer this.
-    pub(crate) cast_source_unsigned: HashSet<(usize, usize)>,
-    /// Spans of `Vector[T, N]` INSTANCE-METHOD calls, from
-    /// `Program.vector_method_call_spans`. The vector dispatch in
-    /// `compile_method_call` consults this when the span-keyed
-    /// `method_callee_types` entry has been clobbered by an outer chain link
-    /// (`v.reduce_sum().to_string()` — B-2026-07-29-7). Presence-only; the
-    /// method name still has to be in the Vector instance set.
-    pub(crate) vector_method_call_spans: HashSet<(usize, usize)>,
-    /// Sibling to `string_typed_exprs`: for every expression whose Kāra
-    /// type is a `Named` struct, the canonical struct name. Populated
-    /// from `Program.expr_struct_type_names`. Lets codegen recover the
-    /// source-level struct identity from a value alone — the LLVM struct
-    /// type doesn't carry the name back — so `emit_sort_by_key_inline_thunk`
-    /// can look up per-field type names via `struct_field_type_names` and
-    /// dispatch the right per-field comparator (int / String) when the
-    /// key is a struct with mixed-type fields.
-    pub(crate) expr_struct_type_names: HashMap<(usize, usize), String>,
-    /// Sibling to `expr_struct_type_names`: for every expression whose
-    /// Kāra type is a struct with a user-supplied `impl Ord for T`, maps
-    /// span → canonical `"Type.cmp"` callee key. Populated from
-    /// `Program.user_ord_typed_exprs`. `emit_sort_by_key_inline_thunk`
-    /// consults this map before the field-aware cascade so the user's
-    /// `cmp` runs instead of a synthesized derive-equivalent lex compare.
-    pub(crate) user_ord_typed_exprs: HashMap<(usize, usize), String>,
-    /// Pointee surface `TypeExpr` per raw-pointer-typed (`*const T` / `*mut T`)
-    /// expression, keyed by span — populated from
-    /// `Program.raw_pointer_pointee_types`. The unary-deref arm keys this by the
-    /// operand span to `load` through a raw pointer (whose value is the address)
-    /// instead of returning the address; references are absent and take the
-    /// pass-through path.
-    pub(crate) raw_pointer_pointee_types: HashMap<(usize, usize), TypeExpr>,
-    /// Arg-less (concrete, non-generic) `Named` type per expression span — the
-    /// complement of `enum_inst_type_exprs`. Consumed ONLY by
-    /// `reconstruct_question_ok_payload` to rebuild a multi-word concrete
-    /// enum/struct `?`-Ok payload the generic-only table drops (B-2026-07-11-7).
-    pub(crate) concrete_named_type_exprs: HashMap<(usize, usize), TypeExpr>,
     /// Tuple ELEMENT indices moved out of a let-bound tuple (`let x = t.0`),
     /// per variable. The element's body now belongs to the destination, so the
     /// tuple's `__karac_dropelems_tuple_*` walk must skip it — without the mask
@@ -1933,29 +1735,6 @@ pub(super) struct Codegen<'ctx> {
     /// consumer: the `.kara_jit_template` manifest emitted by
     /// `emit_jit_template_section` (phase-7 line 14).
     pub(crate) used_data_globals: Vec<inkwell::values::GlobalValue<'ctx>>,
-    /// Borrow-elision for read-only `let r = v[i]` indexed-element bindings
-    /// (B-2026-06-19-6, clone-elision). Per-function set of the RHS index
-    /// expression's `SpanKey` for each `let r = v[i]` whose binding `r` is
-    /// provably read-only and non-escaping AND whose container `v` is not
-    /// mutated within `r`'s lexical scope — computed by the conservative
-    /// whitelist scan `compute_vec_index_borrow_spans` at `compile_function`
-    /// entry. At such a let site the heap-element deep-clone
-    /// (`clone_owned_vec_index_element`) is skipped — `r` aliases the
-    /// container element — and the binding's scope-exit `track_vec_*`
-    /// (FreeVecBuffer + recursive element drop) is suppressed, since the
-    /// container stays the unique owner. Recomputed (overwritten) per fn.
-    pub(crate) vec_index_borrow_spans: HashSet<SpanKey>,
-    /// B-2026-08-14-15 leg A — the RHS `SpanKey` of every index-read that
-    /// `clone_owned_vec_index_element` actually deep-cloned. The clone makes the
-    /// destination the owner of a FRESH value, but the `let` site's Map/Set
-    /// cleanup arm keys on the RHS *shape* (`Call` / `.clone()` / …) and reads a
-    /// bare `v[i]` as a caller-retains ALIAS — correct when the clone is elided,
-    /// a leak of the whole cloned Map control block when it is not. Recording the
-    /// emission (rather than re-deriving it from `!borrow_elided`) keeps the two
-    /// sides exact: the clone self-gates on element copyability and on the read
-    /// value's LLVM type, so "not borrow-elided" is strictly wider than "cloned".
-    /// Accumulates across the module; `SpanKey`s are source-unique.
-    pub(crate) vec_index_cloned_sites: HashSet<SpanKey>,
     /// B-2026-08-01-33 mechanism 2 — `shared` type names the ownership pass
     /// promoted to atomic refcounting. Read by `heap_type_uses_atomic_rc`, the
     /// funnel all four refcount dispatchers share. Empty unless a multi-branch
@@ -2027,46 +1806,6 @@ pub(super) struct Codegen<'ctx> {
     /// flags the stdlib against itself — refusing every legitimate regex
     /// program. See B-2026-08-02-13.
     pub(crate) declaring_stdlib_program: bool,
-    /// Per-variable element-`TypeExpr` side-table for collection variables —
-    /// the *element* of a Vec/Slice/Array, or the *value* of a Map. Used by
-    /// `compile_for_*_var` so for-loop bindings inherit the right side-table
-    /// registrations (`vec_elem_types`, `slice_elem_types`, `map_*_types`)
-    /// when the element is itself a Vec/String/Slice/Map. Without this,
-    /// LLVM-type-only tracking can't distinguish `Vec[String]` from
-    /// `Vec[Vec[T]]` (both store `vec_struct_type` as the element LLVM type).
-    /// B-2026-08-10-21 — span keys of the CONSUME sites the ownership pass
-    /// reported a `UseAfterMove` for, straight from
-    /// `OwnershipCheckResult::use_after_move_consume_sites`.
-    ///
-    /// `UseAfterMove` is non-fatal for `build` on the documented promise that
-    /// "codegen defensive-copies the reuse, so the binary is memory-safe"
-    /// (`cli.rs`'s `is_fatal_ownership_kind`). This is the set that makes the
-    /// promise true. Two consumers, and BOTH are required at every flagged
-    /// site:
-    ///
-    ///   * the identifier load deep-copies the moved value, so the consumer
-    ///     gets its own buffer;
-    ///   * `suppress_source_vec_cleanup_for_arg_ex` skips the source disarm, so
-    ///     the source keeps its own buffer AND its own cleanup.
-    ///
-    /// A copy without the disarm-skip leaks the source; a disarm-skip without
-    /// the copy turns the use-after-free into a double free. Empty for any
-    /// program the ownership pass reported no `UseAfterMove` on, which is the
-    /// overwhelming majority — nothing changes for them.
-    pub(crate) uam_consume_sites: std::collections::HashSet<(usize, usize)>,
-    /// B-2026-08-10-21 — the flagged sites at which a defensive copy was
-    /// ACTUALLY emitted, recorded by `uam_defensive_copy`.
-    ///
-    /// The disarm skip keys on THIS set, not on `uam_consume_sites`, and the
-    /// distinction is the whole safety argument. The copy currently covers the
-    /// `{ptr,len,cap}` family only; skipping the disarm at a site where no copy
-    /// was made leaves two owners of one buffer — measured as
-    /// `free(): double free detected in tcache 2` on a struct-typed move, which
-    /// is strictly worse than the wrong-output it replaced. Keying on
-    /// "a copy happened" makes the pair inseparable by construction, so
-    /// widening the copy to more types can never get out of step with the
-    /// disarm.
-    pub(crate) uam_copied_sites: std::collections::HashSet<(usize, usize)>,
     /// HTTP handler ABI trampoline (2026-05-09): cache of per-handler-fn
     /// `extern "C"` shims. Key is the user handler's mangled fn name (e.g.
     /// `"handle"`); value is the synthesized shim function. Sharing the
@@ -5987,39 +5726,45 @@ impl<'ctx> Codegen<'ctx> {
             compiling_ref_return_let_rhs: false,
             suppress_shadow_metadata_purge: false,
             copy_support_for_loop_shared_mode: false,
-            question_conversions: HashMap::new(),
-            question_ok_payload_types: HashMap::new(),
-            wp_result_types: HashMap::new(),
-            method_callee_types: HashMap::new(),
-            impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::new(),
-            method_impl_dispatch: HashMap::new(),
-            call_effect_subs: crate::ast::CallEffectSubsTable::new(),
-            method_unwrap_inner_types: HashMap::new(),
-            method_unwrap_err_types: HashMap::new(),
-            temp_recv_elem_types: HashMap::new(),
-            temp_recv_len_elem_types: HashMap::new(),
-            iter_terminal_elem_types: HashMap::new(),
-            iter_terminal_acc_types: HashMap::new(),
+            span_tables: SpanTables {
+                question_conversions: HashMap::new(),
+                question_ok_payload_types: HashMap::new(),
+                wp_result_types: HashMap::new(),
+                method_callee_types: HashMap::new(),
+                impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::new(),
+                method_impl_dispatch: HashMap::new(),
+                call_effect_subs: crate::ast::CallEffectSubsTable::new(),
+                method_unwrap_inner_types: HashMap::new(),
+                method_unwrap_err_types: HashMap::new(),
+                temp_recv_elem_types: HashMap::new(),
+                temp_recv_len_elem_types: HashMap::new(),
+                iter_terminal_elem_types: HashMap::new(),
+                iter_terminal_acc_types: HashMap::new(),
+                stats_elem_types: HashMap::new(),
+                string_typed_exprs: HashSet::new(),
+                borrow_vec_typed_exprs: HashSet::new(),
+                iterator_typed_exprs: HashSet::new(),
+                fn_value_typed_exprs: HashMap::new(),
+                call_type_subs: HashMap::new(),
+                call_type_subs_mangle: HashMap::new(),
+                index_recv_vec_types: HashMap::new(),
+                unsigned_vector_exprs: HashSet::new(),
+                unsigned_int_exprs: HashSet::new(),
+                cast_source_unsigned: HashSet::new(),
+                vector_method_call_spans: HashSet::new(),
+                expr_struct_type_names: HashMap::new(),
+                user_ord_typed_exprs: HashMap::new(),
+                raw_pointer_pointee_types: HashMap::new(),
+                concrete_named_type_exprs: HashMap::new(),
+                vec_index_borrow_spans: HashSet::new(),
+                vec_index_cloned_sites: HashSet::new(),
+                uam_consume_sites: std::collections::HashSet::new(),
+                uam_copied_sites: std::collections::HashSet::new(),
+            },
             iter_let_bindings: HashMap::new(),
-            stats_elem_types: HashMap::new(),
             ref_return_inner_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             user_ref_method_inner: std::collections::HashMap::new(),
-            string_typed_exprs: HashSet::new(),
-            borrow_vec_typed_exprs: HashSet::new(),
-            iterator_typed_exprs: HashSet::new(),
-            fn_value_typed_exprs: HashMap::new(),
-            call_type_subs: HashMap::new(),
-            call_type_subs_mangle: HashMap::new(),
-            index_recv_vec_types: HashMap::new(),
-            unsigned_vector_exprs: HashSet::new(),
-            unsigned_int_exprs: HashSet::new(),
-            cast_source_unsigned: HashSet::new(),
-            vector_method_call_spans: HashSet::new(),
-            expr_struct_type_names: HashMap::new(),
-            user_ord_typed_exprs: HashMap::new(),
-            raw_pointer_pointee_types: HashMap::new(),
-            concrete_named_type_exprs: HashMap::new(),
             tuple_moved_elem_bodies: HashMap::new(),
             consts: HashMap::new(),
             module_bindings: HashMap::new(),
@@ -6033,8 +5778,6 @@ impl<'ctx> Codegen<'ctx> {
             source_text: None,
             used_symbols: Vec::new(),
             used_data_globals: Vec::new(),
-            vec_index_borrow_spans: HashSet::new(),
-            vec_index_cloned_sites: HashSet::new(),
             rc_elision: RcElision {
                 elided_bindings: HashMap::new(),
                 elided_cluster_roots: HashMap::new(),
@@ -6063,8 +5806,6 @@ impl<'ctx> Codegen<'ctx> {
                 provider_frame_ty,
             },
             declaring_stdlib_program: false,
-            uam_consume_sites: std::collections::HashSet::new(),
-            uam_copied_sites: std::collections::HashSet::new(),
             http_shim_cache: HashMap::new(),
             target_data: init_target_data,
             main_symbol_override: None,
@@ -6131,7 +5872,8 @@ impl<'ctx> Codegen<'ctx> {
         // (no caller arg inc, no callee exit dec). Empty unless the flag is set
         // — the ownership pass gates the walk — so nothing changes by default.
         // B-2026-08-10-21 — the `UseAfterMove` defensive-copy sites.
-        self.uam_consume_sites
+        self.span_tables
+            .uam_consume_sites
             .extend(ow.use_after_move_consume_sites.iter().copied());
         for (fn_name, recs) in &ow.elidable_ref_params {
             self.drop_rc
@@ -7214,12 +6956,12 @@ impl<'ctx> Codegen<'ctx> {
         // requires `From`-based error conversion, the target type name is
         // recorded so `compile_question` can emit `Target.from(e)` ahead of
         // the early-return.
-        self.question_conversions = program.question_conversions.clone();
+        self.span_tables.question_conversions = program.question_conversions.clone();
         // Side-table set by `lowering::lower_program`: each `?` site's unwrapped
         // Ok/Some payload type, so `reconstruct_question_ok_payload` rebuilds a
         // multi-word payload of any shape (B-2026-07-13-19).
-        self.question_ok_payload_types = program.question_ok_payload_types.clone();
-        self.wp_result_types = program.wp_result_types.clone();
+        self.span_tables.question_ok_payload_types = program.question_ok_payload_types.clone();
+        self.span_tables.wp_result_types = program.wp_result_types.clone();
 
         // Side-table set by the cli pipeline after effectcheck: per-callee
         // boolean indicating whether the callee carries any observable
@@ -7233,9 +6975,10 @@ impl<'ctx> Codegen<'ctx> {
         // Read by `compile_method_call` so the par-branch cancel-check
         // narrowing applies to instance methods, not just free-function
         // and `Type.assoc` calls.
-        self.method_callee_types = program.method_callee_types.clone();
-        self.impl_dispatch_names = crate::impl_dispatch::collect_impl_dispatch_names(program);
-        self.method_impl_dispatch = program.method_impl_dispatch.clone();
+        self.span_tables.method_callee_types = program.method_callee_types.clone();
+        self.span_tables.impl_dispatch_names =
+            crate::impl_dispatch::collect_impl_dispatch_names(program);
+        self.span_tables.method_impl_dispatch = program.method_impl_dispatch.clone();
 
         // Side-table set by `lowering::lower_program` from
         // `TypeCheckResult.expr_types`: the spans of every `Type::Str`
@@ -7243,46 +6986,46 @@ impl<'ctx> Codegen<'ctx> {
         // to dispatch String keys to the `karac_string_cmp` arm — the
         // LLVM struct shape is identical to `Vec[u8]` and a few other
         // 3-word types, so the value alone can't distinguish them.
-        self.string_typed_exprs = program.string_typed_exprs.clone();
-        self.borrow_vec_typed_exprs = program.borrow_vec_typed_exprs.clone();
-        self.iterator_typed_exprs = program.iterator_typed_exprs.clone();
-        self.fn_value_typed_exprs = program.fn_value_typed_exprs.clone();
+        self.span_tables.string_typed_exprs = program.string_typed_exprs.clone();
+        self.span_tables.borrow_vec_typed_exprs = program.borrow_vec_typed_exprs.clone();
+        self.span_tables.iterator_typed_exprs = program.iterator_typed_exprs.clone();
+        self.span_tables.fn_value_typed_exprs = program.fn_value_typed_exprs.clone();
         // Per-generic-call-site resolved type-arg substitution — lets
         // `compile_generic_call` bind container element type params the
         // LLVM-type inference can't (B-2026-07-02-41).
-        self.call_type_subs = program.call_type_subs.clone();
+        self.span_tables.call_type_subs = program.call_type_subs.clone();
         // Sibling: element-aware mono-mangle tokens (B-2026-07-11-35), so
         // `compile_generic_call` gives a distinct symbol to each builtin-
         // collection whole-type-param instantiation sharing the `{ptr,i64,i64}`
         // LLVM shape.
-        self.call_type_subs_mangle = program.call_type_subs_mangle.clone();
+        self.span_tables.call_type_subs_mangle = program.call_type_subs_mangle.clone();
         // Sibling: per-span Tensor element-type + static-dims info for
         // construction / let-registration / indexing dispatch (see
         // `src/codegen/tensor.rs`).
         self.accel.tensor_typed_exprs = program.tensor_typed_exprs.clone();
         self.accel.tensor_index_recv_types = program.tensor_index_recv_types.clone();
-        self.index_recv_vec_types = program.index_recv_vec_types.clone();
+        self.span_tables.index_recv_vec_types = program.index_recv_vec_types.clone();
         // Sibling: per-span Column element-type info for construction /
         // let-registration / indexing dispatch (see `src/codegen/column.rs`).
         self.accel.column_typed_exprs = program.column_typed_exprs.clone();
         // Sibling: spans of unsigned-element vector expressions, so the SIMD
         // `reduce_min/max` codegen picks `ult`/`ugt` over the signed default.
-        self.unsigned_vector_exprs = program.unsigned_vector_exprs.clone();
-        self.unsigned_int_exprs = program.unsigned_int_exprs.clone();
-        self.cast_source_unsigned = program.cast_source_unsigned.clone();
-        self.vector_method_call_spans = program.vector_method_call_spans.clone();
+        self.span_tables.unsigned_vector_exprs = program.unsigned_vector_exprs.clone();
+        self.span_tables.unsigned_int_exprs = program.unsigned_int_exprs.clone();
+        self.span_tables.cast_source_unsigned = program.cast_source_unsigned.clone();
+        self.span_tables.vector_method_call_spans = program.vector_method_call_spans.clone();
         // Sibling to `string_typed_exprs` for `Type::Named` struct
         // expressions. Maps span → struct name. `emit_sort_by_key_inline_thunk`
         // consults this to dispatch struct-typed keys (e.g.
         // `sort_by_key(|item| item)` where `item: MyStruct`) to a
         // field-aware lex cascade that picks the right per-field
         // comparator via `self.type_decls.struct_field_type_names[struct_name]`.
-        self.expr_struct_type_names = program.expr_struct_type_names.clone();
+        self.span_tables.expr_struct_type_names = program.expr_struct_type_names.clone();
         // Sibling map for spans whose struct type has a user `impl Ord`.
         // `emit_sort_by_key_inline_thunk` consults it before the derive
         // cascade to dispatch to the user's compiled `Type.cmp` via
         // direct call.
-        self.user_ord_typed_exprs = program.user_ord_typed_exprs.clone();
+        self.span_tables.user_ord_typed_exprs = program.user_ord_typed_exprs.clone();
 
         // Surface TypeExpr per heap-owning temporary expression. Keyed by
         // span; `materialize_owned_temp` consults it to scope-drop unnamed
@@ -7291,7 +7034,7 @@ impl<'ctx> Codegen<'ctx> {
 
         // Pointee TypeExpr per raw-pointer-typed expression. The unary-deref
         // arm keys this by operand span to load through `*const T` / `*mut T`.
-        self.raw_pointer_pointee_types = program.raw_pointer_pointee_types.clone();
+        self.span_tables.raw_pointer_pointee_types = program.raw_pointer_pointee_types.clone();
 
         // Fully-instantiated TypeExpr per generic Named instantiation
         // expression (`Option[String]`, `Result[i64, AllocError]`, …). Keyed
@@ -7300,28 +7043,28 @@ impl<'ctx> Codegen<'ctx> {
         // with, so `Some(String)` compares by content not pointer word.
         self.type_decls.enum_inst_type_exprs = program.enum_inst_type_exprs.clone();
         self.module_binding_types = program.module_binding_types.clone();
-        self.concrete_named_type_exprs = program.concrete_named_type_exprs.clone();
+        self.span_tables.concrete_named_type_exprs = program.concrete_named_type_exprs.clone();
 
         // Phase 6 line 26 slice 8ab: snapshot the per-call effect-
         // variable substitution table. Slice 8y (entry 32) reads
         // this in `compile_generic_call` to gate per-mono state-
         // machine emission on whether the resolved per-call effects
         // include any network-yield verb.
-        self.call_effect_subs = program.call_effect_subs.clone();
+        self.span_tables.call_effect_subs = program.call_effect_subs.clone();
 
         // Side-table set by `lowering::lower_program`: each
         // `unwrap`/`expect`/`is_*` MethodCall on `Option[T]` or `Result[T, E]`
         // maps to the inner `TypeExpr`. Read by the codegen `unwrap` arm
         // to know how to reconstitute the payload back to a value of T.
-        self.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
-        self.method_unwrap_err_types = program.method_unwrap_err_types.clone();
-        self.temp_recv_elem_types = program.temp_recv_elem_types.clone();
+        self.span_tables.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
+        self.span_tables.method_unwrap_err_types = program.method_unwrap_err_types.clone();
+        self.span_tables.temp_recv_elem_types = program.temp_recv_elem_types.clone();
         self.mapset.temp_recv_mapset_types = program.temp_recv_mapset_types.clone();
-        self.temp_recv_len_elem_types = program.temp_recv_len_elem_types.clone();
-        self.iter_terminal_elem_types = program.iter_terminal_elem_types.clone();
-        self.iter_terminal_acc_types = program.iter_terminal_acc_types.clone();
+        self.span_tables.temp_recv_len_elem_types = program.temp_recv_len_elem_types.clone();
+        self.span_tables.iter_terminal_elem_types = program.iter_terminal_elem_types.clone();
+        self.span_tables.iter_terminal_acc_types = program.iter_terminal_acc_types.clone();
         self.conc.channel_elem_types = program.channel_elem_types.clone();
-        self.stats_elem_types = program.stats_elem_types.clone();
+        self.span_tables.stats_elem_types = program.stats_elem_types.clone();
         self.accel.gpu_dispatch_wgsl = program.gpu_dispatch_wgsl.clone();
         self.conc.task_join_return_types = program.task_join_return_types.clone();
         self.ref_return_inner_types = program.ref_return_inner_types.clone();
@@ -7632,7 +7375,7 @@ impl<'ctx> Codegen<'ctx> {
                         // either position would be a path segment naming no type.
                         let dispatch_head = crate::impl_dispatch::impl_dispatch_segment(
                             &imp.target_type,
-                            &self.impl_dispatch_names,
+                            &self.span_tables.impl_dispatch_names,
                         )
                         .unwrap_or_else(|| type_name.clone());
                         // A method is monomorphized on demand (registered in
@@ -7864,7 +7607,7 @@ impl<'ctx> Codegen<'ctx> {
                         // either position would be a path segment naming no type.
                         let dispatch_head = crate::impl_dispatch::impl_dispatch_segment(
                             &imp.target_type,
-                            &self.impl_dispatch_names,
+                            &self.span_tables.impl_dispatch_names,
                         )
                         .unwrap_or_else(|| type_name.clone());
                         // A method that is generic via its own params OR via the
@@ -8638,60 +8381,90 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_pattern_binding_borrow_modes = tp.pattern_binding_borrow_modes.clone();
         macro_rules! swap_all {
             () => {{
-                std::mem::swap(&mut self.question_conversions, &mut t_question_conversions);
                 std::mem::swap(
-                    &mut self.question_ok_payload_types,
+                    &mut self.span_tables.question_conversions,
+                    &mut t_question_conversions,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.question_ok_payload_types,
                     &mut t_question_ok_payload_types,
                 );
-                std::mem::swap(&mut self.wp_result_types, &mut t_wp_result_types);
-                std::mem::swap(&mut self.fn_sig.callee_effectful, &mut t_callee_effectful);
-                std::mem::swap(&mut self.method_callee_types, &mut t_method_callee_types);
-                std::mem::swap(&mut self.string_typed_exprs, &mut t_string_typed_exprs);
                 std::mem::swap(
-                    &mut self.borrow_vec_typed_exprs,
+                    &mut self.span_tables.wp_result_types,
+                    &mut t_wp_result_types,
+                );
+                std::mem::swap(&mut self.fn_sig.callee_effectful, &mut t_callee_effectful);
+                std::mem::swap(
+                    &mut self.span_tables.method_callee_types,
+                    &mut t_method_callee_types,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.string_typed_exprs,
+                    &mut t_string_typed_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.borrow_vec_typed_exprs,
                     &mut t_borrow_vec_typed_exprs,
                 );
                 std::mem::swap(
-                    &mut self.unsigned_vector_exprs,
+                    &mut self.span_tables.unsigned_vector_exprs,
                     &mut t_unsigned_vector_exprs,
                 );
-                std::mem::swap(&mut self.unsigned_int_exprs, &mut t_unsigned_int_exprs);
-                std::mem::swap(&mut self.cast_source_unsigned, &mut t_cast_source_unsigned);
                 std::mem::swap(
-                    &mut self.vector_method_call_spans,
+                    &mut self.span_tables.unsigned_int_exprs,
+                    &mut t_unsigned_int_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.cast_source_unsigned,
+                    &mut t_cast_source_unsigned,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.vector_method_call_spans,
                     &mut t_vector_method_call_spans,
                 );
                 std::mem::swap(
-                    &mut self.expr_struct_type_names,
+                    &mut self.span_tables.expr_struct_type_names,
                     &mut t_expr_struct_type_names,
                 );
-                std::mem::swap(&mut self.user_ord_typed_exprs, &mut t_user_ord_typed_exprs);
+                std::mem::swap(
+                    &mut self.span_tables.user_ord_typed_exprs,
+                    &mut t_user_ord_typed_exprs,
+                );
                 std::mem::swap(&mut self.drop_rc.owned_temp_drops, &mut t_owned_temp_drops);
                 std::mem::swap(
-                    &mut self.raw_pointer_pointee_types,
+                    &mut self.span_tables.raw_pointer_pointee_types,
                     &mut t_raw_pointer_pointee_types,
                 );
                 std::mem::swap(
                     &mut self.type_decls.enum_inst_type_exprs,
                     &mut t_enum_inst_type_exprs,
                 );
-                std::mem::swap(&mut self.call_effect_subs, &mut t_call_effect_subs);
                 std::mem::swap(
-                    &mut self.method_unwrap_inner_types,
+                    &mut self.span_tables.call_effect_subs,
+                    &mut t_call_effect_subs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.method_unwrap_inner_types,
                     &mut t_method_unwrap_inner_types,
                 );
                 std::mem::swap(
-                    &mut self.method_unwrap_err_types,
+                    &mut self.span_tables.method_unwrap_err_types,
                     &mut t_method_unwrap_err_types,
                 );
-                std::mem::swap(&mut self.temp_recv_elem_types, &mut t_temp_recv_elem_types);
-                std::mem::swap(&mut self.index_recv_vec_types, &mut t_index_recv_vec_types);
+                std::mem::swap(
+                    &mut self.span_tables.temp_recv_elem_types,
+                    &mut t_temp_recv_elem_types,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.index_recv_vec_types,
+                    &mut t_index_recv_vec_types,
+                );
                 std::mem::swap(
                     &mut self.mapset.temp_recv_mapset_types,
                     &mut t_temp_recv_mapset_types,
                 );
                 std::mem::swap(
-                    &mut self.temp_recv_len_elem_types,
+                    &mut self.span_tables.temp_recv_len_elem_types,
                     &mut t_temp_recv_len_elem_types,
                 );
                 std::mem::swap(&mut self.conc.channel_elem_types, &mut t_channel_elem_types);

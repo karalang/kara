@@ -1030,7 +1030,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // used, so this reorder is a pure fix with no regression. The
         // element-drop threading below is identical for both sources, so heap
         // elements are freed once at scope exit.
-        let te = if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
+        let te = if let Some(elem_te) = self.span_tables.temp_recv_elem_types.get(&key).cloned() {
             super::Codegen::vec_type_expr_from_element(&elem_te)
         } else if let Some(te) = self.drop_rc.owned_temp_drops.get(&key).cloned() {
             te
@@ -1339,7 +1339,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // width; the typechecker table is the authoritative full-fidelity
         // source. No entry (unsupported element shape) → fall through.
         let key = (tuple_index.span.offset, tuple_index.span.length);
-        let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() else {
+        let Some(elem_te) = self.span_tables.temp_recv_elem_types.get(&key).cloned() else {
             return Ok(None);
         };
         let vec_te = super::Codegen::vec_type_expr_from_element(&elem_te);

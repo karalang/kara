@@ -2081,6 +2081,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // would otherwise silently miscompile). `string_typed_exprs` is
             // the typechecker's per-expression String flag, keyed by span.
             if self
+                .span_tables
                 .string_typed_exprs
                 .contains(&(object.span.offset, object.span.length))
             {
@@ -2227,7 +2228,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } = &object.kind
         {
             let key = (object.span.offset, object.span.length);
-            if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
+            if let Some(elem_te) = self.span_tables.temp_recv_elem_types.get(&key).cloned() {
                 // B-2026-08-10-5 — pick the CONTAINER shape from the tuple's
                 // own LLVM field type rather than assuming `Vec`. A slice
                 // element is a 16-byte `{ptr,len}` and a Vec a 24-byte
@@ -2780,6 +2781,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Some((te, true));
         }
         let te = self
+            .span_tables
             .index_recv_vec_types
             .get(&(object.span.offset, object.span.length))?;
         Some((
@@ -3265,7 +3267,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // alias of the container's element. Record it so the `let` site's
         // Map/Set cleanup arm (which otherwise reads a bare `v[i]` RHS as
         // caller-retains) arms the scope-exit handle free.
-        self.vec_index_cloned_sites
+        self.span_tables
+            .vec_index_cloned_sites
             .insert(crate::resolver::SpanKey::from_span(&value.span));
         Ok(self
             .builder
@@ -3912,6 +3915,7 @@ impl<'ctx> super::Codegen<'ctx> {
             } = &index.kind
             {
                 if self
+                    .span_tables
                     .string_typed_exprs
                     .contains(&(object.span.offset, object.span.length))
                 {
@@ -5777,7 +5781,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } = &object.kind
         {
             let key = (object.span.offset, object.span.length);
-            if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
+            if let Some(elem_te) = self.span_tables.temp_recv_elem_types.get(&key).cloned() {
                 // B-2026-08-10-5 — pick the CONTAINER shape from the tuple's
                 // own LLVM field type rather than assuming `Vec`. A slice
                 // element is a 16-byte `{ptr,len}` and a Vec a 24-byte

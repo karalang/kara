@@ -2539,6 +2539,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return_type,
             ..
         }) = self
+            .span_tables
             .fn_value_typed_exprs
             .get(&(value.span.offset, value.span.length))
             .map(|t| &t.kind)
@@ -2827,6 +2828,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //    word as an integer.
         let param_hints = self.closure_state.pending_closure_param_hints.take();
         let inferred_fn_te = self
+            .span_tables
             .fn_value_typed_exprs
             .get(&(closure_span.offset, closure_span.length))
             .cloned();
@@ -3975,6 +3977,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // table; bail out (the caller keeps its const-0 fallback) when the
         // callee isn't a function value.
         let fn_type = match self
+            .span_tables
             .fn_value_typed_exprs
             .get(&(callee.span.offset, callee.span.length))
             .map(|t| &t.kind)

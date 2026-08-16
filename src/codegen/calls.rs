@@ -88,6 +88,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if (method == "to_string" || method == "clone")
             && args.is_empty()
             && self
+                .span_tables
                 .string_typed_exprs
                 .contains(&(inner.span.offset, inner.span.length))
         {
@@ -172,6 +173,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // existing diagnostic fires.
             let key = (inner.span.offset, inner.span.length);
             let hoisted = self
+                .span_tables
                 .temp_recv_elem_types
                 .get(&key)
                 .cloned()
@@ -1953,7 +1955,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // `method_unwrap_*` entry. Matches the typechecker's
         // `SpanKey::for_method_call` insert. Span-collision fix, Slice 1.
         let key = crate::token::method_call_key(call_span, args_close_span);
-        let inner_te = match self.method_unwrap_inner_types.get(&key).cloned() {
+        let inner_te = match self
+            .span_tables
+            .method_unwrap_inner_types
+            .get(&key)
+            .cloned()
+        {
             Some(te) => te,
             None => return Ok(None),
         };
@@ -2022,7 +2029,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // "fixed"; f(1)`) — a gate at the call site describing the symptom's
         // neighbourhood rather than its cause.
         if method == "map" && args.len() == 1 {
-            let map_err_te = self.method_unwrap_err_types.get(&key).cloned();
+            let map_err_te = self.span_tables.method_unwrap_err_types.get(&key).cloned();
             let heap_err = map_err_te
                 .as_ref()
                 .is_some_and(|te| !super::vec_method::is_trivially_copyable_te(te));
@@ -2207,7 +2214,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // from the sibling table (recorded by the typechecker for exactly
             // these three methods on a Result).
             let err_te = if is_result {
-                match self.method_unwrap_err_types.get(&key).cloned() {
+                match self.span_tables.method_unwrap_err_types.get(&key).cloned() {
                     Some(te) => Some(te),
                     None => {
                         return Err(format!(
@@ -3159,7 +3166,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // present path does, plus a free of the box itself — left alone
             // rather than half-handled, so an aggregate `E` with heap fields
             // still leaks (narrower than the shape reported, and untested).
-            if let Some(err_te) = self.method_unwrap_err_types.get(&key).cloned() {
+            if let Some(err_te) = self.span_tables.method_unwrap_err_types.get(&key).cloned() {
                 let err_ll = self.llvm_type_for_type_expr(&err_te);
                 let area = (recv_struct.get_type().count_fields() as usize).saturating_sub(1);
                 let direct_heap = matches!(

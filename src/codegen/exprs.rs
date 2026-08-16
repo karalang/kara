@@ -433,6 +433,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // comparisons / div / mod pick `ult`/`ugt` / `udiv` / `urem`.
                     if lhs.is_vector_value() && rhs.is_vector_value() {
                         let is_unsigned = self
+                            .span_tables
                             .unsigned_vector_exprs
                             .contains(&(left.span.offset, left.span.length));
                         return self.compile_binop_typed(op, lhs, rhs, is_unsigned);
@@ -673,7 +674,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Without this, `unsafe { *p }` returned the pointer value
                     // itself (B-2026-06-11-3).
                     let key = (operand.span.offset, operand.span.length);
-                    if let Some(pointee_te) = self.raw_pointer_pointee_types.get(&key).cloned() {
+                    if let Some(pointee_te) = self
+                        .span_tables
+                        .raw_pointer_pointee_types
+                        .get(&key)
+                        .cloned()
+                    {
                         let ptr_val = self.compile_expr(operand)?.into_pointer_value();
                         let pointee_ty = self.llvm_type_for_type_expr(&pointee_te);
                         let loaded = self
@@ -1374,6 +1380,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // what makes `idg(200u8) as i64` widen to 200 rather than -56.
                 let source_is_unsigned = self.expr_is_unsigned_int(inner)
                     || self
+                        .span_tables
                         .cast_source_unsigned
                         .contains(&(expr.span.offset, expr.span.length));
                 // Target signedness drives `fptoui.sat` vs `fptosi.sat` for the
@@ -1891,7 +1898,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // The converted TARGET error value (`Target.from(source)`), or `None`
         // when this `?` needs no cross-error conversion.
         let converted_err: Option<BasicValueEnum<'ctx>> =
-            if let Some(target) = self.question_conversions.get(&key).cloned() {
+            if let Some(target) = self.span_tables.question_conversions.get(&key).cloned() {
                 let qualified = format!("{}.from", target);
                 self.module.get_function(&qualified).map(|from_fn| {
                     // Reconstruct the SOURCE error at `from`'s param type from
@@ -2115,51 +2122,60 @@ impl<'ctx> super::Codegen<'ctx> {
         //   * `Vec[T]` and other generic `Named` payloads land in
         //     `enum_inst_type_exprs`, recorded as the payload type itself.
         let key = (inner.span.offset, inner.span.length);
-        let payload_llvm: BasicTypeEnum<'ctx> =
-            if let Some(te) = self.question_ok_payload_types.get(&key).cloned() {
-                // The typechecker's dedicated, single-write record of THIS `?`'s
-                // unwrapped Ok/Some payload type (B-2026-07-13-19). Unlike
-                // `enum_inst_type_exprs` — which shares the operand's span and can
-                // hold the `Result`/`Option` WRAPPER as its last write — this is
-                // always the genuine payload, so a nested `Option[T]`/`Result[T,E]`
-                // payload (`Result[Option[String], E]?`) is rebuilt as the real
-                // multi-word value instead of truncated to `w0` (which left the
-                // subsequent `match` unable to type the Some binding). A String
-                // payload keeps the 3-word `{ptr,len,cap}` vec shape; everything else
-                // lowers directly. A scalar/pointer payload lands as a non-struct
-                // type and returns `w0` verbatim below.
-                if self.is_string_type_expr(&te) {
-                    self.vec_struct_type().into()
-                } else {
-                    self.llvm_type_for_type_expr(&te)
-                }
-            } else if self.string_typed_exprs.contains(&key) {
+        let payload_llvm: BasicTypeEnum<'ctx> = if let Some(te) = self
+            .span_tables
+            .question_ok_payload_types
+            .get(&key)
+            .cloned()
+        {
+            // The typechecker's dedicated, single-write record of THIS `?`'s
+            // unwrapped Ok/Some payload type (B-2026-07-13-19). Unlike
+            // `enum_inst_type_exprs` — which shares the operand's span and can
+            // hold the `Result`/`Option` WRAPPER as its last write — this is
+            // always the genuine payload, so a nested `Option[T]`/`Result[T,E]`
+            // payload (`Result[Option[String], E]?`) is rebuilt as the real
+            // multi-word value instead of truncated to `w0` (which left the
+            // subsequent `match` unable to type the Some binding). A String
+            // payload keeps the 3-word `{ptr,len,cap}` vec shape; everything else
+            // lowers directly. A scalar/pointer payload lands as a non-struct
+            // type and returns `w0` verbatim below.
+            if self.is_string_type_expr(&te) {
                 self.vec_struct_type().into()
-            } else if let Some(te) = self.type_decls.enum_inst_type_exprs.get(&key).cloned() {
-                // Defensive: if the `Result`/`Option` wrapper itself were recorded
-                // here, its enum aggregate must not be rebuilt from 3 payload words.
-                // (Superseded for well-typed programs by the dedicated table above;
-                // retained as a fallback for any `?` the table doesn't cover.)
-                if let TypeKind::Path(p) = &te.kind {
-                    if matches!(
-                        p.segments.first().map(String::as_str),
-                        Some("Result") | Some("Option")
-                    ) {
-                        return Ok(w0);
-                    }
-                }
-                self.llvm_type_for_type_expr(&te)
-            } else if let Some(te) = self.concrete_named_type_exprs.get(&key).cloned() {
-                // A CONCRETE (arg-less) user enum / struct Ok payload — e.g.
-                // `Result[Json, E]?` where `Json` is a wide enum. `enum_inst_type_exprs`
-                // excludes arg-less Named types, so without this the multi-word payload
-                // truncated to `w0` (its first word) → `insertvalue`/`br` verify failure
-                // downstream (B-2026-07-11-7). The lowering table already excludes the
-                // Result/Option wrappers.
-                self.llvm_type_for_type_expr(&te)
             } else {
-                return Ok(w0);
-            };
+                self.llvm_type_for_type_expr(&te)
+            }
+        } else if self.span_tables.string_typed_exprs.contains(&key) {
+            self.vec_struct_type().into()
+        } else if let Some(te) = self.type_decls.enum_inst_type_exprs.get(&key).cloned() {
+            // Defensive: if the `Result`/`Option` wrapper itself were recorded
+            // here, its enum aggregate must not be rebuilt from 3 payload words.
+            // (Superseded for well-typed programs by the dedicated table above;
+            // retained as a fallback for any `?` the table doesn't cover.)
+            if let TypeKind::Path(p) = &te.kind {
+                if matches!(
+                    p.segments.first().map(String::as_str),
+                    Some("Result") | Some("Option")
+                ) {
+                    return Ok(w0);
+                }
+            }
+            self.llvm_type_for_type_expr(&te)
+        } else if let Some(te) = self
+            .span_tables
+            .concrete_named_type_exprs
+            .get(&key)
+            .cloned()
+        {
+            // A CONCRETE (arg-less) user enum / struct Ok payload — e.g.
+            // `Result[Json, E]?` where `Json` is a wide enum. `enum_inst_type_exprs`
+            // excludes arg-less Named types, so without this the multi-word payload
+            // truncated to `w0` (its first word) → `insertvalue`/`br` verify failure
+            // downstream (B-2026-07-11-7). The lowering table already excludes the
+            // Result/Option wrappers.
+            self.llvm_type_for_type_expr(&te)
+        } else {
+            return Ok(w0);
+        };
         // Only multi-word struct payloads (Vec / String / Slice / small
         // struct) need reconstruction; scalars / pointers / floats are
         // exactly `w0`.
