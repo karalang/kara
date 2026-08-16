@@ -78,11 +78,11 @@ CI/structural gaps — none systemic.
   (1,344), `effect_graph.rs` (1,033).
 - [ ] **9. Perf hygiene (longer-term).** (a) ~~Derive `Copy` on `Span`~~
   DONE — `7ef4e843`: derived + clippy `clone_on_copy` machine-fix sweep,
-  ~2,500 clones deleted across 150 files; full E2E green (2,999/0). (b) Effect inference deep-clones every function body per pass and re-clones
-  per SCC convergence iteration (`src/effectchecker/inference.rs:258–287`);
-  the same clone-all-bodies block is copy-pasted at
-  `src/effectchecker/subtyping.rs:27`, `with_e.rs:30`, `modbind_synth.rs:500,
-  :593` — `Rc<Block>` or split-borrow kills both. (c) Name interning:
+  ~2,500 clones deleted across 150 files; full E2E green (2,999/0). (b) ~~Effect inference body clones~~ DONE — body tables are now
+  `Rc<Function>`: the SCC convergence loop and three of the four
+  whole-program walks take handles. Remainders: `subtyping.rs`'s owned walk
+  still clones from the Rc (unchanged cost), and `collect_function_info`'s
+  one-time `program.items.clone()` stands. (c) Name interning:
   tables are `HashMap<String, …>` with lookup-then-clone-then-relookup
   (`src/typechecker/expr_ops.rs:416`, `expr_call.rs:654`).
 
