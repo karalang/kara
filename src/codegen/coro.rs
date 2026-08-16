@@ -1124,7 +1124,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // A `-> ref T` coroutine returns a borrow pointer, not a value through
         // the slot; the inline-drive caller does not currently read it, so leave
         // that path alone.
-        if self.current_fn_returns_ref {
+        if self.fn_ctx.current_fn_returns_ref {
             return;
         }
         let Some(ret_ty) = self.coro_return_basic_type() else {
@@ -1156,7 +1156,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// type-expr is recorded (e.g. an implicitly-unit fn) — callers treat that
     /// as unit.
     pub(super) fn coro_return_basic_type(&self) -> Option<BasicTypeEnum<'ctx>> {
-        let te = self.fn_return_type_exprs.get(&self.current_fn_name)?;
+        let te = self
+            .fn_return_type_exprs
+            .get(&self.fn_ctx.current_fn_name)?;
         Some(self.llvm_type_for_type_expr(te))
     }
 

@@ -1505,7 +1505,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -1632,7 +1632,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         // Vec-length-pin activation for the `for i in 0..BOUND { v.push(..) }`
         // fill form (bce_length_pin.rs): the pin is keyed on the range END
@@ -1692,7 +1692,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -1752,7 +1752,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -1800,7 +1800,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: latch_bb,
             break_bb: exit_bb,
@@ -1857,7 +1857,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(is_err, exit_bb, cond_bb)
             .unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -1917,7 +1917,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -1992,7 +1992,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -2073,7 +2073,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -2121,7 +2121,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         // Restore whatever the loop variable's name previously bound.
         match saved_var {
@@ -2233,7 +2233,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -2295,7 +2295,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -2416,7 +2416,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -2469,7 +2469,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(Some(self.context.i64_type().const_int(0, false).into()))
     }
@@ -2543,7 +2543,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
             self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-            self.loop_stack.push(LoopFrame {
+            self.fn_ctx.loop_stack.push(LoopFrame {
                 label: label.map(str::to_string),
                 continue_bb: incr_bb,
                 break_bb: shared_exit,
@@ -2612,7 +2612,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_store(counter, next).unwrap();
             self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-            self.loop_stack.pop();
+            self.fn_ctx.loop_stack.pop();
             // Position at the between-block so the second leg's preamble
             // (len/data loads, counter init) lands there; the final leg
             // positions at the shared exit below.
@@ -2696,7 +2696,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -2755,7 +2755,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -2838,7 +2838,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -2903,7 +2903,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -2999,7 +2999,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -3067,7 +3067,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(idx, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -3228,7 +3228,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_type_names
                 .insert(bind_name.clone(), "char".to_string());
         }
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: latch_bb,
             break_bb: exit_bb,
@@ -3236,7 +3236,7 @@ impl<'ctx> super::Codegen<'ctx> {
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
         self.compile_loop_body_with_cleanup(body, latch_bb)?;
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
 
         self.builder.position_at_end(latch_bb);
         let cur = self
@@ -3278,7 +3278,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_type_names
                 .insert(bind_name.clone(), "char".to_string());
         }
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: slow_latch_bb,
             break_bb: exit_bb,
@@ -3286,7 +3286,7 @@ impl<'ctx> super::Codegen<'ctx> {
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
         self.compile_loop_body_with_cleanup(body, slow_latch_bb)?;
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
 
         // `new_off` is defined in `slow_bb`, which dominates every block of
         // copy 2 and therefore this latch — including the `continue` edges.
@@ -3345,7 +3345,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -3506,7 +3506,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(byte_offset, new_off).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -3546,7 +3546,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -3608,7 +3608,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(idx, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -3686,7 +3686,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let exit_bb = self.context.append_basic_block(fn_val, "smf.exit");
             self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-            self.loop_stack.push(LoopFrame {
+            self.fn_ctx.loop_stack.push(LoopFrame {
                 label: label.map(str::to_string),
                 continue_bb: cont_bb,
                 break_bb: exit_bb,
@@ -3752,7 +3752,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_store(idx_slot, inc).unwrap();
             self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-            self.loop_stack.pop();
+            self.fn_ctx.loop_stack.pop();
             self.builder.position_at_end(exit_bb);
             self.builder
                 .build_call(self.runtime_fns.free_fn, &[kbuf.into()], "")
@@ -3836,7 +3836,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `continue` targets `loop_bb`: the index is bumped in `scan_bb`
             // BEFORE the body runs, so re-entering the header never re-visits
             // the slot the body was handed.
-            self.loop_stack.push(LoopFrame {
+            self.fn_ctx.loop_stack.push(LoopFrame {
                 label: label.map(str::to_string),
                 continue_bb: loop_bb,
                 break_bb: exit_bb,
@@ -3919,7 +3919,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.bind_pattern(pattern, kv.into())?;
             self.register_for_loop_bindings(pattern, var_name);
             self.compile_loop_body_with_cleanup(body, loop_bb)?;
-            self.loop_stack.pop();
+            self.fn_ctx.loop_stack.pop();
 
             self.builder.position_at_end(exit_bb);
             return Ok(i64_t.const_int(0, false).into());
@@ -3963,7 +3963,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(loop_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: loop_bb,
             break_bb: exit_bb,
@@ -4008,7 +4008,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.register_for_loop_bindings(pattern, var_name);
         self.compile_loop_body_with_cleanup(body, loop_bb)?;
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
 
         // exit_bb: free iterator — runs on both normal exhaustion and break.
         // Null the slot afterwards so the enclosing frame's `FreeMapIter`
@@ -4100,7 +4100,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let exit_bb = self.context.append_basic_block(fn_val, "sset.for.exit");
             self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-            self.loop_stack.push(LoopFrame {
+            self.fn_ctx.loop_stack.push(LoopFrame {
                 label: label.map(str::to_string),
                 continue_bb: cont_bb,
                 break_bb: exit_bb,
@@ -4153,7 +4153,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_store(idx_slot, inc).unwrap();
             self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-            self.loop_stack.pop();
+            self.fn_ctx.loop_stack.pop();
 
             self.builder.position_at_end(exit_bb);
             // `free(NULL)` is a no-op, so freeing an empty-set (len == 0) null
@@ -4198,7 +4198,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(loop_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: loop_bb,
             break_bb: exit_bb,
@@ -4239,7 +4239,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.compile_loop_body_with_cleanup(body, loop_bb)?;
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
 
         self.builder.position_at_end(exit_bb);
         let iter_final = self
@@ -4286,7 +4286,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -4355,7 +4355,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }

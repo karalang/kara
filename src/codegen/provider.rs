@@ -234,24 +234,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // Depth BEFORE the pop frame is pushed, so a retargeted return's
         // bounded drain covers the body's frames AND the ProviderPop frame.
         let cleanup_depth = self.drop_rc.scope_cleanup_actions.len();
-        self.return_retargets.push(super::state::ReturnRetarget {
-            fn_val,
-            cleanup_depth,
-            merge_bb: None,
-            result_slot: None,
-            result_ty: None,
-            // The typechecked wp result type, when concrete — the `?`
-            // retargeting derives the closure's Result shape from it
-            // (B-2026-07-31-19).
-            result_type_expr: self
-                .wp_result_types
-                .get(&(call_span.offset, call_span.length))
-                .cloned(),
-        });
+        self.fn_ctx
+            .return_retargets
+            .push(super::state::ReturnRetarget {
+                fn_val,
+                cleanup_depth,
+                merge_bb: None,
+                result_slot: None,
+                result_ty: None,
+                // The typechecked wp result type, when concrete — the `?`
+                // retargeting derives the closure's Result shape from it
+                // (B-2026-07-31-19).
+                result_type_expr: self
+                    .wp_result_types
+                    .get(&(call_span.offset, call_span.length))
+                    .cloned(),
+            });
         let body_result = self.compile_provider_body_with_pop_frame(1, |me| {
             me.compile_with_provider_body(closure_expr, resource)
         });
         let rt = self
+            .fn_ctx
             .return_retargets
             .pop()
             .expect("retarget pushed above is still on the stack");
@@ -330,6 +333,7 @@ impl<'ctx> super::Codegen<'ctx> {
             None => self.context.i64_type().const_int(0, false).into(),
         };
         let cleanup_depth = self
+            .fn_ctx
             .return_retargets
             .last()
             .expect("caller checked wp_return_retarget_active")
@@ -348,22 +352,37 @@ impl<'ctx> super::Codegen<'ctx> {
     /// drained the retarget's cleanup frames.
     pub(super) fn store_wp_retarget_value_and_branch(&mut self, v: BasicValueEnum<'ctx>) {
         let fn_val = self
+            .fn_ctx
             .return_retargets
             .last()
             .expect("caller checked wp_return_retarget_active")
             .fn_val;
-        if self.return_retargets.last().unwrap().merge_bb.is_none() {
+        if self
+            .fn_ctx
+            .return_retargets
+            .last()
+            .unwrap()
+            .merge_bb
+            .is_none()
+        {
             let bb = self.context.append_basic_block(fn_val, "wp.ret.merge");
-            self.return_retargets.last_mut().unwrap().merge_bb = Some(bb);
+            self.fn_ctx.return_retargets.last_mut().unwrap().merge_bb = Some(bb);
         }
-        if self.return_retargets.last().unwrap().result_slot.is_none() {
+        if self
+            .fn_ctx
+            .return_retargets
+            .last()
+            .unwrap()
+            .result_slot
+            .is_none()
+        {
             let slot = self.create_entry_alloca(fn_val, "wp.ret.slot", v.get_type());
-            let rt = self.return_retargets.last_mut().unwrap();
+            let rt = self.fn_ctx.return_retargets.last_mut().unwrap();
             rt.result_slot = Some(slot);
             rt.result_ty = Some(v.get_type());
         }
         let (slot, slot_ty, merge_bb) = {
-            let rt = self.return_retargets.last().unwrap();
+            let rt = self.fn_ctx.return_retargets.last().unwrap();
             (
                 rt.result_slot.unwrap(),
                 rt.result_ty.unwrap(),
@@ -382,7 +401,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// entry happens to be live (those switch `current_fn` and fail the
     /// tag check).
     pub(super) fn wp_return_retarget_active(&self) -> bool {
-        self.return_retargets
+        self.fn_ctx
+            .return_retargets
             .last()
             .is_some_and(|rt| Some(rt.fn_val) == self.current_fn)
     }

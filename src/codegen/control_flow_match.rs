@@ -53,7 +53,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Tail-return context: consume now (the scrutinee is not a tail
         // return), re-applied per arm body below so a bare-arg `Option[shared]`
         // arm leaf gets its per-branch inc.
-        let tail = self.tail_ret_inner.take();
+        let tail = self.fn_ctx.tail_ret_inner.take();
         // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(scrutinee);
         // Slice 3b: when the scrutinee is a ref-typed identifier
@@ -1387,7 +1387,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.drop_rc
             .rc_elide_ref_params
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .is_some_and(|recs| recs.iter().any(|(n, _)| n == name))
     }
 

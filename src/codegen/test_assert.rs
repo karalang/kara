@@ -214,7 +214,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // compile-time constant. Outside a `#[track_caller]` fn
         // (`current_fn_caller_loc == None`) this path is byte-identical to
         // before — the whole test-harness surface is unaffected.
-        let (file_ptr, file_len, line, col) = match self.current_fn_caller_loc {
+        let (file_ptr, file_len, line, col) = match self.fn_ctx.current_fn_caller_loc {
             Some((cf_file, cf_line, cf_col)) => {
                 let strlen_fn = self
                     .module

@@ -1191,12 +1191,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // tail escapes via the return → it gets a reference-counted HEAP env
         // (so its captures outlive the frame). Record its span for
         // `compile_closure`, and reset the per-function heap-env-binding set.
-        self.current_fn_heap_closure_spans.clear();
+        self.fn_ctx.current_fn_heap_closure_spans.clear();
         // B-2026-08-13-10 — per-function map; a constant local from the
         // previous function must not leak into this one's unroll guard.
         self.int_const_locals.clear();
         if let Some(span) = self.func_tail_heap_closure_span(func) {
-            self.current_fn_heap_closure_spans.insert(span);
+            self.fn_ctx.current_fn_heap_closure_spans.insert(span);
         }
         // B-2026-07-12-24 (residual): value-spans of `let` bindings whose name
         // never escapes (used only as a `match` scrutinee, or unused). A
@@ -1241,13 +1241,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .ok_or_else(|| format!("Function '{}' not declared", llvm_name))?;
 
         self.current_fn = Some(fn_val);
-        self.current_fn_name = func.name.clone();
+        self.fn_ctx.current_fn_name = func.name.clone();
         // `#[track_caller]` slice 4/5: if this fn received the hidden
         // caller-location params (the three trailing params declare_function
         // appended), capture them. `emit_panic` reads them to report the
         // caller's location, and a nested `#[track_caller]` call forwards them.
         // Reset (to `None`) for every ordinary function.
-        self.current_fn_caller_loc = if self.track_caller_fns.contains(&func.name) {
+        self.fn_ctx.current_fn_caller_loc = if self.track_caller_fns.contains(&func.name) {
             let base = func.params.len() as u32;
             Some((
                 fn_val.get_nth_param(base).unwrap().into_pointer_value(),
@@ -1299,10 +1299,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // Record every (simple-binding) parameter name for the auto-par
         // reduction cost gate's param-bounded-helper check (B-2026-07-23-25).
         // Destructured tuple/struct params are rare and not the target shape.
-        self.current_fn_param_names.clear();
+        self.fn_ctx.current_fn_param_names.clear();
         for p in &func.params {
             if let crate::ast::PatternKind::Binding(n) = &p.pattern.kind {
-                self.current_fn_param_names.insert(n.clone());
+                self.fn_ctx.current_fn_param_names.insert(n.clone());
             }
         }
         self.for_loop_borrow_vars.clear();
@@ -1392,19 +1392,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // means the function doesn't return `Result[T, E]` or the
         // annotation isn't recognised — falls back to staging bare
         // `w0` as i64 in the `?` failure branch.
-        self.current_fn_err_payload_ty = func.return_type.as_ref().and_then(|ret_ty| match &ret_ty
-            .kind
-        {
-            TypeKind::Path(path) if path.segments.len() == 1 && path.segments[0] == "Result" => {
-                path.generic_args
-                    .as_ref()
-                    .and_then(|args| match args.get(1) {
-                        Some(GenericArg::Type(e_te)) => Some(self.llvm_type_for_type_expr(e_te)),
-                        _ => None,
-                    })
-            }
-            _ => None,
-        });
+        self.fn_ctx.current_fn_err_payload_ty =
+            func.return_type
+                .as_ref()
+                .and_then(|ret_ty| match &ret_ty.kind {
+                    TypeKind::Path(path)
+                        if path.segments.len() == 1 && path.segments[0] == "Result" =>
+                    {
+                        path.generic_args
+                            .as_ref()
+                            .and_then(|args| match args.get(1) {
+                                Some(GenericArg::Type(e_te)) => {
+                                    Some(self.llvm_type_for_type_expr(e_te))
+                                }
+                                _ => None,
+                            })
+                    }
+                    _ => None,
+                });
 
         // B-2026-06-12-9: `main() -> Result[(), E]` adaptation. `main` lowers
         // to the C entry `i32 main()`, so a Result-returning body cannot `ret`
@@ -1455,20 +1460,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // through `compile_ref_return_ptr` would try to take the address of a
         // struct-literal temporary (dangling) and mismatch the by-value
         // signature.
-        self.current_fn_returns_ref = matches!(
+        self.fn_ctx.current_fn_returns_ref = matches!(
             func.return_type.as_ref().map(|t| &t.kind),
             Some(TypeKind::Ref(_) | TypeKind::MutRef(_))
-        ) && !self.return_type_ref_is_value_abi(&func.return_type);
+        ) && !self
+            .return_type_ref_is_value_abi(&func.return_type);
         // C-ABI auto-boxed aggregate return (additive-interop Slice 4 Path
         // B) — declared return type is `ptr` (above); the return sites box
         // the `{data,len,cap}` value and return the box pointer. A Slice-2a
         // tagged-union `#[repr(C)]` enum return boxes the same way.
-        self.current_fn_boxes_return = crate::cheader::boxed_return_of(func).is_some()
+        self.fn_ctx.current_fn_boxes_return = crate::cheader::boxed_return_of(func).is_some()
             || self.boxed_enum_export_names.contains(&func.name);
         // AArch64 `#[repr(C)]` struct-by-value return coercion (B-2026-07-09-2
         // Slice 2): if set, every return site reinterprets its struct value
         // into this register type. `None` on x86-64 / non-coerced returns.
-        self.current_fn_arm64_return_coercion = self
+        self.fn_ctx.current_fn_arm64_return_coercion = self
             .target_abi
             .arm64_coerced_struct_returns
             .get(&func.name)
@@ -1479,12 +1485,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // every return site stores through it; its presence also shifts each
         // Kāra param index by +1 in the binding loop below. `None` for
         // register/HFA returns.
-        self.current_fn_sret_param = if self.target_abi.sret_struct_returns.contains_key(&func.name)
-        {
-            Some(fn_val.get_nth_param(0).unwrap().into_pointer_value())
-        } else {
-            None
-        };
+        self.fn_ctx.current_fn_sret_param =
+            if self.target_abi.sret_struct_returns.contains_key(&func.name) {
+                Some(fn_val.get_nth_param(0).unwrap().into_pointer_value())
+            } else {
+                None
+            };
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
@@ -1618,7 +1624,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // AArch64 `sret` return (Slice 3b) prepends a leading result-pointer
             // param, so every Kāra param sits one slot to the right. `sret_base`
             // is 1 when this fn returns via sret, 0 otherwise (the common case).
-            let sret_base = u32::from(self.current_fn_sret_param.is_some());
+            let sret_base = u32::from(self.fn_ctx.current_fn_sret_param.is_some());
             for (i, param) in func.params.iter().enumerate() {
                 let param_name = self.param_name(param);
                 let param_val = fn_val.get_nth_param(i as u32 + sret_base).unwrap();
@@ -2420,7 +2426,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // inc, which could not balance a function MIXING `Some(<alias>)` tails
         // with bare-arg returns (the recursive merge-two-sorted-lists shape).
         // Cleared right after the body so it never leaks into later state.
-        self.tail_ret_inner = func
+        self.fn_ctx.tail_ret_inner = func
             .return_type
             .as_ref()
             .and_then(|te| self.option_inner_shared_type_for_type_expr(te))
@@ -2630,7 +2636,7 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         let mut result = self.compile_function_body(&func.body)?;
         self.restore_declared_aggregate_te(saved_agg_te);
-        self.tail_ret_inner = None;
+        self.fn_ctx.tail_ret_inner = None;
 
         if self
             .builder
@@ -2878,13 +2884,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // once with the direct-use gate bypassed. Return it directly;
                 // re-deriving via `compile_ref_return_ptr` would emit the call
                 // a second time (wrong for any effectful callee).
-                let tail_is_borrow_call = self.current_fn_returns_ref
+                let tail_is_borrow_call = self.fn_ctx.current_fn_returns_ref
                     && func
                         .body
                         .final_expr
                         .as_deref()
                         .is_some_and(|e| self.is_borrow_returning_call_expr(e));
-                let ref_ret_ptr = if !self.current_fn_returns_ref {
+                let ref_ret_ptr = if !self.fn_ctx.current_fn_returns_ref {
                     None
                 } else if tail_is_borrow_call {
                     Some(val.into_pointer_value())
@@ -2894,7 +2900,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .as_deref()
                         .and_then(|e| self.compile_ref_return_ptr(e))
                 };
-                if let Some(sret_ptr) = self.current_fn_sret_param {
+                if let Some(sret_ptr) = self.fn_ctx.current_fn_sret_param {
                     // AArch64 `sret` return (Slice 3b): store the struct value
                     // through the caller's result pointer and `ret void`. Checked
                     // BEFORE `fn_returns_void` — the LLVM signature IS void here,
@@ -2906,11 +2912,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_return(None).unwrap();
                 } else if let Some(ptr) = ref_ret_ptr {
                     self.builder.build_return(Some(&ptr)).unwrap();
-                } else if self.current_fn_boxes_return {
+                } else if self.fn_ctx.current_fn_boxes_return {
                     // C-ABI auto-boxed aggregate return (Slice 4 Path B).
                     let boxed = self.box_return_value(val);
                     self.builder.build_return(Some(&boxed)).unwrap();
-                } else if let Some(coerced_ty) = self.current_fn_arm64_return_coercion {
+                } else if let Some(coerced_ty) = self.fn_ctx.current_fn_arm64_return_coercion {
                     // AArch64 `#[repr(C)]` struct-by-value return (Slice 2):
                     // reinterpret the struct value as the AAPCS register type.
                     let coerced = self.reinterpret_value_as(val, coerced_ty);

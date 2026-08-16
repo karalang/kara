@@ -1806,7 +1806,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // this, a mono compiled inside `main` inherited `current_fn_name ==
             // "main"` and a bare `return;` mis-emitted `ret i32 0` (main's exit-code
             // signature) into the void mono (B-2026-07-11-28).
-            let saved_fn_name = std::mem::take(&mut self.current_fn_name);
+            let saved_fn_name = std::mem::take(&mut self.fn_ctx.current_fn_name);
             let saved_vars = std::mem::take(&mut self.variables);
             let saved_var_types = std::mem::take(&mut self.var_type_names);
             // The mono body is compiled INLINE, mid-caller — so its tensor
@@ -1844,7 +1844,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // in a value-returning fn. Reset for the body, restore the
             // caller's value below (re-entrant, like `variables`).
             let saved_cancel_ptr = self.branch_cancel_ptr.take();
-            let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+            let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
             let saved_subst = std::mem::replace(&mut self.mono_state.type_subst, subst.clone());
             // Name-level twin of `type_subst` (B-2026-07-03-11): thread the
             // concrete-type-name subst so the mono param prologue can register a
@@ -1916,7 +1916,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mono_state.type_subst = saved_subst;
             self.mono_state.type_subst_names = saved_subst_names;
             self.mono_state.type_subst_type_exprs = saved_subst_type_exprs;
-            self.loop_stack = saved_loop_stack;
+            self.fn_ctx.loop_stack = saved_loop_stack;
             self.branch_cancel_ptr = saved_cancel_ptr;
             self.drop_rc.scope_cleanup_actions = saved_cleanup;
             self.restore_var_side_tables(saved_side_tables);
@@ -1924,7 +1924,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_type_names = saved_var_types;
             self.variables = saved_vars;
             self.current_fn = saved_fn;
-            self.current_fn_name = saved_fn_name;
+            self.fn_ctx.current_fn_name = saved_fn_name;
             if let Some(bb) = saved_bb {
                 self.builder.position_at_end(bb);
             }
@@ -2460,7 +2460,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_side_tables = self.take_var_side_tables();
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         // Name-subst twin (B-2026-07-03-11): isolate the layout-mono body from a
         // stale outer name-subst, mirroring `type_subst`.
@@ -2507,7 +2507,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mono_state.type_subst = saved_subst;
         self.mono_state.type_subst_names = saved_subst_names;
         self.mono_state.type_subst_type_exprs = saved_subst_type_exprs;
-        self.loop_stack = saved_loop_stack;
+        self.fn_ctx.loop_stack = saved_loop_stack;
         self.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
         self.restore_var_side_tables(saved_side_tables);
@@ -2642,7 +2642,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Identify the mono by its own name (mirrors `compile_function`), so a
         // valueless `return;` in a void mono checks against the right identity —
         // the caller saved/restores this around the inline body (B-2026-07-11-28).
-        self.current_fn_name = func.name.clone();
+        self.fn_ctx.current_fn_name = func.name.clone();
         self.variables.clear();
         self.var_type_names.clear();
         // Per-binding layout carrier (slice 5): the caller's map was swapped out

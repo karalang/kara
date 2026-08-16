@@ -2374,7 +2374,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let incr_bb = self.context.append_basic_block(fn_val, "t.fia.incr");
         let exit_bb = self.context.append_basic_block(fn_val, "t.fia.exit");
         self.builder.build_unconditional_branch(cond_bb).unwrap();
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: incr_bb,
             break_bb: exit_bb,
@@ -2503,7 +2503,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(bv, nb).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         // The loop owned the buffer; free it once. `break` lands here too.
         self.builder

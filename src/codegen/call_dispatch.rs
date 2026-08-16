@@ -2192,7 +2192,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // already-typed args pass through untouched. Inert unless the callee is
         // `#[track_caller]`, i.e. never for a program without the attribute.
         if self.track_caller_fns.contains(&lookup_name) {
-            match self.current_fn_caller_loc {
+            match self.fn_ctx.current_fn_caller_loc {
                 Some((file, line, col)) => {
                     compiled_args.push(file.into());
                     compiled_args.push(line.into());
@@ -7600,7 +7600,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Params only: a LOCAL's field move-out is the same-scope case, where
         // the null-store neutralizer already transfers the handle (measured
         // clean both before and after this change).
-        if !self.current_fn_param_names.contains(obj.as_str()) {
+        if !self.fn_ctx.current_fn_param_names.contains(obj.as_str()) {
             return;
         }
         // A shared OBJECT's field read incs on its own path.

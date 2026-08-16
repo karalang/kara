@@ -1721,7 +1721,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // for auto-par-split functions; this take is the defense-in-depth for
         // explicit `par` blocks and any future analysis/emission drift.
         let saved_deque_head_slots = std::mem::take(&mut self.mapset.deque_head_slots);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         // Branch body needs its own root cleanup frame so the
         // `track_vec_var` / `track_map_var` / `track_rc_var` calls
@@ -2579,7 +2579,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Restore outer state.
         self.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
-        self.loop_stack = saved_loop_stack;
+        self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.mapset.deque_head_slots = saved_deque_head_slots;

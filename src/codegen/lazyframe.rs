@@ -98,7 +98,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The Lazy kind the CURRENT function is declared to return, keyed by
     /// `current_fn_name` (the source name for both concrete fns and monos).
     pub(super) fn current_fn_lazy_return_kind(&self) -> Option<&'static str> {
-        self.declared_lazy_return_of_fn(&self.current_fn_name)
+        self.declared_lazy_return_of_fn(&self.fn_ctx.current_fn_name)
     }
 
     /// Recursive static classifier: the Lazy kind `e` evaluates to, or

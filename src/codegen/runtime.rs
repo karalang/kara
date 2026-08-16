@@ -49,7 +49,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the outlined body takes the location `(file, line, col)` as three
         // params and the landing-pad call forwards the enclosing fn's received
         // values. Ordinary panics keep the zero-arg outlined body (unchanged).
-        let tc_loc = self.current_fn_caller_loc;
+        let tc_loc = self.fn_ctx.current_fn_caller_loc;
         let panic_fn_type = if tc_loc.is_some() {
             let ptr_ty = self.context.ptr_type(AddressSpace::default());
             let i32_ty = self.context.i32_type();
@@ -172,7 +172,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_global_string_ptr("panic at %s:%d:%d in %s: %s%s\n\0", "panic_fmt")
                     .unwrap();
                 let fn_ptr = b
-                    .build_global_string_ptr(&format!("{}\0", self.current_fn_name), "panic_fn")
+                    .build_global_string_ptr(
+                        &format!("{}\0", self.fn_ctx.current_fn_name),
+                        "panic_fn",
+                    )
                     .unwrap();
                 b.build_call(
                     self.runtime_fns.printf_fn,
@@ -4512,7 +4515,7 @@ impl<'ctx> super::Codegen<'ctx> {
         ret_expr: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
-        if self.current_fn_returns_ref {
+        if self.fn_ctx.current_fn_returns_ref {
             return val;
         }
         // B-2026-08-13-11 — mark the position. The field-rooted Vec-element arm

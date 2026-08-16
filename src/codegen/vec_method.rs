@@ -8115,16 +8115,19 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_expr(body);
         };
         let cleanup_depth = self.drop_rc.scope_cleanup_actions.len();
-        self.return_retargets.push(super::state::ReturnRetarget {
-            fn_val,
-            cleanup_depth,
-            merge_bb: None,
-            result_slot: None,
-            result_ty: None,
-            result_type_expr: None,
-        });
+        self.fn_ctx
+            .return_retargets
+            .push(super::state::ReturnRetarget {
+                fn_val,
+                cleanup_depth,
+                merge_bb: None,
+                result_slot: None,
+                result_ty: None,
+                result_type_expr: None,
+            });
         let body_result = self.compile_expr(body);
         let rt = self
+            .fn_ctx
             .return_retargets
             .pop()
             .expect("retarget pushed just above is still on the stack");
@@ -8138,16 +8141,19 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let cleanup_depth = self.drop_rc.scope_cleanup_actions.len();
-        self.return_retargets.push(super::state::ReturnRetarget {
-            fn_val,
-            cleanup_depth,
-            merge_bb: None,
-            result_slot: None,
-            result_ty: None,
-            result_type_expr: None,
-        });
+        self.fn_ctx
+            .return_retargets
+            .push(super::state::ReturnRetarget {
+                fn_val,
+                cleanup_depth,
+                merge_bb: None,
+                result_slot: None,
+                result_ty: None,
+                result_type_expr: None,
+            });
         let body_result = self.compile_expr(body);
         let rt = self
+            .fn_ctx
             .return_retargets
             .pop()
             .expect("retarget pushed just above is still on the stack");
@@ -8217,7 +8223,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
@@ -8663,7 +8669,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.slice_elem_types.remove(&param_name);
         self.var_elem_type_exprs.remove(&param_name);
         self.mono_state.type_subst = saved_subst;
-        self.loop_stack = saved_loop_stack;
+        self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
@@ -8931,7 +8937,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
@@ -9061,7 +9067,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_elem_type_exprs.remove(&n);
         }
         self.mono_state.type_subst = saved_subst;
-        self.loop_stack = saved_loop_stack;
+        self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
@@ -9322,7 +9328,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
@@ -11016,7 +11022,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Restore outer state.
         self.mono_state.type_subst = saved_subst;
-        self.loop_stack = saved_loop_stack;
+        self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
@@ -11113,7 +11119,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
@@ -11685,7 +11691,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(ret);
         self.builder.build_return(None).unwrap();
 
-        self.loop_stack = saved_loop_stack;
+        self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
@@ -11738,7 +11744,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
@@ -11916,7 +11922,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.build_return(Some(&out)).unwrap();
 
-        self.loop_stack = saved_loop_stack;
+        self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;

@@ -2603,6 +2603,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //     does not escape its frame. The inlined `fold`/`any`/`all`/`sum`
         //     terminals never build a closure value, so they never reach here.
         let is_heap_env = self
+            .fn_ctx
             .current_fn_heap_closure_spans
             .contains(&(closure_span.offset, closure_span.length));
         let mutref_caps: HashSet<String> = {
@@ -2960,7 +2961,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         // B-2026-07-15-8: a closure-VALUED free var (`let base = |x| x + 1;
@@ -3353,9 +3354,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // body compile so the nested `compile_closure` gives it a per-call RC
         // heap box (each `make(n)` instance owns a distinct env — no aliasing).
         // Saved/restored around the body so sibling closures don't inherit it.
-        let saved_heap_spans = self.current_fn_heap_closure_spans.clone();
+        let saved_heap_spans = self.fn_ctx.current_fn_heap_closure_spans.clone();
         if let Some(inner_span) = self.closure_tail_heap_closure_span(params, body) {
-            self.current_fn_heap_closure_spans.insert(inner_span);
+            self.fn_ctx.current_fn_heap_closure_spans.insert(inner_span);
         }
 
         // 7c. Compile body and build return.
@@ -3429,11 +3430,11 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // Restore the heap-span set (7b½): the inner-closure marking is scoped
         // to this closure's body compile only.
-        self.current_fn_heap_closure_spans = saved_heap_spans;
+        self.fn_ctx.current_fn_heap_closure_spans = saved_heap_spans;
 
         // 8. Restore outer state.
         self.mono_state.type_subst = saved_subst;
-        self.loop_stack = saved_loop_stack;
+        self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;

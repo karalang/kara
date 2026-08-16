@@ -860,7 +860,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // below via the `returns_borrow_call` branch. Mirrors the
                     // tail-position handling in `compile_tail_final_expr`.
                     let returns_borrow_call =
-                        self.current_fn_returns_ref && self.is_borrow_returning_call_expr(e);
+                        self.fn_ctx.current_fn_returns_ref && self.is_borrow_returning_call_expr(e);
                     let ret_opt_inner = self.current_fn_ret_option_inner_heap();
                     // B-2026-08-13-21 — `return (b, d)` from a `-> (i64, i64)`
                     // function. Without the declared type staged here,
@@ -1114,7 +1114,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // after the scope-cleanup walk above — the source is a
                     // `ref` param (or a field through one), never a freed
                     // local, so its address is valid here.
-                    let ref_ret_ptr = if !self.current_fn_returns_ref {
+                    let ref_ret_ptr = if !self.fn_ctx.current_fn_returns_ref {
                         None
                     } else if returns_borrow_call {
                         // `v` is already the borrow ptr (compiled with the gate
@@ -1135,24 +1135,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap();
                     } else if let Some(ptr) = ref_ret_ptr {
                         self.builder.build_return(Some(&ptr)).unwrap();
-                    } else if self.current_fn_boxes_return {
+                    } else if self.fn_ctx.current_fn_boxes_return {
                         // C-ABI auto-boxed aggregate return (Slice 4 Path B) —
                         // explicit `return v;` site. Box the value and return
                         // the box pointer, matching the tail-return site.
                         let boxed = self.box_return_value(v);
                         self.builder.build_return(Some(&boxed)).unwrap();
-                    } else if let Some(coerced_ty) = self.current_fn_arm64_return_coercion {
+                    } else if let Some(coerced_ty) = self.fn_ctx.current_fn_arm64_return_coercion {
                         // AArch64 `#[repr(C)]` struct-by-value return (Slice 2) —
                         // explicit `return v;` site; matches the tail site.
                         let coerced = self.reinterpret_value_as(v, coerced_ty);
                         self.builder.build_return(Some(&coerced)).unwrap();
-                    } else if let Some(sret_ptr) = self.current_fn_sret_param {
+                    } else if let Some(sret_ptr) = self.fn_ctx.current_fn_sret_param {
                         // AArch64 `sret` return (Slice 3b) — explicit `return v;`
                         // site; store through the caller's result pointer, then
                         // `ret void`. Matches the tail site.
                         self.builder.build_store(sret_ptr, v).unwrap();
                         self.builder.build_return(None).unwrap();
-                    } else if self.current_fn_name == "main" && self.main_result_err_te.is_some() {
+                    } else if self.fn_ctx.current_fn_name == "main"
+                        && self.main_result_err_te.is_some()
+                    {
                         // `return Ok(())` / `return Err(e)` inside
                         // `main() -> Result[(), E]`: adapt to a process exit
                         // code rather than `ret`-ing the `{tag, …}` aggregate
@@ -1195,7 +1197,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.builder
                             .build_unconditional_branch(ctx.coro_return_bb)
                             .unwrap();
-                    } else if self.current_fn_name == "main" {
+                    } else if self.fn_ctx.current_fn_name == "main" {
                         let zero = self.context.i32_type().const_int(0, false);
                         self.builder.build_return(Some(&zero)).unwrap();
                     } else {
@@ -1811,13 +1813,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // error-path design).
         if self.wp_return_retarget_active() {
             let depth = self
+                .fn_ctx
                 .return_retargets
                 .last()
                 .expect("active retarget checked above")
                 .cleanup_depth;
             self.emit_scope_cleanup_from(depth);
         } else {
-            let staged_payload = match self.current_fn_err_payload_ty {
+            let staged_payload = match self.fn_ctx.current_fn_err_payload_ty {
                 Some(e_ty) => {
                     let w0_i = w0.into_int_value();
                     let payload_word_count = enum_ty.count_fields().saturating_sub(1) as usize;
@@ -1954,6 +1957,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // (`converted_err` is always None: closure sites record no
             // `question_conversions` entry).
             let rt_te = self
+                .fn_ctx
                 .return_retargets
                 .last()
                 .expect("active retarget checked above")
@@ -2003,7 +2007,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.reconstruct_question_ok_payload(inner, val, w0);
         }
 
-        if self.current_fn_name == "main" && self.main_result_err_te.is_some() {
+        if self.fn_ctx.current_fn_name == "main" && self.main_result_err_te.is_some() {
             // `?` inside `main() -> Result[(), E]`: `main`'s LLVM signature is
             // the C entry `i32`, so we emit the design.md § Entry Point error
             // exit with the source-typed error VALUE rather than returning the

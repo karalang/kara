@@ -94,10 +94,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// identifier that names a current-function parameter.
     pub(super) fn expr_references_current_param(&self, expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::Identifier(n) => self.current_fn_param_names.contains(n),
+            ExprKind::Identifier(n) => self.fn_ctx.current_fn_param_names.contains(n),
             ExprKind::Path { segments, .. } => segments
                 .first()
-                .is_some_and(|s| self.current_fn_param_names.contains(s)),
+                .is_some_and(|s| self.fn_ctx.current_fn_param_names.contains(s)),
             ExprKind::Binary { left, right, .. } | ExprKind::Pipe { left, right } => {
                 self.expr_references_current_param(left)
                     || self.expr_references_current_param(right)
@@ -263,7 +263,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.reduction_bound_references_param(&shape),
             acc_int.is_some(),
             Some(&shape.loop_var),
-            Some(self.current_fn_name.as_str()),
+            Some(self.fn_ctx.current_fn_name.as_str()),
         );
         if !verdict.is_fanout() {
             return Ok(None);
@@ -824,7 +824,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
@@ -1196,7 +1196,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Restore outer state.
         self.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
-        self.loop_stack = saved_loop_stack;
+        self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
@@ -2034,7 +2034,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
         let saved_elem_types = std::mem::take(&mut self.vec_elem_types);
@@ -2438,7 +2438,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.vec_elem_types = saved_elem_types;
         self.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
-        self.loop_stack = saved_loop_stack;
+        self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;

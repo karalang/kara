@@ -371,7 +371,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Consume the tail-return context up front so block STATEMENTS compile
         // with it cleared (a non-tail `if let` in stmt position must not pick up
         // tail-return compensation); restore it for the final expr below.
-        let tail_inner = self.tail_ret_inner.take();
+        let tail_inner = self.fn_ctx.tail_ret_inner.take();
         // NLL user-drop placement (B-2026-07-21-1): precompute each binding's
         // last-use statement index with the SAME analysis the interpreter's
         // block loop uses, so a user `impl Drop` body fires at the binding's
@@ -552,7 +552,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // which `compile_function` returns directly via `is_borrow_returning_
         // call_expr`. A `-> ref T` fn never carries an `Option[shared]`
         // tail-inner, so this precedes (and is disjoint from) the inc logic.
-        if self.current_fn_returns_ref && self.is_borrow_returning_call_expr(expr) {
+        if self.fn_ctx.current_fn_returns_ref && self.is_borrow_returning_call_expr(expr) {
             let prev = self.compiling_ref_return_let_rhs;
             self.compiling_ref_return_let_rhs = true;
             let v = self.compile_expr(expr);
@@ -634,9 +634,9 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::Unsafe(_)
             | ExprKind::LabeledBlock { .. } => {
                 // Re-arm the context for the construct's branch finals.
-                self.tail_ret_inner = Some(inner);
+                self.fn_ctx.tail_ret_inner = Some(inner);
                 let v = self.compile_expr(expr)?;
-                self.tail_ret_inner = None;
+                self.fn_ctx.tail_ret_inner = None;
                 Ok(v)
             }
             ExprKind::Identifier(n) if self.var_option_shared_heap.contains_key(n.as_str()) => {
@@ -981,7 +981,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // tail-return context in a local and clear the field so a non-tail
         // `if let` in STATEMENT position doesn't pick it up; re-apply it to the
         // final expr via `compile_tail_final_expr` at the tail emission below.
-        let auto_par_tail = self.tail_ret_inner.take();
+        let auto_par_tail = self.fn_ctx.tail_ret_inner.take();
 
         // NLL user-drop last-use map for the auto-par body path — the
         // sequential-statement arm below fires due user drops per statement,
@@ -1008,7 +1008,7 @@ impl<'ctx> super::Codegen<'ctx> {
             for r in &decision.loop_reductions {
                 eprintln!(
                     "karac-reduce-debug: fn={} stmt_index={} line={} op={} accumulator={}",
-                    self.current_fn_name,
+                    self.fn_ctx.current_fn_name,
                     r.stmt_index,
                     r.loop_line,
                     r.op.symbol(),
@@ -1105,7 +1105,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let (total_cost, min_per_branch) = super::reduce::estimate_par_run_group_cost_units(
                 self.program_snapshot.as_deref(),
                 &group_stmts,
-                Some(self.current_fn_name.as_str()),
+                Some(self.fn_ctx.current_fn_name.as_str()),
             );
             if total_cost > 0
                 && total_cost < super::reduce::PAR_RUN_DISPATCH_THRESHOLD_UNITS
@@ -7383,7 +7383,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // a direct param destructure does.
                             let rhs_is_param_view = matches!(&value.kind,
                                 ExprKind::Identifier(src)
-                                    if (self.current_fn_param_names.contains(src.as_str())
+                                    if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
                                         && !self.ref_params.contains_key(src.as_str()))
                                         || self.param_view_locals.contains(src.as_str()));
                             if rhs_is_param_view {
@@ -8947,7 +8947,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // retracted actions.
                     let rhs_is_param_view = matches!(&value.kind,
                         ExprKind::Identifier(src)
-                            if (self.current_fn_param_names.contains(src.as_str())
+                            if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
                                 && !self.ref_params.contains_key(src.as_str()))
                                 || self.param_view_locals.contains(src.as_str()));
                     if rhs_is_param_view && (lhs_is_tracked_struct || lhs_is_tracked_value_enum) {
@@ -9095,7 +9095,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(base) = &object.kind {
                         let rhs_is_param_view = matches!(&value.kind,
                             ExprKind::Identifier(src)
-                                if (self.current_fn_param_names.contains(src.as_str())
+                                if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
                                     && !self.ref_params.contains_key(src.as_str()))
                                     || self.param_view_locals.contains(src.as_str()));
                         if rhs_is_param_view {

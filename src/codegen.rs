@@ -11,6 +11,7 @@ use accel::Accel;
 use contract_state::ContractState;
 use display::Display;
 use drop_rc::DropRc;
+use fn_ctx::FnCtx;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -72,6 +73,7 @@ mod entry_chains;
 mod expr_ops;
 mod exprs;
 mod file;
+mod fn_ctx;
 mod functions;
 mod helpers;
 mod http;
@@ -137,9 +139,7 @@ use helpers::{
     impl_target_name, make_generic_impl_method_function, make_impl_method_function,
     method_is_compiler_builtin, method_self_is_value,
 };
-use state::{
-    AssertedIndexBound, EnumLayout, LayoutId, LoopFrame, SharedTypeInfo, SpawnSiteRecord, VarSlot,
-};
+use state::{AssertedIndexBound, EnumLayout, LayoutId, SharedTypeInfo, SpawnSiteRecord, VarSlot};
 
 // ── Public API ─────────────────────────────────────────────────
 
@@ -1132,6 +1132,7 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) fn_ctx: FnCtx<'ctx>,
     pub(crate) drop_rc: DropRc<'ctx>,
     pub(crate) pattern_state: PatternState<'ctx>,
     pub(crate) mono_state: MonoState<'ctx>,
@@ -1682,8 +1683,6 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch — surfaced 2026-05-25 by the codegen suite's
     /// intermittent hang investigation.
     pub(crate) seeded_enum_names: HashSet<String>,
-    /// Nested loop stack — innermost frame is last.
-    pub(crate) loop_stack: Vec<LoopFrame<'ctx>>,
     /// Non-generic top-level function AST nodes keyed by name. Retained so the
     /// per-layout-monomorphization dispatch (slice 2) can compile an on-demand
     /// SoA specialization of a plain `Vec[E]`-taking helper at a call site with
@@ -1729,13 +1728,6 @@ pub(super) struct Codegen<'ctx> {
     /// Maps local variable names that hold closure fat-pointers to their LLVM function type.
     /// Required for indirect calls: `build_indirect_call` needs the callee's function type.
     pub(crate) closure_fn_types: HashMap<String, FunctionType<'ctx>>,
-    /// Heap-closure-env epic Slice 1 (B-2026-06-22-2). Spans (offset,length) of
-    /// closure literals in the CURRENTLY-compiled function that ESCAPE via its
-    /// return — these get a reference-counted HEAP environment (so the captured
-    /// locals outlive the frame) instead of the default stack env. Recomputed
-    /// per function (`compile_function`) from the same return-position analysis
-    /// as the Slice 0 guard.
-    pub(crate) current_fn_heap_closure_spans: std::collections::HashSet<(usize, usize)>,
     /// B-2026-07-12-24 (residual): value-spans (offset,length) of `let`
     /// bindings in the CURRENTLY-compiled function whose binding name NEVER
     /// ESCAPES — every use is a direct `match` scrutinee, or the binding is
@@ -2091,14 +2083,6 @@ pub(super) struct Codegen<'ctx> {
     /// recursion base case; `fn id(s: String) -> String { s }`).
     /// Cleared per-function alongside `ref_params`.
     pub(crate) owned_vecstr_params: HashSet<String>,
-    /// Names of the CURRENT function's parameters (all modes). Used by the
-    /// auto-par reduction cost gate (B-2026-07-23-25): a fine-grained
-    /// variable-K reduction whose trip-count bound references a function
-    /// parameter is a probable hot-path helper (the `pow10(n)` /
-    /// `while i < n { r = r * 10 }` shape) and must not be parallelized —
-    /// the per-call dispatch overhead is unrecoverable when it's invoked
-    /// millions of times. Cleared + repopulated per function.
-    pub(crate) current_fn_param_names: HashSet<String>,
     /// `for w in vec` loop-element bindings whose element is a heap
     /// `{ptr,len,cap}` type (`String` / `Vec`). `for` over a Vec is
     /// BORROW-iteration — the loop binds `w` to an ALIAS of `data[i]` and the
@@ -2294,27 +2278,6 @@ pub(super) struct Codegen<'ctx> {
     /// than into the local slot — otherwise the write lands in a callee-local
     /// copy and never propagates back to the caller (B-2026-07-12-3).
     pub(crate) ref_option_shared_heap: HashMap<String, StructType<'ctx>>,
-    /// Flow-sensitive tail-return context for `Option[shared T]` returns.
-    /// `Some(inner_heap)` means "the expression about to be compiled at a
-    /// block's final-expr position is in function-tail-return position, and
-    /// the function returns `Option[shared T]` whose inner heap layout is
-    /// this". Threaded by `compile_function` → `compile_block` (final expr) →
-    /// `compile_if_let` / `compile_match` (each branch's final expr), and
-    /// CLEARED while compiling block statements so a non-tail `if let` in
-    /// statement position never picks it up. When a tail leaf is a bare
-    /// `Option[shared]` binding (`l1` / `l2`), `compile_block` inc's its inner
-    /// in that branch's own block — the per-branch compensation that lets a
-    /// function MIX `Some(<alias>)` tails (which need no inc) with bare-arg
-    /// returns (which do) without the over/under-count a single merge-block
-    /// inc would cause. See docs/implementation_checklist/phase-7-codegen.md.
-    pub(crate) tail_ret_inner: Option<StructType<'ctx>>,
-    /// Active closure-scoped return targets for inline-lowered
-    /// `with_provider` bodies (B-2026-07-31-16); innermost last. See
-    /// [`state::ReturnRetarget`]. Entries are fn-tagged rather than
-    /// saved/cleared across function boundaries — the `ExprKind::Return`
-    /// arm only retargets when the top entry's `fn_val` matches
-    /// `current_fn`.
-    pub(crate) return_retargets: Vec<state::ReturnRetarget<'ctx>>,
     /// B-2026-08-10-18 — spans of fused-iterator CLOSURE BODIES whose
     /// `return` must be retargeted to the body's own value.
     ///
@@ -2340,19 +2303,6 @@ pub(super) struct Codegen<'ctx> {
     /// `None` means no payload is currently staged — only the no-binding
     /// form errdefer can fire (the binding form is gated on `is_some`).
     pub(crate) pending_errdefer_payload: Option<inkwell::values::BasicValueEnum<'ctx>>,
-    /// Phase 7 § *defer / errdefer codegen* slice 4 follow-up (a) —
-    /// wider-E payload reconstruction at the `?` site (2026-05-26).
-    /// Source-level LLVM type of the current function's `Result[T, E]`
-    /// Err arm — recorded at `compile_function` entry by walking
-    /// `func.return_type` for the `Result[T, E]` shape and lowering E
-    /// via `llvm_type_for_type_expr`. Read by `compile_question`'s
-    /// `fail_bb` to call `rebuild_value_from_payload_words` against
-    /// the result struct's payload words (w0/w1/w2 at fields 1/2/3),
-    /// staging the source-typed value rather than the i64-coerced
-    /// `w0` slice 4 originally used. `None` means the current function
-    /// doesn't return `Result[T, E]` (or doesn't return at all) — the
-    /// `?` site falls back to staging bare `w0` as i64 in that case.
-    pub(crate) current_fn_err_payload_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
     /// Set while compiling `main` when its declared return type is
     /// `Result[(), E]` — holds E's source `TypeExpr` (the error type). The
     /// LLVM `main` is the C entry (`i32`), so every Result-returning site —
@@ -2374,25 +2324,6 @@ pub(super) struct Codegen<'ctx> {
     /// `fn main()` posture). Mutually exclusive with `main_result_err_te`.
     /// `false` for `fn main()` / `fn main() -> Result[(), E]` / non-`main`.
     pub(crate) main_returns_exitcode: bool,
-    /// True while compiling a function whose declared return type is a
-    /// borrow (`-> ref T` / `-> mut ref T`). The LLVM signature returns a
-    /// thin `ptr`, so the tail / explicit-`return` sites must emit the
-    /// ADDRESS of the borrow source (a `ref` param or a field reached
-    /// through one) via `compile_ref_return_ptr`, not the materialized
-    /// value — see `B-2026-06-07-5` (returned-borrow codegen). Set per
-    /// function in `compile_function`.
-    pub(crate) current_fn_returns_ref: bool,
-    /// True while compiling a `pub extern "C" fn` whose non-transparent
-    /// aggregate return (`Vec[scalar]` / `String`) is auto-boxed for the C
-    /// ABI (additive-interop Slice 4 Path B). Kāra returns such a
-    /// `{data,len,cap}` value in 3 registers (rax/rdx/rcx), which does NOT
-    /// match the SysV struct-return ABI a C caller expects — so the export
-    /// heap-boxes the value and returns an opaque *pointer* (a scalar
-    /// return, trivially C-compatible; the C side reads `v->data`/`v->len`
-    /// through the header's struct + frees via the auto-emitted
-    /// `karac_free_<name>`). Set per function in `compile_function`; read at
-    /// the tail- and explicit-`return` sites to box before `ret`.
-    pub(crate) current_fn_boxes_return: bool,
     /// Subset of `boxed_export_names` whose box is a Slice-2a tagged-union
     /// `#[repr(C)]` enum (`{ i64 tag, i64 w0 }`), not a `{data,len,cap}` Vec
     /// box. The distinction is load-bearing at destructor-emit time: the
@@ -3067,8 +2998,6 @@ pub(super) struct Codegen<'ctx> {
     /// auto-par lowering path that emits `karac_par_run` for inferred groups
     /// outside explicit `par {}` blocks. Empty when no analysis was supplied.
     pub(crate) concurrency_decisions: HashMap<String, FunctionConcurrency>,
-    /// Name of the function currently being compiled (for rc_fallback_fns lookup).
-    pub(crate) current_fn_name: String,
     /// `#[track_caller]` slice 4: names of functions declared `#[track_caller]`
     /// that received the hidden caller-location parameter triple (populated in
     /// `declare_function`). A call site consults this to decide whether to
@@ -3076,17 +3005,6 @@ pub(super) struct Codegen<'ctx> {
     /// program with no `#[track_caller]` functions, so the whole feature is
     /// inert by default.
     pub(crate) track_caller_fns: std::collections::HashSet<String>,
-    /// `#[track_caller]` slice 4/5: when the function currently being compiled
-    /// is `#[track_caller]`, its three hidden trailing params — the received
-    /// caller location `(file_ptr, line, col)`. `emit_panic` redirects the
-    /// reported panic location to these runtime values, and a nested
-    /// `#[track_caller]` call forwards them (the transitivity rule). `None`
-    /// inside an ordinary function.
-    pub(crate) current_fn_caller_loc: Option<(
-        inkwell::values::PointerValue<'ctx>,
-        inkwell::values::IntValue<'ctx>,
-        inkwell::values::IntValue<'ctx>,
-    )>,
     /// Level 2 crash diagnostics — Part 2: DWARF debug-info state. `Some` only
     /// when `KARAC_DEBUG_INFO` is on AND a source filename is threaded in;
     /// `None` (the default) makes every `di_*` hook a cheap early-return so the
@@ -3344,16 +3262,6 @@ pub(super) struct Codegen<'ctx> {
     /// which we want to avoid in the (common) path where no layout
     /// intrinsic is invoked.
     pub(crate) target_data: Option<TargetData>,
-    /// The current function's AArch64 struct-return coercion type, set at body
-    /// entry from `arm64_coerced_struct_returns`. `Some` ⇒ every return site
-    /// reinterprets its `#[repr(C)]` struct value into this type before
-    /// `ret`. `None` on x86-64 and for non-coerced returns.
-    pub(crate) current_fn_arm64_return_coercion: Option<BasicTypeEnum<'ctx>>,
-    /// The current function's `sret` result pointer (the leading param), set at
-    /// body entry from `sret_struct_returns`. `Some` ⇒ every return site stores
-    /// its struct value here and returns `void`; the prologue also shifts every
-    /// Kāra param index by +1 to skip this leading pointer.
-    pub(crate) current_fn_sret_param: Option<inkwell::values::PointerValue<'ctx>>,
     // ── Hot-swap codegen (phase-7 line 5) ─────────────────────────
     /// Set by `compile_to_*_with_hot_swap` from the CLI's
     /// `--enable-hot-swap` flag. When `true`, every call to a
@@ -7045,7 +6953,20 @@ impl<'ctx> Codegen<'ctx> {
                 display_sorted_collection_spans: std::collections::HashSet::new(),
                 display_fn_cache: HashMap::new(),
             },
-            loop_stack: Vec::new(),
+            fn_ctx: FnCtx {
+                loop_stack: Vec::new(),
+                current_fn_heap_closure_spans: std::collections::HashSet::new(),
+                current_fn_param_names: HashSet::new(),
+                tail_ret_inner: None,
+                return_retargets: Vec::new(),
+                current_fn_err_payload_ty: None,
+                current_fn_returns_ref: false,
+                current_fn_boxes_return: false,
+                current_fn_name: String::new(),
+                current_fn_caller_loc: None,
+                current_fn_arm64_return_coercion: None,
+                current_fn_sret_param: None,
+            },
             mono_state: MonoState {
                 generic_fns: HashMap::new(),
                 generated_monos: HashSet::new(),
@@ -7064,7 +6985,6 @@ impl<'ctx> Codegen<'ctx> {
             indexed_elem_counter: 0,
             pending_reverse_iter: false,
             closure_fn_types: HashMap::new(),
-            current_fn_heap_closure_spans: std::collections::HashSet::new(),
             result_shared_nonescaping_let_spans: std::collections::HashSet::new(),
             result_shared_nonescaping_param_names: std::collections::HashSet::new(),
             fns_returning_heap_env: std::collections::HashSet::new(),
@@ -7132,7 +7052,6 @@ impl<'ctx> Codegen<'ctx> {
             signature_ref_params: std::collections::HashSet::new(),
             entry_slot_ref_vars: HashMap::new(),
             owned_vecstr_params: HashSet::new(),
-            current_fn_param_names: HashSet::new(),
             for_loop_borrow_vars: HashSet::new(),
             borrow_accessor_let_payload: std::collections::HashMap::new(),
             for_loop_owned_agg_vars: HashSet::new(),
@@ -7169,7 +7088,6 @@ impl<'ctx> Codegen<'ctx> {
             },
             var_option_shared_heap: HashMap::new(),
             ref_option_shared_heap: HashMap::new(),
-            tail_ret_inner: None,
             pattern_state: PatternState {
                 discarded_branch_spans: std::collections::HashSet::new(),
                 pattern_binding_is_borrow: false,
@@ -7206,14 +7124,10 @@ impl<'ctx> Codegen<'ctx> {
                 gpu_buffer_vars: HashSet::new(),
             },
             binding_layouts: HashMap::new(),
-            return_retargets: Vec::new(),
             iter_body_retarget_spans: std::collections::HashSet::new(),
             pending_errdefer_payload: None,
-            current_fn_err_payload_ty: None,
             main_result_err_te: None,
             main_returns_exitcode: false,
-            current_fn_returns_ref: false,
-            current_fn_boxes_return: false,
             boxed_enum_export_names: std::collections::HashSet::new(),
             compiling_ref_return_let_rhs: false,
             suppress_shadow_metadata_purge: false,
@@ -7298,9 +7212,7 @@ impl<'ctx> Codegen<'ctx> {
             frozen_element_containers: HashSet::new(),
             frozen_elem_vec_owners: HashSet::new(),
             concurrency_decisions: HashMap::new(),
-            current_fn_name: String::new(),
             track_caller_fns: std::collections::HashSet::new(),
-            current_fn_caller_loc: None,
             debug_info: None,
             par_counter: 0,
             karac_branch_ty,
@@ -7337,8 +7249,6 @@ impl<'ctx> Codegen<'ctx> {
             cstr_vars: HashSet::new(),
             http_shim_cache: HashMap::new(),
             target_data: init_target_data,
-            current_fn_arm64_return_coercion: None,
-            current_fn_sret_param: None,
             hot_swap_enabled: false,
             declare_only_fns: std::collections::HashSet::new(),
             main_symbol_override: None,
@@ -7661,7 +7571,7 @@ impl<'ctx> Codegen<'ctx> {
     fn is_rc_fallback_binding(&self, name: &str) -> bool {
         self.drop_rc
             .rc_fallback_fns
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .is_some_and(|set| set.contains(name))
     }
 
@@ -7673,7 +7583,7 @@ impl<'ctx> Codegen<'ctx> {
     /// mentioned inside those regions.
     fn is_elided_binding(&self, name: &str) -> bool {
         self.elided_bindings
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .is_some_and(|set| set.contains(name))
     }
 
@@ -7703,7 +7613,7 @@ impl<'ctx> Codegen<'ctx> {
         }) && self
             .mapset
             .deque_head_locals
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .is_some_and(|set| set.contains(name))
     }
 
@@ -7728,7 +7638,7 @@ impl<'ctx> Codegen<'ctx> {
         name: &str,
     ) -> Option<(String, usize, crate::ownership::ReturnedChain)> {
         self.elided_cluster_roots
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .and_then(|m| m.get(name))
             .cloned()
     }
@@ -7740,7 +7650,7 @@ impl<'ctx> Codegen<'ctx> {
     fn adopted_root_info(&self, name: &str) -> Option<(String, usize)> {
         if let Some(info) = self
             .adopted_cluster_roots
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .and_then(|m| m.get(name))
         {
             return Some(info.clone());
@@ -7750,7 +7660,7 @@ impl<'ctx> Codegen<'ctx> {
         // falls back to full RC and the ordinary arg-inc / exit-dec
         // balance applies.
         self.conditional_adopted_roots
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .and_then(|m| m.get(name))
             .filter(|(t, _)| self.target_abi.headerless_types.contains(t))
             .cloned()
@@ -7781,7 +7691,7 @@ impl<'ctx> Codegen<'ctx> {
     /// its exit `RcDecOption` is skipped (no caller inc ever happened).
     fn borrowed_param_dec_skip(&self, param_name: &str) -> bool {
         self.borrowed_param_skips
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .is_some_and(|recs| {
                 recs.iter()
                     .any(|(n, _, t)| n == param_name && self.target_abi.headerless_types.contains(t))
@@ -7792,14 +7702,14 @@ impl<'ctx> Codegen<'ctx> {
         || self
             .drop_rc
                 .rc_elide_ref_params
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .is_some_and(|recs| recs.iter().any(|(n, _)| n == param_name))
     }
 
     /// Phase-B2 role lookup for the current function.
     fn b2_binding(&self, name: &str) -> Option<&state::B2Binding> {
         self.elided_b2_bindings
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .and_then(|m| m.get(name))
     }
 
@@ -7820,12 +7730,12 @@ impl<'ctx> Codegen<'ctx> {
         let Some(link_idx) = self
             .target_abi
             .headerless_fns
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .and_then(|m| m.get(type_name))
         else {
             return false;
         };
-        if self.is_coroutine_compiled(&self.current_fn_name) {
+        if self.is_coroutine_compiled(&self.fn_ctx.current_fn_name) {
             return false;
         }
         self.niche_field_inner_heap_type(type_name, *link_idx)
@@ -7888,7 +7798,7 @@ impl<'ctx> Codegen<'ctx> {
     fn is_arc_binding(&self, name: &str) -> bool {
         self.drop_rc
             .arc_fallback_fns
-            .get(&self.current_fn_name)
+            .get(&self.fn_ctx.current_fn_name)
             .is_some_and(|set| set.contains(name))
     }
 
@@ -7919,7 +7829,7 @@ impl<'ctx> Codegen<'ctx> {
         if self.concurrency_decisions.is_empty() {
             return None;
         }
-        self.concurrency_decisions.get(&self.current_fn_name)
+        self.concurrency_decisions.get(&self.fn_ctx.current_fn_name)
     }
 
     /// Look up the recognized reduction (if any) for the loop statement at
@@ -7941,7 +7851,9 @@ impl<'ctx> Codegen<'ctx> {
         // is an index within the loop's OWN block, and equal indices
         // recur across sibling/nested blocks — the source line is what
         // makes the pair unique per loop.
-        let decision = self.concurrency_decisions.get(&self.current_fn_name)?;
+        let decision = self
+            .concurrency_decisions
+            .get(&self.fn_ctx.current_fn_name)?;
         decision
             .loop_reductions
             .iter()
@@ -7965,7 +7877,9 @@ impl<'ctx> Codegen<'ctx> {
         stmt_index: usize,
         loop_span: &crate::token::Span,
     ) -> Option<&crate::concurrency::DisjointWriteLoop> {
-        let decision = self.concurrency_decisions.get(&self.current_fn_name)?;
+        let decision = self
+            .concurrency_decisions
+            .get(&self.fn_ctx.current_fn_name)?;
         decision.disjoint_write_loops.iter().find(|d| {
             d.stmt_index == stmt_index
                 && d.loop_span.offset == loop_span.offset

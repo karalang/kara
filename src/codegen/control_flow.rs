@@ -50,7 +50,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Tail-return context: consume it now (the scrutinee `value` below is
         // NOT a tail return), then re-arm it for each branch's final expr so
         // a bare-arg `Option[shared]` leaf gets its per-branch inc.
-        let tail = self.tail_ret_inner.take();
+        let tail = self.fn_ctx.tail_ret_inner.take();
         // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(value);
         let val = self.compile_expr(value)?;
@@ -316,7 +316,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // block classifies its own scrutinee from a clean slate.
         self.pattern_state
             .pattern_binding_source_retains_inline_payload = saved_source_retains;
-        self.tail_ret_inner = tail;
+        self.fn_ctx.tail_ret_inner = tail;
         let mut then_val = self.compile_block(then_block)?;
         let then_terminated = self
             .builder
@@ -359,7 +359,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(else_bb);
         let else_tail: Option<&Expr>;
         let mut else_val = if let Some(eb) = else_branch {
-            self.tail_ret_inner = tail;
+            self.fn_ctx.tail_ret_inner = tail;
             match &eb.kind {
                 ExprKind::Block(blk) => {
                     else_tail = blk.final_expr.as_deref();
@@ -374,7 +374,7 @@ impl<'ctx> super::Codegen<'ctx> {
             else_tail = None;
             None
         };
-        self.tail_ret_inner = None;
+        self.fn_ctx.tail_ret_inner = None;
         let else_terminated = self
             .builder
             .get_insert_block()
@@ -448,7 +448,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: cond_bb,
             break_bb: exit_bb,
@@ -652,7 +652,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.scope_cleanup_actions.pop();
         }
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
 
         // Miss edge (loop exit): the final scrutinee did not match the
         // pattern. If it is a fresh-temp enum carrying heap in its (unmatched)
@@ -906,7 +906,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ExprKind::FieldAccess { object, .. } => cur = object,
                 ExprKind::TupleIndex { object, .. } => cur = object,
                 ExprKind::Identifier(n) => {
-                    return (self.current_fn_param_names.contains(n.as_str())
+                    return (self.fn_ctx.current_fn_param_names.contains(n.as_str())
                         && !self.ref_params.contains_key(n.as_str()))
                         || self.param_view_locals.contains(n.as_str());
                 }
@@ -1873,7 +1873,7 @@ impl<'ctx> super::Codegen<'ctx> {
         then_block: &Block,
         else_branch: Option<&Expr>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let tail = self.tail_ret_inner.take();
+        let tail = self.fn_ctx.tail_ret_inner.take();
         // Keyed on the condition's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(condition);
         let cond_val = self.compile_expr(condition)?.into_int_value();
@@ -1887,7 +1887,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(then_bb);
-        self.tail_ret_inner = tail;
+        self.fn_ctx.tail_ret_inner = tail;
         let mut then_val = self.compile_block_with_frame(then_block)?;
         let then_terminated = self
             .builder
@@ -1918,7 +1918,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // own leaves), so it contributes no leaf here.
         let else_tail: Option<&Expr>;
         let mut else_val = if let Some(else_expr) = else_branch {
-            self.tail_ret_inner = tail;
+            self.fn_ctx.tail_ret_inner = tail;
             match &else_expr.kind {
                 ExprKind::Block(blk) => {
                     else_tail = blk.final_expr.as_deref();
@@ -1943,7 +1943,7 @@ impl<'ctx> super::Codegen<'ctx> {
             else_tail = None;
             None
         };
-        self.tail_ret_inner = None;
+        self.fn_ctx.tail_ret_inner = None;
         let else_terminated = self
             .builder
             .get_insert_block()
@@ -2274,7 +2274,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: cond_bb,
             break_bb: exit_bb,
@@ -2404,7 +2404,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.scope_cleanup_actions.pop();
         }
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         // Vec-length-pin activation (bce_length_pin.rs): this `while` may be a
         // recognised counted fill whose completion establishes `vec.len() >=
@@ -2433,7 +2433,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let result_slot =
             self.create_entry_alloca(fn_val, "loop.result", self.context.i64_type().into());
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: loop_bb,
             break_bb: exit_bb,
@@ -2463,7 +2463,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.scope_cleanup_actions.pop();
         }
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         // Load result (may be zero if no break-with-value was hit)
         let result = self
@@ -2538,7 +2538,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(body_bb).unwrap();
         self.builder.position_at_end(body_bb);
 
-        self.loop_stack.push(LoopFrame {
+        self.fn_ctx.loop_stack.push(LoopFrame {
             label: Some(label.to_string()),
             continue_bb: continue_unreachable_bb,
             break_bb: exit_bb,
@@ -2567,7 +2567,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_unconditional_branch(exit_bb).unwrap();
         }
 
-        self.loop_stack.pop();
+        self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         let result = self
             .builder
@@ -2591,12 +2591,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // labels, no test fixture exercised it before this slice).
         let frame = match label {
             Some(l) => self
+                .fn_ctx
                 .loop_stack
                 .iter()
                 .rev()
                 .find(|f| f.label.as_deref() == Some(l))
                 .cloned(),
-            None => self.loop_stack.last().cloned(),
+            None => self.fn_ctx.loop_stack.last().cloned(),
         };
         if let Some(frame) = frame {
             if let Some(slot) = frame.result_slot {
@@ -2633,12 +2634,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // frame, but the codegen-side dispatch is uniform.
         let frame = match label {
             Some(l) => self
+                .fn_ctx
                 .loop_stack
                 .iter()
                 .rev()
                 .find(|f| f.label.as_deref() == Some(l))
                 .cloned(),
-            None => self.loop_stack.last().cloned(),
+            None => self.fn_ctx.loop_stack.last().cloned(),
         };
         if let Some(frame) = frame {
             // Same early-exit drain as `compile_break`: `continue` jumps to
