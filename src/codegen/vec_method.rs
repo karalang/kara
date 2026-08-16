@@ -9377,6 +9377,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let probe_fn = self
             .module
             .add_function(&probe_name, probe_ty, Some(Linkage::Internal));
+        // The partition's leaf sorter (B-2026-08-16-3). Its own function for the
+        // same reason the probe is: it inlines the user comparator once more,
+        // and folding that into `qpart` compiles the partition's own two loops
+        // differently. `void isort(data, len)` sorts `[0,len)` in place.
+        let isort_name = format!("__vec_{}_isort_{}", elem_mangle, id);
+        let isort_ty = void_t.fn_type(&[ptr_ty.into(), i64_t.into()], false);
+        let isort_fn = self
+            .module
+            .add_function(&isort_name, isort_ty, Some(Linkage::Internal));
 
         // Save outer codegen state — we're about to compile into a new fn.
         // Same save/restore dance as `emit_sort_by_inline_thunk`.
@@ -11085,7 +11094,16 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // sort_fn is complete, so the mutually recursive partner can be
         // defined now.
-        self.emit_sort_partition_body(qpart_fn, sort_fn, params, body, elem_ty, elem_type_name)?;
+        self.emit_sort_partition_body(
+            qpart_fn,
+            sort_fn,
+            isort_fn,
+            params,
+            body,
+            elem_ty,
+            elem_type_name,
+        )?;
+        self.emit_sort_isort_body(isort_fn, params, body, elem_ty, elem_type_name)?;
         self.emit_sort_probe_body(probe_fn, params, body, elem_ty, elem_type_name)?;
 
         // Restore outer state.
@@ -11159,33 +11177,41 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         qpart_fn: FunctionValue<'ctx>,
         sort_fn: FunctionValue<'ctx>,
+        isort_fn: FunctionValue<'ctx>,
         params: &[ClosureParam],
         body: &Expr,
         elem_ty: BasicTypeEnum<'ctx>,
         elem_type_name: Option<&str>,
     ) -> Result<(), String> {
-        /// Ranges at or below this hand off to the merge. Kept at or below the
-        /// entry probe's own length floor so a handoff can never re-probe.
+        /// Ranges at or below this stop partitioning and are sorted directly by
+        /// `isort_fn` (a longer one that reaches the leaf from the tie gate or
+        /// the depth backstop keeps the merge — see `leaf_call`). Kept at or
+        /// below the entry probe's own length floor so a handoff can never
+        /// re-probe.
         ///
         /// 4096 until B-2026-08-15-30. It was sized for the low-cardinality arm,
         /// which bottoms out in a few levels and never reaches a deep leaf, so
         /// the value did not matter there — measured across 32..4096 on
         /// few-unique it moves nothing (1.00-1.01x). It matters a great deal on
         /// the unstructured arm, where every element descends the full
-        /// log2(n/SPAN): a 4096 leaf leaves log2(4096/64) = 6 merge passes
-        /// under every partition, capping the win no matter how cheap a level
-        /// is. Sweep on random, cycles vs the merge baseline:
+        /// log2(n/SPAN).
         ///
-        ///   SPAN    32     64    128    256    512   1024   4096
-        ///   ratio 0.66x  0.65x  0.66x  0.70x  0.74x  0.81x  0.80x
+        /// Re-swept for B-2026-08-16-3, because the leaf sorter changed and the
+        /// old optimum was the optimum for a MERGE leaf. Random, cycles, both
+        /// arms from one karac via `KARAC_SORT_LEAF`:
         ///
-        /// Flat from 32 to 128, so 64 sits in the middle of the plateau rather
-        /// than on its edge.
+        ///   SPAN         8      16      24      32      48      64      96
+        ///   merge    384.7M  377.9M  367.2M  359.6M  351.4M  353.1M  351.1M
+        ///   insert   311.2M  315.0M  316.3M  313.9M  313.0M  312.8M  321.8M
+        ///
+        /// The merge leaf's tight U is gone: an insertion leaf is FLAT from 8 to
+        /// 64 (311-316M, a 1.6% spread that is inside run-to-run noise) and only
+        /// degrades at 96. So 64 stays — it is inside the new plateau as well as
+        /// the old one, and holding it constant keeps this change to one
+        /// variable.
         const SPAN: u64 = 64;
         // `KARAC_SORT_PART_SPAN` overrides the leaf handoff, the second half of
-        // the B-2026-08-15-30 lever: on high-cardinality input a leaf of 4096
-        // leaves log2(4096/32) = 7 merge passes under every partition, which
-        // caps the reachable win no matter how cheap a level is.
+        // the B-2026-08-15-30 lever, and the axis the sweep above is taken on.
         let span_v = std::env::var("KARAC_SORT_PART_SPAN")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
@@ -11229,6 +11255,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let leaf = bb(self, "leaf");
         let leaf_cp = bb(self, "leaf.cp");
         let leaf_call = bb(self, "leaf.call");
+        let leaf_ins = bb(self, "leaf.ins");
+        let leaf_merge = bb(self, "leaf.merge");
         let pv = bb(self, "pivot");
         let cnt_chk = bb(self, "cnt.chk");
         let cnt_body = bb(self, "cnt.body");
@@ -11319,11 +11347,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(bail, leaf, pv)
             .unwrap();
 
-        // ── leaf: bring the range home to `data`, then merge-sort it ───────
-        // `allow_part = 0` on the callee: without it an abandoned range would
-        // be re-probed, accepted by the sampling estimate that the exact tie
-        // count just rejected, and handed straight back here — the same range,
-        // the same pivot, forever.
+        // ── leaf: bring the range home to `data`, then sort it ─────────────
+        // `allow_part = 0` on the merge callee: without it an abandoned range
+        // would be re-probed, accepted by the sampling estimate that the exact
+        // tie count just rejected, and handed straight back here — the same
+        // range, the same pivot, forever.
+        //
+        // TWO leaf sorters, chosen on length (B-2026-08-16-3). A range that
+        // arrived because it is SHORT (`small`) gets the insertion sort; one
+        // that arrived from the tie gate or the depth backstop can be any size
+        // at all and must keep the merge, which is O(n log n).
+        //
+        // Why not just keep the merge everywhere: measured, the leaves were
+        // 46.4% of the whole shuffled sort — 162.9M cycles against driftsort's
+        // 194.0M for the entire sort — while the partition tree above them was
+        // only 188.2M. Sorting a 64-element block with the natural-run merge
+        // costs an allocation pair, run detection, and ~log2(64/RUN) passes on
+        // input whose natural runs are ~2 long. Insertion needs no buffer, no
+        // run detection, and one pass with a short shift distance.
         self.builder.position_at_end(leaf);
         self.builder
             .build_conditional_branch(need_cp, leaf_cp, leaf_call)
@@ -11334,6 +11375,32 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.build_unconditional_branch(leaf_call).unwrap();
         self.builder.position_at_end(leaf_call);
+        // `KARAC_SORT_LEAF=merge` pins the pre-B-2026-08-16-3 behaviour, so the
+        // two leaf sorters stay A/B-able from one karac — the same lever shape
+        // as `KARAC_SORT_FORCE`. `insertion` forces it on for any length, which
+        // is only meaningful as a measurement (it is O(n^2) above the span).
+        let leaf_short = match std::env::var("KARAC_SORT_LEAF").as_deref() {
+            Ok("merge") => self.context.bool_type().const_zero(),
+            Ok("insertion") => self.context.bool_type().const_int(1, false),
+            _ => self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::SLE,
+                    len,
+                    i64_t.const_int(span_v, false),
+                    "q.leaf.short",
+                )
+                .unwrap(),
+        };
+        self.builder
+            .build_conditional_branch(leaf_short, leaf_ins, leaf_merge)
+            .unwrap();
+        self.builder.position_at_end(leaf_ins);
+        self.builder
+            .build_call(isort_fn, &[d_lo.into(), len.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(ret).unwrap();
+        self.builder.position_at_end(leaf_merge);
         self.builder
             .build_call(sort_fn, &[d_lo.into(), len.into(), zero.into()], "")
             .unwrap();
@@ -11793,6 +11860,204 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap();
         self.builder.build_unconditional_branch(ret).unwrap();
+
+        self.builder.position_at_end(ret);
+        self.builder.build_return(None).unwrap();
+
+        self.fn_ctx.loop_stack = saved_loop_stack;
+        self.var_types.var_type_names = saved_var_types;
+        self.variables = saved_vars;
+        self.current_fn = saved_fn;
+        self.closure_state.closure_fn_types = saved_cfn;
+        self.closure_state.pending_closure_fn_type = saved_pct;
+        self.conc.branch_cancel_ptr = saved_cancel_ptr;
+        if let Some(b) = saved_bb {
+            self.builder.position_at_end(b);
+        }
+        Ok(())
+    }
+
+    /// Emit the body of `__vec_<m>_isort_<id>` — the partition's leaf sorter
+    /// (B-2026-08-16-3). `void isort(data, len)` sorts `[0,len)` in place.
+    ///
+    /// STABLE, and by the same argument phase 1's insertion padding is: an
+    /// element shifts left only past elements that compare STRICTLY greater
+    /// (`cmp(prev, hold) > 0`), so it comes to rest AFTER every element equal
+    /// to it and relative order within a key is preserved. The two sites must
+    /// not drift — both compare in that direction for that reason.
+    ///
+    /// Only the partition calls this, and only for a range that reached the
+    /// leaf by being SHORT. It is O(n^2), so the caller gates it on length
+    /// rather than letting the tie-gate or depth-backstop paths reach it.
+    fn emit_sort_isort_body(
+        &mut self,
+        isort_fn: FunctionValue<'ctx>,
+        params: &[ClosureParam],
+        body: &Expr,
+        elem_ty: BasicTypeEnum<'ctx>,
+        elem_type_name: Option<&str>,
+    ) -> Result<(), String> {
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_zero();
+        let one = i64_t.const_int(1, false);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_var_types = std::mem::take(&mut self.var_types.var_type_names);
+        let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
+        let saved_cfn = std::mem::take(&mut self.closure_state.closure_fn_types);
+        let saved_pct = self.closure_state.pending_closure_fn_type.take();
+        let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
+        self.current_fn = Some(isort_fn);
+
+        let data = isort_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let len = isort_fn.get_nth_param(1).unwrap().into_int_value();
+
+        let bb = |s: &Self, n: &str| s.context.append_basic_block(isort_fn, n);
+        let entry = bb(self, "entry");
+        let i_chk = bb(self, "i.chk");
+        let i_body = bb(self, "i.body");
+        let j_chk = bb(self, "j.chk");
+        let j_cmp = bb(self, "j.cmp");
+        let j_shift = bb(self, "j.shift");
+        let j_done = bb(self, "j.done");
+        let ret = bb(self, "ret");
+
+        self.builder.position_at_end(entry);
+        let hold_a = self.create_entry_alloca(isort_fn, "hold", elem_ty);
+        let i_a = self.create_entry_alloca(isort_fn, "isi", i64_t.into());
+        let j_a = self.create_entry_alloca(isort_fn, "isj", i64_t.into());
+        self.builder.build_store(i_a, one).unwrap();
+        self.builder.build_unconditional_branch(i_chk).unwrap();
+
+        // for i in 1..len
+        self.builder.position_at_end(i_chk);
+        let i_v = self
+            .builder
+            .build_load(i64_t, i_a, "is.i")
+            .unwrap()
+            .into_int_value();
+        let i_go = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i_v, len, "is.i.go")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(i_go, i_body, ret)
+            .unwrap();
+
+        // hold = data[i]; j = i
+        self.builder.position_at_end(i_body);
+        let hold_src = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[i_v], "is.hold.p")
+                .unwrap()
+        };
+        let hold_v = self
+            .builder
+            .build_load(elem_ty, hold_src, "is.hold")
+            .unwrap();
+        self.builder.build_store(hold_a, hold_v).unwrap();
+        self.builder.build_store(j_a, i_v).unwrap();
+        self.builder.build_unconditional_branch(j_chk).unwrap();
+
+        // while j > 0 && cmp(data[j-1], hold) > 0 — the bound is checked in its
+        // own block so `data[j-1]` is never loaded at j == 0.
+        self.builder.position_at_end(j_chk);
+        let j_v = self
+            .builder
+            .build_load(i64_t, j_a, "is.j")
+            .unwrap()
+            .into_int_value();
+        let j_go = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, j_v, zero, "is.j.go")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(j_go, j_cmp, j_done)
+            .unwrap();
+
+        self.builder.position_at_end(j_cmp);
+        let j_v1 = self
+            .builder
+            .build_load(i64_t, j_a, "is.j1")
+            .unwrap()
+            .into_int_value();
+        let jm1 = self.builder.build_int_sub(j_v1, one, "is.jm1").unwrap();
+        let prev_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[jm1], "is.prev.p")
+                .unwrap()
+        };
+        let prev_v = self.builder.build_load(elem_ty, prev_p, "is.prev").unwrap();
+        let hold_v1 = self
+            .builder
+            .build_load(elem_ty, hold_a, "is.hold1")
+            .unwrap();
+        let c = self.emit_sort_by_inline_compare(
+            isort_fn,
+            params,
+            body,
+            elem_type_name,
+            prev_v,
+            hold_v1,
+        )?;
+        let c_gt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, c, zero, "is.cmp.gt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(c_gt, j_shift, j_done)
+            .unwrap();
+
+        // data[j] = data[j-1]; j -= 1
+        self.builder.position_at_end(j_shift);
+        let j_v2 = self
+            .builder
+            .build_load(i64_t, j_a, "is.j2")
+            .unwrap()
+            .into_int_value();
+        let jm1b = self.builder.build_int_sub(j_v2, one, "is.jm1b").unwrap();
+        let src_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[jm1b], "is.src.p")
+                .unwrap()
+        };
+        let src_v = self.builder.build_load(elem_ty, src_p, "is.src").unwrap();
+        let dst_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[j_v2], "is.dst.p")
+                .unwrap()
+        };
+        self.builder.build_store(dst_p, src_v).unwrap();
+        self.builder.build_store(j_a, jm1b).unwrap();
+        self.builder.build_unconditional_branch(j_chk).unwrap();
+
+        // data[j] = hold; i += 1
+        self.builder.position_at_end(j_done);
+        let j_v3 = self
+            .builder
+            .build_load(i64_t, j_a, "is.j3")
+            .unwrap()
+            .into_int_value();
+        let hold_v2 = self
+            .builder
+            .build_load(elem_ty, hold_a, "is.hold2")
+            .unwrap();
+        let land_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[j_v3], "is.land.p")
+                .unwrap()
+        };
+        self.builder.build_store(land_p, hold_v2).unwrap();
+        let i_v2 = self
+            .builder
+            .build_load(i64_t, i_a, "is.i2")
+            .unwrap()
+            .into_int_value();
+        let i_next = self.builder.build_int_add(i_v2, one, "is.i.next").unwrap();
+        self.builder.build_store(i_a, i_next).unwrap();
+        self.builder.build_unconditional_branch(i_chk).unwrap();
 
         self.builder.position_at_end(ret);
         self.builder.build_return(None).unwrap();

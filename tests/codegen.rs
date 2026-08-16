@@ -25402,6 +25402,69 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_partition_insertion_leaf_is_stable() {
+        // B-2026-08-16-3 — the partition's leaf sorter. A range that stops
+        // partitioning because it is SHORT is now sorted by a dedicated
+        // insertion sort instead of being handed back to the merge, so every
+        // element on this path passes through code the older partition tests
+        // never reached.
+        //
+        // This drives the UNSTRUCTURED arm, which the low-cardinality test
+        // above does not: 9000 keys drawn over a wide range, so the probe
+        // admits on orderedness rather than cardinality, the per-range tie gate
+        // is off, and the recursion descends the full log2(n/64) to leaves that
+        // are all insertion-sorted.
+        //
+        // Stability is the property at risk and the reason for the `ord` field:
+        // an insertion sort is stable only if an element shifts past strictly
+        // greater elements, and an `>=` there would be just as sorted and
+        // silently reorder equal keys. `key` is deliberately `% 300` so there
+        // are ~30 duplicates of each key spread across many different leaves —
+        // with distinct keys the stability assertion would be vacuous.
+        //
+        // Strict `assert_eq!` rather than the tolerant `if let Some(out)` form:
+        // a stale runtime archive must fail this loudly (CLAUDE.md).
+        assert_eq!(
+            run_program(
+                "struct R { key: i64, ord: i64 }\n\
+                 fn main() {\n\
+                     let mut v: Vec[R] = Vec.new();\n\
+                     let mut seed: i64 = 987654321;\n\
+                     let mut i: i64 = 0;\n\
+                     while i < 9000 {\n\
+                         seed = (seed * 1103515245 + 12345) % 2147483648;\n\
+                         v.push(R { key: (seed / 65536) % 300, ord: i });\n\
+                         i = i + 1;\n\
+                     }\n\
+                     v.sort_by(|a, b| a.key.cmp(b.key));\n\
+                     let mut inv: i64 = 0;\n\
+                     let mut unstable: i64 = 0;\n\
+                     let mut dups: i64 = 0;\n\
+                     let mut j: i64 = 1;\n\
+                     while j < 9000 {\n\
+                         if v[j].key < v[j - 1].key { inv = inv + 1; }\n\
+                         if v[j].key == v[j - 1].key {\n\
+                             dups = dups + 1;\n\
+                             if v[j].ord < v[j - 1].ord { unstable = unstable + 1; }\n\
+                         }\n\
+                         j = j + 1;\n\
+                     }\n\
+                     let mut sum: i64 = 0;\n\
+                     let mut q: i64 = 0;\n\
+                     while q < 9000 { sum = sum + v[q].ord; q = q + 1; }\n\
+                     println(f\"{inv} {unstable} {dups > 8000} {sum}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            // inv/unstable zero; `dups > 8000` guards the stability check from
+            // going vacuous if the key range ever changes; the ord sum is
+            // 0+1+..+8999 and catches an element dropped or duplicated by the
+            // ping-pong, which sortedness alone would not.
+            Some("0 0 true 40495500\n"),
+        );
+    }
+
+    #[test]
     fn test_e2e_vec_get_unwrap_struct_element_loop() {
         // B-2026-07-14-16 (struct leg) regression: reading many `Vec[Struct]`
         // elements via `v.get(j).unwrap()` in a loop. An earlier version of the
