@@ -11,6 +11,7 @@ use crate::manifest::{CompileProfile, ProfileConfig};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 mod bounds;
 mod extern_ffi;
@@ -404,10 +405,12 @@ pub struct EffectChecker<'a> {
     pub(crate) function_visibility: HashMap<String, bool>,
     /// Function spans for error reporting.
     pub(crate) function_spans: HashMap<String, Span>,
-    /// Functions and their AST bodies (for inference).
-    pub(crate) function_bodies: HashMap<String, Function>,
-    /// Impl method bodies: "TypeName.method" → Function
-    pub(crate) method_bodies: HashMap<String, Function>,
+    /// Functions and their AST bodies (for inference). `Rc` so the SCC
+    /// convergence loop and the whole-program walks can take a handle
+    /// without deep-cloning every body per pass (review item 9b).
+    pub(crate) function_bodies: HashMap<String, Rc<Function>>,
+    /// Impl method bodies: "TypeName.method" → Function (same `Rc` rationale).
+    pub(crate) method_bodies: HashMap<String, Rc<Function>>,
     /// Functions that call polymorphic (`with _`) callees.
     pub(crate) calls_polymorphic: HashSet<String>,
     /// Functions that explicitly declare `with _` (anonymous polymorphism)
@@ -1489,7 +1492,8 @@ impl<'a> EffectChecker<'a> {
         for item in &items {
             match item {
                 Item::Function(f) => {
-                    self.function_bodies.insert(f.name.clone(), f.clone());
+                    self.function_bodies
+                        .insert(f.name.clone(), Rc::new(f.clone()));
                     // Seed inferred effects from declarations.
                     // Functions that declare effects are trusted — their bodies
                     // may contain effectful calls we can't trace (e.g., FFI, stdlib).
@@ -1510,7 +1514,8 @@ impl<'a> EffectChecker<'a> {
                             ImplItem::AssocType(_) => continue,
                         };
                         let key = format!("{}.{}", type_name, method.name);
-                        self.method_bodies.insert(key.clone(), (**method).clone());
+                        self.method_bodies
+                            .insert(key.clone(), Rc::new((**method).clone()));
                         if let Some(DeclaredEffects::Explicit(ref set)) =
                             self.declared_effects.get(&key)
                         {
@@ -1564,7 +1569,7 @@ impl<'a> EffectChecker<'a> {
                             profile_compat: Vec::new(),
                             abi: None,
                         };
-                        self.method_bodies.insert(key, stub);
+                        self.method_bodies.insert(key, Rc::new(stub));
                     }
                 }
                 _ => {}

@@ -494,18 +494,18 @@ impl<'a> super::EffectChecker<'a> {
         // analysis loop without re-borrowing the maps. Cloning is
         // cheap here: the walk produces few results, and this only
         // runs once per program.
-        let work: Vec<(String, Block)> = self
+        let work: Vec<(String, std::rc::Rc<crate::ast::Function>)> = self
             .function_bodies
             .iter()
-            .map(|(n, f)| (n.clone(), f.body.clone()))
+            .map(|(n, f)| (n.clone(), std::rc::Rc::clone(f)))
             .chain(
                 self.method_bodies
                     .iter()
-                    .map(|(n, f)| (n.clone(), f.body.clone())),
+                    .map(|(n, f)| (n.clone(), std::rc::Rc::clone(f))),
             )
             .collect();
-        for (_fn_name, body) in &work {
-            let par_blocks = collect_par_blocks_in_block(body);
+        for (_fn_name, f) in &work {
+            let par_blocks = collect_par_blocks_in_block(&f.body);
             for (par_block, par_span) in par_blocks {
                 self.check_one_par_block(&par_block, &par_span);
             }
@@ -587,13 +587,14 @@ impl<'a> super::EffectChecker<'a> {
     /// SIBLING branch are conservatively skipped (a rare false negative, never
     /// a false positive).
     pub(crate) fn check_captured_local_par_writes(&mut self) {
-        let work: Vec<Block> = self
+        let work: Vec<std::rc::Rc<crate::ast::Function>> = self
             .function_bodies
             .values()
-            .map(|f| f.body.clone())
-            .chain(self.method_bodies.values().map(|f| f.body.clone()))
+            .cloned()
+            .chain(self.method_bodies.values().cloned())
             .collect();
-        for body in &work {
+        for f in &work {
+            let body = &f.body;
             let mut scope = ParWriteScope::default();
             collect_par_write_scope_block(body, false, &mut scope);
             // The flag set: enclosing non-primitive `let mut` locals that are

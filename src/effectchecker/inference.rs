@@ -258,10 +258,10 @@ impl<'a> super::EffectChecker<'a> {
                 let body = self
                     .function_bodies
                     .get(name)
-                    .map(|f| f.body.clone())
-                    .or_else(|| self.method_bodies.get(name).map(|f| f.body.clone()));
-                if let Some(body) = body {
-                    self.infer_function_effects(name, &body);
+                    .cloned()
+                    .or_else(|| self.method_bodies.get(name).cloned());
+                if let Some(f) = body {
+                    self.infer_function_effects(name, &f.body);
                 }
             } else {
                 // Mutually-recursive SCC: iterate until convergence.
@@ -273,10 +273,10 @@ impl<'a> super::EffectChecker<'a> {
                         let body = self
                             .function_bodies
                             .get(name)
-                            .map(|f| f.body.clone())
-                            .or_else(|| self.method_bodies.get(name).map(|f| f.body.clone()));
-                        if let Some(body) = body {
-                            if self.infer_function_effects(name, &body) {
+                            .cloned()
+                            .or_else(|| self.method_bodies.get(name).cloned());
+                        if let Some(f) = body {
+                            if self.infer_function_effects(name, &f.body) {
                                 changed = true;
                             }
                         }
