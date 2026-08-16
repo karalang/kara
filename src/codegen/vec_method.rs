@@ -8218,7 +8218,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
         // Clear the par-branch cancel pointer for the thunk body (B-2026-06-18-10):
@@ -8662,7 +8662,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.vec_elem_types.remove(&param_name);
         self.slice_elem_types.remove(&param_name);
         self.var_elem_type_exprs.remove(&param_name);
-        self.type_subst = saved_subst;
+        self.mono_state.type_subst = saved_subst;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
@@ -8932,7 +8932,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
         // Clear the par-branch cancel pointer for the thunk body (B-2026-06-18-10):
@@ -9060,7 +9060,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.slice_elem_types.remove(&n);
             self.var_elem_type_exprs.remove(&n);
         }
-        self.type_subst = saved_subst;
+        self.mono_state.type_subst = saved_subst;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
@@ -9323,7 +9323,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
         // Clear the par-branch cancel pointer for the mono sort body
@@ -11015,7 +11015,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_sort_probe_body(probe_fn, params, body, elem_ty, elem_type_name)?;
 
         // Restore outer state.
-        self.type_subst = saved_subst;
+        self.mono_state.type_subst = saved_subst;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;

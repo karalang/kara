@@ -1408,10 +1408,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(zero.into());
             }
             // Map[K, V]: side-tables hold both K and V `TypeExpr`s.
-            if self.map_key_type_exprs.contains_key(var_name)
+            if self.mapset.map_key_type_exprs.contains_key(var_name)
                 && self.var_elem_type_exprs.contains_key(var_name)
             {
-                let k_te = self.map_key_type_exprs[var_name].clone();
+                let k_te = self.mapset.map_key_type_exprs[var_name].clone();
                 let v_te = self.var_elem_type_exprs[var_name].clone();
                 let slot = self
                     .variables
@@ -1420,7 +1420,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
                 // B-2026-08-14-35 — `SortedMap` populates the same registries;
                 // route it to the ascending-order renderer, not `Map`'s.
-                let display_fn = if self.sorted_collection_vars.contains(var_name) {
+                let display_fn = if self.mapset.sorted_collection_vars.contains(var_name) {
                     self.emit_sorted_map_display_fn(&k_te, &v_te)?
                 } else {
                     self.emit_map_display_fn(&k_te, &v_te)
@@ -1430,14 +1430,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(zero.into());
             }
             // Set[T]: side-table holds the element `TypeExpr`.
-            if self.set_elem_type_exprs.contains_key(var_name) {
-                let elem_te = self.set_elem_type_exprs[var_name].clone();
+            if self.mapset.set_elem_type_exprs.contains_key(var_name) {
+                let elem_te = self.mapset.set_elem_type_exprs[var_name].clone();
                 let slot = self
                     .variables
                     .get(var_name)
                     .copied()
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
-                let display_fn = if self.sorted_collection_vars.contains(var_name) {
+                let display_fn = if self.mapset.sorted_collection_vars.contains(var_name) {
                     self.emit_sorted_set_display_fn(&elem_te)?
                 } else {
                     self.emit_set_display_fn(&elem_te)

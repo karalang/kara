@@ -2915,7 +2915,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // sharedV]` leaks one ref (the `Some(old)` payload that the
         // discard never holds). Set unconditionally to false here so a
         // prior statement's stale flag never bleeds into this one.
-        self.pending_map_insert_old_dec = false;
+        self.mapset.pending_map_insert_old_dec = false;
         if let Some((receiver_name, method)) = Self::stmt_discards_method_call(stmt) {
             // `insert` displaces an existing value; `remove` moves the value
             // out. Both wrap it in a `Some(old)` the discard never holds, so
@@ -2951,7 +2951,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let owned_heap =
                     is_let_wildcard && self.map_val_owned_heap_str_vec_for(receiver_name);
                 if shared || owned_heap || weak {
-                    self.pending_map_insert_old_dec = true;
+                    self.mapset.pending_map_insert_old_dec = true;
                 }
             }
         }
@@ -2988,7 +2988,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // map_string_value_overwrite_discard case). Snapshot the flag
                 // before the compile consumes it and keep the pre-leg
                 // behavior (generic chokepoint only) for that shape.
-                let insert_reclaims_displaced = self.pending_map_insert_old_dec;
+                let insert_reclaims_displaced = self.mapset.pending_map_insert_old_dec;
                 self.scope_cleanup_actions.push(Vec::new());
                 let val = self.compile_expr(value)?;
                 self.free_discarded_request_builder_temp(value, val);
@@ -3288,9 +3288,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the value-oriented tracking below, which would mis-handle
                     // the raw slot pointer.
                     if let Some(map_name) = self.entry_chain_or_insert_map_name(value) {
-                        let val_ty = *self.map_val_types.get(&map_name).ok_or_else(|| {
-                            format!("entry let-binding: missing val type for '{}'", map_name)
-                        })?;
+                        let val_ty =
+                            *self.mapset.map_val_types.get(&map_name).ok_or_else(|| {
+                                format!("entry let-binding: missing val type for '{}'", map_name)
+                            })?;
                         let fn_val = self.current_fn.expect("let inside a function");
                         let slot_ptr = self.compile_expr(value)?;
                         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -3635,24 +3636,32 @@ impl<'ctx> super::Codegen<'ctx> {
                             detected = true;
                         }
                         if let Some((k_ty, v_ty)) = self.extract_map_kv_types(te) {
-                            self.map_key_types.insert(var_name.clone(), k_ty);
-                            self.map_val_types.insert(var_name.clone(), v_ty);
+                            self.mapset.map_key_types.insert(var_name.clone(), k_ty);
+                            self.mapset.map_val_types.insert(var_name.clone(), v_ty);
                             if let Some(k_name) = Self::extract_map_key_name(te) {
-                                self.map_key_type_names.insert(var_name.clone(), k_name);
+                                self.mapset
+                                    .map_key_type_names
+                                    .insert(var_name.clone(), k_name);
                             }
                             if let Some((k_te, v_te)) = map_kv_type_exprs(te) {
-                                self.map_key_type_exprs.insert(var_name.clone(), k_te);
+                                self.mapset
+                                    .map_key_type_exprs
+                                    .insert(var_name.clone(), k_te);
                                 self.var_elem_type_exprs.insert(var_name.clone(), v_te);
                             }
                             detected = true;
                         }
                         if let Some(elem_ty) = self.extract_set_elem_type(te) {
-                            self.set_elem_types.insert(var_name.clone(), elem_ty);
+                            self.mapset.set_elem_types.insert(var_name.clone(), elem_ty);
                             if let Some(elem_name) = Self::extract_set_elem_name(te) {
-                                self.set_elem_type_names.insert(var_name.clone(), elem_name);
+                                self.mapset
+                                    .set_elem_type_names
+                                    .insert(var_name.clone(), elem_name);
                             }
                             if let Some(elem_te) = set_inner_type_expr(te) {
-                                self.set_elem_type_exprs.insert(var_name.clone(), elem_te);
+                                self.mapset
+                                    .set_elem_type_exprs
+                                    .insert(var_name.clone(), elem_te);
                             }
                             detected = true;
                         }
@@ -3661,7 +3670,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // storage); mark them so iteration + min/max observe
                         // ascending order.
                         if crate::codegen::helpers::is_sorted_collection_type(te) {
-                            self.sorted_collection_vars.insert(var_name.clone());
+                            self.mapset.sorted_collection_vars.insert(var_name.clone());
                         }
                         // `let cell: OnceLock[T] = OnceLock.new()` /
                         // `let c: OnceCell[T] = OnceCell.new()` — register the
@@ -4101,7 +4110,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Map.new(): emit karac_map_new with sizes and (stub) fn pointers.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if self.is_map_new_call(value)
-                        && self.map_key_types.contains_key(var_name.as_str())
+                        && self.mapset.map_key_types.contains_key(var_name.as_str())
                     {
                         let name = var_name.clone();
                         self.compile_map_new_stmt(&name)?;
@@ -4126,7 +4135,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // val_size = 0 correctly via `(key_size + val_size).max(1)`.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if self.is_set_new_call(value)
-                        && self.set_elem_types.contains_key(var_name.as_str())
+                        && self.mapset.set_elem_types.contains_key(var_name.as_str())
                     {
                         let name = var_name.clone();
                         self.compile_set_new_stmt(&name)?;
@@ -4145,7 +4154,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `Map[k: v, ...]` (prefix). Both lower to `ExprKind::MapLiteral`.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if let ExprKind::MapLiteral(entries) = &value.kind {
-                        if self.map_key_types.contains_key(var_name.as_str()) {
+                        if self.mapset.map_key_types.contains_key(var_name.as_str()) {
                             let name = var_name.clone();
                             let entries = entries.clone();
                             return self.compile_map_literal_stmt(&name, &entries);
@@ -4698,7 +4707,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let ExprKind::MethodCall { object, method, .. } = &value.kind {
                                 if method == "remove" {
                                     if let ExprKind::Identifier(m) = &object.kind {
-                                        if self.map_val_types.contains_key(m.as_str()) {
+                                        if self.mapset.map_val_types.contains_key(m.as_str()) {
                                             if let Some(info) = self
                                                 .var_elem_type_exprs
                                                 .get(m.as_str())
@@ -7513,8 +7522,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .vec_index_cloned_sites
                                 .contains(&crate::resolver::SpanKey::from_span(&value.span)));
                     if fresh_handle
-                        && (self.map_key_types.contains_key(var_name.as_str())
-                            || self.set_elem_types.contains_key(var_name.as_str()))
+                        && (self.mapset.map_key_types.contains_key(var_name.as_str())
+                            || self.mapset.set_elem_types.contains_key(var_name.as_str()))
                     {
                         if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
                             // `key_is_vec` reads from `map_key_types` for Map
@@ -7524,12 +7533,14 @@ impl<'ctx> super::Codegen<'ctx> {
                             // `map_val_types` — Sets have val_size = 0 so
                             // their val_is_vec is always false.
                             let key_is_vec = self
+                                .mapset
                                 .map_key_types
                                 .get(var_name.as_str())
-                                .or_else(|| self.set_elem_types.get(var_name.as_str()))
+                                .or_else(|| self.mapset.set_elem_types.get(var_name.as_str()))
                                 .copied()
                                 .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
                             let val_is_vec = self
+                                .mapset
                                 .map_val_types
                                 .get(var_name.as_str())
                                 .copied()
@@ -7551,9 +7562,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                 (val_is_vec, val_shared_heap)
                             };
                             let key_drop_fn = self
+                                .mapset
                                 .map_key_type_exprs
                                 .get(var_name.as_str())
-                                .or_else(|| self.set_elem_type_exprs.get(var_name.as_str()))
+                                .or_else(|| self.mapset.set_elem_type_exprs.get(var_name.as_str()))
                                 .cloned()
                                 .and_then(|kte| self.map_val_drop_fn_for_type_expr(&kte));
                             let key_is_vec = if key_drop_fn.is_some() {
@@ -8445,8 +8457,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // var's queued per-entry drop params (a no-op for `m = m`), then
                     // suppress the moved source below. The var's own FreeMapHandle
                     // stays and frees the NEW handle at scope exit.
-                    let lhs_is_tracked_map = self.map_key_types.contains_key(name.as_str())
-                        || self.set_elem_types.contains_key(name.as_str());
+                    let lhs_is_tracked_map = self.mapset.map_key_types.contains_key(name.as_str())
+                        || self.mapset.set_elem_types.contains_key(name.as_str());
                     if lhs_is_tracked_map && !rhs_is_self_alias {
                         self.eager_free_old_map_var_handle(name);
                     }
@@ -9083,8 +9095,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         {
                             self.suppress_source_vec_cleanup_for_arg(value);
                         } else if let ExprKind::Identifier(src) = &value.kind {
-                            if self.map_key_types.contains_key(src.as_str())
-                                || self.set_elem_types.contains_key(src.as_str())
+                            if self.mapset.map_key_types.contains_key(src.as_str())
+                                || self.mapset.set_elem_types.contains_key(src.as_str())
                             {
                                 self.suppress_map_cleanup_for_tail_identifier(src);
                             } else if matches!(&field_te.kind, TypeKind::Path(p)
@@ -9206,7 +9218,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 });
                             (is_vecstruct_elem || is_tensor_elem)
                                 && !self.slice_elem_types.contains_key(container.as_str())
-                                && !self.map_key_types.contains_key(container.as_str())
+                                && !self.mapset.map_key_types.contains_key(container.as_str())
                         }
                         // `h.xs[j] = t` / `self.xs[j] = t`: the field is an owning
                         // heap Vec whose element is a {ptr,len,cap} (String / Vec)
@@ -9302,7 +9314,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let container_owns = match &object.kind {
                                 ExprKind::Identifier(c) => {
                                     !self.slice_elem_types.contains_key(c.as_str())
-                                        && !self.map_key_types.contains_key(c.as_str())
+                                        && !self.mapset.map_key_types.contains_key(c.as_str())
                                 }
                                 _ => true,
                             };
@@ -9348,8 +9360,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         {
                             self.suppress_source_vec_cleanup_for_arg(value);
                         } else if let ExprKind::Identifier(src) = &value.kind {
-                            if self.map_key_types.contains_key(src.as_str())
-                                || self.set_elem_types.contains_key(src.as_str())
+                            if self.mapset.map_key_types.contains_key(src.as_str())
+                                || self.mapset.set_elem_types.contains_key(src.as_str())
                             {
                                 self.suppress_map_cleanup_for_tail_identifier(src);
                             }
@@ -9440,9 +9452,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 } = &target.kind
                 {
                     if let Some(map_name) = self.entry_chain_or_insert_map_name(operand) {
-                        let val_ty = *self.map_val_types.get(&map_name).ok_or_else(|| {
-                            format!("entry compound-assign: missing val type for '{}'", map_name)
-                        })?;
+                        let val_ty =
+                            *self.mapset.map_val_types.get(&map_name).ok_or_else(|| {
+                                format!(
+                                    "entry compound-assign: missing val type for '{}'",
+                                    map_name
+                                )
+                            })?;
                         let slot_ptr = self.compile_expr(operand)?.into_pointer_value();
                         let cur = self
                             .builder
@@ -10612,14 +10628,18 @@ impl<'ctx> super::Codegen<'ctx> {
             self.track_vec_var(alloca, Some(elem));
             return;
         }
-        if self.map_key_types.contains_key(name) || self.set_elem_types.contains_key(name) {
+        if self.mapset.map_key_types.contains_key(name)
+            || self.mapset.set_elem_types.contains_key(name)
+        {
             let key_is_vec = self
+                .mapset
                 .map_key_types
                 .get(name)
-                .or_else(|| self.set_elem_types.get(name))
+                .or_else(|| self.mapset.set_elem_types.get(name))
                 .copied()
                 .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
             let val_is_vec = self
+                .mapset
                 .map_val_types
                 .get(name)
                 .copied()
@@ -10638,9 +10658,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 (val_is_vec, val_shared_heap)
             };
             let key_drop_fn = self
+                .mapset
                 .map_key_type_exprs
                 .get(name)
-                .or_else(|| self.set_elem_type_exprs.get(name))
+                .or_else(|| self.mapset.set_elem_type_exprs.get(name))
                 .cloned()
                 .and_then(|kte| self.map_val_drop_fn_for_type_expr(&kte));
             let key_is_vec = if key_drop_fn.is_some() {
@@ -10990,12 +11011,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // empty (`map_val_types` never holds a Set var). Mirrors the
             // simple-`let` Map/Set cleanup arm.
             let key_is_vec = self
+                .mapset
                 .map_key_types
                 .get(var_name)
-                .or_else(|| self.set_elem_types.get(var_name))
+                .or_else(|| self.mapset.set_elem_types.get(var_name))
                 .copied()
                 .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
             let val_is_vec = self
+                .mapset
                 .map_val_types
                 .get(var_name)
                 .copied()
@@ -11014,9 +11037,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 (val_is_vec, val_shared_heap)
             };
             let key_drop_fn = self
+                .mapset
                 .map_key_type_exprs
                 .get(var_name)
-                .or_else(|| self.set_elem_type_exprs.get(var_name))
+                .or_else(|| self.mapset.set_elem_type_exprs.get(var_name))
                 .cloned()
                 .and_then(|kte| self.map_val_drop_fn_for_type_expr(&kte));
             let key_is_vec = if key_drop_fn.is_some() {
@@ -11145,9 +11169,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if let super::SnapshotPrimKind::Map { key, val } = kind {
             let key_ty = self.vec_elem_llvm_type(key);
             let val_ty = self.vec_elem_llvm_type(val);
-            self.map_key_types.insert(name.clone(), key_ty);
-            self.map_val_types.insert(name.clone(), val_ty);
-            self.map_key_type_names
+            self.mapset.map_key_types.insert(name.clone(), key_ty);
+            self.mapset.map_val_types.insert(name.clone(), val_ty);
+            self.mapset
+                .map_key_type_names
                 .insert(name.clone(), Self::vec_elem_kind_name(key).to_string());
         }
         // Slice c-repl.B.5.3c: Set replay registers the binding under
@@ -11161,8 +11186,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // must skip the free entirely.
         if let super::SnapshotPrimKind::Set(elem) = kind {
             let elem_ty = self.vec_elem_llvm_type(elem);
-            self.set_elem_types.insert(name.clone(), elem_ty);
-            self.set_elem_type_names
+            self.mapset.set_elem_types.insert(name.clone(), elem_ty);
+            self.mapset
+                .set_elem_type_names
                 .insert(name.clone(), Self::vec_elem_kind_name(elem).to_string());
         }
         Ok(true)
@@ -11928,13 +11954,13 @@ impl<'ctx> super::Codegen<'ctx> {
             self.slice_elem_types.remove(&synth);
             self.var_elem_type_exprs.remove(&synth);
             self.var_type_names.remove(&synth);
-            self.map_key_types.remove(&synth);
-            self.map_val_types.remove(&synth);
-            self.map_key_type_names.remove(&synth);
-            self.map_key_type_exprs.remove(&synth);
-            self.set_elem_types.remove(&synth);
-            self.set_elem_type_names.remove(&synth);
-            self.set_elem_type_exprs.remove(&synth);
+            self.mapset.map_key_types.remove(&synth);
+            self.mapset.map_val_types.remove(&synth);
+            self.mapset.map_key_type_names.remove(&synth);
+            self.mapset.map_key_type_exprs.remove(&synth);
+            self.mapset.set_elem_types.remove(&synth);
+            self.mapset.set_elem_type_names.remove(&synth);
+            self.mapset.set_elem_type_exprs.remove(&synth);
             return;
         }
         let ExprKind::Identifier(container) = &object.kind else {
@@ -11962,7 +11988,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         if self.slice_elem_types.contains_key(container.as_str())
-            || self.map_key_types.contains_key(container.as_str())
+            || self.mapset.map_key_types.contains_key(container.as_str())
             || self.active_soa_layout(container).is_some()
         {
             return;
@@ -12455,7 +12481,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     if matches!(method.as_str(), "insert" | "remove") =>
                 {
                     match &object.kind {
-                        ExprKind::Identifier(m) if self.map_val_types.contains_key(m.as_str()) => {
+                        ExprKind::Identifier(m)
+                            if self.mapset.map_val_types.contains_key(m.as_str()) =>
+                        {
                             self.var_elem_type_exprs
                                 .get(m.as_str())
                                 .map(Self::option_wrapping_type_expr)
@@ -13356,7 +13384,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // must NOT be re-elided here. `map_val_types` is the Map-only registry
         // (SortedMap included; populated alongside `var_elem_type_exprs` at
         // `register_container_var_types`), so it is the precise discriminator.
-        if !self.map_val_types.contains_key(map_var.as_str()) {
+        if !self.mapset.map_val_types.contains_key(map_var.as_str()) {
             return false;
         }
         // `var_elem_type_exprs` records the Map var's VALUE type (same lookup the

@@ -328,7 +328,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // program the typechecker resolved fine.
         let head = self.impl_dispatch_segment_at(call_span, method, type_head);
         let qualified = format!("{head}.{method}");
-        self.module.get_function(&qualified).is_some() || self.generic_fns.contains_key(&qualified)
+        self.module.get_function(&qualified).is_some()
+            || self.mono_state.generic_fns.contains_key(&qualified)
     }
 
     /// The dispatch type segment for a method call — the receiver's head name,
@@ -1094,8 +1095,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let ExprKind::Identifier(name) = &object.kind {
                     let n = name.as_str();
                     let is_builtin_coll = self.vec_elem_types.contains_key(n)
-                        || self.map_key_types.contains_key(n)
-                        || self.set_elem_types.contains_key(n)
+                        || self.mapset.map_key_types.contains_key(n)
+                        || self.mapset.set_elem_types.contains_key(n)
                         || self
                             .var_type_names
                             .get(n)
@@ -4837,11 +4838,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     let data_ptr = self.get_data_ptr(name).unwrap();
                     return self.compile_vec_method(name, data_ptr, method, args);
                 }
-                if self.map_key_types.contains_key(name.as_str()) {
+                if self.mapset.map_key_types.contains_key(name.as_str()) {
                     let name = name.clone();
                     return self.compile_map_method(&name, method, args);
                 }
-                if self.set_elem_types.contains_key(name.as_str()) {
+                if self.mapset.set_elem_types.contains_key(name.as_str()) {
                     let name = name.clone();
                     return self.compile_set_method(&name, method, args);
                 }
@@ -5776,7 +5777,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 // Map methods
-                if self.map_key_types.contains_key(name.as_str()) {
+                if self.mapset.map_key_types.contains_key(name.as_str()) {
                     let name = name.clone();
                     // B-2026-08-12-34 — the `Map` peer of the blanket-`Vec`
                     // fallthrough above: when the builtin dispatcher has no arm
@@ -5795,7 +5796,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 // Set methods
-                if self.set_elem_types.contains_key(name.as_str()) {
+                if self.mapset.set_elem_types.contains_key(name.as_str()) {
                     let name = name.clone();
                     // B-2026-08-12-34 — the `Set` peer of the `Map` fallthrough
                     // above; see it for the reasoning.
@@ -6300,7 +6301,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(fn_val) = self
                 .module
                 .get_function(&qualified)
-                .filter(|_| !self.generic_fns.contains_key(&qualified))
+                .filter(|_| !self.mono_state.generic_fns.contains_key(&qualified))
             {
                 // B-2026-08-01-7: an OWNED-`self` method CONSUMES the
                 // receiver — a named value-enum binding's payload-bodies
@@ -6724,7 +6725,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`s.chars().count()`, `make_vec().len()`) declare no such user fn, so
         // they still take the intercept.
         let user_method_for_len_family = dispatch_key.as_deref().is_some_and(|k| {
-            self.module.get_function(k).is_some() || self.generic_fns.contains_key(k)
+            self.module.get_function(k).is_some() || self.mono_state.generic_fns.contains_key(k)
         });
         if !user_method_for_len_family
             && (!matches!(&object.kind, ExprKind::Identifier(_)) || borrow_local_recv)
@@ -7624,7 +7625,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // fns are keyed by bare name).
         if let Some(receiver_type) = self.inferred_receiver_type(object) {
             let qualified = format!("{}.{}", receiver_type, method);
-            if let Some(generic_fn) = self.generic_fns.get(&qualified) {
+            if let Some(generic_fn) = self.mono_state.generic_fns.get(&qualified) {
                 let mut all_args: Vec<CallArg> = Vec::with_capacity(args.len() + 1);
                 all_args.push(CallArg {
                     label: None,
@@ -7878,13 +7879,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.slice_elem_types.remove(&synth);
                     self.var_elem_type_exprs.remove(&synth);
                     self.var_type_names.remove(&synth);
-                    self.map_key_types.remove(&synth);
-                    self.map_val_types.remove(&synth);
-                    self.map_key_type_names.remove(&synth);
-                    self.map_key_type_exprs.remove(&synth);
-                    self.set_elem_types.remove(&synth);
-                    self.set_elem_type_names.remove(&synth);
-                    self.set_elem_type_exprs.remove(&synth);
+                    self.mapset.map_key_types.remove(&synth);
+                    self.mapset.map_val_types.remove(&synth);
+                    self.mapset.map_key_type_names.remove(&synth);
+                    self.mapset.map_key_type_exprs.remove(&synth);
+                    self.mapset.set_elem_types.remove(&synth);
+                    self.mapset.set_elem_type_names.remove(&synth);
+                    self.mapset.set_elem_type_exprs.remove(&synth);
                     return out;
                 }
             }
@@ -15167,7 +15168,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // fresh-temp receiver into a synth local and re-enter, which routes the
         // now-Identifier receiver through the generic-method mono arm.
         if self.module.get_function(&qualified).is_none()
-            && !self.generic_fns.contains_key(&qualified)
+            && !self.mono_state.generic_fns.contains_key(&qualified)
         {
             return Ok(None);
         }
@@ -15653,7 +15654,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
         let span_key = (object.span.offset, object.span.length);
-        let Some(recv_te) = self.temp_recv_mapset_types.get(&span_key).cloned() else {
+        let Some(recv_te) = self.mapset.temp_recv_mapset_types.get(&span_key).cloned() else {
             return Ok(None);
         };
         let cur_fn = self
@@ -15718,25 +15719,28 @@ impl<'ctx> super::Codegen<'ctx> {
         let result = if head == "Set" {
             self.var_type_names.insert(synth.clone(), "Set".to_string());
             if let Some(elem) = nth(0) {
-                self.set_elem_types
+                self.mapset
+                    .set_elem_types
                     .insert(synth.clone(), self.llvm_type_for_type_expr(&elem));
             }
             let r = self.compile_set_method(&synth, method, args);
-            self.set_elem_types.remove(&synth);
+            self.mapset.set_elem_types.remove(&synth);
             r
         } else {
             self.var_type_names.insert(synth.clone(), "Map".to_string());
             if let Some(k) = nth(0) {
-                self.map_key_types
+                self.mapset
+                    .map_key_types
                     .insert(synth.clone(), self.llvm_type_for_type_expr(&k));
             }
             if let Some(v) = nth(1) {
-                self.map_val_types
+                self.mapset
+                    .map_val_types
                     .insert(synth.clone(), self.llvm_type_for_type_expr(&v));
             }
             let r = self.compile_map_method(&synth, method, args);
-            self.map_key_types.remove(&synth);
-            self.map_val_types.remove(&synth);
+            self.mapset.map_key_types.remove(&synth);
+            self.mapset.map_val_types.remove(&synth);
             r
         };
 

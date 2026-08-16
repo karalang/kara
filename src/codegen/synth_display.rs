@@ -2523,24 +2523,24 @@ impl<'ctx> super::Codegen<'ctx> {
             let disp = self.emit_vec_display_fn_te(&elem_te);
             return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
         }
-        if self.map_key_type_exprs.contains_key(&name)
+        if self.mapset.map_key_type_exprs.contains_key(&name)
             && self.var_elem_type_exprs.contains_key(&name)
         {
-            let k = self.map_key_type_exprs[&name].clone();
+            let k = self.mapset.map_key_type_exprs[&name].clone();
             let v = self.var_elem_type_exprs[&name].clone();
             // B-2026-08-14-35 — `SortedMap` shares `Map`'s registries and its
             // storage, so without this test it rendered through the unsorted
             // fn: `Map`'s prefix over `Map`'s bucket order.
-            let disp = if self.sorted_collection_vars.contains(&name) {
+            let disp = if self.mapset.sorted_collection_vars.contains(&name) {
                 self.emit_sorted_map_display_fn(&k, &v)?
             } else {
                 self.emit_map_display_fn(&k, &v)
             };
             return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
         }
-        if self.set_elem_type_exprs.contains_key(&name) {
-            let elem_te = self.set_elem_type_exprs[&name].clone();
-            let disp = if self.sorted_collection_vars.contains(&name) {
+        if self.mapset.set_elem_type_exprs.contains_key(&name) {
+            let elem_te = self.mapset.set_elem_type_exprs[&name].clone();
+            let disp = if self.mapset.sorted_collection_vars.contains(&name) {
                 self.emit_sorted_set_display_fn(&elem_te)?
             } else {
                 self.emit_set_display_fn(&elem_te)

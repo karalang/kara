@@ -41,7 +41,9 @@ impl<'ctx> super::Codegen<'ctx> {
         variant_name: &str,
         patterns: &[Pattern],
     ) {
-        if self.type_subst_names.is_empty() && self.type_subst_type_exprs.is_empty() {
+        if self.mono_state.type_subst_names.is_empty()
+            && self.mono_state.type_subst_type_exprs.is_empty()
+        {
             return;
         }
         let variants = self.enum_variant_field_type_exprs(enum_name);
@@ -65,8 +67,8 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(seg) = p.segments.first() else {
                 continue;
             };
-            if !(self.type_subst_names.contains_key(seg)
-                || self.type_subst_type_exprs.contains_key(seg))
+            if !(self.mono_state.type_subst_names.contains_key(seg)
+                || self.mono_state.type_subst_type_exprs.contains_key(seg))
             {
                 continue;
             }
@@ -74,7 +76,9 @@ impl<'ctx> super::Codegen<'ctx> {
             to_record.push(((sub_pat.span.offset, sub_pat.span.length), concrete));
         }
         for (k, te) in to_record {
-            self.mono_payload_binding_type_exprs.insert(k, te);
+            self.mono_state
+                .mono_payload_binding_type_exprs
+                .insert(k, te);
         }
     }
 
@@ -90,7 +94,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.pattern_binding_types.contains_key(key) {
             return None;
         }
-        self.mono_payload_binding_type_exprs.get(key).cloned()
+        self.mono_state
+            .mono_payload_binding_type_exprs
+            .get(key)
+            .cloned()
     }
 
     /// Sibling of [`Self::mono_payload_binding_type_expr_for`] that decomposes

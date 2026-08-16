@@ -107,14 +107,14 @@ impl<'ctx> super::Codegen<'ctx> {
             tensor_var_infos: self.accel.tensor_var_infos.remove(name),
             column_var_infos: self.accel.column_var_infos.remove(name),
             enum_inst_var_types: self.enum_inst_var_types.remove(name),
-            map_key_types: self.map_key_types.remove(name),
-            map_val_types: self.map_val_types.remove(name),
-            map_key_type_names: self.map_key_type_names.remove(name),
+            map_key_types: self.mapset.map_key_types.remove(name),
+            map_val_types: self.mapset.map_val_types.remove(name),
+            map_key_type_names: self.mapset.map_key_type_names.remove(name),
             var_elem_type_exprs: self.var_elem_type_exprs.remove(name),
-            map_key_type_exprs: self.map_key_type_exprs.remove(name),
-            set_elem_types: self.set_elem_types.remove(name),
-            set_elem_type_names: self.set_elem_type_names.remove(name),
-            set_elem_type_exprs: self.set_elem_type_exprs.remove(name),
+            map_key_type_exprs: self.mapset.map_key_type_exprs.remove(name),
+            set_elem_types: self.mapset.set_elem_types.remove(name),
+            set_elem_type_names: self.mapset.set_elem_type_names.remove(name),
+            set_elem_type_exprs: self.mapset.set_elem_type_exprs.remove(name),
             string_vars: self.string_vars.remove(name),
             cstr_vars: self.cstr_vars.remove(name),
             inline_option_payload_vars: self.inline_option_payload_vars.remove(name),
@@ -176,28 +176,28 @@ impl<'ctx> super::Codegen<'ctx> {
             self.enum_inst_var_types.insert(key.clone(), v);
         }
         if let Some(v) = snap.map_key_types {
-            self.map_key_types.insert(key.clone(), v);
+            self.mapset.map_key_types.insert(key.clone(), v);
         }
         if let Some(v) = snap.map_val_types {
-            self.map_val_types.insert(key.clone(), v);
+            self.mapset.map_val_types.insert(key.clone(), v);
         }
         if let Some(v) = snap.map_key_type_names {
-            self.map_key_type_names.insert(key.clone(), v);
+            self.mapset.map_key_type_names.insert(key.clone(), v);
         }
         if let Some(v) = snap.var_elem_type_exprs {
             self.var_elem_type_exprs.insert(key.clone(), v);
         }
         if let Some(v) = snap.map_key_type_exprs {
-            self.map_key_type_exprs.insert(key.clone(), v);
+            self.mapset.map_key_type_exprs.insert(key.clone(), v);
         }
         if let Some(v) = snap.set_elem_types {
-            self.set_elem_types.insert(key.clone(), v);
+            self.mapset.set_elem_types.insert(key.clone(), v);
         }
         if let Some(v) = snap.set_elem_type_names {
-            self.set_elem_type_names.insert(key.clone(), v);
+            self.mapset.set_elem_type_names.insert(key.clone(), v);
         }
         if let Some(v) = snap.set_elem_type_exprs {
-            self.set_elem_type_exprs.insert(key.clone(), v);
+            self.mapset.set_elem_type_exprs.insert(key.clone(), v);
         }
         if snap.string_vars {
             self.string_vars.insert(key.clone());
@@ -326,14 +326,14 @@ impl<'ctx> super::Codegen<'ctx> {
             tensor_var_infos: self.accel.tensor_var_infos.clone(),
             column_var_infos: self.accel.column_var_infos.clone(),
             enum_inst_var_types: self.enum_inst_var_types.clone(),
-            map_key_types: self.map_key_types.clone(),
-            map_val_types: self.map_val_types.clone(),
-            map_key_type_names: self.map_key_type_names.clone(),
+            map_key_types: self.mapset.map_key_types.clone(),
+            map_val_types: self.mapset.map_val_types.clone(),
+            map_key_type_names: self.mapset.map_key_type_names.clone(),
             var_elem_type_exprs: self.var_elem_type_exprs.clone(),
-            map_key_type_exprs: self.map_key_type_exprs.clone(),
-            set_elem_types: self.set_elem_types.clone(),
-            set_elem_type_names: self.set_elem_type_names.clone(),
-            set_elem_type_exprs: self.set_elem_type_exprs.clone(),
+            map_key_type_exprs: self.mapset.map_key_type_exprs.clone(),
+            set_elem_types: self.mapset.set_elem_types.clone(),
+            set_elem_type_names: self.mapset.set_elem_type_names.clone(),
+            set_elem_type_exprs: self.mapset.set_elem_type_exprs.clone(),
             string_vars: self.string_vars.clone(),
             cstr_vars: self.cstr_vars.clone(),
             inline_option_payload_vars: self.inline_option_payload_vars.clone(),
@@ -368,14 +368,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.accel.tensor_var_infos = snap.tensor_var_infos;
         self.accel.column_var_infos = snap.column_var_infos;
         self.enum_inst_var_types = snap.enum_inst_var_types;
-        self.map_key_types = snap.map_key_types;
-        self.map_val_types = snap.map_val_types;
-        self.map_key_type_names = snap.map_key_type_names;
+        self.mapset.map_key_types = snap.map_key_types;
+        self.mapset.map_val_types = snap.map_val_types;
+        self.mapset.map_key_type_names = snap.map_key_type_names;
         self.var_elem_type_exprs = snap.var_elem_type_exprs;
-        self.map_key_type_exprs = snap.map_key_type_exprs;
-        self.set_elem_types = snap.set_elem_types;
-        self.set_elem_type_names = snap.set_elem_type_names;
-        self.set_elem_type_exprs = snap.set_elem_type_exprs;
+        self.mapset.map_key_type_exprs = snap.map_key_type_exprs;
+        self.mapset.set_elem_types = snap.set_elem_types;
+        self.mapset.set_elem_type_names = snap.set_elem_type_names;
+        self.mapset.set_elem_type_exprs = snap.set_elem_type_exprs;
         self.string_vars = snap.string_vars;
         self.cstr_vars = snap.cstr_vars;
         self.inline_option_payload_vars = snap.inline_option_payload_vars;

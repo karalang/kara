@@ -18,6 +18,8 @@ use inkwell::targets::{FileType, TargetData};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, StructType};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
+use mapset::MapSet;
+use mono_state::MonoState;
 use provider_state::ProviderState;
 use runtime_fns::RuntimeFns;
 use target_abi::TargetAbi;
@@ -82,9 +84,11 @@ mod arena;
 mod contracts;
 mod interner;
 mod maps;
+mod mapset;
 mod method_call;
 mod module_bindings;
 mod mono;
+mod mono_state;
 mod once;
 mod par_blocks;
 mod param_own;
@@ -130,8 +134,8 @@ use helpers::{
     method_is_compiler_builtin, method_self_is_value,
 };
 use state::{
-    AssertedIndexBound, CleanupAction, EnumLayout, LayoutId, LoopFrame, MapMonoMethods,
-    SharedTypeInfo, SpawnSiteRecord, VarSlot,
+    AssertedIndexBound, CleanupAction, EnumLayout, LayoutId, LoopFrame, SharedTypeInfo,
+    SpawnSiteRecord, VarSlot,
 };
 
 // ── Public API ─────────────────────────────────────────────────
@@ -1125,6 +1129,8 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) mono_state: MonoState<'ctx>,
+    pub(crate) mapset: MapSet<'ctx>,
     pub(crate) accel: Accel<'ctx>,
     pub(crate) contract_state: ContractState<'ctx>,
     pub(crate) tracing: Tracing,
@@ -1689,9 +1695,6 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) seeded_enum_names: HashSet<String>,
     /// Nested loop stack — innermost frame is last.
     pub(crate) loop_stack: Vec<LoopFrame<'ctx>>,
-    // ── Generic monomorphization ──────────────────────────────────
-    /// Generic function AST nodes keyed by name. Not compiled until instantiated.
-    pub(crate) generic_fns: HashMap<String, Function>,
     /// Non-generic top-level function AST nodes keyed by name. Retained so the
     /// per-layout-monomorphization dispatch (slice 2) can compile an on-demand
     /// SoA specialization of a plain `Vec[E]`-taking helper at a call site with
@@ -1700,61 +1703,6 @@ pub(super) struct Codegen<'ctx> {
     /// normal module pass; this registry feeds only the layout-specialized
     /// monomorphs.
     pub(crate) fn_asts: HashMap<String, Function>,
-    /// Already-generated monomorphizations (mangled name → done). Prevents duplicate codegen.
-    pub(crate) generated_monos: HashSet<String>,
-    /// Active type-parameter substitution during a monomorphization pass.
-    /// Maps generic param name (e.g. `"T"`) → concrete LLVM type.
-    pub(crate) type_subst: HashMap<String, BasicTypeEnum<'ctx>>,
-    /// Active const-parameter substitution during a monomorphization
-    /// pass (const generics slice 4). Maps const-generic param name
-    /// (e.g. `"N"`) → its bound `ConstValue`. Used by
-    /// `compile_expr ExprKind::Identifier` to lower const-param
-    /// references in generic bodies to LLVM constants of the matching
-    /// width via `compile_primitive_const`, and by `Array[T, N]`
-    /// element-size extraction sites to recover the size from a
-    /// const-param reference. Slice 1b populates this map during
-    /// `compile_generic_call`'s mango-key mango step; slice 4
-    /// extends the save/restore around `compile_mono_function` so the
-    /// body lowering sees the same bindings.
-    pub(crate) const_subst: HashMap<String, crate::prelude::ConstValue>,
-    /// Active type-parameter substitution during a monomorphization pass,
-    /// as concrete type *names* (e.g. `"T"` → `"C"`) — the name-level twin of
-    /// `type_subst` (which holds LLVM types). Populated in `compile_generic_call`
-    /// from the typechecker's per-call `call_type_subs` frame (resolved through
-    /// the caller's active name-subst so a nested generic call flattens the
-    /// outer param), saved/restored around `compile_mono_function` exactly like
-    /// `type_subst`. Consulted by the mono param prologue so a bare-type-param
-    /// param (`x: X`) registers its receiver type as the concrete impl target
-    /// (`var_type_names["x"] = "C"`), which is what `inferred_receiver_type`
-    /// needs to dispatch a trait method called through the generic bound
-    /// (`x.tag()` → `C.tag`; B-2026-07-03-11). LLVM types can't be reverse-mapped
-    /// to a name safely — same-shape structs collide — so this is a distinct map.
-    pub(crate) type_subst_names: HashMap<String, String>,
-    /// Element-aware twin of `type_subst_names` (B-2026-07-13-2/-3): a generic
-    /// param name → its FULL concrete `TypeExpr` at the active monomorphization
-    /// (`"T"` → `Vec[i64]`, `Vec[String]`, …). `type_subst_names` is head-ONLY
-    /// (`"Vec"`), which suffices for a scalar/String param (String carries no
-    /// element) but DROPS a `Vec`/`VecDeque` element, so a bare-`T` param bound
-    /// to a whole collection lost its element in the mono body: the param
-    /// prologue's `register_var_from_type_expr(x, subst_monomorph_type_params(T))`
-    /// reconstructed a bare `Vec` (no `[E]`) and never populated `vec_elem_types`
-    /// → `owned_vecstr_params` missed `x` → the owned-param return deep-copy was
-    /// skipped (double-free), and a generic-enum payload bind sized the payload
-    /// at the erased scalar width (match-arm-type mismatch → invalid IR).
-    /// Populated at the mono call site from the argument's registered element
-    /// type, saved/restored around `compile_mono_function` exactly like
-    /// `type_subst_names`, and consulted FIRST by `subst_monomorph_type_params`.
-    /// Empty entry ⇒ fall back to the `type_subst_names` head-name path
-    /// (unchanged for every non-collection param).
-    pub(crate) type_subst_type_exprs: HashMap<String, crate::ast::TypeExpr>,
-    /// Per-layout-monomorphization axis: callee param NAME → the `LayoutId`
-    /// of the caller's argument at the active call site
-    /// (`docs/spikes/per-layout-monomorphization.md`). Saved/restored around
-    /// `compile_mono_function` exactly like `type_subst` / `const_subst`, fed
-    /// to `mangle_mono_name` so each layout variant is a distinct LLVM symbol,
-    /// and read by `active_layout_id` / `active_param_soa_layout` to lower a
-    /// monomorph's SoA `Vec[E]` params and their access paths (slice 2).
-    pub(crate) layout_subst: HashMap<String, LayoutId>,
     /// Per-layout-monomorphization slice 3 — the active *return* layout of the
     /// monomorph currently being compiled (`Aos` outside a return-SoA mono).
     /// Saved/restored around the mono body like `layout_subst`; read by
@@ -1938,19 +1886,6 @@ pub(super) struct Codegen<'ctx> {
     /// `|a, b|` closures so tuple receivers don't collapse to bare `i64`.
     /// Taken once and cleared on entry to `compile_closure`.
     pub(crate) pending_closure_param_hints: Option<Vec<BasicTypeEnum<'ctx>>>,
-    /// Staging slot — set by `compile_stmt`'s Let / Expr arms when the
-    /// surrounding statement discards the `Option[V]` result of a
-    /// `Map.insert(k, v)` call (i.e. `let _ = m.insert(...)` or a bare
-    /// `m.insert(...)` statement). `compile_map_method`'s `insert` arm
-    /// reads + clears this flag to decide whether to emit a follow-up
-    /// `rc_dec` on the displaced shared value (the `Some(old)` payload
-    /// that no one will hold the +1 of). Without the dec the prior
-    /// bucket value's refcount stays >0 on every overwrite and the
-    /// shared object leaks. When the result *is* bound (`let prev =
-    /// m.insert(...)`), the caller's scope-exit cleanup on `prev`
-    /// handles the +1; the discard path is the only one that needs
-    /// the receive-site dec.
-    pub(crate) pending_map_insert_old_dec: bool,
     /// B-2026-06-17-2 — set by `compile_stmt` when the statement being lowered
     /// is a discarded `spawn(...)` / `tg.spawn(...)` (a bare expression-
     /// statement or `let _ = …`), whose result `TaskHandle` is never bound or
@@ -2745,35 +2680,6 @@ pub(super) struct Codegen<'ctx> {
     /// bound proof. Empty for essentially every block, so the lookup is a
     /// hash miss on the common path.
     pub(crate) check_free_accum_sites: std::collections::HashSet<crate::resolver::SpanKey>,
-    /// B-2026-08-05-5 override for the mono probe loops' control-byte test.
-    /// `None` (unset) uses the measured per-site policy in
-    /// [`Codegen::map_tag_compare`]; `KARAC_MAP_TAG=0` forces the tag OFF at
-    /// every site and `=1` forces it ON at every site, the latter restoring
-    /// 58412d9f's pre-fix behaviour exactly.
-    ///
-    /// Kept as an A/B lever rather than deleted with the fix: it is the ONLY
-    /// instrument that isolates the tag compare. A commit-to-commit comparison
-    /// against 58412d9f does NOT, because that commit also restructured
-    /// `mono.rs` and changed the `keys()` walk — measuring the tag that way
-    /// produced a 6.1%-faster reading against this lever's 1.9%-slower one on
-    /// the same host and kata, and every fix-sizing estimate taken from the
-    /// commit pair was wrong as a result. Size the tag with the lever.
-    ///
-    /// NOTE the override is deliberately blunt (all sites, both directions) so
-    /// an A/B measures one variable. The shipped policy is per-site.
-    pub(crate) map_tag_override: Option<bool>,
-    /// B-2026-08-07-16: which cursor form the three mono LOOKUP probes use.
-    /// `KARAC_MAP_PROBE=unbounded` drops their `i >= cap` test and `=slotwalk`
-    /// additionally walks the bucket index itself; anything else (including
-    /// unset) is [`MapLookupProbe::Bounded`], the shipped form.
-    ///
-    /// Kept as an A/B lever for the same reason `map_tag_override` is: this is
-    /// the ONLY instrument that isolates the probe form. A commit-to-commit
-    /// comparison does not — that is exactly the mistake this bug's first
-    /// measurement made, comparing across 11 unrelated upstream commits and
-    /// producing a number that meant nothing. One compiler binary, three
-    /// forms, same tree.
-    pub(crate) map_lookup_probe: mono::MapLookupProbe,
     /// One-shot latch consumed by the `BinOp::Add` arm in `compile_binop_typed`
     /// to emit a plain `add` instead of the trapping
     /// `llvm.sadd.with.overflow` sequence.
@@ -2904,13 +2810,6 @@ pub(super) struct Codegen<'ctx> {
     /// this element type, and re-dispatches through `compile_vec_method`
     /// (general-owned-temp-tracking spike, slice 3b).
     pub(crate) temp_recv_elem_types: HashMap<(usize, usize), TypeExpr>,
-    /// Per-fresh-temp `Map`/`Set` receiver read-method MethodCall →
-    /// `Map[K,V]` / `Set[T]` `TypeExpr` side-table — populated from
-    /// `Program.temp_recv_mapset_types`. Codegen materializes the handle,
-    /// registers K/V (or elem), drop-tracks the handle (`FreeMapHandle`), and
-    /// re-dispatches through `compile_map_method` / `compile_set_method`
-    /// (general-owned-temp-tracking spike, slice 3d).
-    pub(crate) temp_recv_mapset_types: HashMap<(usize, usize), TypeExpr>,
     /// Per fresh-temp `Vec` receiver of `len`/`is_empty`/`count` → the
     /// receiver's heap-bearing element `TypeExpr` — populated from
     /// `Program.temp_recv_len_elem_types`. The intercept's drop-track uses it
@@ -3034,15 +2933,6 @@ pub(super) struct Codegen<'ctx> {
     /// materialize the nameless temporary into a synth Vec local and lower the
     /// read through the identifier-keyed Vec path.
     pub(crate) index_recv_vec_types: HashMap<(usize, usize), TypeExpr>,
-    /// Handle-backed builtin (Column/Tensor) bindings for bare
-    /// type-param params of generic monos, keyed by MANGLED mono name →
-    /// `[(param_name, info)]`. Written by `compile_generic_call` (from
-    /// the arg spans' `column_typed_exprs` / `tensor_typed_exprs`
-    /// records), read by `compile_mono_function`'s prologue to register
-    /// `column_var_infos` / `tensor_var_infos` for the param — see
-    /// `state::MonoHandleArgInfo`. Module-lifetime (mangled keys are
-    /// globally unique), so no per-mono save/restore.
-    pub(crate) mono_handle_param_infos: HashMap<String, Vec<(String, state::MonoHandleArgInfo)>>,
     /// Set of `(span.offset, span.length)` keys for every expression whose
     /// Kāra type is a `Vector[T, N]` with an unsigned-integer element.
     /// Populated from `Program.unsigned_vector_exprs`. The LLVM `<N x iX>`
@@ -3176,10 +3066,6 @@ pub(super) struct Codegen<'ctx> {
     /// under-approximating reintroduces the use-after-free, so the walk's
     /// fail-closed discipline is load-bearing rather than incidental.
     pub(crate) fn_body_ident_mention_offsets: HashMap<String, Vec<usize>>,
-    /// `Map[K, V]` instantiation per let-bound variable whose VALUE-bodies
-    /// walk registered (`__karac_dropelems_map_*`) — the rebind fallback in
-    /// the shared static chain, exactly like `optres_var_payload_tes`.
-    pub(crate) map_val_bodies_tes: HashMap<String, TypeExpr>,
     /// Per-pattern-binding surface type table — populated from
     /// `Program.pattern_binding_types` (set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_types`). Key: pattern's
@@ -3200,23 +3086,6 @@ pub(super) struct Codegen<'ctx> {
     /// routes through the right element-typed path. PB sibling slice
     /// (2026-05-09).
     pub(crate) pattern_binding_inner_types: HashMap<(usize, usize), TypeExpr>,
-    /// B-2026-07-13-3: monomorph-resolved concrete payload `TypeExpr` for a
-    /// GENERIC enum's bare-type-param variant payload binding (`enum Opt[T] {
-    /// Yes(T) }`, matched as `Opt.Yes(v)` at `T = String`). The typechecker
-    /// records NOTHING for a `Type::TypeParam` binding (it never sees the
-    /// concrete arg), so `pattern_binding_types` / `pattern_binding_inner_types`
-    /// are both empty at the binding span — codegen would then size the payload
-    /// at the erased 1-word default and load only the box pointer. Populated at
-    /// the match-bind site (`bind_pattern_values`, TupleVariant arm) by
-    /// substituting the enum's declared payload `TypeExpr` through the active
-    /// monomorph substitution (`subst_monomorph_type_params`), and consulted —
-    /// ONLY when the typechecker recorded no concrete surface type — by
-    /// `pattern_payload_word_count` / `pattern_payload_llvm_type` (to trigger and
-    /// size the debox unpack) and the Binding metadata path (to register the
-    /// heap-owning binding's scope-exit free). Keyed by the sub-pattern's
-    /// `(span.offset, span.length)`; refreshed on every monomorph's body compile
-    /// and cleared per function.
-    pub(crate) mono_payload_binding_type_exprs: HashMap<(usize, usize), TypeExpr>,
     /// Per-leaf-binding borrow mode populated from
     /// `Program.pattern_binding_borrow_modes`. Consumed by
     /// `bind_pattern_values` (Binding arm) to wrap a value-typed leaf
@@ -3365,14 +3234,6 @@ pub(super) struct Codegen<'ctx> {
     /// instead of `RcDec` for these. Keyed by fn key (bare name /
     /// `Type.method`), matching `current_fn_name`.
     pub(crate) elided_bindings: HashMap<String, HashSet<String>>,
-    /// Per-function deque locals eligible for the O(1) `pop_front` head-index
-    /// lowering (`crate::deque_head`, B-2026-07-30-5). For a name in this set
-    /// the `{ptr, len, cap}` header is REINTERPRETED: `len` is the end index,
-    /// not the count, and the live range is `data[head..len]` where `head`
-    /// lives in `deque_head_slots`. The in-memory layout is unchanged, which
-    /// is what keeps every generic Vec path (drop, clone, par-copy) correct —
-    /// the analysis only admits locals no such path can reach.
-    pub(crate) deque_head_locals: HashMap<String, HashSet<String>>,
     /// B-2026-07-30-11 (match-arm leg) — the binding names of the pattern
     /// currently being bound that sit in an enum VARIANT payload position
     /// (`collect_variant_payload_binding_names`; bare-tuple elements excluded
@@ -3382,10 +3243,6 @@ pub(super) struct Codegen<'ctx> {
     /// StructDrop; set/cleared around each bind call by the match / if-let
     /// compilers. Empty everywhere else, so `let` destructures are untouched.
     pub(crate) current_variant_payload_bindings: HashSet<String>,
-    /// Entry-block `i64` alloca holding `head` for each eligible deque local of
-    /// the function being compiled. Cleared per function; a name present here
-    /// is one the head-aware method arms must use.
-    pub(crate) deque_head_slots: HashMap<String, PointerValue<'ctx>>,
     /// Phase B1 cluster roots: fn key → root binding → (member struct
     /// name, link user-field index). The let-site swaps the root's
     /// cleanup for `FreeClusterWalk`. Cursors and fresh nodes keep
@@ -3663,12 +3520,6 @@ pub(super) struct Codegen<'ctx> {
     /// flags the stdlib against itself — refusing every legitimate regex
     /// program. See B-2026-08-02-13.
     pub(crate) declaring_stdlib_program: bool,
-    /// Per-variable Map key LLVM type (variable name → K LLVM type).
-    pub(crate) map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
-    /// Per-variable Map value LLVM type (variable name → V LLVM type).
-    pub(crate) map_val_types: HashMap<String, BasicTypeEnum<'ctx>>,
-    /// Per-variable Map key type name string (e.g. "i64", "String") for hash/eq fn selection.
-    pub(crate) map_key_type_names: HashMap<String, String>,
     /// Per-variable element-`TypeExpr` side-table for collection variables —
     /// the *element* of a Vec/Slice/Array, or the *value* of a Map. Used by
     /// `compile_for_*_var` so for-loop bindings inherit the right side-table
@@ -3769,34 +3620,6 @@ pub(super) struct Codegen<'ctx> {
     /// B-2026-07-08-9 sibling: per-`Result[T, E]`-variable `(ok, err)` payload
     /// `TypeExpr`s for the `Ok(<T>)`/`Err(<E>)` Display renderer.
     pub(crate) var_result_payload_te: HashMap<String, (TypeExpr, TypeExpr)>,
-    /// Per-Map-variable key-`TypeExpr` side-table (parallels
-    /// `var_elem_type_exprs` for the key slot). Used by `compile_for_map_var`
-    /// to register the per-iteration `k` binding when iterating with a tuple
-    /// pattern `for (k, v) in m`.
-    pub(crate) map_key_type_exprs: HashMap<String, TypeExpr>,
-    /// Per-variable Set element LLVM type (variable name → T LLVM type).
-    /// Mirrors `map_key_types` — `Set[T]` lowers to `Map[T, ()]` at codegen,
-    /// reusing the `karac_map_*` C runtime, but the surface type identity is
-    /// kept distinct so codegen can pick the right method dispatch and the
-    /// Display fn can pick the `Set{...}` brace style.
-    pub(crate) set_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
-    /// Variable names bound to a `SortedSet[T]` / `SortedMap[K, V]`. These share
-    /// `Set`/`Map`'s `KaracMap`-backed storage (so they live in
-    /// `set_elem_types` / `map_key_types` and reuse `compile_set_method` /
-    /// `compile_map_method` for all order-independent ops), but must observe
-    /// their keys in ASCENDING order at iteration (`for`, `keys`/`values`/
-    /// `entries`) and at `min`/`max`. Codegen consults this set at those
-    /// observation points to inject a sort; empty for plain `Set`/`Map`.
-    pub(crate) sorted_collection_vars: std::collections::HashSet<String>,
-    /// Per-variable Set element type name string (e.g. `"i64"`, `"String"`)
-    /// for hash/eq fn selection. Mirrors `map_key_type_names`.
-    pub(crate) set_elem_type_names: HashMap<String, String>,
-    /// Per-variable Set element-`TypeExpr` side-table. Mirrors
-    /// `map_key_type_exprs` and is consulted alongside it by Set-aware paths
-    /// (`compile_for_set_var`, Set Display fn) so compound element types
-    /// (`Set[(i64, String)]`, `Set[Vec[T]]`) compose through the
-    /// TypeExpr-aware hash/eq/Display paths.
-    pub(crate) set_elem_type_exprs: HashMap<String, TypeExpr>,
     /// Variables whose surface type is `String`. Disambiguates Strings from
     /// `Vec[u8]` at iteration time — both share the `{ptr, i64, i64}`
     /// physical layout and are both registered in `vec_elem_types` with
@@ -3871,17 +3694,6 @@ pub(super) struct Codegen<'ctx> {
     /// it has no production caller until the consumer lands.
     #[allow(dead_code)]
     pub(crate) drop_fn_cache: HashMap<String, FunctionValue<'ctx>>,
-    /// Per-(K, V) cache of monomorphized `Map[K, V]` method symbols.
-    /// Keyed by the mangled `"{key_mangle}_{val_mangle}"` token (e.g.
-    /// `"i64_i64"`) produced by `mono_map_cache_key`. Lazily populated
-    /// by `get_or_emit_map_mono_methods` on the first request for a
-    /// given K/V tuple. Per-method `FunctionValue`s have `LinkOnceODR`
-    /// linkage so cross-crate / cross-TU duplicates collapse at link
-    /// time (locked design § 3.2). Slice 1 ships `Map[i64, i64]` only;
-    /// the gating predicate `should_use_mono_map_for` returns `false`
-    /// for every other K/V tuple, leaving them on the erased fallback
-    /// per § 3.6.
-    pub(crate) map_mono_methods: HashMap<String, MapMonoMethods<'ctx>>,
     /// Lazily-initialized `TargetData` consumed by the layout-introspection
     /// intrinsics (`align_of[T]()`, `offset_of[T](field)`). Constructed
     /// via `create_target_machine().get_target_data()` on first use; the
@@ -7574,14 +7386,18 @@ impl<'ctx> Codegen<'ctx> {
                 display_fn_cache: HashMap::new(),
             },
             loop_stack: Vec::new(),
-            generic_fns: HashMap::new(),
+            mono_state: MonoState {
+                generic_fns: HashMap::new(),
+                generated_monos: HashSet::new(),
+                type_subst: HashMap::new(),
+                type_subst_names: HashMap::new(),
+                type_subst_type_exprs: HashMap::new(),
+                const_subst: HashMap::new(),
+                layout_subst: HashMap::new(),
+                mono_handle_param_infos: HashMap::new(),
+                mono_payload_binding_type_exprs: HashMap::new(),
+            },
             fn_asts: HashMap::new(),
-            generated_monos: HashSet::new(),
-            type_subst: HashMap::new(),
-            type_subst_names: HashMap::new(),
-            type_subst_type_exprs: HashMap::new(),
-            const_subst: HashMap::new(),
-            layout_subst: HashMap::new(),
             return_layout: LayoutId::Aos,
             pending_return_layout: None,
             closure_counter: 0,
@@ -7605,7 +7421,32 @@ impl<'ctx> Codegen<'ctx> {
             heap_env_vec_owners: std::collections::HashSet::new(),
             pending_closure_fn_type: None,
             pending_closure_param_hints: None,
-            pending_map_insert_old_dec: false,
+            mapset: MapSet {
+                pending_map_insert_old_dec: false,
+                map_tag_override: match std::env::var("KARAC_MAP_TAG").as_deref() {
+                    Ok("0") => Some(false),
+                    Ok("1") => Some(true),
+                    _ => None,
+                },
+                map_lookup_probe: match std::env::var("KARAC_MAP_PROBE").as_deref() {
+                    Ok("unbounded") => mono::MapLookupProbe::Unbounded,
+                    Ok("slotwalk") => mono::MapLookupProbe::SlotWalk,
+                    _ => mono::MapLookupProbe::Bounded,
+                },
+                temp_recv_mapset_types: HashMap::new(),
+                map_val_bodies_tes: HashMap::new(),
+                deque_head_locals: HashMap::new(),
+                deque_head_slots: HashMap::new(),
+                map_key_types: HashMap::new(),
+                map_val_types: HashMap::new(),
+                map_key_type_names: HashMap::new(),
+                map_key_type_exprs: HashMap::new(),
+                set_elem_types: HashMap::new(),
+                sorted_collection_vars: std::collections::HashSet::new(),
+                set_elem_type_names: HashMap::new(),
+                set_elem_type_exprs: HashMap::new(),
+                map_mono_methods: HashMap::new(),
+            },
             pending_spawn_detach: false,
             last_fstr_acc: None,
             block_tail_shared_transfer: false,
@@ -7720,16 +7561,6 @@ impl<'ctx> Codegen<'ctx> {
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),
             user_drop_wrapper_fns: HashMap::new(),
-            map_tag_override: match std::env::var("KARAC_MAP_TAG").as_deref() {
-                Ok("0") => Some(false),
-                Ok("1") => Some(true),
-                _ => None,
-            },
-            map_lookup_probe: match std::env::var("KARAC_MAP_PROBE").as_deref() {
-                Ok("unbounded") => mono::MapLookupProbe::Unbounded,
-                Ok("slotwalk") => mono::MapLookupProbe::SlotWalk,
-                _ => mono::MapLookupProbe::Bounded,
-            },
             check_free_accum_sites: std::collections::HashSet::new(),
             elide_next_add_overflow_check: false,
             elide_proven_index_add_overflow: std::env::var("KARAC_BCE_OVF_SKIP").as_deref()
@@ -7746,7 +7577,6 @@ impl<'ctx> Codegen<'ctx> {
             method_unwrap_inner_types: HashMap::new(),
             method_unwrap_err_types: HashMap::new(),
             temp_recv_elem_types: HashMap::new(),
-            temp_recv_mapset_types: HashMap::new(),
             temp_recv_len_elem_types: HashMap::new(),
             iter_terminal_elem_types: HashMap::new(),
             iter_terminal_acc_types: HashMap::new(),
@@ -7765,7 +7595,6 @@ impl<'ctx> Codegen<'ctx> {
             call_type_subs: HashMap::new(),
             call_type_subs_mangle: HashMap::new(),
             index_recv_vec_types: HashMap::new(),
-            mono_handle_param_infos: HashMap::new(),
             unsigned_vector_exprs: HashSet::new(),
             unsigned_int_exprs: HashSet::new(),
             cast_source_unsigned: HashSet::new(),
@@ -7781,10 +7610,8 @@ impl<'ctx> Codegen<'ctx> {
             tuple_moved_elem_bodies: HashMap::new(),
             struct_moved_field_bodies: HashMap::new(),
             optres_var_payload_tes: HashMap::new(),
-            map_val_bodies_tes: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
-            mono_payload_binding_type_exprs: HashMap::new(),
             pattern_binding_borrow_modes: HashMap::new(),
             consts: HashMap::new(),
             module_bindings: HashMap::new(),
@@ -7800,9 +7627,7 @@ impl<'ctx> Codegen<'ctx> {
             used_data_globals: Vec::new(),
             branch_cancel_ptr: None,
             rc_fallback_fns: HashMap::new(),
-            deque_head_locals: HashMap::new(),
             current_variant_payload_bindings: HashSet::new(),
-            deque_head_slots: HashMap::new(),
             vec_index_borrow_spans: HashSet::new(),
             vec_index_cloned_sites: HashSet::new(),
             elided_bindings: HashMap::new(),
@@ -7847,9 +7672,6 @@ impl<'ctx> Codegen<'ctx> {
             },
             user_shadowed_prelude_types: std::collections::HashSet::new(),
             declaring_stdlib_program: false,
-            map_key_types: HashMap::new(),
-            map_val_types: HashMap::new(),
-            map_key_type_names: HashMap::new(),
             uam_consume_sites: std::collections::HashSet::new(),
             uam_copied_sites: std::collections::HashSet::new(),
             var_elem_type_exprs: HashMap::new(),
@@ -7861,11 +7683,6 @@ impl<'ctx> Codegen<'ctx> {
             arena_checkpoint_owner: HashMap::new(),
             var_option_payload_te: HashMap::new(),
             var_result_payload_te: HashMap::new(),
-            map_key_type_exprs: HashMap::new(),
-            set_elem_types: HashMap::new(),
-            sorted_collection_vars: std::collections::HashSet::new(),
-            set_elem_type_names: HashMap::new(),
-            set_elem_type_exprs: HashMap::new(),
             string_vars: HashSet::new(),
             ascii_const_string_lets: HashMap::new(),
             cstr_vars: HashSet::new(),
@@ -7873,7 +7690,6 @@ impl<'ctx> Codegen<'ctx> {
             clone_fn_cache: HashMap::new(),
             try_clone_fn_cache: HashMap::new(),
             drop_fn_cache: HashMap::new(),
-            map_mono_methods: HashMap::new(),
             target_data: init_target_data,
             current_fn_arm64_return_coercion: None,
             current_fn_sret_param: None,
@@ -8081,7 +7897,7 @@ impl<'ctx> Codegen<'ctx> {
     /// Computed from the AST, plain data — no LLVM type crosses the boundary,
     /// so codegen containment holds (CLAUDE.md § Codegen architecture).
     fn load_deque_head_locals(&mut self, program: &crate::ast::Program) {
-        self.deque_head_locals = crate::deque_head::eligible_deque_locals(program);
+        self.mapset.deque_head_locals = crate::deque_head::eligible_deque_locals(program);
     }
 
     /// Set the source filename used for `karac_error_trace_push` calls at
@@ -8229,13 +8045,14 @@ impl<'ctx> Codegen<'ctx> {
         // ("Instruction does not dominate all uses"). Comparing the alloca's
         // parent function against `current_fn` makes every such lane fall
         // back to the memmove lowering structurally, whatever emitter it is.
-        self.deque_head_slots.get(name).is_some_and(|slot| {
+        self.mapset.deque_head_slots.get(name).is_some_and(|slot| {
             let parent_fn = slot
                 .as_instruction_value()
                 .and_then(|inst| inst.get_parent())
                 .and_then(|bb| bb.get_parent());
             parent_fn.is_some() && parent_fn == self.current_fn
         }) && self
+            .mapset
             .deque_head_locals
             .get(&self.current_fn_name)
             .is_some_and(|set| set.contains(name))
@@ -8245,7 +8062,7 @@ impl<'ctx> Codegen<'ctx> {
     /// binding is not on the head-index path.
     pub(super) fn deque_head_slot(&self, name: &str) -> Option<PointerValue<'ctx>> {
         if self.is_head_index_deque(name) {
-            self.deque_head_slots.get(name).copied()
+            self.mapset.deque_head_slots.get(name).copied()
         } else {
             None
         }
@@ -9100,7 +8917,7 @@ impl<'ctx> Codegen<'ctx> {
         self.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
         self.method_unwrap_err_types = program.method_unwrap_err_types.clone();
         self.temp_recv_elem_types = program.temp_recv_elem_types.clone();
-        self.temp_recv_mapset_types = program.temp_recv_mapset_types.clone();
+        self.mapset.temp_recv_mapset_types = program.temp_recv_mapset_types.clone();
         self.temp_recv_len_elem_types = program.temp_recv_len_elem_types.clone();
         self.iter_terminal_elem_types = program.iter_terminal_elem_types.clone();
         self.iter_terminal_acc_types = program.iter_terminal_acc_types.clone();
@@ -9291,7 +9108,9 @@ impl<'ctx> Codegen<'ctx> {
                     continue;
                 }
                 if f.generic_params.is_some() {
-                    self.generic_fns.insert(f.name.clone(), f.clone());
+                    self.mono_state
+                        .generic_fns
+                        .insert(f.name.clone(), f.clone());
                     // Register the CONCRETE return-type name (if any) so code
                     // that consults `fn_return_type_names` — the print
                     // signedness check (`expr_is_unsigned_int`), call-result var
@@ -9361,7 +9180,8 @@ impl<'ctx> Codegen<'ctx> {
                         && !f.attributes.iter().any(|a| a.is_bare("compiler_builtin"))
                         && !user_fn_names.contains(f.name.as_str())
                     {
-                        self.generic_fns
+                        self.mono_state
+                            .generic_fns
                             .entry(f.name.clone())
                             .or_insert_with(|| f.clone());
                     }
@@ -9451,17 +9271,19 @@ impl<'ctx> Codegen<'ctx> {
                                     // dedups across the value-self / ref-self
                                     // two-pass.
                                     let qualified = format!("{}.{}", type_name, method.name);
-                                    self.generic_fns.entry(qualified).or_insert_with(|| {
-                                        if impl_is_generic {
-                                            make_generic_impl_method_function(imp, method)
-                                        } else {
-                                            make_impl_method_function(
-                                                &type_name,
-                                                method,
-                                                &imp.target_type,
-                                            )
-                                        }
-                                    });
+                                    self.mono_state.generic_fns.entry(qualified).or_insert_with(
+                                        || {
+                                            if impl_is_generic {
+                                                make_generic_impl_method_function(imp, method)
+                                            } else {
+                                                make_impl_method_function(
+                                                    &type_name,
+                                                    method,
+                                                    &imp.target_type,
+                                                )
+                                            }
+                                        },
+                                    );
                                     continue;
                                 }
                                 if method_self_is_value(method) != value_self_pass {
@@ -10460,7 +10282,7 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(&mut self.temp_recv_elem_types, &mut t_temp_recv_elem_types);
                 std::mem::swap(&mut self.index_recv_vec_types, &mut t_index_recv_vec_types);
                 std::mem::swap(
-                    &mut self.temp_recv_mapset_types,
+                    &mut self.mapset.temp_recv_mapset_types,
                     &mut t_temp_recv_mapset_types,
                 );
                 std::mem::swap(

@@ -1490,10 +1490,10 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let mut args = Vec::with_capacity(params.len());
         for p in params {
-            let te = if let Some(full) = self.type_subst_type_exprs.get(p) {
+            let te = if let Some(full) = self.mono_state.type_subst_type_exprs.get(p) {
                 full.clone()
             } else {
-                let name = self.type_subst_names.get(p)?;
+                let name = self.mono_state.type_subst_names.get(p)?;
                 TypeExpr {
                     kind: TypeKind::Path(PathExpr {
                         segments: vec![name.clone()],

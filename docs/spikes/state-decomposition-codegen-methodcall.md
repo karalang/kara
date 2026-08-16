@@ -157,6 +157,8 @@ for fp in files:
 | 2 | cluster 7 **`Contracts`** (`src/codegen/contract_state.rs`) | **landed** — 12 fields (refinement/distinct bases + predicates, the per-function contract frame, `strip_contracts`, secret types) | 2026-08-16 |
 | 2 | cluster 8 **`GpuAccel`** (`src/codegen/accel.rs`) | **landed** — 14 fields (SoA layouts + drop fns, GPU WGSL/buffers, tensor and column/DataFrame infos); `Codegen` 345 → 321 fields | 2026-08-16 |
 | 2 | cluster 6 `BceOverflow` | **deferred** — B-2026-08-15-30 (open, perf) touches the BCE/vec paths; take it after that closes | — |
-| 2 | clusters 9–12 | not started | — |
+| 2 | cluster 9 **`MapSet`** (`src/codegen/mapset.rs`) | **landed** — 16 fields (per-variable Map K/V, Set elem, VecDeque head slots, temp-recv map/set types, map-lowering flags) | 2026-08-16 |
+| 2 | cluster 10 **`Mono`** (`src/codegen/mono_state.rs`) | **landed** — 9 fields (generic fn ASTs, emitted-mono set, and the active type/const/layout substitution); `Codegen` 321 → 298 fields | 2026-08-16 |
+| 2 | clusters 11–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
 | 2 | clusters 14–15 (`FnCtx`, `VarTables`) | deferred — decide after 13 | — |

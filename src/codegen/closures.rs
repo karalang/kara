@@ -2406,7 +2406,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `try_unit_enum_variant` (those emit IR).
     fn name_resolves_to_free_fn(&self, name: &str) -> bool {
         if self.variables.contains_key(name)
-            || self.const_subst.contains_key(name)
+            || self.mono_state.const_subst.contains_key(name)
             || self.consts.contains_key(name)
             || self.module_bindings.contains_key(name)
         {
@@ -2961,7 +2961,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         // B-2026-07-15-8: a closure-VALUED free var (`let base = |x| x + 1;
         // let composed = |x| base(x) * 10;`) is captured into the env by value
@@ -3432,7 +3432,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn_heap_closure_spans = saved_heap_spans;
 
         // 8. Restore outer state.
-        self.type_subst = saved_subst;
+        self.mono_state.type_subst = saved_subst;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;

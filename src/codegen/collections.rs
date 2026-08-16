@@ -58,6 +58,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
 
         let elem_ty = self
+            .mapset
             .set_elem_types
             .get(var_name)
             .copied()
@@ -481,6 +482,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Element TypeExpr drives clone/hash/eq fn synthesis. Without
                 // it we can't deep-clone non-Copy elements (String, …) safely.
                 let elem_te = self
+                    .mapset
                     .set_elem_type_exprs
                     .get(var_name)
                     .cloned()
@@ -563,6 +565,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (`min`/`max` are SortedSet-only in the typechecker, so any var
                 // reaching here is sorted.)
                 let elem_te = self
+                    .mapset
                     .set_elem_type_exprs
                     .get(var_name)
                     .cloned()
@@ -2184,13 +2187,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.slice_elem_types.remove(&synth);
                 self.var_elem_type_exprs.remove(&synth);
                 self.var_type_names.remove(&synth);
-                self.map_key_types.remove(&synth);
-                self.map_val_types.remove(&synth);
-                self.map_key_type_names.remove(&synth);
-                self.map_key_type_exprs.remove(&synth);
-                self.set_elem_types.remove(&synth);
-                self.set_elem_type_names.remove(&synth);
-                self.set_elem_type_exprs.remove(&synth);
+                self.mapset.map_key_types.remove(&synth);
+                self.mapset.map_val_types.remove(&synth);
+                self.mapset.map_key_type_names.remove(&synth);
+                self.mapset.map_key_type_exprs.remove(&synth);
+                self.mapset.set_elem_types.remove(&synth);
+                self.mapset.set_elem_type_names.remove(&synth);
+                self.mapset.set_elem_type_exprs.remove(&synth);
 
                 return result;
             }
@@ -2386,7 +2389,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // The key is hashed via the per-K hash_fn registered at Map construction;
         // it does NOT need to be an integer (unlike Array/Vec/Slice).
         if let ExprKind::Identifier(name) = &object.kind {
-            if self.map_key_types.contains_key(name.as_str()) {
+            if self.mapset.map_key_types.contains_key(name.as_str()) {
                 return self.compile_map_index(name, index);
             }
         }
@@ -3103,10 +3106,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// / String / plain-struct concretes that drive element stride and the
     /// non-Copy clone decision, which is all the callers need.
     pub(super) fn subst_monomorph_type_params(&self, te: &TypeExpr) -> TypeExpr {
-        if self.type_subst_names.is_empty() && self.type_subst_type_exprs.is_empty() {
+        if self.mono_state.type_subst_names.is_empty()
+            && self.mono_state.type_subst_type_exprs.is_empty()
+        {
             return te.clone();
         }
         let mut subst: std::collections::HashMap<String, TypeExpr> = self
+            .mono_state
             .type_subst_names
             .iter()
             .map(|(param, concrete)| {
@@ -3128,7 +3134,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // head `"Vec"`, dropping `[E]`, so a bare-`T` collection param would
         // register elementless and miss its owned-param deep-copy / size its
         // enum payload at the erased scalar width. Overrides the head-only entry.
-        for (param, full_te) in &self.type_subst_type_exprs {
+        for (param, full_te) in &self.mono_state.type_subst_type_exprs {
             subst.insert(param.clone(), full_te.clone());
         }
         super::helpers::subst_type_params_in_type_expr(te, &subst)
@@ -3347,7 +3353,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // container is a COPY on both backends (mutating `let mut p = xs[0]`
         // leaves the lender's element untouched — measured, both containers).
         if !self.slice_elem_types.contains_key(cname.as_str())
-            && !self.map_key_types.contains_key(cname.as_str())
+            && !self.mapset.map_key_types.contains_key(cname.as_str())
             && !self.vec_elem_types.contains_key(cname.as_str())
         {
             return Ok(val);
@@ -5536,7 +5542,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // discarding the previous-value out-slot. Fresh-insert and overwrite
         // are both handled by the same runtime call.
         if let ExprKind::Identifier(name) = &object.kind {
-            if self.map_key_types.contains_key(name.as_str()) {
+            if self.mapset.map_key_types.contains_key(name.as_str()) {
                 return self.compile_map_index_store(name, index, val, rhs_src);
             }
         }
@@ -5715,13 +5721,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.slice_elem_types.remove(&synth);
                 self.var_elem_type_exprs.remove(&synth);
                 self.var_type_names.remove(&synth);
-                self.map_key_types.remove(&synth);
-                self.map_val_types.remove(&synth);
-                self.map_key_type_names.remove(&synth);
-                self.map_key_type_exprs.remove(&synth);
-                self.set_elem_types.remove(&synth);
-                self.set_elem_type_names.remove(&synth);
-                self.set_elem_type_exprs.remove(&synth);
+                self.mapset.map_key_types.remove(&synth);
+                self.mapset.map_val_types.remove(&synth);
+                self.mapset.map_key_type_names.remove(&synth);
+                self.mapset.map_key_type_exprs.remove(&synth);
+                self.mapset.set_elem_types.remove(&synth);
+                self.mapset.set_elem_type_names.remove(&synth);
+                self.mapset.set_elem_type_exprs.remove(&synth);
 
                 return result;
             }

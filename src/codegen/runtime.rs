@@ -5011,12 +5011,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// arm makes.
     fn uam_map_or_set_clone_fn(&mut self, name: &str) -> Option<FunctionValue<'ctx>> {
         if let (Some(k_te), Some(v_te)) = (
-            self.map_key_type_exprs.get(name).cloned(),
+            self.mapset.map_key_type_exprs.get(name).cloned(),
             self.var_elem_type_exprs.get(name).cloned(),
         ) {
             return Some(self.emit_map_clone_fn(&k_te, &v_te));
         }
-        if let Some(elem_te) = self.set_elem_type_exprs.get(name).cloned() {
+        if let Some(elem_te) = self.mapset.set_elem_type_exprs.get(name).cloned() {
             let unit_te = TypeExpr {
                 kind: TypeKind::Tuple(Vec::new()),
                 span: elem_te.span.clone(),
@@ -6139,7 +6139,9 @@ impl<'ctx> super::Codegen<'ctx> {
             None => match &tail.kind {
                 ExprKind::MethodCall { object, method, .. } if method == "remove" => {
                     match &object.kind {
-                        ExprKind::Identifier(m) if self.map_val_types.contains_key(m.as_str()) => {
+                        ExprKind::Identifier(m)
+                            if self.mapset.map_val_types.contains_key(m.as_str()) =>
+                        {
                             self.var_elem_type_exprs.get(m.as_str()).cloned()
                         }
                         _ => None,
@@ -7572,7 +7574,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => None,
             })
             .or_else(|| match &value.kind {
-                ExprKind::Identifier(n) => self.map_val_bodies_tes.get(n.as_str()).cloned(),
+                ExprKind::Identifier(n) => self.mapset.map_val_bodies_tes.get(n.as_str()).cloned(),
                 _ => None,
             });
         let Some(te) = te else {
@@ -7582,7 +7584,8 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         if let Some(bodies) = self.emit_map_val_user_drop_bodies_fn(&te) {
-            self.map_val_bodies_tes
+            self.mapset
+                .map_val_bodies_tes
                 .insert(var_name.to_string(), te.clone());
             self.track_user_drop_var_with_fn("", var_name, slot.ptr, bodies);
         }

@@ -726,11 +726,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.compile_for_slice_var(label, pattern, name, body);
                     }
                     // Map iteration: for (k, v) in map { }
-                    if self.map_key_types.contains_key(name.as_str()) {
+                    if self.mapset.map_key_types.contains_key(name.as_str()) {
                         return self.compile_for_map_var(label, pattern, name, body);
                     }
                     // Set iteration: for x in set { }
-                    if self.set_elem_types.contains_key(name.as_str()) {
+                    if self.mapset.set_elem_types.contains_key(name.as_str()) {
                         return self.compile_for_set_var(label, pattern, name, body);
                     }
                 }
@@ -756,10 +756,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.slice_elem_types.contains_key("self") {
                     return self.compile_for_slice_var(label, pattern, "self", body);
                 }
-                if self.map_key_types.contains_key("self") {
+                if self.mapset.map_key_types.contains_key("self") {
                     return self.compile_for_map_var(label, pattern, "self", body);
                 }
-                if self.set_elem_types.contains_key("self") {
+                if self.mapset.set_elem_types.contains_key("self") {
                     return self.compile_for_set_var(label, pattern, "self", body);
                 }
                 Ok(self.context.i64_type().const_int(0, false).into())
@@ -1129,7 +1129,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let key = (iterable.span.offset, iterable.span.length);
         let te = if let Some(te) = self.owned_temp_drops.get(&key).cloned() {
             te
-        } else if let Some(te) = self.temp_recv_mapset_types.get(&key).cloned() {
+        } else if let Some(te) = self.mapset.temp_recv_mapset_types.get(&key).cloned() {
             te
         } else {
             return Ok(None);
@@ -1179,13 +1179,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let result = self.compile_for(label, pattern, &synth_expr, body);
         // Drop synth registries (the queued cleanup references the alloca).
         self.variables.remove(&synth);
-        self.map_key_types.remove(&synth);
-        self.map_val_types.remove(&synth);
-        self.map_key_type_names.remove(&synth);
-        self.map_key_type_exprs.remove(&synth);
-        self.set_elem_types.remove(&synth);
-        self.set_elem_type_names.remove(&synth);
-        self.set_elem_type_exprs.remove(&synth);
+        self.mapset.map_key_types.remove(&synth);
+        self.mapset.map_val_types.remove(&synth);
+        self.mapset.map_key_type_names.remove(&synth);
+        self.mapset.map_key_type_exprs.remove(&synth);
+        self.mapset.set_elem_types.remove(&synth);
+        self.mapset.set_elem_type_names.remove(&synth);
+        self.mapset.set_elem_type_exprs.remove(&synth);
         self.var_elem_type_exprs.remove(&synth);
         self.var_type_names.remove(&synth);
         result.map(Some)
@@ -1279,13 +1279,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.slice_elem_types.remove(&synth);
         self.var_elem_type_exprs.remove(&synth);
         self.var_type_names.remove(&synth);
-        self.map_key_types.remove(&synth);
-        self.map_val_types.remove(&synth);
-        self.map_key_type_names.remove(&synth);
-        self.map_key_type_exprs.remove(&synth);
-        self.set_elem_types.remove(&synth);
-        self.set_elem_type_names.remove(&synth);
-        self.set_elem_type_exprs.remove(&synth);
+        self.mapset.map_key_types.remove(&synth);
+        self.mapset.map_val_types.remove(&synth);
+        self.mapset.map_key_type_names.remove(&synth);
+        self.mapset.map_key_type_exprs.remove(&synth);
+        self.mapset.set_elem_types.remove(&synth);
+        self.mapset.set_elem_type_names.remove(&synth);
+        self.mapset.set_elem_type_exprs.remove(&synth);
         self.string_vars.remove(&synth);
 
         result.map(Some)
@@ -3650,11 +3650,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
 
         let key_ty = self
+            .mapset
             .map_key_types
             .get(var_name)
             .copied()
             .unwrap_or(i64_t.into());
         let val_ty = self
+            .mapset
             .map_val_types
             .get(var_name)
             .copied()
@@ -3664,8 +3666,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // sorted-key buffer, look each value up by key (`karac_map_get`), and
         // bind `{k, v}` with the same borrow-like semantics as the hash path
         // (aliases into the map's data; the freed header buffer owns nothing).
-        if self.sorted_collection_vars.contains(var_name) {
+        if self.mapset.sorted_collection_vars.contains(var_name) {
             let key_te = self
+                .mapset
                 .map_key_type_exprs
                 .get(var_name)
                 .cloned()
@@ -4064,6 +4067,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
 
         let elem_ty = self
+            .mapset
             .set_elem_types
             .get(var_name)
             .copied()
@@ -4075,8 +4079,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // to the hash path (a borrow-like alias into the set's key data, which
         // the freed header buffer does not own), so `Set[String]` semantics
         // carry over unchanged.
-        if self.sorted_collection_vars.contains(var_name) {
+        if self.mapset.sorted_collection_vars.contains(var_name) {
             let elem_te = self
+                .mapset
                 .set_elem_type_exprs
                 .get(var_name)
                 .cloned()
@@ -4129,7 +4134,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             self.bind_pattern(pattern, elem_val)?;
             if let PatternKind::Binding(elem_name) = &pattern.kind {
-                if let Some(elem_te2) = self.set_elem_type_exprs.get(var_name).cloned() {
+                if let Some(elem_te2) = self.mapset.set_elem_type_exprs.get(var_name).cloned() {
                     self.register_var_from_type_expr(elem_name, &elem_te2);
                 }
             }
@@ -4228,7 +4233,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the element type itself is a Vec/Slice/Map (currently a no-op
         // for scalar Set elements; cheap insurance for the future).
         if let PatternKind::Binding(elem_name) = &pattern.kind {
-            if let Some(elem_te) = self.set_elem_type_exprs.get(var_name).cloned() {
+            if let Some(elem_te) = self.mapset.set_elem_type_exprs.get(var_name).cloned() {
                 self.register_var_from_type_expr(elem_name, &elem_te);
             }
         }
@@ -4407,9 +4412,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // Vec and no per-key deep clone, which is the win here; the
         // zero-call bucket walk stays a scalar-only optimization.
         let named = |cg: &Self, n: &str| {
-            cg.map_key_types.contains_key(n)
-                && !cg.set_elem_types.contains_key(n)
-                && cg.map_key_type_exprs.contains_key(n)
+            cg.mapset.map_key_types.contains_key(n)
+                && !cg.mapset.set_elem_types.contains_key(n)
+                && cg.mapset.map_key_type_exprs.contains_key(n)
                 && cg.var_elem_type_exprs.contains_key(n)
         };
         match &expr.kind {

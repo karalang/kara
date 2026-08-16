@@ -300,7 +300,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         | ExprKind::CharLit(_)
                         | ExprKind::ByteLit(_)
                 );
-                if is_literal_index && self.generic_fns.contains_key(name) {
+                if is_literal_index && self.mono_state.generic_fns.contains_key(name) {
                     let explicit_args = vec![GenericArg::Const((**index).clone())];
                     return self.compile_generic_call(name, args, Some(&explicit_args), call_span);
                 }
@@ -444,7 +444,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `T`, never a registered key) is unaffected and keeps its
                 // `compile_assoc_call` type-subst remap.
                 let qualified = format!("{}.{}", segments[0], segments[1]);
-                if self.generic_fns.contains_key(&qualified) {
+                if self.mono_state.generic_fns.contains_key(&qualified) {
                     // Explicit turbofish args (`W[i64].make(..)`) ride in the path
                     // itself and are rare for an associated ctor; the common
                     // `W.make(7)` infers its type params from the args
@@ -813,7 +813,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Check if this is a call to a generic function (monomorphize on demand)
-        if self.generic_fns.contains_key(&name) {
+        if self.mono_state.generic_fns.contains_key(&name) {
             return self.compile_generic_call(
                 &name,
                 args,
@@ -3640,7 +3640,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// declared as a module function), so a hit in EITHER means the user owns
     /// the name — fall through to the normal generic/concrete call path.
     fn user_shadows_mem_builtin(&self, name: &str) -> bool {
-        self.generic_fns.contains_key(name) || self.module.get_function(name).is_some()
+        self.mono_state.generic_fns.contains_key(name) || self.module.get_function(name).is_some()
     }
 
     /// Resolve a `mut ref` place argument of a `std.mem` builtin (`swap` /

@@ -275,7 +275,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         // The spawn wrapper is its own top-level function run on a pool worker —
         // NOT a continuation of any enclosing `par {}` branch. If this spawn
         // site sits inside an auto-parallelized statement group, `current_fn`
@@ -511,7 +511,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(None).unwrap();
 
         // Restore outer state.
-        self.type_subst = saved_subst;
+        self.mono_state.type_subst = saved_subst;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;

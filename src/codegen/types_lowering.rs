@@ -196,7 +196,9 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         name: &str,
     ) -> Option<inkwell::types::StructType<'ctx>> {
-        if self.type_subst_names.is_empty() && self.type_subst_type_exprs.is_empty() {
+        if self.mono_state.type_subst_names.is_empty()
+            && self.mono_state.type_subst_type_exprs.is_empty()
+        {
             return None;
         }
         let params = self.struct_generic_params.get(name)?;
@@ -361,7 +363,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // being a live generic param so a genuine 2-segment path
                 // (module / enum-variant type) is untouched.
                 if path.segments.len() == 2 {
-                    if let Some(concrete) = self.type_subst_names.get(&path.segments[0]) {
+                    if let Some(concrete) = self.mono_state.type_subst_names.get(&path.segments[0])
+                    {
                         if let Some(bound_ty) = self
                             .assoc_type_bindings
                             .get(&(concrete.clone(), path.segments[1].clone()))
@@ -386,7 +389,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // over a same-named global alias (`type T = String;` inside a
                 // `[T]`-generic mono) — the same precedence
                 // `llvm_type_for_name` applies by checking `type_subst` first.
-                if !self.type_subst.contains_key(name) {
+                if !self.mono_state.type_subst.contains_key(name) {
                     if let Some(base) = self.resolve_type_alias_te(ty) {
                         return self.llvm_type_for_type_expr(&base);
                     }
@@ -647,7 +650,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // bound at the active monomorphization). Look up in
                 // `const_subst` and recover the integer width.
                 ExprKind::Identifier(name) => {
-                    let cv = self.const_subst.get(name)?;
+                    let cv = self.mono_state.const_subst.get(name)?;
                     const_value_as_u32(cv)?
                 }
                 _ => return None,
@@ -662,7 +665,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if p.segments.len() == 1 && p.generic_args.is_none() {
                         let name = &p.segments[0];
                         {
-                            let cv = self.const_subst.get(name)?;
+                            let cv = self.mono_state.const_subst.get(name)?;
                             const_value_as_u32(cv)?
                         }
                     } else {
@@ -704,7 +707,7 @@ impl<'ctx> super::Codegen<'ctx> {
             GenericArg::Const(expr) => match &expr.kind {
                 ExprKind::Integer(n, _) if *n > 0 => *n as u32,
                 ExprKind::Identifier(name) => {
-                    let cv = self.const_subst.get(name)?;
+                    let cv = self.mono_state.const_subst.get(name)?;
                     const_value_as_u32(cv)?
                 }
                 _ => return None,
@@ -714,7 +717,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if p.segments.len() == 1 && p.generic_args.is_none() {
                         let name = &p.segments[0];
                         {
-                            let cv = self.const_subst.get(name)?;
+                            let cv = self.mono_state.const_subst.get(name)?;
                             const_value_as_u32(cv)?
                         }
                     } else {
@@ -1498,6 +1501,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // real shape. No-op outside a mono (the map is empty) and for a
         // concrete name (not a bound generic param).
         let ty_name = self
+            .mono_state
             .type_subst_names
             .get(&ty_name)
             .cloned()
@@ -1884,28 +1888,38 @@ impl<'ctx> super::Codegen<'ctx> {
         // plain `Map`/`Set` prefix. Set before the arms below rather than
         // inside them, because each returns early.
         if crate::codegen::helpers::is_sorted_collection_type(te) {
-            self.sorted_collection_vars.insert(var_name.to_string());
+            self.mapset
+                .sorted_collection_vars
+                .insert(var_name.to_string());
         }
         if let Some((k_ty, v_ty)) = self.extract_map_kv_types(te) {
-            self.map_key_types.insert(var_name.to_string(), k_ty);
-            self.map_val_types.insert(var_name.to_string(), v_ty);
+            self.mapset.map_key_types.insert(var_name.to_string(), k_ty);
+            self.mapset.map_val_types.insert(var_name.to_string(), v_ty);
             if let Some(k_name) = Self::extract_map_key_name(te) {
-                self.map_key_type_names.insert(var_name.to_string(), k_name);
+                self.mapset
+                    .map_key_type_names
+                    .insert(var_name.to_string(), k_name);
             }
             if let Some((k_te, v_te)) = map_kv_type_exprs(te) {
-                self.map_key_type_exprs.insert(var_name.to_string(), k_te);
+                self.mapset
+                    .map_key_type_exprs
+                    .insert(var_name.to_string(), k_te);
                 self.var_elem_type_exprs.insert(var_name.to_string(), v_te);
             }
             return;
         }
         if let Some(elem_ty) = self.extract_set_elem_type(te) {
-            self.set_elem_types.insert(var_name.to_string(), elem_ty);
+            self.mapset
+                .set_elem_types
+                .insert(var_name.to_string(), elem_ty);
             if let Some(elem_name) = Self::extract_set_elem_name(te) {
-                self.set_elem_type_names
+                self.mapset
+                    .set_elem_type_names
                     .insert(var_name.to_string(), elem_name);
             }
             if let Some(elem_te) = set_inner_type_expr(te) {
-                self.set_elem_type_exprs
+                self.mapset
+                    .set_elem_type_exprs
                     .insert(var_name.to_string(), elem_te);
             }
             return;
@@ -2060,7 +2074,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // tuple-element-classification follow-up would extend this arm.
             PatternKind::Tuple(pats) if pats.len() == 2 => {
                 if let PatternKind::Binding(k_name) = &pats[0].kind {
-                    if let Some(k_te) = self.map_key_type_exprs.get(source_var).cloned() {
+                    if let Some(k_te) = self.mapset.map_key_type_exprs.get(source_var).cloned() {
                         self.register_var_from_type_expr(k_name, &k_te);
                         self.mark_for_loop_borrow_if_heap(k_name, &k_te);
                     }
@@ -2401,7 +2415,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     pub(super) fn llvm_type_for_name(&self, name: &str) -> BasicTypeEnum<'ctx> {
         // Active monomorphization substitution takes priority.
-        if let Some(&ty) = self.type_subst.get(name) {
+        if let Some(&ty) = self.mono_state.type_subst.get(name) {
             return ty;
         }
         // Type alias → base layout (refinement: phase-9 step 4; plain:
@@ -3120,9 +3134,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// key-side rc_dec walk.
     pub(super) fn map_key_shared_heap_type_for(&self, var_name: &str) -> Option<StructType<'ctx>> {
         let k_te = self
+            .mapset
             .map_key_type_exprs
             .get(var_name)
-            .or_else(|| self.set_elem_type_exprs.get(var_name))?;
+            .or_else(|| self.mapset.set_elem_type_exprs.get(var_name))?;
         Self::shared_heap_type_for_type_expr_with(&self.shared_types, k_te)
     }
 

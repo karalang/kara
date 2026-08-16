@@ -88,7 +88,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => None,
             };
         }
-        self.generic_fns
+        self.mono_state
+            .generic_fns
             .get(name)
             .and_then(|f| f.return_type.as_ref())
             .and_then(Self::lazy_kind_of_type_expr)

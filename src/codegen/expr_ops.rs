@@ -2791,13 +2791,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.slice_elem_types.remove(&synth);
         self.var_elem_type_exprs.remove(&synth);
         self.var_type_names.remove(&synth);
-        self.map_key_types.remove(&synth);
-        self.map_val_types.remove(&synth);
-        self.map_key_type_names.remove(&synth);
-        self.map_key_type_exprs.remove(&synth);
-        self.set_elem_types.remove(&synth);
-        self.set_elem_type_names.remove(&synth);
-        self.set_elem_type_exprs.remove(&synth);
+        self.mapset.map_key_types.remove(&synth);
+        self.mapset.map_val_types.remove(&synth);
+        self.mapset.map_key_type_names.remove(&synth);
+        self.mapset.map_key_type_exprs.remove(&synth);
+        self.mapset.set_elem_types.remove(&synth);
+        self.mapset.set_elem_type_names.remove(&synth);
+        self.mapset.set_elem_type_exprs.remove(&synth);
         elem
     }
 
@@ -6566,7 +6566,12 @@ impl<'ctx> super::Codegen<'ctx> {
     fn generic_method_return_inst(&self, object: &Expr, method: &str) -> Option<TypeExpr> {
         let recv_ty = self.type_name_of_expr(object)?;
         let fn_name = format!("{recv_ty}.{method}");
-        let ret_te = self.generic_fns.get(&fn_name)?.return_type.clone()?;
+        let ret_te = self
+            .mono_state
+            .generic_fns
+            .get(&fn_name)?
+            .return_type
+            .clone()?;
         let params = self.struct_generic_params.get(recv_ty.as_str())?;
         if params.is_empty() {
             return None;

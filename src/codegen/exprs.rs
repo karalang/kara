@@ -324,7 +324,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // target), and finally `load_variable` so the existing
                 // "Undefined variable" diagnostic still fires for
                 // genuinely unbound names.
-                if let Some(cv) = self.const_subst.get(name) {
+                if let Some(cv) = self.mono_state.const_subst.get(name) {
                     let cv = cv.clone();
                     return Ok(self.compile_primitive_const(&cv));
                 }

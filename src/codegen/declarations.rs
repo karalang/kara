@@ -910,7 +910,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the return type) and the mangled name as `emit_key` (used in the
     /// LLVM symbol names + the `state_struct_types` / `state_machine_return_types`
     /// map keys). Field types resolve through `llvm_type_for_name` which
-    /// honors the active `self.type_subst`, so per-mono callers populate
+    /// honors the active `self.mono_state.type_subst`, so per-mono callers populate
     /// the subst before calling this helper.
     pub(super) fn emit_state_struct_type_for_key(
         &mut self,
@@ -1144,7 +1144,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// LLVM symbol name + the state-struct + return-type table
     /// lookups). The body-splitting walker invokes
     /// `self.materialize_body_arg` / `llvm_type_for_name` inside the
-    /// per-arm emission; those routines honor `self.type_subst`, so
+    /// per-arm emission; those routines honor `self.mono_state.type_subst`, so
     /// per-mono callers populate the subst before calling this helper
     /// to get the right concrete LLVM types for `T`-typed locals.
     pub(super) fn emit_state_machine_poll_fn_for_key(
@@ -2775,7 +2775,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   parameter's declared `TypeExpr` via `lookup_param_type_expr`
     ///   (recovered from the polymorphic `fn_ast.params` by binding
     ///   name) and resolve it through `llvm_type_for_type_expr`
-    ///   (which honors the active `self.type_subst` so a `T`-typed
+    ///   (which honors the active `self.mono_state.type_subst` so a `T`-typed
     ///   parameter resolves to the concrete LLVM type for the
     ///   current monomorphization). If the resolved LLVM type is the
     ///   Vec struct shape (`{ ptr, i64, i64 }` — same lowering used

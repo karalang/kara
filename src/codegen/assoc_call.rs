@@ -396,7 +396,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // std.mem `take[T: Default]`). No-op outside a mono / for concrete
         // types (not in `type_subst_names`); a param bound to a primitive with
         // no `<prim>.default` still falls through as before (no regression).
-        let resolved_type_name = self.type_subst_names.get(type_name).cloned();
+        let resolved_type_name = self.mono_state.type_subst_names.get(type_name).cloned();
         let type_name = resolved_type_name.as_deref().unwrap_or(type_name);
         // Fallible-allocation constructor companions (phase-8-stdlib-floor
         // item 2) are interpreter-only in v1 — their codegen lowering (runtime

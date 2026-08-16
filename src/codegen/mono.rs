@@ -329,7 +329,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 "Set" => {
                     if let (Some(pn), Some(&elem)) = (
                         param_at(0),
-                        arg_ident.and_then(|n| self.set_elem_types.get(n)),
+                        arg_ident.and_then(|n| self.mapset.set_elem_types.get(n)),
                     ) {
                         subst.entry(pn).or_insert(elem);
                     }
@@ -337,13 +337,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 "Map" => {
                     if let (Some(kn), Some(&kty)) = (
                         param_at(0),
-                        arg_ident.and_then(|n| self.map_key_types.get(n)),
+                        arg_ident.and_then(|n| self.mapset.map_key_types.get(n)),
                     ) {
                         subst.entry(kn).or_insert(kty);
                     }
                     if let (Some(vn), Some(&vty)) = (
                         param_at(1),
-                        arg_ident.and_then(|n| self.map_val_types.get(n)),
+                        arg_ident.and_then(|n| self.mapset.map_val_types.get(n)),
                     ) {
                         subst.entry(vn).or_insert(vty);
                     }
@@ -388,7 +388,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .filter(|h| matches!(h.as_str(), "Map" | "SortedMap"))
         {
             let (Some(k), Some(v)) = (
-                self.map_key_type_exprs.get(arg_name),
+                self.mapset.map_key_type_exprs.get(arg_name),
                 self.var_elem_type_exprs.get(arg_name),
             ) else {
                 return None;
@@ -404,6 +404,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .filter(|h| matches!(h.as_str(), "Set" | "SortedSet"))
         {
             let elem = self
+                .mapset
                 .set_elem_type_exprs
                 .get(arg_name)
                 .or_else(|| self.var_elem_type_exprs.get(arg_name))?;
@@ -1105,13 +1106,13 @@ impl<'ctx> super::Codegen<'ctx> {
             enum_inst_var_types: std::mem::take(&mut self.enum_inst_var_types),
             string_vars: std::mem::take(&mut self.string_vars),
             slice_elem_types: std::mem::take(&mut self.slice_elem_types),
-            map_key_types: std::mem::take(&mut self.map_key_types),
-            map_val_types: std::mem::take(&mut self.map_val_types),
-            map_key_type_names: std::mem::take(&mut self.map_key_type_names),
-            map_key_type_exprs: std::mem::take(&mut self.map_key_type_exprs),
-            set_elem_types: std::mem::take(&mut self.set_elem_types),
-            set_elem_type_names: std::mem::take(&mut self.set_elem_type_names),
-            set_elem_type_exprs: std::mem::take(&mut self.set_elem_type_exprs),
+            map_key_types: std::mem::take(&mut self.mapset.map_key_types),
+            map_val_types: std::mem::take(&mut self.mapset.map_val_types),
+            map_key_type_names: std::mem::take(&mut self.mapset.map_key_type_names),
+            map_key_type_exprs: std::mem::take(&mut self.mapset.map_key_type_exprs),
+            set_elem_types: std::mem::take(&mut self.mapset.set_elem_types),
+            set_elem_type_names: std::mem::take(&mut self.mapset.set_elem_type_names),
+            set_elem_type_exprs: std::mem::take(&mut self.mapset.set_elem_type_exprs),
             atomic_var_inner_is_bool: std::mem::take(&mut self.atomic_var_inner_is_bool),
             owned_vecstr_params: std::mem::take(&mut self.owned_vecstr_params),
             closure_fn_types: std::mem::take(&mut self.closure_fn_types),
@@ -1129,13 +1130,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.enum_inst_var_types = saved.enum_inst_var_types;
         self.string_vars = saved.string_vars;
         self.slice_elem_types = saved.slice_elem_types;
-        self.map_key_types = saved.map_key_types;
-        self.map_val_types = saved.map_val_types;
-        self.map_key_type_names = saved.map_key_type_names;
-        self.map_key_type_exprs = saved.map_key_type_exprs;
-        self.set_elem_types = saved.set_elem_types;
-        self.set_elem_type_names = saved.set_elem_type_names;
-        self.set_elem_type_exprs = saved.set_elem_type_exprs;
+        self.mapset.map_key_types = saved.map_key_types;
+        self.mapset.map_val_types = saved.map_val_types;
+        self.mapset.map_key_type_names = saved.map_key_type_names;
+        self.mapset.map_key_type_exprs = saved.map_key_type_exprs;
+        self.mapset.set_elem_types = saved.set_elem_types;
+        self.mapset.set_elem_type_names = saved.set_elem_type_names;
+        self.mapset.set_elem_type_exprs = saved.set_elem_type_exprs;
         self.atomic_var_inner_is_bool = saved.atomic_var_inner_is_bool;
         self.owned_vecstr_params = saved.owned_vecstr_params;
         self.closure_fn_types = saved.closure_fn_types;
@@ -1301,7 +1302,7 @@ impl<'ctx> super::Codegen<'ctx> {
         explicit_generic_args: Option<&[GenericArg]>,
         call_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let generic_fn = self.generic_fns[name].clone();
+        let generic_fn = self.mono_state.generic_fns[name].clone();
 
         // Compile argument values so we can infer concrete types.
         // B-2026-07-02-13: cleared pending-let hint for the arg compiles —
@@ -1465,6 +1466,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // name that is itself an outer generic param resolves to the
                 // outer param's concrete binding.
                 let resolved = self
+                    .mono_state
                     .type_subst_names
                     .get(&concrete_name)
                     .cloned()
@@ -1511,6 +1513,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let TypeKind::Path(path) = &t.kind {
                             if let Some(seg) = path.segments.first() {
                                 let resolved = self
+                                    .mono_state
                                     .type_subst_names
                                     .get(seg)
                                     .cloned()
@@ -1620,7 +1623,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let handle_params = self.collect_mono_handle_params(&generic_fn, args);
         let mangled = self.append_handle_mangle(mangled, &handle_params);
         if !handle_params.is_empty() {
-            self.mono_handle_param_infos
+            self.mono_state
+                .mono_handle_param_infos
                 .insert(mangled.clone(), handle_params);
         }
         // B-2026-07-11-35 (return-owned-param leg) — disambiguate a generic
@@ -1715,9 +1719,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut mono_agg: Vec<(bool, Option<TypeExpr>)> = Vec::new();
         let mut transfer_ident: Vec<bool> = Vec::new();
         {
-            let saved_names = std::mem::replace(&mut self.type_subst_names, subst_names.clone());
-            let saved_type_exprs =
-                std::mem::replace(&mut self.type_subst_type_exprs, subst_type_exprs.clone());
+            let saved_names =
+                std::mem::replace(&mut self.mono_state.type_subst_names, subst_names.clone());
+            let saved_type_exprs = std::mem::replace(
+                &mut self.mono_state.type_subst_type_exprs,
+                subst_type_exprs.clone(),
+            );
             for a in args.iter() {
                 mono_agg.push(match &a.value.kind {
                     ExprKind::StructLiteral { path, .. } => match path.last() {
@@ -1740,8 +1747,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => false,
                 });
             }
-            self.type_subst_names = saved_names;
-            self.type_subst_type_exprs = saved_type_exprs;
+            self.mono_state.type_subst_names = saved_names;
+            self.mono_state.type_subst_type_exprs = saved_type_exprs;
         }
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
@@ -1785,9 +1792,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let use_state_machine = self.call_uses_state_machine(call_span, name);
 
         // Generate the specialization if we haven't done so yet.
-        if !self.generated_monos.contains(&mangled) {
+        if !self.mono_state.generated_monos.contains(&mangled) {
             // Mark as in-progress before recursing to avoid infinite loops.
-            self.generated_monos.insert(mangled.clone());
+            self.mono_state.generated_monos.insert(mangled.clone());
 
             // Save all per-function codegen state — we're about to compile a
             // different function inline.
@@ -1838,30 +1845,31 @@ impl<'ctx> super::Codegen<'ctx> {
             // caller's value below (re-entrant, like `variables`).
             let saved_cancel_ptr = self.branch_cancel_ptr.take();
             let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-            let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
+            let saved_subst = std::mem::replace(&mut self.mono_state.type_subst, subst.clone());
             // Name-level twin of `type_subst` (B-2026-07-03-11): thread the
             // concrete-type-name subst so the mono param prologue can register a
             // bound-generic receiver under its concrete type for trait dispatch.
             let saved_subst_names =
-                std::mem::replace(&mut self.type_subst_names, subst_names.clone());
+                std::mem::replace(&mut self.mono_state.type_subst_names, subst_names.clone());
             // Element-aware twin (B-2026-07-13-2/-3): thread each Vec/VecDeque
             // whole-collection param's FULL concrete `TypeExpr` so the body
             // registers its element (see `type_subst_type_exprs`). Built above,
             // before the side-table swap cleared the caller's element map.
             let saved_subst_type_exprs =
-                std::mem::replace(&mut self.type_subst_type_exprs, subst_type_exprs);
+                std::mem::replace(&mut self.mono_state.type_subst_type_exprs, subst_type_exprs);
             // Const generics slice 4: thread the const-arg substitution
             // into the body-lowering pass so `compile_expr Identifier`
             // can resolve const-param refs against it. Parallel to
             // `type_subst`'s save/restore.
-            let saved_const_subst = std::mem::replace(&mut self.const_subst, const_subst.clone());
+            let saved_const_subst =
+                std::mem::replace(&mut self.mono_state.const_subst, const_subst.clone());
             // Per-layout-monomorphization axis: thread the per-call layout
             // substitution into the body-lowering pass. Parallel to
             // `type_subst` / `const_subst`. Slice 1 always carries `Aos`
             // entries, so body lowering (which doesn't yet consult this map)
             // is unchanged; slice 2 reads it to select the SoA access paths.
             let saved_layout_subst =
-                std::mem::replace(&mut self.layout_subst, layout_subst.clone());
+                std::mem::replace(&mut self.mono_state.layout_subst, layout_subst.clone());
             // Slice 4: `compile_mono_function`'s prologue may register SoA
             // borrow params in `ref_params` (a generic fn with a `ref Vec[E]`
             // param whose binding-site layout is SoA). Swap it out for the mono
@@ -1903,11 +1911,11 @@ impl<'ctx> super::Codegen<'ctx> {
             self.ref_params = saved_ref_params;
             self.signature_ref_params = saved_signature_ref_params;
             self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
-            self.layout_subst = saved_layout_subst;
-            self.const_subst = saved_const_subst;
-            self.type_subst = saved_subst;
-            self.type_subst_names = saved_subst_names;
-            self.type_subst_type_exprs = saved_subst_type_exprs;
+            self.mono_state.layout_subst = saved_layout_subst;
+            self.mono_state.const_subst = saved_const_subst;
+            self.mono_state.type_subst = saved_subst;
+            self.mono_state.type_subst_names = saved_subst_names;
+            self.mono_state.type_subst_type_exprs = saved_subst_type_exprs;
             self.loop_stack = saved_loop_stack;
             self.branch_cancel_ptr = saved_cancel_ptr;
             self.scope_cleanup_actions = saved_cleanup;
@@ -2438,10 +2446,10 @@ impl<'ctx> super::Codegen<'ctx> {
         layout_subst: HashMap<String, LayoutId>,
         return_layout: LayoutId,
     ) -> Result<(), String> {
-        if self.generated_monos.contains(mangled) {
+        if self.mono_state.generated_monos.contains(mangled) {
             return Ok(());
         }
-        self.generated_monos.insert(mangled.to_string());
+        self.mono_state.generated_monos.insert(mangled.to_string());
 
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
@@ -2453,15 +2461,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
         // Name-subst twin (B-2026-07-03-11): isolate the layout-mono body from a
         // stale outer name-subst, mirroring `type_subst`.
-        let saved_subst_names = std::mem::take(&mut self.type_subst_names);
+        let saved_subst_names = std::mem::take(&mut self.mono_state.type_subst_names);
         // Element-aware twin (B-2026-07-13-2/-3): a layout mono is non-generic,
         // so clear any stale outer type-expr subst too; restored below.
-        let saved_subst_type_exprs = std::mem::take(&mut self.type_subst_type_exprs);
-        let saved_const_subst = std::mem::take(&mut self.const_subst);
-        let saved_layout_subst = std::mem::replace(&mut self.layout_subst, layout_subst);
+        let saved_subst_type_exprs = std::mem::take(&mut self.mono_state.type_subst_type_exprs);
+        let saved_const_subst = std::mem::take(&mut self.mono_state.const_subst);
+        let saved_layout_subst = std::mem::replace(&mut self.mono_state.layout_subst, layout_subst);
         let saved_return_layout = std::mem::replace(&mut self.return_layout, return_layout);
         // Slice 4: the mono prologue now registers SoA `ref`/`mut ref Vec[E]`
         // params in `ref_params` (so the access paths deref the slot once).
@@ -2494,11 +2502,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.signature_ref_params = saved_signature_ref_params;
         self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
         self.return_layout = saved_return_layout;
-        self.layout_subst = saved_layout_subst;
-        self.const_subst = saved_const_subst;
-        self.type_subst = saved_subst;
-        self.type_subst_names = saved_subst_names;
-        self.type_subst_type_exprs = saved_subst_type_exprs;
+        self.mono_state.layout_subst = saved_layout_subst;
+        self.mono_state.const_subst = saved_const_subst;
+        self.mono_state.type_subst = saved_subst;
+        self.mono_state.type_subst_names = saved_subst_names;
+        self.mono_state.type_subst_type_exprs = saved_subst_type_exprs;
         self.loop_stack = saved_loop_stack;
         self.branch_cancel_ptr = saved_cancel_ptr;
         self.scope_cleanup_actions = saved_cleanup;
@@ -2778,6 +2786,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let TypeKind::Path(path) = &name_ty.kind {
                     if let Some(type_name) = path.segments.first() {
                         let concrete = self
+                            .mono_state
                             .type_subst_names
                             .get(type_name)
                             .cloned()
@@ -2898,6 +2907,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // registrar above can't act on (S6a; see
                 // `mono_handle_param_infos`).
                 let handle_info = self
+                    .mono_state
                     .mono_handle_param_infos
                     .get(mangled)
                     .and_then(|entries| entries.iter().find(|(n, _)| n == &param_name))
@@ -2967,7 +2977,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if let Some(block) = ret_block {
             for name in self.soa_return_local_names(&func.body) {
-                self.layout_subst.insert(name, LayoutId::Soa(block.clone()));
+                self.mono_state
+                    .layout_subst
+                    .insert(name, LayoutId::Soa(block.clone()));
             }
         }
 
@@ -3260,7 +3272,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Path TypeExpr. Already-concrete args pass through.
                     if let TypeKind::Path(p) = &t.kind {
                         if p.segments.len() == 1 && p.generic_args.is_none() {
-                            if let Some(concrete) = self.type_subst_names.get(&p.segments[0]) {
+                            if let Some(concrete) =
+                                self.mono_state.type_subst_names.get(&p.segments[0])
+                            {
                                 any_bound = true;
                                 return GenericArg::Type(TypeExpr {
                                     kind: TypeKind::Path(PathExpr {
@@ -3530,7 +3544,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`docs/spikes/per-layout-monomorphization.md` §4.2): the `LayoutId` of
     /// each layout-carrying (`Vec[E]`) value param, keyed by param name. This
     /// is the layout half of the monomorph key fed to `mangle_mono_name` and
-    /// (slice 2) to body lowering via `self.layout_subst`.
+    /// (slice 2) to body lowering via `self.mono_state.layout_subst`.
     ///
     /// **Forward (arguments):** a param's `LayoutId` is the binding-site layout
     /// of the matching argument's *root* — but only when the argument is a bare
@@ -3582,7 +3596,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`binding_layouts`) — so a base-symbol param that merely shares a name
     /// with a `layout` block no longer lowers SoA by coincidence.
     pub(super) fn active_layout_id(&self, binding_name: &str) -> LayoutId {
-        if let Some(layout) = self.layout_subst.get(binding_name) {
+        if let Some(layout) = self.mono_state.layout_subst.get(binding_name) {
             return layout.clone();
         }
         if let Some(layout) = self.binding_layouts.get(binding_name) {
@@ -3606,7 +3620,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         binding_name: &str,
     ) -> Option<super::state::SoaLayout> {
-        let layout = if let Some(layout) = self.layout_subst.get(binding_name) {
+        let layout = if let Some(layout) = self.mono_state.layout_subst.get(binding_name) {
             // A returned local seeded by a return-SoA mono, or a name the
             // dispatch already laid out. Honored even for a returned local —
             // this IS the return-mono's SoA seeding.
@@ -3663,7 +3677,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let name = param.name()?;
-        match self.layout_subst.get(name) {
+        match self.mono_state.layout_subst.get(name) {
             Some(LayoutId::Soa(block)) => self.accel.soa_layouts.get(block).cloned(),
             _ => None,
         }
@@ -4014,7 +4028,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// x86's margin, and might flip arm64's sign if part of what the tag costs
     /// there is the same spill rather than the compare.
     pub(super) fn map_tag_compare(&self, key: MapProbeKey) -> bool {
-        if let Some(forced) = self.map_tag_override {
+        if let Some(forced) = self.mapset.map_tag_override {
             return forced;
         }
         match key {
@@ -4094,7 +4108,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> (LookupProbeCursor<'ctx>, IntValue<'ctx>) {
         let (entry_bb, probe_cond_bb, probe_body_bb) = blocks;
         let i64_t = self.context.i64_type();
-        let form = self.map_lookup_probe;
+        let form = self.mapset.map_lookup_probe;
 
         self.builder.position_at_end(probe_cond_bb);
         let (phi, seed) = match form {
@@ -4232,7 +4246,7 @@ impl<'ctx> super::Codegen<'ctx> {
         val_ty: BasicTypeEnum<'ctx>,
     ) -> MapMonoMethods<'ctx> {
         let cache_key = self.mono_map_cache_key(key_ty, val_ty);
-        if let Some(entry) = self.map_mono_methods.get(&cache_key) {
+        if let Some(entry) = self.mapset.map_mono_methods.get(&cache_key) {
             return *entry;
         }
 
@@ -4328,7 +4342,7 @@ impl<'ctx> super::Codegen<'ctx> {
             insert_old_fn,
             get_fn,
         };
-        self.map_mono_methods.insert(cache_key, methods);
+        self.mapset.map_mono_methods.insert(cache_key, methods);
         methods
     }
 

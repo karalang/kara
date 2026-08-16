@@ -931,6 +931,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         };
         let name = self
+            .mono_state
             .type_subst_names
             .get(head)
             .map(String::as_str)
@@ -979,6 +980,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         };
         let name = self
+            .mono_state
             .type_subst_names
             .get(head)
             .map(String::as_str)
@@ -1029,6 +1031,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return false;
                 };
                 let name = self
+                    .mono_state
                     .type_subst_names
                     .get(head)
                     .map(String::as_str)
@@ -1278,7 +1281,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.boxed_enum_payload_vars.clear();
         self.boxed_optres_payload_view_vars.clear();
         self.deboxed_payload_box_ptrs.clear();
-        self.mono_payload_binding_type_exprs.clear();
+        self.mono_state.mono_payload_binding_type_exprs.clear();
         self.inline_result_payload_vars.clear();
         self.inline_option_map_payload_vars.clear();
         self.inline_option_agg_payload_vars.clear();
@@ -1291,7 +1294,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // here for the same name-collision reason as `variables`: the table is
         // keyed by bare binding name, so a `queue` in one function must not
         // hand its head alloca to a `queue` in the next.
-        self.deque_head_slots.clear();
+        self.mapset.deque_head_slots.clear();
         self.owned_vecstr_params.clear();
         // Record every (simple-binding) parameter name for the auto-par
         // reduction cost gate's param-bounded-helper check (B-2026-07-23-25).
@@ -1339,17 +1342,17 @@ impl<'ctx> super::Codegen<'ctx> {
         self.tuple_moved_elem_bodies.clear();
         self.struct_moved_field_bodies.clear();
         self.optres_var_payload_tes.clear();
-        self.map_val_bodies_tes.clear();
+        self.mapset.map_val_bodies_tes.clear();
         self.string_vars.clear();
         self.ascii_const_string_lets.clear();
         self.slice_elem_types.clear();
-        self.map_key_types.clear();
-        self.map_val_types.clear();
-        self.map_key_type_names.clear();
-        self.map_key_type_exprs.clear();
-        self.set_elem_types.clear();
-        self.set_elem_type_names.clear();
-        self.set_elem_type_exprs.clear();
+        self.mapset.map_key_types.clear();
+        self.mapset.map_val_types.clear();
+        self.mapset.map_key_type_names.clear();
+        self.mapset.map_key_type_exprs.clear();
+        self.mapset.set_elem_types.clear();
+        self.mapset.set_elem_type_names.clear();
+        self.mapset.set_elem_type_exprs.clear();
         self.atomic_var_inner_is_bool.clear();
         // The handle-backed builtins were missing from this list (same
         // per-function-reset rationale — every entry is keyed by bare var
@@ -1516,7 +1519,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // candidate (uncertain ⇒ ineligible). `concurrency_decisions` is
         // populated even when auto-par is disabled (the analysis always
         // runs), hence the explicit `auto_par_disabled` check.
-        let mut head_index_names = self.deque_head_locals.get(&func.name).cloned();
+        let mut head_index_names = self.mapset.deque_head_locals.get(&func.name).cloned();
         if let Some(names) = head_index_names.as_mut() {
             if !self.auto_par_disabled {
                 if let Some(dec) = self.concurrency_decisions.get(&func.name) {
@@ -1573,7 +1576,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_alloca(i64_t, &format!("{name}.deque.head"))
                     .unwrap();
                 self.builder.build_store(slot, i64_t.const_zero()).unwrap();
-                self.deque_head_slots.insert(name, slot);
+                self.mapset.deque_head_slots.insert(name, slot);
             }
         }
 

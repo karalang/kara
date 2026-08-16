@@ -33,13 +33,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.slice_elem_types.remove(name);
         self.var_elem_type_exprs.remove(name);
         self.var_type_names.remove(name);
-        self.map_key_types.remove(name);
-        self.map_val_types.remove(name);
-        self.map_key_type_names.remove(name);
-        self.map_key_type_exprs.remove(name);
-        self.set_elem_types.remove(name);
-        self.set_elem_type_names.remove(name);
-        self.set_elem_type_exprs.remove(name);
+        self.mapset.map_key_types.remove(name);
+        self.mapset.map_val_types.remove(name);
+        self.mapset.map_key_type_names.remove(name);
+        self.mapset.map_key_type_exprs.remove(name);
+        self.mapset.set_elem_types.remove(name);
+        self.mapset.set_elem_type_names.remove(name);
+        self.mapset.set_elem_type_exprs.remove(name);
     }
 
     /// Slice MR helper: lower an indexed-receiver method call
@@ -288,7 +288,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.lower_indexed_elem_ptr_vec(&outer_name, index)?
         } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
             self.lower_indexed_elem_ptr_slice(&outer_name, index)?
-        } else if self.map_val_types.contains_key(outer_name.as_str()) {
+        } else if self.mapset.map_val_types.contains_key(outer_name.as_str()) {
             // B-2026-07-25-5: Map outer. `var_elem_type_exprs` is already
             // populated with the map's VALUE TypeExpr at every Map-registering
             // site, so the `elem_te` lookup above resolves for maps unchanged —
@@ -356,13 +356,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.slice_elem_types.remove(&synth);
         self.var_elem_type_exprs.remove(&synth);
         self.var_type_names.remove(&synth);
-        self.map_key_types.remove(&synth);
-        self.map_val_types.remove(&synth);
-        self.map_key_type_names.remove(&synth);
-        self.map_key_type_exprs.remove(&synth);
-        self.set_elem_types.remove(&synth);
-        self.set_elem_type_names.remove(&synth);
-        self.set_elem_type_exprs.remove(&synth);
+        self.mapset.map_key_types.remove(&synth);
+        self.mapset.map_val_types.remove(&synth);
+        self.mapset.map_key_type_names.remove(&synth);
+        self.mapset.map_key_type_exprs.remove(&synth);
+        self.mapset.set_elem_types.remove(&synth);
+        self.mapset.set_elem_type_names.remove(&synth);
+        self.mapset.set_elem_type_exprs.remove(&synth);
 
         // B-2026-07-09-1: tear down the hoisted FieldAccess-container synth
         // (same registry set as the element synth above), if one was minted.
@@ -372,13 +372,13 @@ impl<'ctx> super::Codegen<'ctx> {
             self.slice_elem_types.remove(&c);
             self.var_elem_type_exprs.remove(&c);
             self.var_type_names.remove(&c);
-            self.map_key_types.remove(&c);
-            self.map_val_types.remove(&c);
-            self.map_key_type_names.remove(&c);
-            self.map_key_type_exprs.remove(&c);
-            self.set_elem_types.remove(&c);
-            self.set_elem_type_names.remove(&c);
-            self.set_elem_type_exprs.remove(&c);
+            self.mapset.map_key_types.remove(&c);
+            self.mapset.map_val_types.remove(&c);
+            self.mapset.map_key_type_names.remove(&c);
+            self.mapset.map_key_type_exprs.remove(&c);
+            self.mapset.set_elem_types.remove(&c);
+            self.mapset.set_elem_type_names.remove(&c);
+            self.mapset.set_elem_type_exprs.remove(&c);
         }
 
         result
@@ -907,13 +907,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_elem_type_exprs.remove(&synth);
         self.var_type_names.remove(&synth);
         self.atomic_var_inner_is_bool.remove(&synth);
-        self.map_key_types.remove(&synth);
-        self.map_val_types.remove(&synth);
-        self.map_key_type_names.remove(&synth);
-        self.map_key_type_exprs.remove(&synth);
-        self.set_elem_types.remove(&synth);
-        self.set_elem_type_names.remove(&synth);
-        self.set_elem_type_exprs.remove(&synth);
+        self.mapset.map_key_types.remove(&synth);
+        self.mapset.map_val_types.remove(&synth);
+        self.mapset.map_key_type_names.remove(&synth);
+        self.mapset.map_key_type_exprs.remove(&synth);
+        self.mapset.set_elem_types.remove(&synth);
+        self.mapset.set_elem_type_names.remove(&synth);
+        self.mapset.set_elem_type_exprs.remove(&synth);
 
         result
     }
@@ -1277,7 +1277,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Receiver must be a tracked Map variable; without map_val_types
         // we can't size the synth slot.
-        if !self.map_key_types.contains_key(map_name.as_str()) {
+        if !self.mapset.map_key_types.contains_key(map_name.as_str()) {
             return Ok(None);
         }
         let val_te = self
@@ -1291,13 +1291,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     method, map_name
                 )
             })?;
-        let val_ty = *self.map_val_types.get(map_name.as_str()).ok_or_else(|| {
-            format!(
-                "codegen: entry-chain trailing-method '{}' on map '{}' \
+        let val_ty = *self
+            .mapset
+            .map_val_types
+            .get(map_name.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "codegen: entry-chain trailing-method '{}' on map '{}' \
                      — value LLVM type unknown",
-                method, map_name
-            )
-        })?;
+                    method, map_name
+                )
+            })?;
 
         // Compile the inner chain — returns the slot pointer (`*mut V`).
         let slot_value = self
@@ -1343,13 +1347,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.slice_elem_types.remove(&synth);
         self.var_elem_type_exprs.remove(&synth);
         self.var_type_names.remove(&synth);
-        self.map_key_types.remove(&synth);
-        self.map_val_types.remove(&synth);
-        self.map_key_type_names.remove(&synth);
-        self.map_key_type_exprs.remove(&synth);
-        self.set_elem_types.remove(&synth);
-        self.set_elem_type_names.remove(&synth);
-        self.set_elem_type_exprs.remove(&synth);
+        self.mapset.map_key_types.remove(&synth);
+        self.mapset.map_val_types.remove(&synth);
+        self.mapset.map_key_type_names.remove(&synth);
+        self.mapset.map_key_type_exprs.remove(&synth);
+        self.mapset.set_elem_types.remove(&synth);
+        self.mapset.set_elem_type_names.remove(&synth);
+        self.mapset.set_elem_type_exprs.remove(&synth);
 
         Ok(Some(result?))
     }
@@ -1580,11 +1584,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
 
         let key_ty = self
+            .mapset
             .map_key_types
             .get(outer_name)
             .copied()
             .unwrap_or(i64_t.into());
         let val_ty = self
+            .mapset
             .map_val_types
             .get(outer_name)
             .copied()

@@ -54,34 +54,37 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
 
-        let te: TypeExpr =
-            if self.set_elem_types.contains_key(name) {
-                let elem =
-                    self.set_elem_type_exprs.get(name).cloned().ok_or_else(|| {
-                        format!("clone: missing set_elem_type_exprs for '{}'", name)
-                    })?;
-                mk_path("Set", vec![elem])
-            } else if self.map_key_types.contains_key(name) {
-                let k =
-                    self.map_key_type_exprs.get(name).cloned().ok_or_else(|| {
-                        format!("clone: missing map_key_type_exprs for '{}'", name)
-                    })?;
-                let v = self.var_elem_type_exprs.get(name).cloned().ok_or_else(|| {
-                    format!("clone: missing var_elem_type_exprs (val) for '{}'", name)
-                })?;
-                mk_path("Map", vec![k, v])
-            } else if self.vec_elem_types.contains_key(name) {
-                // Distinguish String from Vec[T]: String registers in
-                // `vec_elem_types` (so the str-method dispatch finds it) but
-                // skips `var_elem_type_exprs`. Vec[T] populates both.
-                if let Some(elem_te) = self.var_elem_type_exprs.get(name).cloned() {
-                    mk_path("Vec", vec![elem_te])
-                } else {
-                    mk_path("String", vec![])
-                }
+        let te: TypeExpr = if self.mapset.set_elem_types.contains_key(name) {
+            let elem = self
+                .mapset
+                .set_elem_type_exprs
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("clone: missing set_elem_type_exprs for '{}'", name))?;
+            mk_path("Set", vec![elem])
+        } else if self.mapset.map_key_types.contains_key(name) {
+            let k = self
+                .mapset
+                .map_key_type_exprs
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("clone: missing map_key_type_exprs for '{}'", name))?;
+            let v = self.var_elem_type_exprs.get(name).cloned().ok_or_else(|| {
+                format!("clone: missing var_elem_type_exprs (val) for '{}'", name)
+            })?;
+            mk_path("Map", vec![k, v])
+        } else if self.vec_elem_types.contains_key(name) {
+            // Distinguish String from Vec[T]: String registers in
+            // `vec_elem_types` (so the str-method dispatch finds it) but
+            // skips `var_elem_type_exprs`. Vec[T] populates both.
+            if let Some(elem_te) = self.var_elem_type_exprs.get(name).cloned() {
+                mk_path("Vec", vec![elem_te])
             } else {
-                return Ok(None);
-            };
+                mk_path("String", vec![])
+            }
+        } else {
+            return Ok(None);
+        };
         Ok(Some(te))
     }
 
@@ -493,7 +496,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(map_name) = &map_obj.kind else {
             return Ok(None);
         };
-        if !self.map_key_types.contains_key(map_name.as_str()) {
+        if !self.mapset.map_key_types.contains_key(map_name.as_str()) {
             return Ok(None);
         }
         let map_name = map_name.clone();
@@ -529,7 +532,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             if m == "entry" && inner_args.len() == 1 {
                 if let ExprKind::Identifier(map_name) = &inner.kind {
-                    if self.map_key_types.contains_key(map_name.as_str()) {
+                    if self.mapset.map_key_types.contains_key(map_name.as_str()) {
                         return Some(map_name.clone());
                     }
                 }
@@ -622,10 +625,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
         let key_ty = *self
+            .mapset
             .map_key_types
             .get(map_name)
             .ok_or_else(|| format!("entry chain: missing key type for '{}'", map_name))?;
         let val_ty = *self
+            .mapset
             .map_val_types
             .get(map_name)
             .ok_or_else(|| format!("entry chain: missing val type for '{}'", map_name))?;

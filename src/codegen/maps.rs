@@ -43,6 +43,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // bucket with the value side stripped (`val_size = 0`).
         let (key_ty, val_size) = if is_set {
             let elem_ty = self
+                .mapset
                 .set_elem_types
                 .get(var_name)
                 .copied()
@@ -50,11 +51,13 @@ impl<'ctx> super::Codegen<'ctx> {
             (elem_ty, i64_t.const_int(0, false))
         } else {
             let key_ty = self
+                .mapset
                 .map_key_types
                 .get(var_name)
                 .copied()
                 .unwrap_or(i64_t.into());
             let val_ty = self
+                .mapset
                 .map_val_types
                 .get(var_name)
                 .copied()
@@ -76,9 +79,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // the key of the underlying bucket, so they consult the `set_elem_*`
         // tables.
         let key_te = if is_set {
-            self.set_elem_type_exprs.get(var_name).cloned()
+            self.mapset.set_elem_type_exprs.get(var_name).cloned()
         } else {
-            self.map_key_type_exprs.get(var_name).cloned()
+            self.mapset.map_key_type_exprs.get(var_name).cloned()
         };
         let (hash_fn, eq_fn) = if let Some(key_te) = key_te {
             (
@@ -87,9 +90,9 @@ impl<'ctx> super::Codegen<'ctx> {
             )
         } else {
             let type_name = if is_set {
-                self.set_elem_type_names.get(var_name).cloned()
+                self.mapset.set_elem_type_names.get(var_name).cloned()
             } else {
-                self.map_key_type_names.get(var_name).cloned()
+                self.mapset.map_key_type_names.get(var_name).cloned()
             }
             .unwrap_or_else(|| "i64".to_string());
             (
@@ -210,11 +213,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
 
         let key_ty = self
+            .mapset
             .map_key_types
             .get(var_name)
             .copied()
             .unwrap_or(i64_t.into());
         let val_ty = self
+            .mapset
             .map_val_types
             .get(var_name)
             .copied()
@@ -267,6 +272,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // freed before the bucket storage releases. Same contract: the
         // fn owns the whole key side, so the flag is forced off.
         let key_drop_fn = self
+            .mapset
             .map_key_type_exprs
             .get(var_name)
             .cloned()
@@ -307,6 +313,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
 
         let elem_ty = self
+            .mapset
             .set_elem_types
             .get(var_name)
             .copied()
@@ -354,6 +361,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // half of the underlying `Map[T, ()]`) needs a per-element field
         // release; see the Map path's key_drop_fn above.
         let key_drop_fn = self
+            .mapset
             .set_elem_type_exprs
             .get(var_name)
             .cloned()
@@ -405,11 +413,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .copied()
             .ok_or_else(|| format!("compile_map_literal_stmt: '{var_name}' not registered"))?;
         let key_ty = self
+            .mapset
             .map_key_types
             .get(var_name)
             .copied()
             .unwrap_or(i64_t.into());
         let val_ty = self
+            .mapset
             .map_val_types
             .get(var_name)
             .copied()
@@ -493,11 +503,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
 
         let key_ty = self
+            .mapset
             .map_key_types
             .get(name)
             .copied()
             .unwrap_or(i64_t.into());
         let val_ty = self
+            .mapset
             .map_val_types
             .get(name)
             .copied()
@@ -569,11 +581,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
 
         let key_ty = self
+            .mapset
             .map_key_types
             .get(name)
             .copied()
             .unwrap_or(i64_t.into());
         let val_ty = self
+            .mapset
             .map_val_types
             .get(name)
             .copied()
@@ -657,11 +671,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
 
         let key_ty = self
+            .mapset
             .map_key_types
             .get(var_name)
             .copied()
             .unwrap_or(i64_t.into());
         let val_ty = self
+            .mapset
             .map_val_types
             .get(var_name)
             .copied()
@@ -688,7 +704,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`karac_map_get`), instead of the hash-order iterator below. `values`
         // in particular cannot be post-sorted (it carries no key), so ordering
         // has to happen at build time.
-        if self.sorted_collection_vars.contains(var_name) {
+        if self.mapset.sorted_collection_vars.contains(var_name) {
             return self.compile_sorted_map_kvg(
                 var_name, method, map_handle, key_ty, val_ty, elem_ty, elem_size,
             );
@@ -780,7 +796,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // load+store, the prior behavior — correct for scalars, the only
         // regression-free option without the type.
         self.builder.position_at_end(body_bb);
-        let key_te = self.map_key_type_exprs.get(var_name).cloned();
+        let key_te = self.mapset.map_key_type_exprs.get(var_name).cloned();
         let val_te = self.var_elem_type_exprs.get(var_name).cloned();
         // Emit (cached) clone fns first — `emit_clone_fn_for_type_expr` may move
         // the builder into the synthesized fn, so re-assert `body_bb` after.
@@ -880,6 +896,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.unwrap();
 
         let key_te = self
+            .mapset
             .map_key_type_exprs
             .get(var_name)
             .cloned()
@@ -1061,6 +1078,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.unwrap();
 
         let key_te = self
+            .mapset
             .map_key_type_exprs
             .get(var_name)
             .cloned()
@@ -1302,6 +1320,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.unwrap();
 
         let key_te = self
+            .mapset
             .map_key_type_exprs
             .get(var_name)
             .cloned()
@@ -1511,11 +1530,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
 
         let key_ty = self
+            .mapset
             .map_key_types
             .get(var_name)
             .copied()
             .unwrap_or(i64_t.into());
         let val_ty = self
+            .mapset
             .map_val_types
             .get(var_name)
             .copied()
@@ -1980,8 +2001,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // shared, `map_val_shared_heap_type_for` returns None
                 // and we skip — Vec/String/primitive V's don't have a
                 // refcount to dec.
-                if self.pending_map_insert_old_dec {
-                    self.pending_map_insert_old_dec = false;
+                if self.mapset.pending_map_insert_old_dec {
+                    self.mapset.pending_map_insert_old_dec = false;
                     if self.map_val_weak_for(var_name) {
                         // B-2026-08-08-29 — weak V. The DISPLACED occupant's
                         // weak count is about to be wrapped in a `Some(old)`
@@ -2086,6 +2107,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // at parity. `key_slot` is the caller's key aggregate, which is
                 // exactly the by-address form the stored hash/eq expect.
                 let str_key_te = self
+                    .mapset
                     .map_key_type_exprs
                     .get(var_name)
                     .cloned()
@@ -2420,8 +2442,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // nobody holds. Reclaim it — dec a shared/RC value, free an
                 // owned-heap `String`/`Vec` buffer. Same wildcard-let gating as
                 // insert (a bare `m.remove(k);` already drops its Option temp).
-                if self.pending_map_insert_old_dec {
-                    self.pending_map_insert_old_dec = false;
+                if self.mapset.pending_map_insert_old_dec {
+                    self.mapset.pending_map_insert_old_dec = false;
                     if self.map_val_weak_for(var_name) {
                         // B-2026-08-08-29 — weak V, the remove sibling of the
                         // insert-overwrite reclaim above.
@@ -2515,6 +2537,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // nothing, and running it FIRST lets the bodies read the values
                 // the frees below invalidate.
                 if let Some(bodies) = self
+                    .mapset
                     .map_val_bodies_tes
                     .get(var_name)
                     .cloned()
@@ -2577,13 +2600,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // receiver — a plain (hash) Map never typechecks these — so the
             // sorted-keys backbone (`emit_sorted_keys_buf`) is always valid here.
             "min" | "max" | "floor" | "ceiling"
-                if self.sorted_collection_vars.contains(var_name) =>
+                if self.mapset.sorted_collection_vars.contains(var_name) =>
             {
                 self.compile_sorted_map_option_lookup(
                     var_name, method, map_handle, key_ty, val_ty, args,
                 )
             }
-            "range" if self.sorted_collection_vars.contains(var_name) => {
+            "range" if self.mapset.sorted_collection_vars.contains(var_name) => {
                 self.compile_sorted_map_range(var_name, map_handle, key_ty, val_ty, args)
             }
             _ => Err(format!("codegen: Map.{method} not yet implemented")),
