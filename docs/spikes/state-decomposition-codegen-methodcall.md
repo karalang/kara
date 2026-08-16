@@ -154,6 +154,9 @@ for fp in files:
 | 2 | cluster 3 **`Provider`** (`src/codegen/provider_state.rs`) | **landed** — 6 fields moved + the dead `provider_lookup_result_ty` deleted; `Codegen` 361 → 355 fields | 2026-08-16 |
 | 2 | cluster 5 **`Display`** (`src/codegen/display.rs`) | **landed** — 8 fields (per-site payload types for Option/Result, tuple, Vec, Map, Set; baked-Display enums; emitted-fn cache) | 2026-08-16 |
 | 2 | cluster 4 **`Tracing`** (`src/codegen/tracing.rs`) | **landed** — 4 fields (`current_span`, `panic_site_counter`, `strip_error_trace`, `runtime_panic_prefix_needed`); `Codegen` 355 → 345 fields | 2026-08-16 |
-| 2 | clusters 6–12 | not started | — |
+| 2 | cluster 7 **`Contracts`** (`src/codegen/contract_state.rs`) | **landed** — 12 fields (refinement/distinct bases + predicates, the per-function contract frame, `strip_contracts`, secret types) | 2026-08-16 |
+| 2 | cluster 8 **`GpuAccel`** (`src/codegen/accel.rs`) | **landed** — 14 fields (SoA layouts + drop fns, GPU WGSL/buffers, tensor and column/DataFrame infos); `Codegen` 345 → 321 fields | 2026-08-16 |
+| 2 | cluster 6 `BceOverflow` | **deferred** — B-2026-08-15-30 (open, perf) touches the BCE/vec paths; take it after that closes | — |
+| 2 | clusters 9–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
 | 2 | clusters 14–15 (`FnCtx`, `VarTables`) | deferred — decide after 13 | — |

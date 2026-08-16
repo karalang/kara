@@ -7,6 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
+use accel::Accel;
+use contract_state::ContractState;
 use display::Display;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -27,6 +29,7 @@ use crate::ownership::{CapturePath, OwnershipCheckResult, OwnershipMode, ParCapt
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
+mod accel;
 mod accum_overflow;
 mod arrow;
 mod ascii_const_chars;
@@ -46,6 +49,7 @@ mod closures;
 mod collections;
 mod column;
 mod consume_class;
+mod contract_state;
 mod control_flow;
 mod control_flow_bce;
 mod control_flow_for;
@@ -127,7 +131,7 @@ use helpers::{
 };
 use state::{
     AssertedIndexBound, CleanupAction, EnumLayout, LayoutId, LoopFrame, MapMonoMethods,
-    SharedTypeInfo, SoaLayout, SpawnSiteRecord, VarSlot,
+    SharedTypeInfo, SpawnSiteRecord, VarSlot,
 };
 
 // ── Public API ─────────────────────────────────────────────────
@@ -1121,6 +1125,8 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    pub(crate) accel: Accel<'ctx>,
+    pub(crate) contract_state: ContractState<'ctx>,
     pub(crate) tracing: Tracing,
     pub(crate) display: Display<'ctx>,
     pub(crate) provider_state: ProviderState<'ctx>,
@@ -1396,26 +1402,6 @@ pub(super) struct Codegen<'ctx> {
     /// `boxed_passthrough_owner_alias`, and separate for the same reason as the
     /// set above.
     pub(crate) nested_boxed_passthrough_owner_alias: std::collections::HashMap<String, String>,
-    /// Refinement type alias name → its base `TypeExpr` (`type Email =
-    /// String where …` → the `String` type expr). Populated from the
-    /// program's `Item::TypeAlias`es that carry a `where` predicate.
-    /// Consulted by `llvm_type_for_type_expr` / `llvm_type_for_name` so a
-    /// refinement lowers to its *base*'s layout — without this a refinement
-    /// over a non-`i64` base would hit the `i64` fall-through default and
-    /// silently mis-size the slot (phase-9 step 4). A refinement is
-    /// layout-identical to its base (no runtime tag), so this is a pure
-    /// alias resolution.
-    pub(crate) refinement_bases: HashMap<String, crate::ast::TypeExpr>,
-    /// Refinement type alias name → the ordered names of its generic
-    /// parameters (`type NonEmpty[T] = Vec[T] where …` → `["T"]`). Parallel
-    /// to `refinement_bases`, which stores only the *uninstantiated* base
-    /// (`Vec[T]`). When a refinement alias is used at a concrete arity
-    /// (`NonEmpty[EnrichedRow]`), `resolve_type_alias_te` zips these
-    /// param names against the use-site generic args and substitutes them
-    /// into the base so the binding registers as `Vec[EnrichedRow]` (correct
-    /// element type), not `Vec[T]` (which would mis-size the element as the
-    /// `i64` unknown-name fall-through). Empty for non-generic refinements.
-    pub(crate) refinement_generic_params: HashMap<String, Vec<String>>,
     /// PLAIN type alias name → its base `TypeExpr` (`type Name = String;` →
     /// the `String` type expr). The `where`-free sibling of
     /// `refinement_bases`, populated from the same `Item::TypeAlias`es and
@@ -1443,72 +1429,6 @@ pub(super) struct Codegen<'ctx> {
     /// `Vec[i64]` (correct element type) rather than `Vec[T]`. Empty for a
     /// non-generic alias.
     pub(crate) plain_alias_generic_params: HashMap<String, Vec<String>>,
-    /// Distinct-type name → its base `TypeExpr` (`distinct type UserId = i64`
-    /// → the `i64` type expression). A distinct type is layout-identical to
-    /// its base (zero-cost wrapper, no runtime tag), so codegen lowers it to
-    /// the base's LLVM layout — consulted ONLY at the pure-layout sites
-    /// (`llvm_type_for_type_expr`, `llvm_type_for_name`), NOT in
-    /// `type_alias_base_name`: unlike a refinement, a distinct type keeps its
-    /// own name for value-level method dispatch (no base-method deref).
-    /// Populated from `Item::DistinctType`. design.md § Distinct Types.
-    pub(crate) distinct_bases: HashMap<String, crate::ast::TypeExpr>,
-    /// Refinement name → its predicate `Expr` (`type Even = i64 where
-    /// self % 2 == 0` → the `self % 2 == 0` expression). Populated from
-    /// `Item::TypeAlias.refinement`, parallel to `refinement_bases`. Drives
-    /// the runtime predicate check emitted at `x as Refined` cast sites and
-    /// `Refined.try_from(x)` calls (phase-9 step 5c): the predicate is
-    /// compiled with `self` bound to the candidate value, then branched on.
-    pub(crate) refinement_predicates: HashMap<String, crate::ast::Expr>,
-    /// The `ensures` clauses of the function currently being compiled
-    /// (design.md § Contracts). Set at `compile_function` entry, cleared at
-    /// exit; consumed by `emit_ensures_checks`, which is emitted inline
-    /// before each `ret` (the tail return + every explicit `return`).
-    pub(crate) current_contract_ensures: Vec<crate::ast::EnsuresClause>,
-    /// The return `TypeExpr` of the function currently being compiled, set
-    /// alongside `current_contract_ensures`. `emit_ensures_checks` uses it to
-    /// register the `result` binding's type (via `register_var_from_type_expr`)
-    /// so a `result.field` access inside an `ensures` clause resolves the
-    /// struct field index — without it, field access on `result` can't find
-    /// the struct name and reads the wrong slot (the `ensures(result)
-    /// result.q == old(...)` codegen bug surfaced by the Weave dogfood).
-    /// `None` for a `()`-returning function or when contracts are stripped.
-    pub(crate) current_contract_result_type: Option<crate::ast::TypeExpr>,
-    /// `old(arg)` pre-state snapshots for the current function, captured at
-    /// entry and keyed by the arg expression's span. Read back by the
-    /// `old(...)` interception in `compile_call` when emitting the
-    /// postcondition (design.md § Contracts rule 4).
-    pub(crate) contract_old_snapshots: HashMap<SpanKey, inkwell::values::BasicValueEnum<'ctx>>,
-    /// Struct/impl `invariant` predicates that must hold at every exit of the
-    /// method currently being compiled (design.md § Contracts rule 3). Set at
-    /// `compile_function` entry for impl-method functions — `impl invariant`
-    /// always, plain `invariant` only when the method is `pub` — and cleared at
-    /// exit. Consumed by `emit_invariant_checks`, emitted inline before each
-    /// `ret` (same exit points as `ensures`), with `self` already bound as the
-    /// method's first parameter. Empty for free functions and non-pub methods
-    /// of invariant-free structs.
-    pub(crate) current_method_invariants: Vec<crate::ast::Expr>,
-    /// `Some(type_name)` when the function currently being compiled is a
-    /// *constructor* — a `pub` associated function returning `Self`/the type,
-    /// which has no `self` parameter (design.md § Contracts: "Constructors ...
-    /// also check the invariant at their return point"). When set,
-    /// `emit_invariant_checks` binds the *return value* as `self` before
-    /// evaluating `current_method_invariants`, since the construction boundary
-    /// has no receiver. `None` for methods (where `self` is parameter 0) and
-    /// for free / non-constructor associated functions. Set at
-    /// `compile_function` entry, cleared at exit.
-    pub(crate) constructor_invariant_self_type: Option<String>,
-    /// When `true`, all contract machinery is elided from the emitted module
-    /// (design.md § Contracts: "stripped in release"): `requires` / `ensures`
-    /// checks, `old(...)` pre-state capture, and struct/impl `invariant`
-    /// checks are not emitted, paying zero runtime cost. Defaults from
-    /// `read_strip_contracts_env` (`KARAC_STRIP_CONTRACTS`) at construction;
-    /// `set_strip_contracts` overrides it (used by the release-build path and
-    /// by IR tests that must force the decision without touching global env).
-    /// The gate lives at the three contract *setup* sites in
-    /// `compile_function` — suppressing setup makes every downstream emit site
-    /// a natural no-op, and `old(...)` (which lives only inside `ensures`
-    /// bodies) is never reached because those bodies aren't compiled.
-    pub(crate) strip_contracts: bool,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -1684,16 +1604,6 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) state_machine_return_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Field names in declaration order (struct name → field names).
     pub(crate) struct_field_names: HashMap<String, Vec<String>>,
-    /// True when the `std.secret` `Secret[T]` wrapper is in scope for this
-    /// compilation — i.e. a `StructDef` named `Secret` carrying
-    /// `stdlib_origin` was registered (the gated `import std.secret.{Secret};`
-    /// path). Read by the derived-Display field walk (`build_struct_display_parts`)
-    /// to emit `Secret`-typed fields as the literal `<redacted>` instead of
-    /// leaking the wrapped value. Scoped to the stdlib type so a user's
-    /// unrelated `struct Secret` renders normally (a `Secret` import and a
-    /// user `struct Secret` cannot coexist — the resolver rejects the
-    /// duplicate name — so the flag is unambiguous within one program).
-    pub(crate) secret_type_is_stdlib: bool,
     /// Field type-names in declaration order (struct name → per-field
     /// user-type name, or `None` if the field's declared type isn't a
     /// path / isn't a known user struct). Used to recover the inner
@@ -2358,15 +2268,6 @@ pub(super) struct Codegen<'ctx> {
     /// double-free. Populated in `pattern_binding.rs` at the view bind; cleared
     /// per-function alongside `owned_struct_params`.
     pub(crate) shared_enum_payload_view_vars: std::collections::HashMap<String, String>,
-    /// SoA layout metadata (layout name → SoaLayout). **Origin-only** (slice 5):
-    /// keyed by the `layout <name>` block's name, consulted to resolve a
-    /// `LayoutId::Soa(<block>)` to its struct shape, to populate the layout
-    /// catalogue (`collect_soa_layouts`), and — at a `let` binding *site* — to
-    /// decide whether the binding's name matches a layout origin
-    /// (`seed_binding_site_layout`). It is **never** the access-path trigger:
-    /// a binding's physical layout is carried by `binding_layouts` /
-    /// `layout_subst`, not re-derived from this map by name at each use.
-    pub(crate) soa_layouts: HashMap<String, SoaLayout>,
     /// Per-binding physical-layout value carrier (slice 5): the active
     /// `LayoutId` of each in-function *local* binding, seeded at its binding
     /// site (`seed_binding_site_layout` — the one sanctioned origin name-match)
@@ -2379,22 +2280,6 @@ pub(super) struct Codegen<'ctx> {
     /// cleared at each function entry and save/restored (`mem::take`) around the
     /// mono entry points, exactly like `variables` / `ref_params`.
     pub(crate) binding_layouts: HashMap<String, LayoutId>,
-    /// Names of the current function's *returned* local bindings — the
-    /// tail-`return`ed bare `Vec[E]` identifiers (`soa_return_local_names`).
-    /// A returned local's physical layout is dictated by the function's
-    /// `return_layout` (the SoA-return monomorph seeds it in `layout_subst`),
-    /// NOT by a coincidental name match against a `layout` block. So
-    /// `seed_binding_site_layout`'s origin name-match fallback is suppressed for
-    /// any binding in this set: in the AoS base symbol (and forward-param-only
-    /// monos, where `return_layout` is `Aos`) a returned local stays AoS,
-    /// matching the AoS return type — without this, a builder whose returned
-    /// local is named like a layout block (`init_grid`'s `grid`,
-    /// `fan_collide`'s `coll`) lowered its body SoA while the base signature
-    /// returned the AoS `{ptr,len,cap}` struct (LLVM return-type mismatch). A
-    /// terminal (non-returned) local is unaffected, so single-function SoA
-    /// (`main`'s `entities`) still seeds by name. Set at each function entry
-    /// (base + every mono) and save/restored around the mono entry points.
-    pub(crate) soa_return_locals: std::collections::HashSet<String>,
     /// Function parameter ref-ness (function name → vec of is_ref per param).
     pub(crate) fn_param_ref: HashMap<String, Vec<bool>>,
     /// The `mut ref` / `mut Slice` subset of [`Self::fn_param_ref`] — a
@@ -2840,16 +2725,6 @@ pub(super) struct Codegen<'ctx> {
     /// with no heap-owning fields don't get an entry (the synthesis fn returns
     /// `None`) and don't reach `CleanupAction::StructDrop`.
     pub(crate) struct_drop_fns: HashMap<String, FunctionValue<'ctx>>,
-    /// One per-element heap-field drop fn per SoA `layout` block that has at
-    /// least one String/Vec-bearing group, keyed by the layout name. The fn
-    /// takes `*mut SoaStruct` and, for every live element `[0, len)`, frees
-    /// each heap group's String/Vec field buffers (cap-guarded, recursing
-    /// nested tuples/structs) — the SoA analog of `struct_drop_fns`, called
-    /// from the `FreeSoaGroups` cleanup arm and the reassignment inline-free
-    /// before the group buffers themselves are released. A fully-POD layout
-    /// gets no entry (`emit_soa_drop_fn` returns `None`) and emits exactly the
-    /// pre-heap-field cleanup IR (the Slipstream native-oracle invariant).
-    pub(crate) soa_drop_fns: HashMap<String, FunctionValue<'ctx>>,
     /// Per-user-type lazy drop-wrapper cache (type name →
     /// `karac_drop_<Type>` `FunctionValue`). Populated by
     /// `emit_user_drop_wrappers` for every type in
@@ -3076,10 +2951,6 @@ pub(super) struct Codegen<'ctx> {
     /// `Stats.<fn>` call-span -> slice element `TypeExpr` (`i64` | `f64`),
     /// from `Program.stats_elem_types` (S5). Missing entry = `f64`.
     pub(crate) stats_elem_types: HashMap<(usize, usize), TypeExpr>,
-    /// `gpu.dispatch` kernel-arg span -> generated WGSL shader text, from
-    /// `Program.gpu_dispatch_wgsl` (spike slice-0c). `compile_method_call`
-    /// bakes the shader as a constant and calls `karac_runtime_gpu_f32_map`.
-    pub(crate) gpu_dispatch_wgsl: HashMap<(usize, usize), String>,
     /// `TaskHandle[T].join()` MethodCall span → result type `T`, from
     /// `Program.task_join_return_types`. The join arm of `compile_method_call`
     /// lowers `T` to its LLVM shape so the cross-task result transfer (and the
@@ -3091,12 +2962,6 @@ pub(super) struct Codegen<'ctx> {
     /// borrow and bind `n` as a ref-local. Method-ref half of
     /// B-2026-06-07-5 (free-fn calls use `fn_ref_return_inner`).
     pub(crate) ref_return_inner_types: HashMap<(usize, usize), TypeExpr>,
-    /// Inner `T` of every `Secret[T]`-typed expression, keyed by span —
-    /// populated from `Program.secret_inner_types`. Read by the `ct_eq`
-    /// intercept (`compile_method_call`) to resolve a `Secret[T]` receiver's
-    /// inner type (its `bool` result has no `ref_return_inner_types` entry) and
-    /// gate the constant-time compare to the `Secret[String]` inner v1 supports.
-    pub(crate) secret_inner_types: HashMap<(usize, usize), TypeExpr>,
     /// Bare names of USER-defined impl methods whose declared return type is
     /// a borrow (`-> ref T`). Gates the method-ref caller path (let-bind +
     /// direct-use rejection) so it fires ONLY for user accessors — builtin
@@ -3161,23 +3026,6 @@ pub(super) struct Codegen<'ctx> {
     /// collide on one `$struct` symbol, sharing an element-erased body
     /// (B-2026-07-11-35 return-owned-param leg).
     pub(crate) call_type_subs_mangle: HashMap<(usize, usize), HashMap<String, String>>,
-    /// Per-expression Tensor type info (element TypeExpr + static dims),
-    /// keyed by `(span.offset, span.length)`. Populated from
-    /// `Program.tensor_typed_exprs` (lowering pass, from
-    /// `TypeCheckResult.expr_types`). Consumed at `Tensor.from(...)`
-    /// construction sites, unannotated tensor let-bindings, and indexing
-    /// dispatch. See `src/codegen/tensor.rs` for the value layout this
-    /// drives.
-    pub(crate) tensor_typed_exprs: HashMap<(usize, usize), crate::ast::TensorTypeInfo>,
-    /// B-2026-08-14-17 — the `TensorTypeInfo` of an `Index` RECEIVER, keyed by
-    /// the receiver's span (`Program.tensor_index_recv_types`). Shares its key
-    /// with `tensor_typed_exprs` at every tensor index — the parser stamps a
-    /// postfix expression with its receiver's span — where that table describes
-    /// the index's scalar RESULT. `compile_index` installs this entry for the
-    /// duration of compiling the receiver so a tensor-valued rvalue
-    /// (`(t * 2)[0]`) routes through the tensor lowering instead of being
-    /// compiled as scalar arithmetic on two pointers.
-    pub(crate) tensor_index_recv_types: HashMap<(usize, usize), crate::ast::TensorTypeInfo>,
     /// B-2026-08-14-38 — the `Vec[T]` / `VecDeque[T]` `TypeExpr` of an `Index`
     /// RECEIVER that is a method call (`Program.index_recv_vec_types`). The Vec
     /// twin of `tensor_index_recv_types`: same key, same collision (the parser
@@ -3186,45 +3034,6 @@ pub(super) struct Codegen<'ctx> {
     /// materialize the nameless temporary into a synth Vec local and lower the
     /// read through the identifier-keyed Vec path.
     pub(crate) index_recv_vec_types: HashMap<(usize, usize), TypeExpr>,
-    /// Per-binding Tensor registration: element LLVM type + static dims
-    /// (`Some(n)` = concrete literal usable for stride folding /
-    /// bounds-check elision; `None` = read the dim from the value's
-    /// runtime header). Populated by `register_var_from_type_expr`'s
-    /// Tensor arm (annotations, params, for-bindings) and the let-path
-    /// side-table fallback for unannotated bindings. Consulted by
-    /// `compile_index` / `compile_index_store` / method dispatch.
-    pub(crate) tensor_var_infos: HashMap<String, state::TensorVarInfo<'ctx>>,
-    /// Expected-type threading for `Tensor.zeros` / `ones` / `full` —
-    /// these constructors can't recover the element type or rank from
-    /// their `dims: Vec[i64]` argument, so the let-binding path stashes
-    /// the destination binding's registered `TensorVarInfo` here before
-    /// compiling the RHS (the exact `pending_let_elem_type` mechanism
-    /// `Vec.with_capacity` uses). `Tensor.from` never needs it (dims and
-    /// element type both come from the literal).
-    pub(crate) pending_let_tensor_info: Option<state::TensorVarInfo<'ctx>>,
-    /// Per-expression Column element type, keyed by `(span.offset,
-    /// span.length)`. Populated from `Program.column_typed_exprs`
-    /// (lowering pass). Consumed at unannotated column let-bindings
-    /// (column-returning calls) so the binding registers its element
-    /// type. See `src/codegen/column.rs` for the value layout.
-    pub(crate) column_typed_exprs: HashMap<(usize, usize), crate::ast::ColumnTypeInfo>,
-    /// Per-binding Column registration: element LLVM type (+ unsigned
-    /// flag). Populated by `register_var_from_type_expr`'s Column arm
-    /// (annotations, params) and the let-path side-table fallback for
-    /// unannotated bindings. Consulted by `compile_index` (`c[i] ->
-    /// Option[T]`) and method dispatch (`push` / `len` / …).
-    pub(crate) column_var_infos: HashMap<String, state::ColumnVarInfo<'ctx>>,
-    /// Expected-type threading for `Column.new` / `with_capacity` /
-    /// `from_vec` / `from_iter_nullable` — `new`/`with_capacity` carry no
-    /// element value in their args, so the let-binding path stashes the
-    /// destination binding's registered `ColumnVarInfo` here before
-    /// compiling the RHS (the `pending_let_tensor_info` mechanism).
-    pub(crate) pending_let_column_info: Option<state::ColumnVarInfo<'ctx>>,
-    /// Set of binding names known to be `DataFrame`s (non-generic, so no
-    /// per-binding type info — just membership). Populated by
-    /// `register_var_from_type_expr`'s DataFrame arm; gates
-    /// `try_compile_dataframe_method` and the `FreeDataFrame` tracker.
-    pub(crate) dataframe_var_infos: std::collections::HashSet<String>,
     /// Handle-backed builtin (Column/Tensor) bindings for bare
     /// type-param params of generic monos, keyed by MANGLED mono name →
     /// `[(param_name, info)]`. Written by `compile_generic_call` (from
@@ -3819,33 +3628,6 @@ pub(super) struct Codegen<'ctx> {
     /// `llvm.experimental.noalias.scope.decl` in THIS function's loop
     /// preheader and are only sound within it.
     pub(crate) tabulate_alias_scopes: Option<TabulateAliasScopes<'ctx>>,
-    /// LLVM struct type for `ProviderLookupResult { data, vtable }` —
-    /// matches the runtime's `#[repr(C)]` shape. Used once at codegen
-    /// init to type the `karac_provider_lookup` extern's return; after
-    /// that the call's return type carries the shape implicitly so
-    /// extractvalue at sub-step 4 dispatch sites doesn't need to look
-    /// it up here. Field retained as ABI documentation for future
-    /// readers and as the canonical anchor if `ProviderLookupResult`'s
-    /// shape ever changes.
-    #[allow(dead_code)]
-    // ── Map runtime ───────────────────────────────────────────────
-    /// GPU-SLIP-4h: per-`GpuBuffer` binding → element struct name, recorded
-    /// when `let buf = gpu.upload(vec)` / a resident `gpu.dispatch` binds a
-    /// handle. `gpu.download` into a PLAIN (un-layouted) `Vec[S]` target
-    /// needs `S` to synthesize the default interleaved manifest, and the
-    /// `{handle, n}` value itself is type-erased.
-    pub(crate) gpu_buffer_elem_structs: HashMap<String, String>,
-    /// Names of variables that are actually a `GpuBuffer` (`{handle, n}` value,
-    /// bound by `let buf = gpu.upload(...)` / a resident `gpu.dispatch`). The
-    /// gpu-buffer LLVM type is an anonymous `{i64, i64}`, which is STRUCTURALLY
-    /// identical to any 2-field all-`i64` user struct (`struct P { x: i64,
-    /// y: i64 }`), so the gpu-buffer reassign / method arms must NOT key on
-    /// `vs.ty == gpu_buffer_type()` alone — a plain `P` reassign otherwise routes
-    /// old-value cleanup through `karac_runtime_gpu_free_soa` and pulls in the
-    /// opt-in GPU archive, breaking `karac run`/`build` for a non-GPU program
-    /// (B-2026-07-18-7). This is the authoritative membership test. Cleared
-    /// per-function.
-    pub(crate) gpu_buffer_vars: HashSet<String>,
     /// B-2026-08-02-7 / B-2026-08-02-13 — prelude type names a user program
     /// re-declared, shadowing the stdlib type of the same name.
     ///
@@ -7645,7 +7427,20 @@ impl<'ctx> Codegen<'ctx> {
             module,
             builder,
             variables: HashMap::new(),
-            secret_type_is_stdlib: false,
+            contract_state: ContractState {
+                secret_type_is_stdlib: false,
+                refinement_bases: HashMap::new(),
+                refinement_generic_params: HashMap::new(),
+                distinct_bases: HashMap::new(),
+                refinement_predicates: HashMap::new(),
+                current_contract_ensures: Vec::new(),
+                current_contract_result_type: None,
+                contract_old_snapshots: HashMap::new(),
+                current_method_invariants: Vec::new(),
+                constructor_invariant_self_type: None,
+                strip_contracts: read_strip_contracts_env(),
+                secret_inner_types: HashMap::new(),
+            },
             var_type_names: HashMap::new(),
             tuple_var_elem_type_names: HashMap::new(),
             tuple_var_elem_type_exprs: HashMap::new(),
@@ -7666,18 +7461,8 @@ impl<'ctx> Codegen<'ctx> {
             vec_elem_field_clone_log: Vec::new(),
             in_return_defensive_copy: false,
             nested_boxed_passthrough_owner_alias: std::collections::HashMap::new(),
-            refinement_bases: HashMap::new(),
-            refinement_generic_params: HashMap::new(),
             plain_alias_bases: HashMap::new(),
             plain_alias_generic_params: HashMap::new(),
-            distinct_bases: HashMap::new(),
-            refinement_predicates: HashMap::new(),
-            current_contract_ensures: Vec::new(),
-            current_contract_result_type: None,
-            contract_old_snapshots: HashMap::new(),
-            current_method_invariants: Vec::new(),
-            constructor_invariant_self_type: None,
-            strip_contracts: read_strip_contracts_env(),
             tracing: Tracing {
                 strip_error_trace: read_strip_error_trace_env(),
                 runtime_panic_prefix_needed: true,
@@ -7885,9 +7670,23 @@ impl<'ctx> Codegen<'ctx> {
             ref_option_shared_heap: HashMap::new(),
             tail_ret_inner: None,
             discarded_branch_spans: std::collections::HashSet::new(),
-            soa_layouts: HashMap::new(),
+            accel: Accel {
+                soa_layouts: HashMap::new(),
+                soa_return_locals: std::collections::HashSet::new(),
+                soa_drop_fns: HashMap::new(),
+                gpu_dispatch_wgsl: HashMap::new(),
+                tensor_typed_exprs: HashMap::new(),
+                tensor_index_recv_types: HashMap::new(),
+                tensor_var_infos: HashMap::new(),
+                pending_let_tensor_info: None,
+                column_typed_exprs: HashMap::new(),
+                column_var_infos: HashMap::new(),
+                pending_let_column_info: None,
+                dataframe_var_infos: std::collections::HashSet::new(),
+                gpu_buffer_elem_structs: HashMap::new(),
+                gpu_buffer_vars: HashSet::new(),
+            },
             binding_layouts: HashMap::new(),
-            soa_return_locals: std::collections::HashSet::new(),
             scope_cleanup_actions: Vec::new(),
             return_retargets: Vec::new(),
             iter_body_retarget_spans: std::collections::HashSet::new(),
@@ -7920,7 +7719,6 @@ impl<'ctx> Codegen<'ctx> {
             match_scrutinee_enum_hint: None,
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),
-            soa_drop_fns: HashMap::new(),
             user_drop_wrapper_fns: HashMap::new(),
             map_tag_override: match std::env::var("KARAC_MAP_TAG").as_deref() {
                 Ok("0") => Some(false),
@@ -7955,10 +7753,8 @@ impl<'ctx> Codegen<'ctx> {
             iter_let_bindings: HashMap::new(),
             channel_elem_types: HashMap::new(),
             stats_elem_types: HashMap::new(),
-            gpu_dispatch_wgsl: HashMap::new(),
             task_join_return_types: HashMap::new(),
             ref_return_inner_types: HashMap::new(),
-            secret_inner_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             user_ref_method_inner: std::collections::HashMap::new(),
             heuristic_inline_hints: std::collections::HashMap::new(),
@@ -7968,15 +7764,7 @@ impl<'ctx> Codegen<'ctx> {
             fn_value_typed_exprs: HashMap::new(),
             call_type_subs: HashMap::new(),
             call_type_subs_mangle: HashMap::new(),
-            tensor_typed_exprs: HashMap::new(),
-            tensor_index_recv_types: HashMap::new(),
             index_recv_vec_types: HashMap::new(),
-            tensor_var_infos: HashMap::new(),
-            pending_let_tensor_info: None,
-            column_typed_exprs: HashMap::new(),
-            column_var_infos: HashMap::new(),
-            pending_let_column_info: None,
-            dataframe_var_infos: std::collections::HashSet::new(),
             mono_handle_param_infos: HashMap::new(),
             unsigned_vector_exprs: HashSet::new(),
             unsigned_int_exprs: HashSet::new(),
@@ -8057,8 +7845,6 @@ impl<'ctx> Codegen<'ctx> {
                 provider_vtables: HashMap::new(),
                 provider_frame_ty,
             },
-            gpu_buffer_elem_structs: HashMap::new(),
-            gpu_buffer_vars: HashSet::new(),
             user_shadowed_prelude_types: std::collections::HashSet::new(),
             declaring_stdlib_program: false,
             map_key_types: HashMap::new(),
@@ -8326,7 +8112,7 @@ impl<'ctx> Codegen<'ctx> {
     /// the release-build path and IR tests force the decision without relying
     /// on the process-global env var.
     pub(crate) fn set_strip_contracts(&mut self, strip: bool) {
-        self.strip_contracts = strip;
+        self.contract_state.strip_contracts = strip;
     }
 
     /// Override the `?`-error-return-trace stripping decision (peer to
@@ -8736,14 +8522,17 @@ impl<'ctx> Codegen<'ctx> {
         for item in &program.items {
             if let Item::TypeAlias(t) = item {
                 if let Some(pred) = &t.refinement {
-                    self.refinement_bases.insert(t.name.clone(), t.ty.clone());
-                    self.refinement_predicates
+                    self.contract_state
+                        .refinement_bases
+                        .insert(t.name.clone(), t.ty.clone());
+                    self.contract_state
+                        .refinement_predicates
                         .insert(t.name.clone(), pred.clone());
                     // Generic refinement (`type NonEmpty[T] = Vec[T] where …`):
                     // remember the param names so a use at concrete arity
                     // substitutes the right element type into the base.
                     if let Some(gp) = &t.generic_params {
-                        self.refinement_generic_params.insert(
+                        self.contract_state.refinement_generic_params.insert(
                             t.name.clone(),
                             gp.params.iter().map(|p| p.name.clone()).collect(),
                         );
@@ -8785,14 +8574,16 @@ impl<'ctx> Codegen<'ctx> {
         // § Distinct Types (Newtypes).
         for item in &program.items {
             if let Item::DistinctType(d) = item {
-                self.distinct_bases
+                self.contract_state
+                    .distinct_bases
                     .insert(d.name.clone(), d.base_type.clone());
                 // Combined `distinct type T = Base where pred`: register the
                 // predicate so the `T(value)` constructor emits the runtime
                 // assertion via `emit_refinement_assert`. Keyed by the
                 // distinct name, parallel to refinements.
                 if let Some(pred) = &d.refinement {
-                    self.refinement_predicates
+                    self.contract_state
+                        .refinement_predicates
                         .insert(d.name.clone(), pred.clone());
                 }
             }
@@ -8806,11 +8597,13 @@ impl<'ctx> Codegen<'ctx> {
         for (_, sp) in crate::prelude::STDLIB_PROGRAMS.iter() {
             for item in &sp.items {
                 if let Item::DistinctType(d) = item {
-                    self.distinct_bases
+                    self.contract_state
+                        .distinct_bases
                         .entry(d.name.clone())
                         .or_insert_with(|| d.base_type.clone());
                     if let Some(pred) = &d.refinement {
-                        self.refinement_predicates
+                        self.contract_state
+                            .refinement_predicates
                             .entry(d.name.clone())
                             .or_insert_with(|| pred.clone());
                     }
@@ -8842,6 +8635,7 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
         let cyclic: Vec<String> = self
+            .contract_state
             .refinement_bases
             .keys()
             .chain(self.plain_alias_bases.keys())
@@ -8851,6 +8645,7 @@ impl<'ctx> Codegen<'ctx> {
                 seen.insert(cur.clone());
                 loop {
                     let Some(base) = self
+                        .contract_state
                         .refinement_bases
                         .get(&cur)
                         .or_else(|| self.plain_alias_bases.get(&cur))
@@ -8869,8 +8664,8 @@ impl<'ctx> Codegen<'ctx> {
             .cloned()
             .collect();
         for name in cyclic {
-            self.refinement_bases.remove(&name);
-            self.refinement_generic_params.remove(&name);
+            self.contract_state.refinement_bases.remove(&name);
+            self.contract_state.refinement_generic_params.remove(&name);
             self.plain_alias_bases.remove(&name);
             self.plain_alias_generic_params.remove(&name);
         }
@@ -8950,7 +8745,8 @@ impl<'ctx> Codegen<'ctx> {
         // runtime read: a cell can call contracted functions JIT'd from
         // earlier cells, which this module's item scan cannot see.
         self.tracing.runtime_panic_prefix_needed = self.main_symbol_override.is_some()
-            || (!self.strip_contracts && contracts::program_declares_contracts(program));
+            || (!self.contract_state.strip_contracts
+                && contracts::program_declares_contracts(program));
         // Eagerly cache the host `TargetData` up front (phase-10 line 282): the
         // `&self` drop-synthesis paths read `self.target_data` to size the
         // `karac_free_buf` recycling hint (`cap × elem_abi_size`) for a
@@ -9247,12 +9043,12 @@ impl<'ctx> Codegen<'ctx> {
         // Sibling: per-span Tensor element-type + static-dims info for
         // construction / let-registration / indexing dispatch (see
         // `src/codegen/tensor.rs`).
-        self.tensor_typed_exprs = program.tensor_typed_exprs.clone();
-        self.tensor_index_recv_types = program.tensor_index_recv_types.clone();
+        self.accel.tensor_typed_exprs = program.tensor_typed_exprs.clone();
+        self.accel.tensor_index_recv_types = program.tensor_index_recv_types.clone();
         self.index_recv_vec_types = program.index_recv_vec_types.clone();
         // Sibling: per-span Column element-type info for construction /
         // let-registration / indexing dispatch (see `src/codegen/column.rs`).
-        self.column_typed_exprs = program.column_typed_exprs.clone();
+        self.accel.column_typed_exprs = program.column_typed_exprs.clone();
         // Sibling: spans of unsigned-element vector expressions, so the SIMD
         // `reduce_min/max` codegen picks `ult`/`ugt` over the signed default.
         self.unsigned_vector_exprs = program.unsigned_vector_exprs.clone();
@@ -9310,10 +9106,10 @@ impl<'ctx> Codegen<'ctx> {
         self.iter_terminal_acc_types = program.iter_terminal_acc_types.clone();
         self.channel_elem_types = program.channel_elem_types.clone();
         self.stats_elem_types = program.stats_elem_types.clone();
-        self.gpu_dispatch_wgsl = program.gpu_dispatch_wgsl.clone();
+        self.accel.gpu_dispatch_wgsl = program.gpu_dispatch_wgsl.clone();
         self.task_join_return_types = program.task_join_return_types.clone();
         self.ref_return_inner_types = program.ref_return_inner_types.clone();
-        self.secret_inner_types = program.secret_inner_types.clone();
+        self.contract_state.secret_inner_types = program.secret_inner_types.clone();
         self.display.display_option_result_types = program.display_option_result_types.clone();
         self.display.display_tuple_types = program.display_tuple_types.clone();
         self.display.display_vec_types = program.display_vec_types.clone();
@@ -10676,7 +10472,10 @@ impl<'ctx> Codegen<'ctx> {
                     &mut self.ref_return_inner_types,
                     &mut t_ref_return_inner_types,
                 );
-                std::mem::swap(&mut self.secret_inner_types, &mut t_secret_inner_types);
+                std::mem::swap(
+                    &mut self.contract_state.secret_inner_types,
+                    &mut t_secret_inner_types,
+                );
                 std::mem::swap(
                     &mut self.display.display_option_result_types,
                     &mut t_display_option_result_types,

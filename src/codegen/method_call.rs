@@ -4953,7 +4953,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (covers identifier + chained receivers); only `iter_axis`
                 // remains a follow-on codegen slice and errors loudly here
                 // rather than falling through to the silent-0 default.
-                if let Some(info) = self.tensor_var_infos.get(name.as_str()) {
+                if let Some(info) = self.accel.tensor_var_infos.get(name.as_str()) {
                     match method {
                         "shape" | "rank" => {
                             let t_ptr = self.tensor_ptr_for_var(name)?;
@@ -6096,7 +6096,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.inferred_receiver_type(object).as_deref(),
                 Some("Secret")
             )
-            && self.secret_type_is_stdlib
+            && self.contract_state.secret_type_is_stdlib
         {
             // Resolve the receiver's inner `T` (shared with the arg, since the
             // signature is `ct_eq(ref self, other: ref Secret[T])`). The parser
@@ -6106,10 +6106,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // first, then fall back to the receiver span.
             let arg_span = &args[0].value.span;
             let inner_te = self
+                .contract_state
                 .secret_inner_types
                 .get(&(arg_span.offset, arg_span.length))
                 .or_else(|| {
-                    self.secret_inner_types
+                    self.contract_state
+                        .secret_inner_types
                         .get(&(object.span.offset, object.span.length))
                 });
             let inner_is_string = inner_te
@@ -8180,10 +8182,10 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self",
             _ => return None,
         };
-        let (elem, unsigned) = if let Some(ti) = self.tensor_var_infos.get(name) {
+        let (elem, unsigned) = if let Some(ti) = self.accel.tensor_var_infos.get(name) {
             (ti.elem, ti.elem_unsigned)
         } else {
-            let ci = self.column_var_infos.get(name)?;
+            let ci = self.accel.column_var_infos.get(name)?;
             (ci.elem, ci.elem_unsigned)
         };
         let prim = self.primitive_type_name_for_llvm(elem, unsigned)?;
@@ -14837,7 +14839,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the Vec/String element registry that value-receiver dispatch needs.
         let mut is_tensor = false;
         if let Some(info) = self.tensor_var_info_from_type_expr(&inner_te) {
-            self.tensor_var_infos.insert(synth.clone(), info);
+            self.accel.tensor_var_infos.insert(synth.clone(), info);
             is_tensor = true;
         } else {
             let inner_llvm = self.llvm_type_for_type_expr(&inner_te);
@@ -14877,7 +14879,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.string_vars.remove(&synth);
         self.ref_params.remove(&synth);
         if is_tensor {
-            self.tensor_var_infos.remove(&synth);
+            self.accel.tensor_var_infos.remove(&synth);
         }
         result.map(Some)
     }
@@ -19642,11 +19644,16 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // WGSL baked by the typechecker, keyed on the kernel-argument span.
         let key = (args[0].value.span.offset, args[0].value.span.length);
-        let wgsl = self.gpu_dispatch_wgsl.get(&key).cloned().ok_or_else(|| {
-            "internal error: no WGSL recorded for `gpu.dispatch` — the typechecker \
+        let wgsl = self
+            .accel
+            .gpu_dispatch_wgsl
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| {
+                "internal error: no WGSL recorded for `gpu.dispatch` — the typechecker \
              intercept must run before codegen"
-                .to_string()
-        })?;
+                    .to_string()
+            })?;
 
         // Bake the shader text as a global constant; pass (ptr, byte length).
         let i64_t = self.context.i64_type();
@@ -20059,6 +20066,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // NO layout for `S`, the default single interleaved group (GPU-SLIP-4h;
         // upload used the same rule, so handle and manifest always agree).
         let soa = self
+            .accel
             .soa_layouts
             .values()
             .find(|l| l.struct_name == struct_name)
@@ -20266,6 +20274,7 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
     ) -> Option<crate::codegen::state::SoaLayout> {
         if self
+            .accel
             .soa_layouts
             .values()
             .any(|l| l.struct_name == struct_name)

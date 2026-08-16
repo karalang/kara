@@ -2277,7 +2277,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         if let Some(name) = container_recv {
-            if let Some(info) = self.tensor_var_infos.get(name).cloned() {
+            if let Some(info) = self.accel.tensor_var_infos.get(name).cloned() {
                 let t_ptr = self.tensor_ptr_for_var(name)?;
                 return self.compile_tensor_index(t_ptr, &info, index);
             }
@@ -2323,16 +2323,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // allocate, so they are owned unconditionally.
         if container_recv.is_none() {
             let key = (object.span.offset, object.span.length);
-            if let Some(ti) = self.tensor_index_recv_types.get(&key).cloned() {
+            if let Some(ti) = self.accel.tensor_index_recv_types.get(&key).cloned() {
                 let info = self.tensor_var_info_from_table(&ti);
-                let saved = self.tensor_typed_exprs.insert(key, ti);
+                let saved = self.accel.tensor_typed_exprs.insert(key, ti);
                 let compiled = self.compile_expr(object);
                 match saved {
                     Some(prev) => {
-                        self.tensor_typed_exprs.insert(key, prev);
+                        self.accel.tensor_typed_exprs.insert(key, prev);
                     }
                     None => {
-                        self.tensor_typed_exprs.remove(&key);
+                        self.accel.tensor_typed_exprs.remove(&key);
                     }
                 }
                 let val = compiled?;
@@ -2367,7 +2367,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // slot yields `Some`, a SQL null yields `None`. See
         // `src/codegen/column.rs`.
         if let Some(name) = container_recv {
-            if let Some(info) = self.column_var_infos.get(name).copied() {
+            if let Some(info) = self.accel.column_var_infos.get(name).copied() {
                 let control = self.column_ptr_for_var(name)?;
                 return self.compile_column_index(control, &info, index);
             }
@@ -2652,8 +2652,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 ..
             } if method == "shape" => {
                 let recv_is_tensor = match &recv.kind {
-                    ExprKind::Identifier(n) => self.tensor_var_infos.contains_key(n.as_str()),
+                    ExprKind::Identifier(n) => self.accel.tensor_var_infos.contains_key(n.as_str()),
                     _ => self
+                        .accel
                         .tensor_typed_exprs
                         .contains_key(&(recv.span.offset, recv.span.length)),
                 };
@@ -5500,7 +5501,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Tensor element store: `t[i, j] = v` — same layout helpers as
         // the read path (`src/codegen/tensor.rs`).
         if let ExprKind::Identifier(name) = &object.kind {
-            if let Some(info) = self.tensor_var_infos.get(name.as_str()).cloned() {
+            if let Some(info) = self.accel.tensor_var_infos.get(name.as_str()).cloned() {
                 let t_ptr = self.tensor_ptr_for_var(name)?;
                 return self.compile_tensor_index_store(t_ptr, &info, index, val);
             }

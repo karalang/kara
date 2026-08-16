@@ -1270,7 +1270,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `seed_binding_site_layout` does NOT name-match them SoA — a returned
         // local stays AoS here, matching the AoS return type. (A SoA-returning
         // specialization is the `return_layout` mono, not this base symbol.)
-        self.soa_return_locals = self
+        self.accel.soa_return_locals = self
             .soa_return_local_names(&func.body)
             .into_iter()
             .collect();
@@ -1306,7 +1306,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_accessor_let_payload.clear();
         self.for_loop_owned_agg_vars.clear();
         self.borrowed_agg_payload_struct_vars.clear();
-        self.gpu_buffer_vars.clear();
+        self.accel.gpu_buffer_vars.clear();
         self.owned_struct_params.clear();
         self.param_view_locals.clear();
         self.shared_enum_payload_view_vars.clear();
@@ -1356,9 +1356,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // name): a `c: Column[i64]` in one function must not make the
         // Column intercept fire on a same-named non-column binding in the
         // next. Found alongside the mono-side leak (S6a / `SavedVarSideTables`).
-        self.column_var_infos.clear();
-        self.tensor_var_infos.clear();
-        self.dataframe_var_infos.clear();
+        self.accel.column_var_infos.clear();
+        self.accel.tensor_var_infos.clear();
+        self.accel.dataframe_var_infos.clear();
         self.scope_cleanup_actions.clear();
         self.scope_cleanup_actions.push(Vec::new());
         // Slice 10: reseed module-binding side-tables after the per-fn
@@ -2431,7 +2431,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `requires` assert is built, and `old(...)` (which lives only inside
         // `ensures` bodies) is never reached because those bodies aren't
         // compiled. The gate is a single decision point for the whole feature.
-        if !self.strip_contracts {
+        if !self.contract_state.strip_contracts {
             // `requires` preconditions: emit the entry-time predicate checks
             // now that parameters are bound and before the body runs. A false
             // predicate aborts with `contract violated`.
@@ -2442,10 +2442,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // `emit_ensures_checks` can fire them inline before each `ret`
             // (the tail return below + every explicit `return`).
             self.capture_contract_old_snapshots(&func.ensures)?;
-            self.current_contract_ensures = func.ensures.clone();
+            self.contract_state.current_contract_ensures = func.ensures.clone();
             // Return type for the `result` binding in `emit_ensures_checks`
             // (so `result.field` resolves its struct field index).
-            self.current_contract_result_type = func.return_type.clone();
+            self.contract_state.current_contract_result_type = func.return_type.clone();
 
             // Struct/impl `invariant` setup (rule 3): resolve the receiver
             // type's invariants for this method and stash them so
@@ -2454,8 +2454,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // method function carries `Type.method` as its name and the
             // method's `is_pub` flag — both consumed by `method_invariants_for`.
             // Free functions and invariant-free structs yield an empty list.
-            self.current_method_invariants = self.method_invariants_for(&func.name, func.is_pub);
-            self.constructor_invariant_self_type = None;
+            self.contract_state.current_method_invariants =
+                self.method_invariants_for(&func.name, func.is_pub);
+            self.contract_state.constructor_invariant_self_type = None;
             // `method_invariants_for` keys purely off the `Type.method` name, so
             // it also matches associated functions (which `make_impl_method_function`
             // names `Type.method` but gives no `self` parameter). For those:
@@ -2466,7 +2467,7 @@ impl<'ctx> super::Codegen<'ctx> {
             //     a constructor: clear the invariants so we don't try to evaluate
             //     `self.field` against a non-receiver (which previously aborted
             //     codegen with `Undefined variable 'self'`).
-            if !self.current_method_invariants.is_empty() {
+            if !self.contract_state.current_method_invariants.is_empty() {
                 let has_self_param = func.params.first().is_some_and(|p| {
                     matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(n) if n == "self")
                 });
@@ -2482,13 +2483,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         Some((type_name, _))
                             if returns_self_or_type(func.return_type.as_ref(), type_name) =>
                         {
-                            self.constructor_invariant_self_type = Some(type_name.to_string());
+                            self.contract_state.constructor_invariant_self_type =
+                                Some(type_name.to_string());
                         }
                         // Any other associated function (e.g. `Type.parse() -> i64`)
                         // is NOT a constructor: clear the name-resolved invariants
                         // so we don't evaluate `self.field` against a non-receiver
                         // (which would abort codegen with `Undefined variable 'self'`).
-                        _ => self.current_method_invariants.clear(),
+                        _ => self.contract_state.current_method_invariants.clear(),
                     }
                 }
             }
@@ -2962,11 +2964,11 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.scope_cleanup_actions.clear();
-        self.current_contract_ensures.clear();
-        self.current_contract_result_type = None;
-        self.contract_old_snapshots.clear();
-        self.current_method_invariants.clear();
-        self.constructor_invariant_self_type = None;
+        self.contract_state.current_contract_ensures.clear();
+        self.contract_state.current_contract_result_type = None;
+        self.contract_state.contract_old_snapshots.clear();
+        self.contract_state.current_method_invariants.clear();
+        self.contract_state.constructor_invariant_self_type = None;
         Ok(())
     }
 

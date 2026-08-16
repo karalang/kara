@@ -2960,8 +2960,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .and_then(|v| v.get(i).cloned().flatten());
                 let is_tensor_param = param_tensor.is_some();
                 let saved_pending_tensor = param_tensor.map(|info| {
-                    let prev = self.pending_let_tensor_info.take();
-                    self.pending_let_tensor_info = Some(info);
+                    let prev = self.accel.pending_let_tensor_info.take();
+                    self.accel.pending_let_tensor_info = Some(info);
                     prev
                 });
                 // A materialized FRESH-OWNED tensor temp (`Tensor.from(…)` /
@@ -3031,7 +3031,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     val.into()
                 };
                 if let Some(prev) = saved_pending_tensor {
-                    self.pending_let_tensor_info = prev;
+                    self.accel.pending_let_tensor_info = prev;
                 }
                 compiled_args.push(arg_meta);
             }

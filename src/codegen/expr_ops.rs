@@ -7504,7 +7504,7 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
         val: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
-        match self.distinct_bases.get(name).cloned() {
+        match self.contract_state.distinct_bases.get(name).cloned() {
             Some(base_te) => {
                 let target = self.llvm_type_for_type_expr(&base_te);
                 self.coerce_scalar_to_type(val, target)

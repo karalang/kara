@@ -208,7 +208,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::Path { segments, .. } = &callee.kind {
             if segments.len() == 2
                 && segments[1] == "from"
-                && self.distinct_bases.contains_key(&segments[0])
+                && self
+                    .contract_state
+                    .distinct_bases
+                    .contains_key(&segments[0])
             {
                 if let Some(arg) = args.first() {
                     let value = self.compile_expr(&arg.value)?;
@@ -796,7 +799,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // combined `distinct type T = Base where pred` form, it also emits the
         // runtime predicate assertion (`emit_refinement_assert` is a no-op
         // when `name` carries no predicate). design.md § Distinct Types.
-        if self.distinct_bases.contains_key(&name) {
+        if self.contract_state.distinct_bases.contains_key(&name) {
             if let Some(arg) = args.first() {
                 let value = self.compile_expr(&arg.value)?;
                 // Coerce to the base width so a bare literal arg
@@ -1643,13 +1646,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(&name)
                     .and_then(|v| v.get(i).cloned().flatten());
                 let saved_pending_tensor = param_tensor.as_ref().map(|info| {
-                    let prev = self.pending_let_tensor_info.take();
-                    self.pending_let_tensor_info = Some(info.clone());
+                    let prev = self.accel.pending_let_tensor_info.take();
+                    self.accel.pending_let_tensor_info = Some(info.clone());
                     prev
                 });
                 let val = self.compile_expr(&a.value)?;
                 if let Some(prev) = saved_pending_tensor {
-                    self.pending_let_tensor_info = prev;
+                    self.accel.pending_let_tensor_info = prev;
                 }
                 let cur_fn = self
                     .builder
@@ -7209,7 +7212,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // cleanup's null-guard skips — the consumer (tail return, by-
         // value call arg, `let b = a;`) now owns the single heap block.
         // The null store is the Tensor analog of Vec's `cap = 0`.
-        if self.tensor_var_infos.contains_key(var_name) {
+        if self.accel.tensor_var_infos.contains_key(var_name) {
             let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
             return;
         }
@@ -7217,7 +7220,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // cleanup's null-guard skips — the consumer (tail return, by-
         // value call arg, `let b = a;`) now owns the control block + its
         // two buffers. The Column analog of the Tensor arm above.
-        if self.column_var_infos.contains_key(var_name) {
+        if self.accel.column_var_infos.contains_key(var_name) {
             let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
             return;
         }
@@ -7225,7 +7228,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // cleanup's null-guard skips — the consumer (`let b = a;`, by-value
         // arg, tail return) now owns the control block + every column /
         // name it holds. The DataFrame analog of the Column arm above.
-        if self.dataframe_var_infos.contains(var_name) {
+        if self.accel.dataframe_var_infos.contains(var_name) {
             let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
             return;
         }

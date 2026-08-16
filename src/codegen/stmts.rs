@@ -1922,7 +1922,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // header and mismatches its SoA use sites (`substep`/`render_fb`). Checked
         // before the annotation so the SoA type wins over the AoS `Vec[E]` lower.
         if let PatternKind::Binding(name) = &pattern.kind {
-            if let Some(soa) = self.soa_layouts.get(name) {
+            if let Some(soa) = self.accel.soa_layouts.get(name) {
                 return Some(
                     self.soa_vec_type(soa.num_groups, soa.cold_group.is_some())
                         .into(),
@@ -1990,8 +1990,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // tracked per BINDING in `dataframe_var_infos` rather than per
         // expression) and is left alone.
         let span_key = (expr.span.offset, expr.span.length);
-        if self.column_typed_exprs.contains_key(&span_key)
-            || self.tensor_typed_exprs.contains_key(&span_key)
+        if self.accel.column_typed_exprs.contains_key(&span_key)
+            || self.accel.tensor_typed_exprs.contains_key(&span_key)
         {
             return Some(self.context.ptr_type(AddressSpace::default()).into());
         }
@@ -3339,7 +3339,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // ref-local and `r[i, j]` (a tuple index) would not
                         // dispatch as a tensor.
                         if let Some(info) = self.tensor_var_info_from_type_expr(&inner_te) {
-                            self.tensor_var_infos.insert(var_name.clone(), info);
+                            self.accel.tensor_var_infos.insert(var_name.clone(), info);
                             return Ok(());
                         }
                         let inner_llvm = self.llvm_type_for_type_expr(&inner_te);
@@ -3582,7 +3582,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // threading below makes them visible to the
                         // `Tensor.zeros/ones/full` constructor arms.
                         if let Some(info) = self.tensor_var_info_from_type_expr(te) {
-                            self.tensor_var_infos.insert(var_name.clone(), info);
+                            self.accel.tensor_var_infos.insert(var_name.clone(), info);
                             detected = true;
                         }
                         // `let c: Column[T] = ...` — register the binding's
@@ -3590,7 +3590,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // pending-info threading below makes it visible to
                         // the `Column.new/with_capacity/from_vec` arms.
                         if let Some(info) = self.column_var_info_from_type_expr(te) {
-                            self.column_var_infos.insert(var_name.clone(), info);
+                            self.accel.column_var_infos.insert(var_name.clone(), info);
                             detected = true;
                         }
                         if let Some(elem_ty) = self.extract_vec_elem_type(te) {
@@ -4262,12 +4262,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // type or rank from their `dims: Vec[i64]` argument;
                 // `tensor_var_infos[var_name]` was populated above from
                 // the annotation. Cleared after compile.
-                let saved_pending_let_tensor = self.pending_let_tensor_info.take();
+                let saved_pending_let_tensor = self.accel.pending_let_tensor_info.take();
                 // Sibling threading for `Column.new/with_capacity/from_vec`
                 // — `new`/`with_capacity` carry no element value in their
                 // args; `column_var_infos[var_name]` was populated above
                 // from the annotation. Cleared after compile.
-                let saved_pending_let_column = self.pending_let_column_info.take();
+                let saved_pending_let_column = self.accel.pending_let_column_info.take();
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {
                         self.pending_let_elem_type = Some(elem_ty);
@@ -4322,11 +4322,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.pending_let_elem_type = Some(elem_ty);
                         }
                     }
-                    if let Some(info) = self.tensor_var_infos.get(var_name.as_str()) {
-                        self.pending_let_tensor_info = Some(info.clone());
+                    if let Some(info) = self.accel.tensor_var_infos.get(var_name.as_str()) {
+                        self.accel.pending_let_tensor_info = Some(info.clone());
                     }
-                    if let Some(info) = self.column_var_infos.get(var_name.as_str()) {
-                        self.pending_let_column_info = Some(*info);
+                    if let Some(info) = self.accel.column_var_infos.get(var_name.as_str()) {
+                        self.accel.pending_let_column_info = Some(*info);
                     }
                 }
                 // B-2026-08-13-17 — read from the ANNOTATION, and read it
@@ -4388,8 +4388,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.pending_let_elem_type = saved_pending_let_elem;
                 self.pending_let_elem_type_expr = saved_pending_let_elem_te;
                 self.pending_let_tuple_te = saved_pending_let_tuple_te;
-                self.pending_let_tensor_info = saved_pending_let_tensor;
-                self.pending_let_column_info = saved_pending_let_column;
+                self.accel.pending_let_tensor_info = saved_pending_let_tensor;
+                self.accel.pending_let_column_info = saved_pending_let_column;
                 // B-2026-07-31-17: a `let` whose RHS TERMINATES the current
                 // block (`let x = { return 5; }` — the init is `!`-typed;
                 // every path returns/breaks) leaves nothing to bind and no
@@ -5945,13 +5945,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // carries every ref-typed expr span — its presence at the
                     // RHS span is the borrow signal.
                     let rhs_is_borrow = self.ref_return_inner_types.contains_key(&key);
-                    if !self.tensor_var_infos.contains_key(var_name.as_str()) {
-                        if let Some(ti) = self.tensor_typed_exprs.get(&key).cloned() {
+                    if !self.accel.tensor_var_infos.contains_key(var_name.as_str()) {
+                        if let Some(ti) = self.accel.tensor_typed_exprs.get(&key).cloned() {
                             let info = self.tensor_var_info_from_table(&ti);
-                            self.tensor_var_infos.insert(var_name.clone(), info);
+                            self.accel.tensor_var_infos.insert(var_name.clone(), info);
                         }
                     }
-                    if self.tensor_var_infos.contains_key(var_name.as_str()) && !rhs_is_borrow {
+                    if self.accel.tensor_var_infos.contains_key(var_name.as_str()) && !rhs_is_borrow
+                    {
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             if matches!(slot.ty, BasicTypeEnum::PointerType(_)) {
                                 let slot_ptr = slot.ptr;
@@ -5971,14 +5972,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     let key = (value.span.offset, value.span.length);
                     let rhs_is_borrow = self.ref_return_inner_types.contains_key(&key);
-                    if !self.column_var_infos.contains_key(var_name.as_str()) {
-                        if let Some(ci) = self.column_typed_exprs.get(&key).cloned() {
+                    if !self.accel.column_var_infos.contains_key(var_name.as_str()) {
+                        if let Some(ci) = self.accel.column_typed_exprs.get(&key).cloned() {
                             let info = self.column_var_info_from_table(&ci);
-                            self.column_var_infos.insert(var_name.clone(), info);
+                            self.accel.column_var_infos.insert(var_name.clone(), info);
                         }
                     }
-                    if self.column_var_infos.contains_key(var_name.as_str()) && !rhs_is_borrow {
+                    if self.accel.column_var_infos.contains_key(var_name.as_str()) && !rhs_is_borrow
+                    {
                         let string_elem = self
+                            .accel
                             .column_var_infos
                             .get(var_name.as_str())
                             .is_some_and(|i| self.column_elem_is_string(i.elem));
@@ -5995,7 +5998,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // A `let b = a;` move suppresses the source's free (its slot
                 // is nulled — see FreeDataFrame's null guard).
                 if let PatternKind::Binding(var_name) = &pattern.kind {
-                    if self.dataframe_var_infos.contains(var_name.as_str()) {
+                    if self.accel.dataframe_var_infos.contains(var_name.as_str()) {
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             if matches!(slot.ty, BasicTypeEnum::PointerType(_)) {
                                 let slot_ptr = slot.ptr;
@@ -7886,7 +7889,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // gpu SoA free (`karac_runtime_gpu_free_soa`) and drag in the
                     // opt-in GPU archive, breaking `karac run`/`build` for a
                     // non-GPU program.
-                    if self.gpu_buffer_vars.contains(name)
+                    if self.accel.gpu_buffer_vars.contains(name)
                         && self
                             .variables
                             .get(name)
@@ -8471,7 +8474,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `free(null)` is a no-op, so the move-suppression sentinel
                     // (a nulled slot) needs no guard. Mirrors the Vec/Map/struct
                     // eager-free above.
-                    let lhs_is_tensor = self.tensor_var_infos.contains_key(name.as_str());
+                    let lhs_is_tensor = self.accel.tensor_var_infos.contains_key(name.as_str());
                     let rhs_is_self_ident =
                         matches!(&value.kind, ExprKind::Identifier(rn) if rn == name);
                     if lhs_is_tensor && !rhs_is_self_ident {

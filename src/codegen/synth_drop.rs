@@ -2154,7 +2154,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // via `secret_type_is_stdlib`, so a user's own `struct Secret` is
         // untouched. The memset only writes into the buffer (no free), so it
         // cannot double-free with the field-drop loop that frees it next.
-        if struct_name == "Secret" && self.secret_type_is_stdlib {
+        if struct_name == "Secret" && self.contract_state.secret_type_is_stdlib {
             let inner_is_string = self
                 .struct_field_type_exprs
                 .get("Secret")

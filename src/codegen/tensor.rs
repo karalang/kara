@@ -448,7 +448,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let info = self.pending_let_tensor_info.clone().ok_or_else(|| {
+        let info = self.accel.pending_let_tensor_info.clone().ok_or_else(|| {
             "Tensor.from_arrow_ipc: element type and rank unknown — requires a \
              `let t: Tensor[T, [dims]] = ...` annotation"
                 .to_string()
@@ -462,7 +462,7 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let info = self.pending_let_tensor_info.clone().ok_or_else(|| {
+        let info = self.accel.pending_let_tensor_info.clone().ok_or_else(|| {
             format!(
                 "Tensor.{}: element type and rank unknown — requires a \
                  `let t: Tensor[T, [dims]] = ...` annotation",
@@ -718,7 +718,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // outer tensor binding) from hijacking the element type; a bare/
         // unannotated `Tensor.from` (no pending) falls back to the leaf width,
         // which the reader-side var info infers identically.
-        let elem = match &self.pending_let_tensor_info {
+        let elem = match &self.accel.pending_let_tensor_info {
             Some(info) if info.dims.len() == rank => info.elem,
             _ => leaf_elem,
         };
@@ -997,10 +997,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // draws that line via the ref-return side-tables.
         let receiver_is_fresh_temp = self.tensor_receiver_is_owned_fresh_temp(object);
         let t_ptr = match &object.kind {
-            ExprKind::Identifier(name) if self.tensor_var_infos.contains_key(name.as_str()) => {
+            ExprKind::Identifier(name)
+                if self.accel.tensor_var_infos.contains_key(name.as_str()) =>
+            {
                 self.tensor_ptr_for_var(name)?
             }
             _ if self
+                .accel
                 .tensor_typed_exprs
                 .contains_key(&(call_span.offset, call_span.length)) =>
             {
@@ -1020,7 +1023,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 .ok_or_else(|| "matmul takes exactly 1 argument".to_string())?;
             let arg_is_fresh_temp = self.tensor_receiver_is_owned_fresh_temp(arg_expr);
             let o_ptr = match &arg_expr.kind {
-                ExprKind::Identifier(name) if self.tensor_var_infos.contains_key(name.as_str()) => {
+                ExprKind::Identifier(name)
+                    if self.accel.tensor_var_infos.contains_key(name.as_str()) =>
+                {
                     self.tensor_ptr_for_var(name)?
                 }
                 _ => self.compile_expr(arg_expr)?.into_pointer_value(),
@@ -1119,7 +1124,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// size of the data copy).
     fn tensor_transform_elem(&self, call_span: &Span) -> Result<BasicTypeEnum<'ctx>, String> {
         let key = (call_span.offset, call_span.length);
-        let ti = self.tensor_typed_exprs.get(&key).ok_or_else(|| {
+        let ti = self.accel.tensor_typed_exprs.get(&key).ok_or_else(|| {
             "tensor shape-transform result type is not statically known \
              (missing lowering side-table entry)"
                 .to_string()
@@ -1386,6 +1391,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let key = (call_span.offset, call_span.length);
         let rank = self
+            .accel
             .tensor_typed_exprs
             .get(&key)
             .map(|ti| ti.dims.len())
@@ -2242,7 +2248,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(recv) = &object.kind else {
             return Ok(None);
         };
-        let Some(info) = self.tensor_var_infos.get(recv.as_str()).cloned() else {
+        let Some(info) = self.accel.tensor_var_infos.get(recv.as_str()).cloned() else {
             return Ok(None);
         };
         let rank = info.dims.len();
@@ -2474,7 +2480,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Runtime axis: every sub-dim reads the header, which we wrote.
             _ => vec![None; sub_rank],
         };
-        self.tensor_var_infos.insert(
+        self.accel.tensor_var_infos.insert(
             row_name.clone(),
             TensorVarInfo {
                 elem,
@@ -2503,7 +2509,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(self.runtime_fns.free_fn, &[sub_t.into()], "")
             .unwrap();
-        self.tensor_var_infos.remove(row_name.as_str());
+        self.accel.tensor_var_infos.remove(row_name.as_str());
         self.variables.remove(row_name.as_str());
         Ok(Some(i64_t.const_int(0, false).into()))
     }
@@ -3154,12 +3160,13 @@ impl<'ctx> super::Codegen<'ctx> {
     fn tensor_arg_static_dim(&self, arg: Option<&CallArg>, di: usize) -> Option<i64> {
         let arg = arg?;
         if let ExprKind::Identifier(n) = &arg.value.kind {
-            if let Some(info) = self.tensor_var_infos.get(n.as_str()) {
+            if let Some(info) = self.accel.tensor_var_infos.get(n.as_str()) {
                 return info.dims.get(di).copied().flatten();
             }
         }
         let key = (arg.value.span.offset, arg.value.span.length);
-        self.tensor_typed_exprs
+        self.accel
+            .tensor_typed_exprs
             .get(&key)
             .and_then(|ti| ti.dims.get(di).copied().flatten())
     }
@@ -3204,7 +3211,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// side-table). Used to tell the tensor operand of a tensor⊕scalar op
     /// from the scalar one.
     fn expr_is_tensor_typed(&self, expr: &Expr) -> bool {
-        self.tensor_typed_exprs
+        self.accel
+            .tensor_typed_exprs
             .contains_key(&(expr.span.offset, expr.span.length))
     }
 
@@ -3233,8 +3241,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let lkey = (left.span.offset, left.span.length);
         let rkey = (right.span.offset, right.span.length);
         let (Some(l), Some(r)) = (
-            self.tensor_typed_exprs.get(&lkey),
-            self.tensor_typed_exprs.get(&rkey),
+            self.accel.tensor_typed_exprs.get(&lkey),
+            self.accel.tensor_typed_exprs.get(&rkey),
         ) else {
             return false;
         };
@@ -3403,6 +3411,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let key = (binary_span.offset, binary_span.length);
         let ti = self
+            .accel
             .tensor_typed_exprs
             .get(&key)
             .ok_or_else(|| {
@@ -3510,6 +3519,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let key = (unary_span.offset, unary_span.length);
         let ti = self
+            .accel
             .tensor_typed_exprs
             .get(&key)
             .ok_or_else(|| {
@@ -3583,7 +3593,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &object.kind else {
             return Ok(None);
         };
-        let Some(info) = self.tensor_var_infos.get(name.as_str()).cloned() else {
+        let Some(info) = self.accel.tensor_var_infos.get(name.as_str()).cloned() else {
             return Ok(None);
         };
         if args.len() != 1 {
@@ -3598,10 +3608,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // arg span doesn't collide with the call span). Needed to unroll the
         // alignment; `None` (unknown rank) falls through to `karac run`.
         let arg_rank = match &arg.kind {
-            ExprKind::Identifier(an) => {
-                self.tensor_var_infos.get(an.as_str()).map(|i| i.dims.len())
-            }
+            ExprKind::Identifier(an) => self
+                .accel
+                .tensor_var_infos
+                .get(an.as_str())
+                .map(|i| i.dims.len()),
             _ => self
+                .accel
                 .tensor_typed_exprs
                 .get(&(arg.span.offset, arg.span.length))
                 .map(|ti| ti.dims.len()),
@@ -3879,7 +3892,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // scalar FULL reductions; other forms fall through.
             _ => return self.try_compile_tensor_reduce_expr_receiver(object, method, call_span),
         };
-        let Some(info) = self.tensor_var_infos.get(name).cloned() else {
+        let Some(info) = self.accel.tensor_var_infos.get(name).cloned() else {
             return Ok(None);
         };
         let t_ptr = self.tensor_ptr_for_var(name)?;
@@ -4022,7 +4035,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self",
             _ => return Ok(None),
         };
-        let Some(info) = self.tensor_var_infos.get(base_name).cloned() else {
+        let Some(info) = self.accel.tensor_var_infos.get(base_name).cloned() else {
             return Ok(None);
         };
         // The inline closure is the last arg; the zip partner is arg 0.

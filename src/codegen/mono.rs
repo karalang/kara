@@ -162,12 +162,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             };
             let key = (arg.value.span.offset, arg.value.span.length);
-            if let Some(ci) = self.column_typed_exprs.get(&key) {
+            if let Some(ci) = self.accel.column_typed_exprs.get(&key) {
                 out.push((
                     param_name.to_string(),
                     super::state::MonoHandleArgInfo::Column(ci.clone()),
                 ));
-            } else if let Some(ti) = self.tensor_typed_exprs.get(&key) {
+            } else if let Some(ti) = self.accel.tensor_typed_exprs.get(&key) {
                 out.push((
                     param_name.to_string(),
                     super::state::MonoHandleArgInfo::Tensor(ti.clone()),
@@ -217,8 +217,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             }
             let key = (arg.value.span.offset, arg.value.span.length);
-            if self.column_typed_exprs.contains_key(&key)
-                || self.tensor_typed_exprs.contains_key(&key)
+            if self.accel.column_typed_exprs.contains_key(&key)
+                || self.accel.tensor_typed_exprs.contains_key(&key)
             {
                 // OVERWRITE, not `or_insert`: `infer_type_args` already bound
                 // this handle param to the `i64` default (a `Column`/`Tensor`
@@ -1096,8 +1096,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// compile. Pair with [`Self::restore_var_side_tables`].
     pub(super) fn take_var_side_tables(&mut self) -> SavedVarSideTables<'ctx> {
         SavedVarSideTables {
-            column_var_infos: std::mem::take(&mut self.column_var_infos),
-            dataframe_var_infos: std::mem::take(&mut self.dataframe_var_infos),
+            column_var_infos: std::mem::take(&mut self.accel.column_var_infos),
+            dataframe_var_infos: std::mem::take(&mut self.accel.dataframe_var_infos),
             vec_elem_types: std::mem::take(&mut self.vec_elem_types),
             var_elem_type_exprs: std::mem::take(&mut self.var_elem_type_exprs),
             array_elem_type_exprs: std::mem::take(&mut self.array_elem_type_exprs),
@@ -1120,8 +1120,8 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Restore the caller's side-tables after a nested mono compile.
     pub(super) fn restore_var_side_tables(&mut self, saved: SavedVarSideTables<'ctx>) {
-        self.column_var_infos = saved.column_var_infos;
-        self.dataframe_var_infos = saved.dataframe_var_infos;
+        self.accel.column_var_infos = saved.column_var_infos;
+        self.accel.dataframe_var_infos = saved.dataframe_var_infos;
         self.vec_elem_types = saved.vec_elem_types;
         self.var_elem_type_exprs = saved.var_elem_type_exprs;
         self.array_elem_type_exprs = saved.array_elem_type_exprs;
@@ -1810,7 +1810,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // clean slate for the body (module-level tensor bindings are
             // re-seeded inside `compile_mono_function`) and restore below —
             // parallel to `variables` / `var_type_names`.
-            let saved_tensor_infos = std::mem::take(&mut self.tensor_var_infos);
+            let saved_tensor_infos = std::mem::take(&mut self.accel.tensor_var_infos);
             // Same isolation for every other name-keyed var side-table the
             // full-registration prologue (B-2026-07-02-11) can now write —
             // see `SavedVarSideTables` for the leak this fixes.
@@ -1877,7 +1877,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `let r = m.entry(k).or_insert(d)` binding tag): a nested mono
             // body must not see/clobber the outer function's tags.
             let saved_entry_slot_ref_vars = std::mem::take(&mut self.entry_slot_ref_vars);
-            let saved_soa_return_locals = std::mem::take(&mut self.soa_return_locals);
+            let saved_soa_return_locals = std::mem::take(&mut self.accel.soa_return_locals);
 
             // Declare then compile the specialization.
             self.declare_mono_function(&generic_fn, &mangled)?;
@@ -1898,7 +1898,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_state_machine_helpers_for_mono(name, &mangled);
 
             // Restore state.
-            self.soa_return_locals = saved_soa_return_locals;
+            self.accel.soa_return_locals = saved_soa_return_locals;
             self.binding_layouts = saved_binding_layouts;
             self.ref_params = saved_ref_params;
             self.signature_ref_params = saved_signature_ref_params;
@@ -1912,7 +1912,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.branch_cancel_ptr = saved_cancel_ptr;
             self.scope_cleanup_actions = saved_cleanup;
             self.restore_var_side_tables(saved_side_tables);
-            self.tensor_var_infos = saved_tensor_infos;
+            self.accel.tensor_var_infos = saved_tensor_infos;
             self.var_type_names = saved_var_types;
             self.variables = saved_vars;
             self.current_fn = saved_fn;
@@ -2447,7 +2447,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
-        let saved_tensor_infos = std::mem::take(&mut self.tensor_var_infos);
+        let saved_tensor_infos = std::mem::take(&mut self.accel.tensor_var_infos);
         // Full var-side-table isolation — see `SavedVarSideTables`.
         let saved_side_tables = self.take_var_side_tables();
         let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
@@ -2482,13 +2482,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // Returned-local set is per-function; `compile_mono_function` repopulates
         // it from this mono's body. Save/restore so it can't leak across the
         // nested compile (mirrors `binding_layouts`).
-        let saved_soa_return_locals = std::mem::take(&mut self.soa_return_locals);
+        let saved_soa_return_locals = std::mem::take(&mut self.accel.soa_return_locals);
 
         let result = self
             .declare_mono_function(func, mangled)
             .and_then(|_| self.compile_mono_function(func, mangled));
 
-        self.soa_return_locals = saved_soa_return_locals;
+        self.accel.soa_return_locals = saved_soa_return_locals;
         self.binding_layouts = saved_binding_layouts;
         self.ref_params = saved_ref_params;
         self.signature_ref_params = saved_signature_ref_params;
@@ -2503,7 +2503,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.branch_cancel_ptr = saved_cancel_ptr;
         self.scope_cleanup_actions = saved_cleanup;
         self.restore_var_side_tables(saved_side_tables);
-        self.tensor_var_infos = saved_tensor_infos;
+        self.accel.tensor_var_infos = saved_tensor_infos;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
@@ -2543,7 +2543,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // would give. The caller binds the result into its SoA slot; the body
         // builds + returns the SoA struct. No-op outside a return-SoA mono.
         let soa_return = match &self.return_layout {
-            LayoutId::Soa(block) => self.soa_layouts.get(block).cloned(),
+            LayoutId::Soa(block) => self.accel.soa_layouts.get(block).cloned(),
             LayoutId::Aos => None,
         };
         let fn_type = if let Some(soa) = soa_return {
@@ -2645,7 +2645,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `seed_binding_site_layout` is suppressed for them (their layout comes
         // from `return_layout` / `layout_subst`, seeded just below). The caller's
         // set was swapped out at the mono entry point.
-        self.soa_return_locals = self
+        self.accel.soa_return_locals = self
             .soa_return_local_names(&func.body)
             .into_iter()
             .collect();
@@ -2905,11 +2905,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 match handle_info {
                     Some(super::state::MonoHandleArgInfo::Column(ci)) => {
                         let info = self.column_var_info_from_table(&ci);
-                        self.column_var_infos.insert(param_name.clone(), info);
+                        self.accel.column_var_infos.insert(param_name.clone(), info);
                     }
                     Some(super::state::MonoHandleArgInfo::Tensor(ti)) => {
                         let info = self.tensor_var_info_from_table(&ti);
-                        self.tensor_var_infos.insert(param_name.clone(), info);
+                        self.accel.tensor_var_infos.insert(param_name.clone(), info);
                     }
                     None => {}
                 }
@@ -3611,8 +3611,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // dispatch already laid out. Honored even for a returned local —
             // this IS the return-mono's SoA seeding.
             layout.clone()
-        } else if self.soa_layouts.contains_key(binding_name)
-            && !self.soa_return_locals.contains(binding_name)
+        } else if self.accel.soa_layouts.contains_key(binding_name)
+            && !self.accel.soa_return_locals.contains(binding_name)
         {
             // Origin name-match — but NOT for a returned local. A returned
             // local's layout is dictated by the function's `return_layout`
@@ -3627,7 +3627,7 @@ impl<'ctx> super::Codegen<'ctx> {
             LayoutId::Soa(block) => {
                 self.binding_layouts
                     .insert(binding_name.to_string(), LayoutId::Soa(block.clone()));
-                self.soa_layouts.get(&block).cloned()
+                self.accel.soa_layouts.get(&block).cloned()
             }
             LayoutId::Aos => None,
         }
@@ -3640,7 +3640,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// a mono SoA param (not itself a `layout`-block name) lowers SoA.
     pub(super) fn active_soa_layout(&self, binding_name: &str) -> Option<super::state::SoaLayout> {
         match self.active_layout_id(binding_name) {
-            LayoutId::Soa(block) => self.soa_layouts.get(&block).cloned(),
+            LayoutId::Soa(block) => self.accel.soa_layouts.get(&block).cloned(),
             LayoutId::Aos => None,
         }
     }
@@ -3664,7 +3664,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let name = param.name()?;
         match self.layout_subst.get(name) {
-            Some(LayoutId::Soa(block)) => self.soa_layouts.get(block).cloned(),
+            Some(LayoutId::Soa(block)) => self.accel.soa_layouts.get(block).cloned(),
             _ => None,
         }
     }

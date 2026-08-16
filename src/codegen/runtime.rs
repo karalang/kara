@@ -3816,7 +3816,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         soa: &crate::codegen::state::SoaLayout,
     ) -> Option<FunctionValue<'ctx>> {
-        if let Some(f) = self.soa_drop_fns.get(&soa.name) {
+        if let Some(f) = self.accel.soa_drop_fns.get(&soa.name) {
             return Some(*f);
         }
         let heap_groups = self.soa_heap_groups(soa);
@@ -3830,7 +3830,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let fn_name = format!("__karac_soa_drop_{}", soa.name);
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.soa_drop_fns.insert(soa.name.clone(), f);
+            self.accel.soa_drop_fns.insert(soa.name.clone(), f);
             return Some(f);
         }
 
@@ -3847,7 +3847,7 @@ impl<'ctx> super::Codegen<'ctx> {
             drop_fn_ty,
             Some(inkwell::module::Linkage::Internal),
         );
-        self.soa_drop_fns.insert(soa.name.clone(), drop_fn);
+        self.accel.soa_drop_fns.insert(soa.name.clone(), drop_fn);
         self.current_fn = Some(drop_fn);
 
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");

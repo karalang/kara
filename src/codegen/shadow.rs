@@ -104,8 +104,8 @@ impl<'ctx> super::Codegen<'ctx> {
             ref_params: self.ref_params.remove(name),
             signature_ref_params: self.signature_ref_params.remove(name),
             var_option_shared_heap: self.var_option_shared_heap.remove(name),
-            tensor_var_infos: self.tensor_var_infos.remove(name),
-            column_var_infos: self.column_var_infos.remove(name),
+            tensor_var_infos: self.accel.tensor_var_infos.remove(name),
+            column_var_infos: self.accel.column_var_infos.remove(name),
             enum_inst_var_types: self.enum_inst_var_types.remove(name),
             map_key_types: self.map_key_types.remove(name),
             map_val_types: self.map_val_types.remove(name),
@@ -167,10 +167,10 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_option_shared_heap.insert(key.clone(), v);
         }
         if let Some(v) = snap.tensor_var_infos {
-            self.tensor_var_infos.insert(key.clone(), v);
+            self.accel.tensor_var_infos.insert(key.clone(), v);
         }
         if let Some(v) = snap.column_var_infos {
-            self.column_var_infos.insert(key.clone(), v);
+            self.accel.column_var_infos.insert(key.clone(), v);
         }
         if let Some(v) = snap.enum_inst_var_types {
             self.enum_inst_var_types.insert(key.clone(), v);
@@ -323,8 +323,8 @@ impl<'ctx> super::Codegen<'ctx> {
             ref_params: self.ref_params.clone(),
             signature_ref_params: self.signature_ref_params.clone(),
             var_option_shared_heap: self.var_option_shared_heap.clone(),
-            tensor_var_infos: self.tensor_var_infos.clone(),
-            column_var_infos: self.column_var_infos.clone(),
+            tensor_var_infos: self.accel.tensor_var_infos.clone(),
+            column_var_infos: self.accel.column_var_infos.clone(),
             enum_inst_var_types: self.enum_inst_var_types.clone(),
             map_key_types: self.map_key_types.clone(),
             map_val_types: self.map_val_types.clone(),
@@ -365,8 +365,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.ref_params = snap.ref_params;
         self.signature_ref_params = snap.signature_ref_params;
         self.var_option_shared_heap = snap.var_option_shared_heap;
-        self.tensor_var_infos = snap.tensor_var_infos;
-        self.column_var_infos = snap.column_var_infos;
+        self.accel.tensor_var_infos = snap.tensor_var_infos;
+        self.accel.column_var_infos = snap.column_var_infos;
         self.enum_inst_var_types = snap.enum_inst_var_types;
         self.map_key_types = snap.map_key_types;
         self.map_val_types = snap.map_val_types;

@@ -548,7 +548,7 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &Expr,
     ) -> Result<super::state::ColumnVarInfo<'ctx>, String> {
         let key = (arg.span.offset, arg.span.length);
-        let ci = self.column_typed_exprs.get(&key).ok_or_else(|| {
+        let ci = self.accel.column_typed_exprs.get(&key).ok_or_else(|| {
             "DataFrame.insert: column argument's element type is unknown \
              (no Column[T] side-table entry for the argument)"
                 .to_string()
@@ -672,7 +672,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(var) = &object.kind else {
             return Ok(None);
         };
-        if !self.dataframe_var_infos.contains(var.as_str()) {
+        if !self.accel.dataframe_var_infos.contains(var.as_str()) {
             return Ok(None);
         }
         if method == "describe" {
@@ -779,10 +779,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 let kind = i64_t.const_int(self.dataframe_kind_for_info(&info), false);
 
                 let (name_data, name_len) = self.df_string_parts(&args[0].value)?;
-                let saved = self.pending_let_column_info.take();
-                self.pending_let_column_info = Some(info);
+                let saved = self.accel.pending_let_column_info.take();
+                self.accel.pending_let_column_info = Some(info);
                 let col_val = self.compile_expr(&args[1].value)?;
-                self.pending_let_column_info = saved;
+                self.accel.pending_let_column_info = saved;
                 let src_col = col_val.into_pointer_value();
                 let owned_col = self.column_deep_copy(src_col, elem_size)?;
                 // The argument column was copied in (frame owns the copy).

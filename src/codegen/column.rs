@@ -825,7 +825,7 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let info = self.pending_let_column_info.ok_or_else(|| {
+        let info = self.accel.pending_let_column_info.ok_or_else(|| {
             format!(
                 "Column.{}: element type unknown — requires a \
                  `let c: Column[T] = ...` annotation",
@@ -1256,7 +1256,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self",
             _ => return Ok(None),
         };
-        let Some(info) = self.column_var_infos.get(name).copied() else {
+        let Some(info) = self.accel.column_var_infos.get(name).copied() else {
             return Ok(None);
         };
         if !matches!(
@@ -4335,11 +4335,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// column, or any column-typed expression in the side-table).
     fn expr_is_column(&self, expr: &Expr) -> bool {
         if let ExprKind::Identifier(name) = &expr.kind {
-            if self.column_var_infos.contains_key(name.as_str()) {
+            if self.accel.column_var_infos.contains_key(name.as_str()) {
                 return true;
             }
         }
-        self.column_typed_exprs
+        self.accel
+            .column_typed_exprs
             .contains_key(&(expr.span.offset, expr.span.length))
     }
 
@@ -4352,12 +4353,13 @@ impl<'ctx> super::Codegen<'ctx> {
         expr: &Expr,
     ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, bool), String> {
         if let ExprKind::Identifier(name) = &expr.kind {
-            if let Some(info) = self.column_var_infos.get(name.as_str()).copied() {
+            if let Some(info) = self.accel.column_var_infos.get(name.as_str()).copied() {
                 let ptr = self.column_ptr_for_var(name)?;
                 return Ok((ptr, info.elem, info.elem_unsigned));
             }
         }
         let ci = self
+            .accel
             .column_typed_exprs
             .get(&(expr.span.offset, expr.span.length))
             .cloned()
@@ -4428,6 +4430,7 @@ impl<'ctx> super::Codegen<'ctx> {
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let result_ci = self
+            .accel
             .column_typed_exprs
             .get(&(span.offset, span.length))
             .cloned()
@@ -4552,6 +4555,7 @@ impl<'ctx> super::Codegen<'ctx> {
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let result_ci = self
+            .accel
             .column_typed_exprs
             .get(&(span.offset, span.length))
             .cloned()

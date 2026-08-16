@@ -117,7 +117,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `df.lazy()` — the single entry point from the eager world.
                 if method == "lazy" {
                     let is_df = match &object.kind {
-                        ExprKind::Identifier(n) => self.dataframe_var_infos.contains(n.as_str()),
+                        ExprKind::Identifier(n) => {
+                            self.accel.dataframe_var_infos.contains(n.as_str())
+                        }
                         _ => self.type_name_of_expr(object).as_deref() == Some("DataFrame"),
                     };
                     if is_df {

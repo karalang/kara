@@ -492,7 +492,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // on `stdlib_origin` so a user's own `struct Secret` (which
                 // cannot coexist with the import) is not affected.
                 if s.name == "Secret" && s.stdlib_origin {
-                    self.secret_type_is_stdlib = true;
+                    self.contract_state.secret_type_is_stdlib = true;
                 }
             }
         }
@@ -983,7 +983,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // origin (the same name-match `seed_binding_site_layout` uses at the
             // `let`); `field.name` is that binding name.
             let soa_field = if matches!(field.type_name.as_deref(), Some("Vec")) {
-                self.soa_layouts.get(&field.name).cloned()
+                self.accel.soa_layouts.get(&field.name).cloned()
             } else {
                 None
             };
@@ -3316,7 +3316,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
 
                 let num_groups = groups.len();
-                self.soa_layouts.insert(
+                self.accel.soa_layouts.insert(
                     layout.name.clone(),
                     SoaLayout {
                         name: layout.name.clone(),

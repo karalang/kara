@@ -395,7 +395,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // identical to its base, so lower to the base's layout (the
                 // distinct name itself has no struct/enum def and would hit
                 // the `i64` fall-through in `llvm_type_for_name`).
-                if let Some(base) = self.distinct_bases.get(name) {
+                if let Some(base) = self.contract_state.distinct_bases.get(name) {
                     return self.llvm_type_for_type_expr(&base.clone());
                 }
                 // B-2026-08-08-10 — a USER-declared struct whose name collides
@@ -1471,6 +1471,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn type_alias_base_name(&self, name: &str) -> String {
         let mut cur = name.to_string();
         while let Some(base) = self
+            .contract_state
             .refinement_bases
             .get(&cur)
             .or_else(|| self.plain_alias_bases.get(&cur))
@@ -1508,7 +1509,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // this fn) so method dispatch + the `FreeDataFrame` tracker
         // recognise it (`src/codegen/dataframe.rs`).
         if normalized == "DataFrame" {
-            self.dataframe_var_infos.insert(var.clone());
+            self.accel.dataframe_var_infos.insert(var.clone());
         }
         self.var_type_names.insert(var, normalized);
     }
@@ -1615,8 +1616,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // Refinement first, then plain: the two maps are disjoint by
         // construction (`populate_type_alias_bases` keys off `t.refinement`),
         // so the order is documentation, not precedence.
-        let (base, params) = match self.refinement_bases.get(name) {
-            Some(b) => (b.clone(), self.refinement_generic_params.get(name)),
+        let (base, params) = match self.contract_state.refinement_bases.get(name) {
+            Some(b) => (
+                b.clone(),
+                self.contract_state.refinement_generic_params.get(name),
+            ),
             None => (
                 self.plain_alias_bases.get(name)?.clone(),
                 self.plain_alias_generic_params.get(name),
@@ -1798,14 +1802,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // admits on them (shape()/rank()) dispatch via the side-table /
         // method path without needing a per-var registration.
         if let Some(info) = self.tensor_var_info_from_type_expr(te) {
-            self.tensor_var_infos.insert(var_name.to_string(), info);
+            self.accel
+                .tensor_var_infos
+                .insert(var_name.to_string(), info);
             return;
         }
         // Column[T] — register the element LLVM type so indexing
         // (`c[i] -> Option[T]`), method dispatch, and the cleanup tracker
         // recognise the binding (`src/codegen/column.rs`).
         if let Some(info) = self.column_var_info_from_type_expr(te) {
-            self.column_var_infos.insert(var_name.to_string(), info);
+            self.accel
+                .column_var_infos
+                .insert(var_name.to_string(), info);
             return;
         }
         // DataFrame — non-generic, so just record membership so method
@@ -1813,7 +1821,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // binding (`src/codegen/dataframe.rs`).
         if let crate::ast::TypeKind::Path(p) = &te.kind {
             if p.segments.last().map(|s| s.as_str()) == Some("DataFrame") {
-                self.dataframe_var_infos.insert(var_name.to_string());
+                self.accel.dataframe_var_infos.insert(var_name.to_string());
                 return;
             }
         }
@@ -2405,6 +2413,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // argument-independent (`Vec`/`Map`/`Set` are all fat pointers), and
         // the `TypeExpr` path above covers the rest.
         if let Some(base) = self
+            .contract_state
             .refinement_bases
             .get(name)
             .or_else(|| self.plain_alias_bases.get(name))
@@ -2414,7 +2423,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Distinct type → base layout. The name-level path is hit when a
         // distinct type is referenced by bare name (a recorded
         // `var_type_names` entry or a struct-field type name).
-        if let Some(base) = self.distinct_bases.get(name) {
+        if let Some(base) = self.contract_state.distinct_bases.get(name) {
             return self.llvm_type_for_type_expr(&base.clone());
         }
         match name {

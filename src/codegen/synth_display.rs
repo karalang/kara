@@ -1552,7 +1552,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// field walk. Scoped via `secret_type_is_stdlib` so a user's own
     /// `struct Secret` is unaffected.
     fn field_type_is_stdlib_secret(&self, te: &crate::ast::TypeExpr) -> bool {
-        self.secret_type_is_stdlib
+        self.contract_state.secret_type_is_stdlib
             && matches!(
                 &te.kind,
                 crate::ast::TypeKind::Path(p)

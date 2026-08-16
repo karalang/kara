@@ -82,9 +82,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // = Base where pred`; consult both so a method-form predicate
         // (`self.len()`) gets the base side-tables in either case.
         if let Some(base_te) = self
+            .contract_state
             .refinement_bases
             .get(rname)
-            .or_else(|| self.distinct_bases.get(rname))
+            .or_else(|| self.contract_state.distinct_bases.get(rname))
             .cloned()
         {
             self.register_var_from_type_expr(REFINE_SELF, &base_te);
@@ -106,6 +107,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// after the binding is no longer needed).
     fn compile_bound_predicate(&mut self, rname: &str) -> Result<IntValue<'ctx>, String> {
         let mut pred = self
+            .contract_state
             .refinement_predicates
             .get(rname)
             .cloned()
@@ -123,7 +125,11 @@ impl<'ctx> super::Codegen<'ctx> {
         rname: &str,
         value: BasicValueEnum<'ctx>,
     ) -> Result<(), String> {
-        if !self.refinement_predicates.contains_key(rname) {
+        if !self
+            .contract_state
+            .refinement_predicates
+            .contains_key(rname)
+        {
             return Ok(());
         }
         self.bind_refine_self(value, rname);
@@ -157,7 +163,11 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &Expr,
         span: &Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        if !self.refinement_predicates.contains_key(rname) {
+        if !self
+            .contract_state
+            .refinement_predicates
+            .contains_key(rname)
+        {
             return Ok(None);
         }
         let value = self.compile_expr(arg)?;

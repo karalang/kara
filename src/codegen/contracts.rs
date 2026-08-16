@@ -96,7 +96,8 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         for arg in &args {
             let val = self.compile_expr(arg)?;
-            self.contract_old_snapshots
+            self.contract_state
+                .contract_old_snapshots
                 .insert(SpanKey::from_span(&arg.span), val);
         }
         Ok(())
@@ -107,7 +108,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the arg directly — defensive; the typechecker restricts `old(...)` to
     /// `ensures`).
     pub(super) fn contract_old_lookup(&self, arg: &Expr) -> Option<BasicValueEnum<'ctx>> {
-        self.contract_old_snapshots
+        self.contract_state
+            .contract_old_snapshots
             .get(&SpanKey::from_span(&arg.span))
             .copied()
     }
@@ -120,7 +122,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         result_value: Option<BasicValueEnum<'ctx>>,
     ) -> Result<(), String> {
-        let ensures = self.current_contract_ensures.clone();
+        let ensures = self.contract_state.current_contract_ensures.clone();
         if ensures.is_empty() {
             return Ok(());
         }
@@ -153,6 +155,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // alongside the `variables` slot.
                     let prev_type_name = self.var_type_names.remove(param);
                     if let Some(crate::ast::TypeKind::Path(p)) = self
+                        .contract_state
                         .current_contract_result_type
                         .as_ref()
                         .map(|te| &te.kind)
@@ -236,7 +239,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         result_value: Option<BasicValueEnum<'ctx>>,
     ) -> Result<(), String> {
-        let invariants = self.current_method_invariants.clone();
+        let invariants = self.contract_state.current_method_invariants.clone();
         if invariants.is_empty() {
             return Ok(());
         }
@@ -244,7 +247,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // invariant resolves to the freshly-constructed instance. Saved/restored
         // around the checks (defensive — a constructor has no real `self`
         // binding to shadow, but this keeps the table clean).
-        let bound_self = match (&self.constructor_invariant_self_type, result_value) {
+        let bound_self = match (
+            &self.contract_state.constructor_invariant_self_type,
+            result_value,
+        ) {
             (Some(type_name), Some(rv)) => {
                 let type_name = type_name.clone();
                 let fn_val = self

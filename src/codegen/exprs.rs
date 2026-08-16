@@ -389,6 +389,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Must precede the generic scalar operand compilation below
                     // (two tensor pointers would choke `compile_binop`).
                     if self
+                        .accel
                         .tensor_typed_exprs
                         .contains_key(&(expr.span.offset, expr.span.length))
                     {
@@ -401,6 +402,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // borrowed; fresh value-semantics result with null
                     // propagation). Mirrors the tensor intercept above.
                     if self
+                        .accel
                         .column_typed_exprs
                         .contains_key(&(expr.span.offset, expr.span.length))
                     {
@@ -715,6 +717,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Element-wise tensor negation — the result span is
                     // tensor-typed; lower to a fresh negated tensor.
                     if self
+                        .accel
                         .tensor_typed_exprs
                         .contains_key(&(expr.span.offset, expr.span.length))
                     {
@@ -724,6 +727,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // column-typed; lower to a fresh negated column (nulls
                     // stay null).
                     if self
+                        .accel
                         .column_typed_exprs
                         .contains_key(&(expr.span.offset, expr.span.length))
                     {
@@ -1383,7 +1387,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // layout; a false predicate aborts with a contract fault.
                 if let TypeKind::Path(p) = &ty.kind {
                     if let Some(name) = p.segments.first() {
-                        if self.refinement_predicates.contains_key(name) {
+                        if self.contract_state.refinement_predicates.contains_key(name) {
                             let name = name.clone();
                             self.emit_refinement_assert(&name, casted)?;
                         }
@@ -3332,12 +3336,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // buffer type structurally collides with any 2-field all-`i64` user
         // struct, so downstream reassign / method arms must key on this set, not
         // on the LLVM type alone.
-        self.gpu_buffer_vars.insert(var_name.to_string());
+        self.accel.gpu_buffer_vars.insert(var_name.to_string());
         // GPU-SLIP-4h: record the handle's element struct so a later
         // `gpu.download` into a PLAIN `Vec[S]` target can synthesize the
         // default interleaved manifest ({handle, n} itself is type-erased).
         if let Some(sn) = self.gpu_value_elem_struct(value) {
-            self.gpu_buffer_elem_structs
+            self.accel
+                .gpu_buffer_elem_structs
                 .insert(var_name.to_string(), sn);
         }
         Ok(())
@@ -3413,6 +3418,7 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         };
         let struct_name = self
+            .accel
             .gpu_buffer_elem_structs
             .get(buf_name)
             .cloned()
