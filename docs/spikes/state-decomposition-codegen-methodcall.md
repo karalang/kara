@@ -1,6 +1,6 @@
 # Spike: state decomposition — `Codegen` (439 fields) and `infer_method_call` (5.9k lines)
 
-**Status:** 🚧 **IN PROGRESS — Phase 1 eight slices landed (`infer_method_call` 5,873 → 2,156 lines, -63%); Phase 2 queued behind the open codegen bugs.** This doc is the live coordination point for the refactor: the cluster map below is measured (not guessed), and the status table at the bottom is updated as slices land. **Other agents: read § Coordination protocol before editing `src/codegen.rs` or `src/typechecker/expr_method_call.rs`.**
+**Status:** 🚧 **IN PROGRESS — Phase 1 nine slices landed (`infer_method_call` 5,873 → 1,838 lines, -69%); Phase 2 queued behind the open codegen bugs.** This doc is the live coordination point for the refactor: the cluster map below is measured (not guessed), and the status table at the bottom is updated as slices land. **Other agents: read § Coordination protocol before editing `src/codegen.rs` or `src/typechecker/expr_method_call.rs`.**
 
 *Origin: project-review item 6 ("schedule state-level decomposition of Codegen — not as a launch item, but before any MLIR/backend-swap ambition is taken seriously; same treatment for `infer_method_call`"). Owner decided 2026-08-15 to start now rather than defer, on the reasoning in § Why now.*
 
@@ -143,7 +143,8 @@ for fp in files:
 | 1 | slice 6 — **user-`impl` dispatch tail** (`method_user_impl.rs`): impl-table lookup, candidate collection, bound gating, specialization, and the `no method 'X' on T` diagnostics | **landed** — 639 lines moved; 3,591 → 2,957 | 2026-08-16 |
 | 1 | slice 7 — **identifier-receiver dispatch** (`method_identifier_receiver.rs`): the `ptr` provenance module, other prelude module paths, and type-receiver associated calls (`T.method(..)`, incl. `From` disambiguation) | **landed** — 428 lines moved; 2,957 → 2,537 | 2026-08-16 |
 | 1 | slice 8 — **iterator / aggregation / atomics** (`method_iterator_agg.rs`): `iter`/`iter_mut`/`into_iter`, collection `clone`, `sum`/`product`/`max`/`min`, `join`/`concat`, the line iterators, and the atomic `load`/`store`/`compare_exchange`/`fetch_*` family | **landed** — 397 lines moved; 2,537 → 2,156 | 2026-08-16 |
-| 1 | slices 9–10 — remaining families (string, map/set, slice/pointer views, `retain`/`dedup`/`split_off`, tuple, pointer receivers, fresh-temp receiver recording) | in progress | — |
+| 1 | slice 9 — **sequence mutation + slice views** (`method_sequence_mutation.rs`): the comparator sorts, `retain`, `dedup`, `split_off`; plus `as_slice`/`as_slice_mut` and `as_ptr`/`as_mut_ptr` as a second entry point | **landed** — 332 lines moved; 2,156 → 1,838 | 2026-08-16 |
+| 1 | slice 10+ — remaining families (string, map/set, tuple, pointer receivers, fresh-temp receiver recording, `Array[T, N]` surface) | in progress | — |
 | 2 | cluster 1 `RuntimeFns` | not started | — |
 | 2 | clusters 2–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
