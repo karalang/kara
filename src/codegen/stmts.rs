@@ -2578,7 +2578,7 @@ impl<'ctx> super::Codegen<'ctx> {
             &value.kind,
             ExprKind::FieldAccess { object, .. }
                 if matches!(&object.kind, ExprKind::Identifier(p)
-                    if self.shared_enum_payload_view_vars.contains_key(p.as_str()))
+                    if self.payload_vars.shared_enum_payload_view_vars.contains_key(p.as_str()))
         );
         if !is_param_field && !is_view_field {
             return;
@@ -5666,7 +5666,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if let Some(src) = self.call_passthrough_armed_nested_source(value)
                                 {
                                     nested.clear();
-                                    self.nested_boxed_passthrough_owner_alias
+                                    self.payload_vars
+                                        .nested_boxed_passthrough_owner_alias
                                         .insert(var_name.to_string(), src);
                                 }
                             }
@@ -5726,7 +5727,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // a binding that owns nothing must not be
                                 // excepted from the arg-site retraction.
                                 if has_struct_field_box {
-                                    self.struct_field_boxed_payload_vars
+                                    self.payload_vars
+                                        .struct_field_boxed_payload_vars
                                         .insert(var_name.to_string());
                                 }
                             }
@@ -5836,7 +5838,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .all(|(e, _, inner)| *e == "Option" && inner.is_none());
                                     boxed.clear();
                                     if callee_owns_box {
-                                        self.boxed_passthrough_owner_alias
+                                        self.payload_vars
+                                            .boxed_passthrough_owner_alias
                                             .insert(var_name.to_string(), src);
                                     }
                                 }
@@ -5849,7 +5852,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // the reassignment eager-free. See the field's
                                 // doc for the measured shape.
                                 if matches!(&value.kind, ExprKind::Identifier(_)) {
-                                    self.boxed_moved_in_vars.insert(var_name.to_string());
+                                    self.payload_vars
+                                        .boxed_moved_in_vars
+                                        .insert(var_name.to_string());
                                 }
                                 for (enum_name, variant, inner) in &boxed {
                                     let nested_opt_drop = payload_te
@@ -6938,7 +6943,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // aliases the receiver's Err/None payload.
                                     .or_else(|| self.map_passthrough_armed_source(value))
                                 {
-                                    self.passthrough_owner_alias
+                                    self.payload_vars
+                                        .passthrough_owner_alias
                                         .insert(var_name.to_string(), src);
                                 } else {
                                     self.track_inline_option_payload_var(var_name, slot.ptr, &te);
@@ -6983,6 +6989,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .is_some_and(|src| src != *var_name)
                                     {
                                         if self
+                                            .payload_vars
                                             .inline_option_payload_vars
                                             .contains(var_name.as_str())
                                         {
@@ -6992,6 +6999,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                             );
                                         }
                                         if self
+                                            .payload_vars
                                             .inline_result_payload_vars
                                             .contains(var_name.as_str())
                                         {
@@ -7499,9 +7507,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ExprKind::Identifier(src)
                                     if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
                                         && !self.ref_params.contains_key(src.as_str()))
-                                        || self.param_view_locals.contains(src.as_str()));
+                                        || self.payload_vars.param_view_locals.contains(src.as_str()));
                             if rhs_is_param_view {
-                                self.param_view_locals.insert(var_name.to_string());
+                                self.payload_vars
+                                    .param_view_locals
+                                    .insert(var_name.to_string());
                             }
                             if struct_borrow_elided {
                                 // Borrow alias: no owned drop (see comment above).
@@ -8942,9 +8952,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     // was measured on; NOT true for a boxed one, which is this
                     // row — the scope-exit action reads the slot after the
                     // store and frees only the last value.
-                    if (self.boxed_enum_payload_vars.contains(name.as_str())
-                        || self.nested_boxed_payload_vars.contains(name.as_str()))
-                        && !self.boxed_moved_in_vars.contains(name.as_str())
+                    if (self
+                        .payload_vars
+                        .boxed_enum_payload_vars
+                        .contains(name.as_str())
+                        || self
+                            .payload_vars
+                            .nested_boxed_payload_vars
+                            .contains(name.as_str()))
+                        && !self
+                            .payload_vars
+                            .boxed_moved_in_vars
+                            .contains(name.as_str())
                     {
                         let self_alias =
                             matches!(&value.kind, ExprKind::Identifier(rn) if rn == name);
@@ -9088,10 +9107,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         ExprKind::Identifier(src)
                             if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
                                 && !self.ref_params.contains_key(src.as_str()))
-                                || self.param_view_locals.contains(src.as_str()));
+                                || self.payload_vars.param_view_locals.contains(src.as_str()));
                     if rhs_is_param_view && (lhs_is_tracked_struct || lhs_is_tracked_value_enum) {
                         self.suppress_user_drop_for_var(name);
-                        self.param_view_locals.insert(name.clone());
+                        self.payload_vars.param_view_locals.insert(name.clone());
                         // B-2026-08-04-19 — the retraction above drops only the
                         // LHS's BODIES; the source param's memory drop is
                         // name-blind and survives (per the note above), so a
@@ -9236,7 +9255,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             ExprKind::Identifier(src)
                                 if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
                                     && !self.ref_params.contains_key(src.as_str()))
-                                    || self.param_view_locals.contains(src.as_str()));
+                                    || self.payload_vars.param_view_locals.contains(src.as_str()));
                         if rhs_is_param_view {
                             let base = base.clone();
                             self.suppress_user_drop_for_var(&base);
@@ -10218,7 +10237,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // ALREADY disarmed for this exact slot by the time we get here, so
         // taking ownership cannot double-free against it.
         let boxed_view_src: bool = matches!(&value.kind, ExprKind::Identifier(n)
-            if self.boxed_optres_payload_view_vars.contains_key(n.as_str()));
+            if self.payload_vars.boxed_optres_payload_view_vars.contains_key(n.as_str()));
         // B-2026-08-06-31 — the box this view was DEBOXED from, when its owner
         // is ANOTHER FRAME (B-2026-08-06-10's mirror; recorded only for an
         // owned-param scrutinee). The branch below neutralizes by RETRACTION —
@@ -10234,7 +10253,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .variables
                 .get(n.as_str())
                 .map(|s| s.ptr)
-                .and_then(|p| self.deboxed_payload_box_ptrs.get(&p).copied()),
+                .and_then(|p| self.payload_vars.deboxed_payload_box_ptrs.get(&p).copied()),
             _ => None,
         };
 
@@ -10259,7 +10278,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let view_src: bool = !fresh
             && callee_owned_src.is_none()
             && matches!(&value.kind, ExprKind::Identifier(root)
-                if self.shared_enum_payload_view_vars.contains_key(root.as_str())
+                if self.payload_vars.shared_enum_payload_view_vars.contains_key(root.as_str())
                     || self.for_loop_owned_agg_vars.contains(root.as_str()));
 
         for (idx, fname) in field_names.iter().enumerate() {

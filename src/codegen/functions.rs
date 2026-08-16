@@ -1277,14 +1277,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .soa_return_local_names(&func.body)
             .into_iter()
             .collect();
-        self.inline_option_payload_vars.clear();
-        self.boxed_enum_payload_vars.clear();
-        self.boxed_optres_payload_view_vars.clear();
-        self.deboxed_payload_box_ptrs.clear();
+        self.payload_vars.inline_option_payload_vars.clear();
+        self.payload_vars.boxed_enum_payload_vars.clear();
+        self.payload_vars.boxed_optres_payload_view_vars.clear();
+        self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.mono_state.mono_payload_binding_type_exprs.clear();
-        self.inline_result_payload_vars.clear();
-        self.inline_option_map_payload_vars.clear();
-        self.inline_option_agg_payload_vars.clear();
+        self.payload_vars.inline_result_payload_vars.clear();
+        self.payload_vars.inline_option_map_payload_vars.clear();
+        self.payload_vars.inline_option_agg_payload_vars.clear();
         self.var_option_shared_heap.clear();
         self.ref_option_shared_heap.clear();
         self.ref_params.clear();
@@ -1311,8 +1311,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrowed_agg_payload_struct_vars.clear();
         self.accel.gpu_buffer_vars.clear();
         self.owned_struct_params.clear();
-        self.param_view_locals.clear();
-        self.shared_enum_payload_view_vars.clear();
+        self.payload_vars.param_view_locals.clear();
+        self.payload_vars.shared_enum_payload_view_vars.clear();
         self.drop_rc.rc_fallback_heap_types.clear();
         // Per-function reset of the name-keyed local-variable type side-
         // tables. These mirror exactly what `register_var_from_type_expr`
@@ -2288,7 +2288,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             armed = true;
                         }
                         if armed {
-                            self.struct_field_boxed_payload_vars
+                            self.payload_vars
+                                .struct_field_boxed_payload_vars
                                 .insert(param_name.clone());
                         }
                     }

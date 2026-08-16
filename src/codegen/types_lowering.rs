@@ -1480,7 +1480,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .contract_state
             .refinement_bases
             .get(&cur)
-            .or_else(|| self.plain_alias_bases.get(&cur))
+            .or_else(|| self.payload_vars.plain_alias_bases.get(&cur))
         {
             let next = Self::mangled_type_name(base);
             if next == cur {
@@ -1629,8 +1629,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.contract_state.refinement_generic_params.get(name),
             ),
             None => (
-                self.plain_alias_bases.get(name)?.clone(),
-                self.plain_alias_generic_params.get(name),
+                self.payload_vars.plain_alias_bases.get(name)?.clone(),
+                self.payload_vars.plain_alias_generic_params.get(name),
             ),
         };
         // Build the param→arg substitution from the alias's declared param
@@ -2460,7 +2460,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .contract_state
             .refinement_bases
             .get(name)
-            .or_else(|| self.plain_alias_bases.get(name))
+            .or_else(|| self.payload_vars.plain_alias_bases.get(name))
         {
             return self.llvm_type_for_type_expr(&base.clone());
         }

@@ -282,6 +282,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Identifier(n) = &scrutinee.kind {
                 let owner = self
+                    .payload_vars
                     .passthrough_owner_alias
                     .get(n.as_str())
                     .cloned()
@@ -1742,11 +1743,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // A passthrough binding owns nothing — ask about its source, exactly as
         // the suppressors themselves forward (B-2026-08-06-27).
         let name: &str = self
+            .payload_vars
             .passthrough_owner_alias
             .get(name.as_str())
             .map_or(name.as_str(), |s| s.as_str());
-        self.inline_option_payload_vars.contains(name)
-            || self.inline_result_payload_vars.contains(name)
+        self.payload_vars.inline_option_payload_vars.contains(name)
+            || self.payload_vars.inline_result_payload_vars.contains(name)
     }
 
     /// Does `pattern` bind a `Some`/`Ok`/`Err` payload out at all? (Shape only —
@@ -1811,6 +1813,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         let owner: &str = self
+            .payload_vars
             .passthrough_owner_alias
             .get(name.as_str())
             .map_or(name.as_str(), |s| s.as_str());
@@ -2561,11 +2564,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // (B-2026-08-06-27), so the clone lands on the value that is really at
         // risk.
         let owner: String = self
+            .payload_vars
             .passthrough_owner_alias
             .get(name.as_str())
             .cloned()
             .unwrap_or_else(|| name.clone());
-        if !self.inline_option_payload_vars.contains(owner.as_str()) {
+        if !self
+            .payload_vars
+            .inline_option_payload_vars
+            .contains(owner.as_str())
+        {
             return (val, None);
         }
         // ESCAPING arms only. A read-only match is already the zero-cost borrow
@@ -2687,11 +2695,16 @@ impl<'ctx> super::Codegen<'ctx> {
             return (val, None);
         };
         let owner: String = self
+            .payload_vars
             .passthrough_owner_alias
             .get(name.as_str())
             .cloned()
             .unwrap_or_else(|| name.clone());
-        if !self.inline_result_payload_vars.contains(owner.as_str()) {
+        if !self
+            .payload_vars
+            .inline_result_payload_vars
+            .contains(owner.as_str())
+        {
             return (val, None);
         }
         // ESCAPING arms only — a read-only match is the borrow path above, and
@@ -4113,7 +4126,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // byte-identical and confines the mirror to the cross-call case, where a
         // data write is the ONLY channel to the caller's drop fn.
         if !self.pattern_state.pattern_binding_scrutinee_is_owned_param {
-            self.deboxed_payload_box_ptrs.remove(&slot);
+            self.payload_vars.deboxed_payload_box_ptrs.remove(&slot);
             return;
         }
         // …and never through a SHARED enum's payload box. That box lives inside
@@ -4124,13 +4137,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // is a private non-shared `Option`, so the shape this row measured
         // still reaches the mirror; only the shared original is off limits.
         if self.pattern_state.pattern_binding_scrutinee_is_shared_enum {
-            self.deboxed_payload_box_ptrs.remove(&slot);
+            self.payload_vars.deboxed_payload_box_ptrs.remove(&slot);
             return;
         }
         // The unpack mirror of `coerce_to_payload_words`'s pack-side boxing —
         // identical to `reconstruct_payload_value`'s own `want > field_words`.
         if field_words.is_empty() || self.pattern_payload_word_count(sub_pat) <= field_words.len() {
-            self.deboxed_payload_box_ptrs.remove(&slot);
+            self.payload_vars.deboxed_payload_box_ptrs.remove(&slot);
             return;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -4139,10 +4152,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_to_ptr(field_words[0], ptr_ty, "enumbox.mv")
         {
             Ok(box_ptr) => {
-                self.deboxed_payload_box_ptrs.insert(slot, box_ptr);
+                self.payload_vars
+                    .deboxed_payload_box_ptrs
+                    .insert(slot, box_ptr);
             }
             Err(_) => {
-                self.deboxed_payload_box_ptrs.remove(&slot);
+                self.payload_vars.deboxed_payload_box_ptrs.remove(&slot);
             }
         }
     }
@@ -6804,7 +6819,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // per-field walk, so a field the pattern did NOT consume keeps its live
         // cap and the owner still frees it. One level: the box pointer is a
         // fresh `inttoptr` and is never itself a key.
-        if let Some(box_ptr) = self.deboxed_payload_box_ptrs.get(&base_ptr).copied() {
+        if let Some(box_ptr) = self
+            .payload_vars
+            .deboxed_payload_box_ptrs
+            .get(&base_ptr)
+            .copied()
+        {
             self.suppress_destructured_struct_pattern_cleanup_at(box_ptr, struct_name, pattern);
         }
     }
@@ -7738,7 +7758,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
-        if !self.struct_field_boxed_payload_vars.contains(name.as_str()) {
+        if !self
+            .payload_vars
+            .struct_field_boxed_payload_vars
+            .contains(name.as_str())
+        {
             return;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
@@ -7818,10 +7842,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-06-27 — a passthrough result binding owns nothing (its
         // source does), so a disarm aimed at it must land on the source.
         let name: &str = self
+            .payload_vars
             .passthrough_owner_alias
             .get(name.as_str())
             .map_or(name.as_str(), |s| s.as_str());
-        if !self.inline_option_payload_vars.contains(name) {
+        if !self.payload_vars.inline_option_payload_vars.contains(name) {
             return;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
@@ -7895,7 +7920,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// if that shape ever arms, but it does not today and an unbounded walk
     /// over a map that could contain a cycle is not worth adding unmeasured.
     pub(super) fn moved_arg_owner_name(&self, name: &str) -> String {
-        self.passthrough_owner_alias
+        self.payload_vars
+            .passthrough_owner_alias
             .get(name)
             .cloned()
             .unwrap_or_else(|| name.to_string())
@@ -7924,8 +7950,14 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         let owner = self.moved_arg_owner_name(n);
-        (self.inline_option_payload_vars.contains(owner.as_str())
-            || self.inline_result_payload_vars.contains(owner.as_str()))
+        (self
+            .payload_vars
+            .inline_option_payload_vars
+            .contains(owner.as_str())
+            || self
+                .payload_vars
+                .inline_result_payload_vars
+                .contains(owner.as_str()))
         .then_some(owner)
     }
 
@@ -7945,7 +7977,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// disarms a passthrough source through here rather than through the
     /// whole-slot zero.
     pub(super) fn suppress_boxed_enum_payload_cleanup_for_owner(&self, name: &str) {
-        if !self.boxed_enum_payload_vars.contains(name) {
+        if !self.payload_vars.boxed_enum_payload_vars.contains(name) {
             return;
         }
         let Some(slot) = self.variables.get(name) else {
@@ -7970,7 +8002,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-06-29 — follow the passthrough ownership alias, so the
         // suppression lands on the binding that actually owns the payload.
         let name = &self.moved_arg_owner_name(name);
-        if !self.inline_option_payload_vars.contains(name.as_str()) {
+        if !self
+            .payload_vars
+            .inline_option_payload_vars
+            .contains(name.as_str())
+        {
             return;
         }
         let Some(slot) = self.variables.get(name.as_str()) else {
@@ -8004,7 +8040,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-06-29 — follow the passthrough ownership alias, so the
         // suppression lands on the binding that actually owns the payload.
         let name = &self.moved_arg_owner_name(name);
-        if !self.inline_result_payload_vars.contains(name.as_str()) {
+        if !self
+            .payload_vars
+            .inline_result_payload_vars
+            .contains(name.as_str())
+        {
             return;
         }
         let Some(slot) = self.variables.get(name.as_str()) else {
@@ -8051,7 +8091,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return None;
         };
-        if !self.boxed_enum_payload_vars.contains(name.as_str()) {
+        if !self
+            .payload_vars
+            .boxed_enum_payload_vars
+            .contains(name.as_str())
+        {
             return None;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
@@ -8152,7 +8196,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return None;
         };
-        if !self.inline_result_payload_vars.contains(name.as_str()) {
+        if !self
+            .payload_vars
+            .inline_result_payload_vars
+            .contains(name.as_str())
+        {
             return None;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
@@ -8264,10 +8312,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // `suppress_inline_option_payload_cleanup`: a passthrough result
         // binding owns nothing, so the disarm must land on its source.
         let name: &str = self
+            .payload_vars
             .passthrough_owner_alias
             .get(name.as_str())
             .map_or(name.as_str(), |s| s.as_str());
-        if !self.inline_result_payload_vars.contains(name) {
+        if !self.payload_vars.inline_result_payload_vars.contains(name) {
             return;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
@@ -8363,11 +8412,19 @@ impl<'ctx> super::Codegen<'ctx> {
             if !self.call_arg_flows_into_return(callee_name, i) {
                 return None;
             }
-            if self.boxed_enum_payload_vars.contains(n.as_str()) {
+            if self
+                .payload_vars
+                .boxed_enum_payload_vars
+                .contains(n.as_str())
+            {
                 return Some(n.clone());
             }
-            let owner = self.boxed_passthrough_owner_alias.get(n.as_str())?;
-            self.boxed_enum_payload_vars
+            let owner = self
+                .payload_vars
+                .boxed_passthrough_owner_alias
+                .get(n.as_str())?;
+            self.payload_vars
+                .boxed_enum_payload_vars
                 .contains(owner.as_str())
                 .then(|| owner.clone())
         })
@@ -8415,10 +8472,18 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => {
                 let mut cur = n.clone();
                 for _ in 0..8 {
-                    if self.nested_boxed_payload_vars.contains(cur.as_str()) {
+                    if self
+                        .payload_vars
+                        .nested_boxed_payload_vars
+                        .contains(cur.as_str())
+                    {
                         return Some(cur);
                     }
-                    match self.nested_boxed_passthrough_owner_alias.get(cur.as_str()) {
+                    match self
+                        .payload_vars
+                        .nested_boxed_passthrough_owner_alias
+                        .get(cur.as_str())
+                    {
                         Some(next) if *next != cur => cur = next.clone(),
                         _ => return None,
                     }
@@ -8453,13 +8518,21 @@ impl<'ctx> super::Codegen<'ctx> {
             if !self.call_arg_flows_into_return(callee_name, i) {
                 return None;
             }
-            if self.nested_boxed_payload_vars.contains(n.as_str()) {
+            if self
+                .payload_vars
+                .nested_boxed_payload_vars
+                .contains(n.as_str())
+            {
                 return Some(n.clone());
             }
             // A chained passthrough's argument is itself an unarmed result;
             // follow it one hop to the binding that does own the box.
-            let owner = self.nested_boxed_passthrough_owner_alias.get(n.as_str())?;
-            self.nested_boxed_payload_vars
+            let owner = self
+                .payload_vars
+                .nested_boxed_passthrough_owner_alias
+                .get(n.as_str())?;
+            self.payload_vars
+                .nested_boxed_payload_vars
                 .contains(owner.as_str())
                 .then(|| owner.clone())
         })
@@ -8481,8 +8554,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// result registers nothing. Not the reverse — a discarded result leaves
     /// the source as the only owner, so zeroing it would leak.
     pub(super) fn call_passthrough_armed_inline_source(&self, value: &Expr) -> Option<String> {
-        self.call_passthrough_armed_source(value, &self.inline_option_payload_vars)
-            .or_else(|| self.call_passthrough_armed_source(value, &self.inline_result_payload_vars))
+        self.call_passthrough_armed_source(value, &self.payload_vars.inline_option_payload_vars)
+            .or_else(|| {
+                self.call_passthrough_armed_source(
+                    value,
+                    &self.payload_vars.inline_result_payload_vars,
+                )
+            })
     }
 
     /// Superset of [`Self::call_passthrough_armed_inline_source`] that also
@@ -8498,7 +8576,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// because rc handles are not buffer-owned).
     pub(super) fn call_passthrough_armed_any_source(&self, value: &Expr) -> Option<String> {
         self.call_passthrough_armed_inline_source(value)
-            .or_else(|| self.call_passthrough_armed_source(value, &self.boxed_enum_payload_vars))
+            .or_else(|| {
+                self.call_passthrough_armed_source(
+                    value,
+                    &self.payload_vars.boxed_enum_payload_vars,
+                )
+            })
     }
 
     /// The BUILTIN sibling of [`Self::call_passthrough_armed_source`]:
@@ -8544,8 +8627,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(n) = &object.kind else {
             return None;
         };
-        (self.inline_option_payload_vars.contains(n.as_str())
-            || self.inline_result_payload_vars.contains(n.as_str()))
+        (self
+            .payload_vars
+            .inline_option_payload_vars
+            .contains(n.as_str())
+            || self
+                .payload_vars
+                .inline_result_payload_vars
+                .contains(n.as_str()))
         .then(|| n.clone())
     }
 
@@ -8648,14 +8737,23 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let in_option = self.inline_option_payload_vars.contains(name.as_str());
-        let in_result = self.inline_result_payload_vars.contains(name.as_str());
+        let in_option = self
+            .payload_vars
+            .inline_option_payload_vars
+            .contains(name.as_str());
+        let in_result = self
+            .payload_vars
+            .inline_result_payload_vars
+            .contains(name.as_str());
         // `boxed_enum_payload_vars` covers the heap-BOXED wide payload
         // (`Option[Block]`) whose `BoxedEnumDrop` guards on `tag == Some`; the
         // two inline sets cover the inline `{ptr,len,cap}` heap payload whose
         // free guards on `cap > 0`. Zeroing the whole slot below neutralizes
         // every shape's guard at once.
-        let in_boxed = self.boxed_enum_payload_vars.contains(name.as_str());
+        let in_boxed = self
+            .payload_vars
+            .boxed_enum_payload_vars
+            .contains(name.as_str());
         if !in_option && !in_result && !in_boxed {
             return;
         }
@@ -8740,6 +8838,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let Some(slot) = self
+            .payload_vars
             .boxed_optres_payload_view_vars
             .get(name.as_str())
             .copied()
@@ -8780,7 +8879,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
-        if !self.inline_option_map_payload_vars.contains(name.as_str()) {
+        if !self
+            .payload_vars
+            .inline_option_map_payload_vars
+            .contains(name.as_str())
+        {
             return;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
@@ -8830,7 +8933,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return None;
         };
-        if !self.inline_option_agg_payload_vars.contains(name.as_str()) {
+        if !self
+            .payload_vars
+            .inline_option_agg_payload_vars
+            .contains(name.as_str())
+        {
             return None;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
@@ -8919,7 +9026,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
-        if !self.inline_option_agg_payload_vars.contains(name.as_str()) {
+        if !self
+            .payload_vars
+            .inline_option_agg_payload_vars
+            .contains(name.as_str())
+        {
             return;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
@@ -8973,7 +9084,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
-        if !self.boxed_enum_payload_vars.contains(name.as_str()) {
+        if !self
+            .payload_vars
+            .boxed_enum_payload_vars
+            .contains(name.as_str())
+        {
             return;
         }
         let Some(slot) = self.variables.get(name.as_str()).copied() else {
@@ -9130,7 +9245,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let i64_t = self.context.i64_type();
-        if self.inline_result_payload_vars.contains(name.as_str()) {
+        if self
+            .payload_vars
+            .inline_result_payload_vars
+            .contains(name.as_str())
+        {
             if let Some(layout) = self.enum_layouts.get("Result") {
                 if let Ok(cap_ptr) = self.builder.build_struct_gep(
                     layout.llvm_type,
@@ -9142,7 +9261,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        if self.inline_option_payload_vars.contains(name.as_str()) {
+        if self
+            .payload_vars
+            .inline_option_payload_vars
+            .contains(name.as_str())
+        {
             if let Some(layout) = self.enum_layouts.get("Option") {
                 if let Ok(cap_ptr) = self.builder.build_struct_gep(
                     layout.llvm_type,
@@ -9154,7 +9277,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        if self.inline_option_map_payload_vars.contains(name.as_str()) {
+        if self
+            .payload_vars
+            .inline_option_map_payload_vars
+            .contains(name.as_str())
+        {
             if let Some(layout) = self.enum_layouts.get("Option") {
                 let none_tag = layout.tags.get("None").copied().unwrap_or(0);
                 if let Ok(tag_ptr) = self.builder.build_struct_gep(

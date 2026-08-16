@@ -833,7 +833,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 && self.struct_types.contains_key(tn)
                                 && !self.shared_types.contains_key(tn)
                             {
-                                self.shared_enum_payload_view_vars
+                                self.payload_vars
+                                    .shared_enum_payload_view_vars
                                     .insert(name.clone(), tn.to_string());
                             }
                             // The user-struct arm is skipped for an `Option`/`Result`
@@ -1099,7 +1100,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if let Some(slot) =
                                     self.pattern_state.pattern_binding_scrutinee_optres_slot
                                 {
-                                    self.boxed_optres_payload_view_vars
+                                    self.payload_vars
+                                        .boxed_optres_payload_view_vars
                                         .insert(name.clone(), slot);
                                 }
                             }

@@ -2670,13 +2670,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .soa_return_local_names(&func.body)
             .into_iter()
             .collect();
-        self.inline_option_payload_vars.clear();
-        self.boxed_enum_payload_vars.clear();
-        self.boxed_optres_payload_view_vars.clear();
-        self.deboxed_payload_box_ptrs.clear();
-        self.inline_result_payload_vars.clear();
-        self.inline_option_map_payload_vars.clear();
-        self.inline_option_agg_payload_vars.clear();
+        self.payload_vars.inline_option_payload_vars.clear();
+        self.payload_vars.boxed_enum_payload_vars.clear();
+        self.payload_vars.boxed_optres_payload_view_vars.clear();
+        self.payload_vars.deboxed_payload_box_ptrs.clear();
+        self.payload_vars.inline_result_payload_vars.clear();
+        self.payload_vars.inline_option_map_payload_vars.clear();
+        self.payload_vars.inline_option_agg_payload_vars.clear();
         // Function-level scope-cleanup frame for owned locals (`Tensor` /
         // `Vec` / `String` / `Map` lets needing drop), mirroring
         // `compile_function`. The caller's frame stack was swapped out in

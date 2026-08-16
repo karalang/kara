@@ -1590,7 +1590,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // therefore leave this binding armed rather than zero its slot as a
         // move; see the arg-site skip in `call_dispatch.rs`.
         if inner_struct_name.is_some() && inner_drop_fn.is_some() {
-            self.boxed_struct_payload_vars.insert(name.to_string());
+            self.payload_vars
+                .boxed_struct_payload_vars
+                .insert(name.to_string());
         }
     }
 
@@ -1670,7 +1672,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // enum-variant field can neutralize this box drop (the move target
         // becomes the box's sole owner) — see
         // `suppress_inline_option_result_binding_move`.
-        self.boxed_enum_payload_vars.insert(name.to_string());
+        self.payload_vars
+            .boxed_enum_payload_vars
+            .insert(name.to_string());
     }
 
     /// Queue a scope-exit free of a heap box nested one enum level DOWN,
@@ -1832,7 +1836,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // Armed for the passthrough rule only — deliberately NOT
         // `boxed_enum_payload_vars`; see this fn's doc and that field's.
-        self.nested_boxed_payload_vars.insert(name.to_string());
+        self.payload_vars
+            .nested_boxed_payload_vars
+            .insert(name.to_string());
     }
 
     /// B-2026-08-07-5 — NESTED sibling of
@@ -1862,7 +1868,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &value.kind else {
             return;
         };
-        if !self.nested_boxed_payload_vars.contains(name.as_str()) {
+        if !self
+            .payload_vars
+            .nested_boxed_payload_vars
+            .contains(name.as_str())
+        {
             return;
         }
         let Some(slot) = self.variables.get(name.as_str()).copied() else {
@@ -4398,6 +4408,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return val;
         };
         if !self
+            .payload_vars
             .shared_enum_payload_view_vars
             .contains_key(recv.as_str())
         {
@@ -4709,6 +4720,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .borrowed_agg_payload_struct_vars
                 .contains(obj_name.as_str())
             || self
+                .payload_vars
                 .shared_enum_payload_view_vars
                 .contains_key(obj_name.as_str())
         {
@@ -4837,6 +4849,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .borrowed_agg_payload_struct_vars
                 .contains(obj_name.as_str())
             || self
+                .payload_vars
                 .shared_enum_payload_view_vars
                 .contains_key(obj_name.as_str())
         {
@@ -4969,6 +4982,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .borrowed_agg_payload_struct_vars
                 .contains(obj_name.as_str())
             || self
+                .payload_vars
                 .shared_enum_payload_view_vars
                 .contains_key(obj_name.as_str())
         {
@@ -5921,7 +5935,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 payload_elem_agg_drop,
             });
         }
-        self.inline_option_payload_vars.insert(var_name.to_string());
+        self.payload_vars
+            .inline_option_payload_vars
+            .insert(var_name.to_string());
     }
 
     /// B-2026-08-14-15 leg B — the per-element aggregate drop fn for an
@@ -6018,7 +6034,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 drop_fn,
             });
         }
-        self.inline_option_agg_payload_vars
+        self.payload_vars
+            .inline_option_agg_payload_vars
             .insert(var_name.to_string());
     }
 
@@ -6297,7 +6314,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Res` body that `karac run` never printed and freeing whatever those
         // words happened to hold. Benign only because the trailing words were
         // zero, so every `cap > 0` guard skipped.
-        if self.boxed_enum_payload_vars.contains(var_name) {
+        if self.payload_vars.boxed_enum_payload_vars.contains(var_name) {
             return;
         }
         let (ok_payload_elem_ty, err_payload_elem_ty) = self
@@ -6406,7 +6423,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 err_payload_elem_agg_drop,
             });
         }
-        self.inline_result_payload_vars.insert(var_name.to_string());
+        self.payload_vars
+            .inline_result_payload_vars
+            .insert(var_name.to_string());
     }
 
     /// `Result[T, E]` sibling of `try_track_discarded_inline_option` — frees a
@@ -6521,7 +6540,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 map_drop,
             });
         }
-        self.inline_option_map_payload_vars
+        self.payload_vars
+            .inline_option_map_payload_vars
             .insert(var_name.to_string());
     }
 

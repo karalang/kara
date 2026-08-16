@@ -908,7 +908,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ExprKind::Identifier(n) => {
                     return (self.fn_ctx.current_fn_param_names.contains(n.as_str())
                         && !self.ref_params.contains_key(n.as_str()))
-                        || self.param_view_locals.contains(n.as_str());
+                        || self.payload_vars.param_view_locals.contains(n.as_str());
                 }
                 _ => return false,
             }

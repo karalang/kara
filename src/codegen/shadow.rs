@@ -117,12 +117,21 @@ impl<'ctx> super::Codegen<'ctx> {
             set_elem_type_exprs: self.mapset.set_elem_type_exprs.remove(name),
             string_vars: self.var_types.string_vars.remove(name),
             cstr_vars: self.var_types.cstr_vars.remove(name),
-            inline_option_payload_vars: self.inline_option_payload_vars.remove(name),
-            inline_result_payload_vars: self.inline_result_payload_vars.remove(name),
-            inline_option_map_payload_vars: self.inline_option_map_payload_vars.remove(name),
-            inline_option_agg_payload_vars: self.inline_option_agg_payload_vars.remove(name),
-            boxed_enum_payload_vars: self.boxed_enum_payload_vars.remove(name),
-            boxed_optres_payload_view_vars: self.boxed_optres_payload_view_vars.remove(name),
+            inline_option_payload_vars: self.payload_vars.inline_option_payload_vars.remove(name),
+            inline_result_payload_vars: self.payload_vars.inline_result_payload_vars.remove(name),
+            inline_option_map_payload_vars: self
+                .payload_vars
+                .inline_option_map_payload_vars
+                .remove(name),
+            inline_option_agg_payload_vars: self
+                .payload_vars
+                .inline_option_agg_payload_vars
+                .remove(name),
+            boxed_enum_payload_vars: self.payload_vars.boxed_enum_payload_vars.remove(name),
+            boxed_optres_payload_view_vars: self
+                .payload_vars
+                .boxed_optres_payload_view_vars
+                .remove(name),
             rc_fallback_heap_types: self.drop_rc.rc_fallback_heap_types.remove(name),
         }
     }
@@ -210,22 +219,34 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_types.cstr_vars.insert(key.clone());
         }
         if snap.inline_option_payload_vars {
-            self.inline_option_payload_vars.insert(key.clone());
+            self.payload_vars
+                .inline_option_payload_vars
+                .insert(key.clone());
         }
         if snap.inline_result_payload_vars {
-            self.inline_result_payload_vars.insert(key.clone());
+            self.payload_vars
+                .inline_result_payload_vars
+                .insert(key.clone());
         }
         if snap.inline_option_map_payload_vars {
-            self.inline_option_map_payload_vars.insert(key.clone());
+            self.payload_vars
+                .inline_option_map_payload_vars
+                .insert(key.clone());
         }
         if snap.inline_option_agg_payload_vars {
-            self.inline_option_agg_payload_vars.insert(key.clone());
+            self.payload_vars
+                .inline_option_agg_payload_vars
+                .insert(key.clone());
         }
         if let Some(v) = snap.boxed_optres_payload_view_vars {
-            self.boxed_optres_payload_view_vars.insert(key.clone(), v);
+            self.payload_vars
+                .boxed_optres_payload_view_vars
+                .insert(key.clone(), v);
         }
         if snap.boxed_enum_payload_vars {
-            self.boxed_enum_payload_vars.insert(key.clone());
+            self.payload_vars
+                .boxed_enum_payload_vars
+                .insert(key.clone());
         }
         if let Some(v) = snap.rc_fallback_heap_types {
             self.drop_rc.rc_fallback_heap_types.insert(key, v);
@@ -340,12 +361,21 @@ impl<'ctx> super::Codegen<'ctx> {
             set_elem_type_exprs: self.mapset.set_elem_type_exprs.clone(),
             string_vars: self.var_types.string_vars.clone(),
             cstr_vars: self.var_types.cstr_vars.clone(),
-            inline_option_payload_vars: self.inline_option_payload_vars.clone(),
-            inline_result_payload_vars: self.inline_result_payload_vars.clone(),
-            inline_option_map_payload_vars: self.inline_option_map_payload_vars.clone(),
-            inline_option_agg_payload_vars: self.inline_option_agg_payload_vars.clone(),
-            boxed_enum_payload_vars: self.boxed_enum_payload_vars.clone(),
-            boxed_optres_payload_view_vars: self.boxed_optres_payload_view_vars.clone(),
+            inline_option_payload_vars: self.payload_vars.inline_option_payload_vars.clone(),
+            inline_result_payload_vars: self.payload_vars.inline_result_payload_vars.clone(),
+            inline_option_map_payload_vars: self
+                .payload_vars
+                .inline_option_map_payload_vars
+                .clone(),
+            inline_option_agg_payload_vars: self
+                .payload_vars
+                .inline_option_agg_payload_vars
+                .clone(),
+            boxed_enum_payload_vars: self.payload_vars.boxed_enum_payload_vars.clone(),
+            boxed_optres_payload_view_vars: self
+                .payload_vars
+                .boxed_optres_payload_view_vars
+                .clone(),
             rc_fallback_heap_types: self.drop_rc.rc_fallback_heap_types.clone(),
         }
     }
@@ -382,12 +412,12 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.set_elem_type_exprs = snap.set_elem_type_exprs;
         self.var_types.string_vars = snap.string_vars;
         self.var_types.cstr_vars = snap.cstr_vars;
-        self.inline_option_payload_vars = snap.inline_option_payload_vars;
-        self.inline_result_payload_vars = snap.inline_result_payload_vars;
-        self.inline_option_map_payload_vars = snap.inline_option_map_payload_vars;
-        self.inline_option_agg_payload_vars = snap.inline_option_agg_payload_vars;
-        self.boxed_enum_payload_vars = snap.boxed_enum_payload_vars;
-        self.boxed_optres_payload_view_vars = snap.boxed_optres_payload_view_vars;
+        self.payload_vars.inline_option_payload_vars = snap.inline_option_payload_vars;
+        self.payload_vars.inline_result_payload_vars = snap.inline_result_payload_vars;
+        self.payload_vars.inline_option_map_payload_vars = snap.inline_option_map_payload_vars;
+        self.payload_vars.inline_option_agg_payload_vars = snap.inline_option_agg_payload_vars;
+        self.payload_vars.boxed_enum_payload_vars = snap.boxed_enum_payload_vars;
+        self.payload_vars.boxed_optres_payload_view_vars = snap.boxed_optres_payload_view_vars;
         self.drop_rc.rc_fallback_heap_types = snap.rc_fallback_heap_types;
     }
 }

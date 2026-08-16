@@ -2060,7 +2060,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `suppress_destructured_struct_pattern_cleanup_at`.
                 let boxed_struct_binding = matches!(
                     &a.value.kind,
-                    ExprKind::Identifier(n) if self.boxed_struct_payload_vars.contains(n.as_str())
+                    ExprKind::Identifier(n) if self.payload_vars.boxed_struct_payload_vars.contains(n.as_str())
                 );
                 // B-2026-08-12-1 — an ENTRY-COPIED param owns its own buffer,
                 // so the caller keeps the original and this whole-slot zero
@@ -2126,7 +2126,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // gating it was a byte-identical no-op on the first attempt and
                 // is load-bearing only now that the let site arms one.
                 if let Some(src) = self.nested_boxed_owner_source_of(&a.value) {
-                    if !self.struct_field_boxed_payload_vars.contains(src.as_str()) {
+                    if !self
+                        .payload_vars
+                        .struct_field_boxed_payload_vars
+                        .contains(src.as_str())
+                    {
                         self.suppress_nested_boxed_drop_for_var(&src);
                     }
                 }
@@ -2165,7 +2169,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // same slot (`Result[Wide, String]`), and zeroing all of it
                 // strands that. Only the box word moves owner here.
                 if let ExprKind::Identifier(n) = &a.value.kind {
-                    if let Some(owner) = self.boxed_passthrough_owner_alias.get(n.as_str()).cloned()
+                    if let Some(owner) = self
+                        .payload_vars
+                        .boxed_passthrough_owner_alias
+                        .get(n.as_str())
+                        .cloned()
                     {
                         self.suppress_boxed_enum_payload_cleanup_for_owner(&owner);
                     }
@@ -2600,9 +2608,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// families that can own one.
     fn envelope_operand_is_unowned(&self, e: &Expr) -> bool {
         if let ExprKind::Identifier(n) = &e.kind {
-            return !self.boxed_enum_payload_vars.contains(n.as_str())
-                && !self.nested_boxed_payload_vars.contains(n.as_str())
-                && !self.struct_field_boxed_payload_vars.contains(n.as_str());
+            return !self
+                .payload_vars
+                .boxed_enum_payload_vars
+                .contains(n.as_str())
+                && !self
+                    .payload_vars
+                    .nested_boxed_payload_vars
+                    .contains(n.as_str())
+                && !self
+                    .payload_vars
+                    .struct_field_boxed_payload_vars
+                    .contains(n.as_str());
         }
         self.optres_arg_mints_field_envelope(e)
     }
@@ -5856,7 +5873,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => true,
             });
         }
-        self.nested_boxed_payload_vars.remove(name);
+        self.payload_vars.nested_boxed_payload_vars.remove(name);
     }
 
     pub(super) fn suppress_map_cleanup_for_tail_identifier(&mut self, name: &str) {
@@ -7123,8 +7140,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             // (`suppress_boxed_payload_view_move`) cannot serve
                             // here: across a call there is no action to retract,
                             // only data the caller's drop fn will read.
-                            if let Some(box_ptr) =
-                                self.deboxed_payload_box_ptrs.get(&slot.ptr).copied()
+                            if let Some(box_ptr) = self
+                                .payload_vars
+                                .deboxed_payload_box_ptrs
+                                .get(&slot.ptr)
+                                .copied()
                             {
                                 self.zero_struct_field_move_cap_inst(
                                     box_ptr,
@@ -7399,7 +7419,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // if this mirror is missing. Registration is gated to an
                 // owned-param scrutinee, so an in-frame boxed view keeps
                 // B-2026-08-04-2's retraction and never reaches this store.
-                if let Some(box_ptr) = self.deboxed_payload_box_ptrs.get(&slot.ptr).copied() {
+                if let Some(box_ptr) = self
+                    .payload_vars
+                    .deboxed_payload_box_ptrs
+                    .get(&slot.ptr)
+                    .copied()
+                {
                     self.zero_struct_move_caps_mono(box_ptr, &type_name, subst.as_ref());
                 }
             }
