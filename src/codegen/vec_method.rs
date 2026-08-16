@@ -10368,9 +10368,41 @@ impl<'ctx> super::Codegen<'ctx> {
         // does and moves the other way, so element type does not separate them
         // either. Until something does, a blanket arch gate trades one set of
         // katas for another, which is not an improvement.
+        // ON AARCH64 THE KERNEL CHOICE DEPENDS ON ELEMENT SIZE, and the probe
+        // does not know that — it measures branch predictability alone, which
+        // is the only thing that mattered on the x86 host it was calibrated on.
+        // Measured here on the isolated kernel (150k x 25 rounds, six patterns),
+        // branchless/branchy in cycles on the UNPREDICTABLE (random) pattern —
+        // the only one where the probe's answer is in doubt:
+        //
+        //     i64        8 B   0.81x   branchless wins by 1.24x
+        //     (i64,i64) 16 B   1.27x   branchy     wins by 1.27x
+        //
+        // The ranking INVERTS with element width. A branchless merge selects the
+        // whole element, so at 16 bytes it is two selects and a wider copy on
+        // the loop-carried cursor chain; at 8 bytes it is one, and cheap enough
+        // to beat the ~50% misprediction a random merge pays. Above 8 bytes the
+        // select stops paying and the branchy kernel — which this core predicts
+        // well enough — wins.
+        //
+        // So gate on width rather than on the probe for wide elements, and only
+        // on aarch64: the x86 calibration (its 8%/6% few-unique/sawtooth
+        // regressions are why the 40% threshold exists) is untouched.
+        //
+        // This is what the corpus A/B was missing. Forcing branchy everywhere
+        // won #252/#253 and LOST #15/#16/#18 — and those three sort scalar
+        // `i64`, exactly the class this keeps on the branchless path.
+        // `BasicTypeEnum::size_of()` is NOT usable here: for a struct it yields
+        // a `getelementptr` constant EXPRESSION, so `get_zero_extended_constant`
+        // returns None and every tuple element silently reads as narrow — which
+        // is exactly backwards, since tuples are the wide case this gates on.
+        // The target data layout answers it properly.
+        let elem_bytes = self.ensure_target_data()?.get_store_size(&elem_ty);
+        let wide_elem = elem_bytes > 8;
         let d_mode = match std::env::var("KARAC_SORT_FORCE").as_deref() {
             Ok("branchless") => one.into(),
             Ok("branchy") => zero.into(),
+            _ if wide_elem && super::driver::native_target_is_aarch64() => zero.into(),
             _ => self
                 .builder
                 .build_select(d_bl, one, zero, "d.mode")
