@@ -1633,3 +1633,187 @@ pub(crate) fn is_int_literal_one(expr: &Expr) -> bool {
 pub(crate) fn is_named_identifier(expr: &Expr, name: &str) -> bool {
     matches!(&expr.kind, ExprKind::Identifier(n) if n == name)
 }
+
+#[cfg(test)]
+mod tests {
+    //! Focused unit tests for the auto-par cost model
+    //! (project-review-2026-08-16 item 8). This module drives auto-par
+    //! decisions — a documented run-vs-build divergence surface — yet had no
+    //! dedicated coverage: a drifted gate surfaced only as an E2E
+    //! output-ordering flake. Each test pins one gate of [`fanout_verdict`]
+    //! or one helper's contract, on shapes small enough to localize a
+    //! failure to the exact gate that moved.
+
+    use super::*;
+
+    /// Parse a program and return the shape of the first `while` loop in
+    /// function `name` (statement index + extracted [`LoopShape`]).
+    fn first_while_shape(src: &str, name: &str) -> LoopShape {
+        let result = crate::parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        let f = result
+            .program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) if f.name == name => Some(f.clone()),
+                _ => None,
+            })
+            .expect("function exists");
+        for (i, stmt) in f.body.stmts.iter().enumerate() {
+            let StmtKind::Expr(e) = &stmt.kind else {
+                continue;
+            };
+            if matches!(e.kind, ExprKind::While { .. }) {
+                return extract_loop_shape(&f.body, i, e).expect("counted loop shape recognized");
+            }
+        }
+        panic!("no while loop found in {name}");
+    }
+
+    fn verdict_for(src: &str, fn_name: &str) -> FanoutVerdict {
+        let shape = first_while_shape(src, fn_name);
+        fanout_verdict(
+            &shape.body,
+            &shape.end_expr,
+            shape.lo_expr.as_ref(),
+            None,
+            false,
+            true,
+            Some(&shape.loop_var),
+            Some(fn_name),
+        )
+    }
+
+    /// A statically tiny loop (trip count × body cost far under the dispatch
+    /// threshold) must decline: sequential wins.
+    #[test]
+    fn tiny_static_loop_declines_below_cost_threshold() {
+        let v = verdict_for(
+            "fn main() {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 10 {\n        total += i;\n        i += 1;\n    }\n    print(\"{total}\");\n}\n",
+            "main",
+        );
+        assert_eq!(v, FanoutVerdict::DeclinedBelowCostThreshold);
+        assert!(!v.is_fanout());
+    }
+
+    /// A huge statically-known trip count with a compute body (no memory
+    /// reads — pure arithmetic on the loop var) must fan out.
+    #[test]
+    fn large_compute_loop_fans_out() {
+        let v = verdict_for(
+            "fn main() {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 100000000 {\n        total += (i * 3 + 1) % 7;\n        i += 1;\n    }\n    print(\"{total}\");\n}\n",
+            "main",
+        );
+        assert_eq!(v, FanoutVerdict::Fanout);
+    }
+
+    /// `const_eval_iter_count` recovers literal trip counts, including a
+    /// nonzero lower bound, and refuses non-literal bounds.
+    #[test]
+    fn const_eval_iter_count_contract() {
+        let shape = first_while_shape(
+            "fn main() {\n    let mut i = 0;\n    while i < 1000 {\n        i += 1;\n    }\n}\n",
+            "main",
+        );
+        assert_eq!(
+            const_eval_iter_count(&shape.end_expr, shape.lo_expr.as_ref()),
+            Some(1000)
+        );
+        // Non-literal bound: not const-evaluable.
+        let shape = first_while_shape(
+            "fn f(n: i64) {\n    let mut i = 0;\n    while i < n {\n        i += 1;\n    }\n}\nfn main() {}\n",
+            "f",
+        );
+        assert_eq!(
+            const_eval_iter_count(&shape.end_expr, shape.lo_expr.as_ref()),
+            None
+        );
+    }
+
+    /// Body cost is monotone: adding work to a loop body must not lower the
+    /// estimate. (Absolute unit values are calibrated and may move; the
+    /// ORDER is the contract downstream gates rely on.)
+    #[test]
+    fn body_cost_is_monotone_in_body_size() {
+        let small = first_while_shape(
+            "fn main() {\n    let mut t = 0;\n    let mut i = 0;\n    while i < 100 {\n        t += i;\n        i += 1;\n    }\n}\n",
+            "main",
+        );
+        let big = first_while_shape(
+            "fn main() {\n    let mut t = 0;\n    let mut i = 0;\n    while i < 100 {\n        t += (i * 3 + 1) % 7 + (i * 5 + 2) % 11 + (i * 7 + 3) % 13;\n        i += 1;\n    }\n}\n",
+            "main",
+        );
+        let small_cost = estimate_body_cost_units(&small.body);
+        let big_cost = estimate_body_cost_units(&big.body);
+        assert!(small_cost > 0, "a nonempty body costs something");
+        assert!(
+            big_cost > small_cost,
+            "more work must not estimate cheaper: big={big_cost} small={small_cost}"
+        );
+    }
+
+    /// The memory-bound detector: an index-read body with no substantial
+    /// call is memory-bound; a pure-arithmetic body is not.
+    #[test]
+    fn memory_bound_detector_contract() {
+        let indexed = first_while_shape(
+            "fn main() {\n    let v = vec![1, 2, 3];\n    let mut t = 0;\n    let mut i = 0;\n    while i < 3 {\n        t += v[i];\n        i += 1;\n    }\n}\n",
+            "main",
+        );
+        assert!(
+            body_is_memory_bound(&indexed.body),
+            "index read → memory-bound"
+        );
+        let compute = first_while_shape(
+            "fn main() {\n    let mut t = 0;\n    let mut i = 0;\n    while i < 3 {\n        t += (i * 3) % 7;\n        i += 1;\n    }\n}\n",
+            "main",
+        );
+        assert!(!compute.body.stmts.is_empty());
+        assert!(
+            !body_is_memory_bound(&compute.body),
+            "pure arithmetic is not memory-bound"
+        );
+    }
+
+    /// The accumulator TYPE gate (B-2026-07-31-14): integer widths fan out,
+    /// floats decline, unresolved (`None`) stays eligible.
+    #[test]
+    fn accumulator_type_gate_contract() {
+        for ok in ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"] {
+            assert!(accumulator_type_fans_out(Some(ok)), "{ok} must be eligible");
+        }
+        assert!(!accumulator_type_fans_out(Some("f64")), "floats decline");
+        assert!(!accumulator_type_fans_out(Some("f32")), "floats decline");
+        assert!(
+            accumulator_type_fans_out(None),
+            "unresolved type preserves pre-gate behavior (eligible)"
+        );
+    }
+
+    /// The variable-K + param-bound gate (B-2026-07-23-25): a cheap body
+    /// under a parameter-referencing variable bound declines with the
+    /// dedicated verdict, not a generic one.
+    #[test]
+    fn variable_bound_cheap_body_declines_param_bound_verdict() {
+        let shape = first_while_shape(
+            "fn f(n: i64) -> i64 {\n    let mut t = 0;\n    let mut i = 0;\n    while i < n {\n        t += i;\n        i += 1;\n    }\n    t\n}\nfn main() {}\n",
+            "f",
+        );
+        let v = fanout_verdict(
+            &shape.body,
+            &shape.end_expr,
+            shape.lo_expr.as_ref(),
+            None,
+            true, // bound references a function parameter
+            true,
+            Some(&shape.loop_var),
+            Some("f"),
+        );
+        assert_eq!(v, FanoutVerdict::DeclinedVariableKParamBound);
+    }
+}
