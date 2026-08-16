@@ -6,8 +6,8 @@
 //! a structured subtype-trace.
 //!
 //! Houses `check_call_site_subtyping` (the driver) and the
-//! three-way body walker (`check_subtyping_in_block_owned`,
-//! `check_subtyping_in_stmt_owned`, `check_subtyping_in_expr_owned`)
+//! three-way body walker (`check_subtyping_in_block`,
+//! `check_subtyping_in_stmt`, `check_subtyping_in_expr`)
 //! plus the per-call-args check (`check_call_args_subtyping`).
 //!
 //! Lives in a sibling `impl<'a> super::EffectChecker<'a>` block.
@@ -24,52 +24,52 @@ use super::{
 
 impl<'a> super::EffectChecker<'a> {
     pub(crate) fn check_call_site_subtyping(&mut self) {
-        let bodies: Vec<Block> = self
+        let bodies: Vec<std::rc::Rc<crate::ast::Function>> = self
             .function_bodies
             .values()
-            .map(|f| f.body.clone())
-            .chain(self.method_bodies.values().map(|f| f.body.clone()))
+            .cloned()
+            .chain(self.method_bodies.values().cloned())
             .collect();
-        for body in bodies {
-            self.check_subtyping_in_block_owned(body);
+        for f in bodies {
+            self.check_subtyping_in_block(&f.body);
         }
     }
 
-    fn check_subtyping_in_block_owned(&mut self, block: Block) {
-        for stmt in block.stmts {
-            self.check_subtyping_in_stmt_owned(stmt);
+    fn check_subtyping_in_block(&mut self, block: &Block) {
+        for stmt in &block.stmts {
+            self.check_subtyping_in_stmt(stmt);
         }
-        if let Some(expr) = block.final_expr {
-            self.check_subtyping_in_expr_owned(*expr);
+        if let Some(expr) = &block.final_expr {
+            self.check_subtyping_in_expr(expr);
         }
     }
 
-    fn check_subtyping_in_stmt_owned(&mut self, stmt: Stmt) {
-        match stmt.kind {
+    fn check_subtyping_in_stmt(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
             StmtKind::MultiAssign { .. } => unreachable!(
                 "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
             ),
-            StmtKind::Let { value, .. } => self.check_subtyping_in_expr_owned(value),
+            StmtKind::Let { value, .. } => self.check_subtyping_in_expr(value),
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {
                 value, else_block, ..
             } => {
-                self.check_subtyping_in_expr_owned(value);
-                self.check_subtyping_in_block_owned(else_block);
+                self.check_subtyping_in_expr(value);
+                self.check_subtyping_in_block(else_block);
             }
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-                self.check_subtyping_in_block_owned(body);
+                self.check_subtyping_in_block(body);
             }
             StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
-                self.check_subtyping_in_expr_owned(target);
-                self.check_subtyping_in_expr_owned(value);
+                self.check_subtyping_in_expr(target);
+                self.check_subtyping_in_expr(value);
             }
-            StmtKind::Expr(expr) => self.check_subtyping_in_expr_owned(expr),
+            StmtKind::Expr(expr) => self.check_subtyping_in_expr(expr),
         }
     }
 
     /// Per-argument Fn-slot subtyping check, shared between `Call` and
-    /// `MethodCall` arms of `check_subtyping_in_expr_owned`. Resolves the
+    /// `MethodCall` arms of `check_subtyping_in_expr`. Resolves the
     /// callee's parameter list (via `function_bodies` or `method_bodies`)
     /// and emits `EffectSubtypeViolation` for any function-valued argument
     /// whose effect set exceeds its slot's declared effects.
@@ -225,30 +225,30 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
-    fn check_subtyping_in_expr_owned(&mut self, expr: Expr) {
-        match expr.kind {
+    fn check_subtyping_in_expr(&mut self, expr: &Expr) {
+        match &expr.kind {
             ExprKind::Call { callee, args } => {
-                if let Some(cname) = self.extract_callee_name(&callee) {
-                    self.check_call_args_subtyping(&cname, &args, &expr.span);
+                if let Some(cname) = self.extract_callee_name(callee) {
+                    self.check_call_args_subtyping(&cname, args, &expr.span);
                 }
                 // Recurse into callee and args
-                self.check_subtyping_in_expr_owned(*callee);
+                self.check_subtyping_in_expr(callee);
                 for arg in args {
-                    self.check_subtyping_in_expr_owned(arg.value);
+                    self.check_subtyping_in_expr(&arg.value);
                 }
             }
             ExprKind::Block(block) | ExprKind::Comptime(block) => {
-                self.check_subtyping_in_block_owned(block)
+                self.check_subtyping_in_block(block)
             }
             ExprKind::If {
                 condition,
                 then_block,
                 else_branch,
             } => {
-                self.check_subtyping_in_expr_owned(*condition);
-                self.check_subtyping_in_block_owned(then_block);
+                self.check_subtyping_in_expr(condition);
+                self.check_subtyping_in_block(then_block);
                 if let Some(e) = else_branch {
-                    self.check_subtyping_in_expr_owned(*e);
+                    self.check_subtyping_in_expr(e);
                 }
             }
             ExprKind::IfLet {
@@ -257,45 +257,45 @@ impl<'a> super::EffectChecker<'a> {
                 else_branch,
                 ..
             } => {
-                self.check_subtyping_in_expr_owned(*value);
-                self.check_subtyping_in_block_owned(then_block);
+                self.check_subtyping_in_expr(value);
+                self.check_subtyping_in_block(then_block);
                 if let Some(e) = else_branch {
-                    self.check_subtyping_in_expr_owned(*e);
+                    self.check_subtyping_in_expr(e);
                 }
             }
             ExprKind::Match { scrutinee, arms } => {
-                self.check_subtyping_in_expr_owned(*scrutinee);
+                self.check_subtyping_in_expr(scrutinee);
                 for arm in arms {
-                    if let Some(g) = arm.guard {
-                        self.check_subtyping_in_expr_owned(g);
+                    if let Some(g) = &arm.guard {
+                        self.check_subtyping_in_expr(g);
                     }
-                    self.check_subtyping_in_expr_owned(arm.body);
+                    self.check_subtyping_in_expr(&arm.body);
                 }
             }
             ExprKind::While {
                 condition, body, ..
             } => {
-                self.check_subtyping_in_expr_owned(*condition);
-                self.check_subtyping_in_block_owned(body);
+                self.check_subtyping_in_expr(condition);
+                self.check_subtyping_in_block(body);
             }
             ExprKind::WhileLet { value, body, .. } => {
-                self.check_subtyping_in_expr_owned(*value);
-                self.check_subtyping_in_block_owned(body);
+                self.check_subtyping_in_expr(value);
+                self.check_subtyping_in_block(body);
             }
             ExprKind::For { iterable, body, .. } => {
-                self.check_subtyping_in_expr_owned(*iterable);
-                self.check_subtyping_in_block_owned(body);
+                self.check_subtyping_in_expr(iterable);
+                self.check_subtyping_in_block(body);
             }
             ExprKind::Loop { body, .. }
             | ExprKind::Unsafe(body)
             | ExprKind::Try(body)
             | ExprKind::Seq(body)
             | ExprKind::Par(body) => {
-                self.check_subtyping_in_block_owned(body);
+                self.check_subtyping_in_block(body);
             }
-            ExprKind::LabeledBlock { body, .. } => self.check_subtyping_in_block_owned(body),
-            ExprKind::Lock { body, .. } => self.check_subtyping_in_block_owned(body),
-            ExprKind::Closure { body, .. } => self.check_subtyping_in_expr_owned(*body),
+            ExprKind::LabeledBlock { body, .. } => self.check_subtyping_in_block(body),
+            ExprKind::Lock { body, .. } => self.check_subtyping_in_block(body),
+            ExprKind::Closure { body, .. } => self.check_subtyping_in_expr(body),
             ExprKind::MethodCall { object, args, .. } => {
                 // Mirror the `Call` branch: resolve to `Type.method` via the
                 // typechecker side-table and run the same per-arg Fn-slot
@@ -303,97 +303,95 @@ impl<'a> super::EffectChecker<'a> {
                 // satisfy a method's pure `Fn()` slot whenever the enclosing
                 // caller declared the effects.
                 if let Some(callee_key) = self.resolve_method_callee_key(&expr.span) {
-                    self.check_call_args_subtyping(&callee_key, &args, &expr.span);
+                    self.check_call_args_subtyping(&callee_key, args, &expr.span);
                 }
-                self.check_subtyping_in_expr_owned(*object);
+                self.check_subtyping_in_expr(object);
                 for arg in args {
-                    self.check_subtyping_in_expr_owned(arg.value);
+                    self.check_subtyping_in_expr(&arg.value);
                 }
             }
             ExprKind::Binary { left, right, .. } => {
-                self.check_subtyping_in_expr_owned(*left);
-                self.check_subtyping_in_expr_owned(*right);
+                self.check_subtyping_in_expr(left);
+                self.check_subtyping_in_expr(right);
             }
             ExprKind::Pipe { left, right } => {
-                self.check_subtyping_in_expr_owned(*left);
-                self.check_subtyping_in_expr_owned(*right);
+                self.check_subtyping_in_expr(left);
+                self.check_subtyping_in_expr(right);
             }
-            ExprKind::Unary { operand, .. } => self.check_subtyping_in_expr_owned(*operand),
-            ExprKind::Return(Some(e)) | ExprKind::Question(e) => {
-                self.check_subtyping_in_expr_owned(*e)
-            }
-            ExprKind::Break { value: Some(e), .. } => self.check_subtyping_in_expr_owned(*e),
+            ExprKind::Unary { operand, .. } => self.check_subtyping_in_expr(operand),
+            ExprKind::Return(Some(e)) | ExprKind::Question(e) => self.check_subtyping_in_expr(e),
+            ExprKind::Break { value: Some(e), .. } => self.check_subtyping_in_expr(e),
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-                self.check_subtyping_in_expr_owned(*object)
+                self.check_subtyping_in_expr(object)
             }
             ExprKind::Index { object, index } => {
-                self.check_subtyping_in_expr_owned(*object);
-                self.check_subtyping_in_expr_owned(*index);
+                self.check_subtyping_in_expr(object);
+                self.check_subtyping_in_expr(index);
             }
             ExprKind::Tuple(exprs) => {
                 for e in exprs {
-                    self.check_subtyping_in_expr_owned(e);
+                    self.check_subtyping_in_expr(e);
                 }
             }
             ExprKind::ArrayLiteral(elems) => {
                 for e in elems {
-                    self.check_subtyping_in_expr_owned(e);
+                    self.check_subtyping_in_expr(e);
                 }
             }
             ExprKind::RepeatLiteral { value, count, .. } => {
-                self.check_subtyping_in_expr_owned(*value);
-                self.check_subtyping_in_expr_owned(*count);
+                self.check_subtyping_in_expr(value);
+                self.check_subtyping_in_expr(count);
             }
             ExprKind::PrefixCollectionLiteral { items, .. } => {
                 for e in items {
-                    self.check_subtyping_in_expr_owned(e);
+                    self.check_subtyping_in_expr(e);
                 }
             }
             ExprKind::StructLiteral { fields, spread, .. } => {
                 for f in fields {
-                    self.check_subtyping_in_expr_owned(f.value);
+                    self.check_subtyping_in_expr(&f.value);
                 }
                 if let Some(s) = spread {
-                    self.check_subtyping_in_expr_owned(*s);
+                    self.check_subtyping_in_expr(s);
                 }
             }
             ExprKind::MapLiteral(entries) => {
                 for (k, v) in entries {
-                    self.check_subtyping_in_expr_owned(k);
-                    self.check_subtyping_in_expr_owned(v);
+                    self.check_subtyping_in_expr(k);
+                    self.check_subtyping_in_expr(v);
                 }
             }
-            ExprKind::Cast { expr: inner, .. } => self.check_subtyping_in_expr_owned(*inner),
+            ExprKind::Cast { expr: inner, .. } => self.check_subtyping_in_expr(inner),
             ExprKind::Range { start, end, .. } => {
                 if let Some(s) = start {
-                    self.check_subtyping_in_expr_owned(*s);
+                    self.check_subtyping_in_expr(s);
                 }
                 if let Some(e) = end {
-                    self.check_subtyping_in_expr_owned(*e);
+                    self.check_subtyping_in_expr(e);
                 }
             }
             ExprKind::NilCoalesce { left, right } => {
-                self.check_subtyping_in_expr_owned(*left);
-                self.check_subtyping_in_expr_owned(*right);
+                self.check_subtyping_in_expr(left);
+                self.check_subtyping_in_expr(right);
             }
             ExprKind::OptionalChain { object, args, .. } => {
-                self.check_subtyping_in_expr_owned(*object);
+                self.check_subtyping_in_expr(object);
                 if let Some(args) = args {
                     for a in args {
-                        self.check_subtyping_in_expr_owned(a.value);
+                        self.check_subtyping_in_expr(&a.value);
                     }
                 }
             }
             ExprKind::Providers { bindings, body } => {
                 for b in bindings {
-                    self.check_subtyping_in_expr_owned(b.value);
+                    self.check_subtyping_in_expr(&b.value);
                 }
-                self.check_subtyping_in_block_owned(body);
+                self.check_subtyping_in_block(body);
             }
             ExprKind::InterpolatedStringLit(parts) => {
                 for p in parts {
                     if let ParsedInterpolationPart::Expr(e, _) = p {
-                        self.check_subtyping_in_expr_owned(*e);
+                        self.check_subtyping_in_expr(e);
                     }
                 }
             }
