@@ -11430,12 +11430,50 @@ impl<'ctx> super::Codegen<'ctx> {
         let s1 = self.emit_splitmix64(seed0);
         let s2 = self.emit_splitmix64(s1);
         let s3 = self.emit_splitmix64(s2);
+        // Lemire's multiply-shift range reduction rather than `s % len`
+        // (B-2026-08-16-9): `(s * len) >> 64` is uniform enough over [0,len) and
+        // lowers to a single `umulh`, where the remainder needs a runtime
+        // `udiv` + `msub` — three of them per call, on a divider that is not
+        // pipelined. Nothing here needs a rigorously unbiased index: ANY index
+        // in range is a valid pivot, so the residual modulo bias buys nothing.
+        // `s < 2^64` and `len >= 1` gives `s*len < len * 2^64`, so the high word
+        // is strictly below `len` and the sample stays in range.
+        //
+        // `KARAC_SORT_PIVOT_REM=1` restores the remainder for A/B.
+        let use_rem = std::env::var("KARAC_SORT_PIVOT_REM").as_deref() == Ok("1");
+        let i128_t = self.context.i128_type();
         let mut idxs = Vec::with_capacity(3);
         for (n, s) in [("a", s1), ("b", s2), ("c", s3)] {
-            let m = self
-                .builder
-                .build_int_unsigned_rem(s, len, &format!("q.pv.{n}.m"))
-                .unwrap();
+            let m = if use_rem {
+                self.builder
+                    .build_int_unsigned_rem(s, len, &format!("q.pv.{n}.m"))
+                    .unwrap()
+            } else {
+                let sw = self
+                    .builder
+                    .build_int_z_extend(s, i128_t, &format!("q.pv.{n}.sw"))
+                    .unwrap();
+                let lw = self
+                    .builder
+                    .build_int_z_extend(len, i128_t, &format!("q.pv.{n}.lw"))
+                    .unwrap();
+                let pr = self
+                    .builder
+                    .build_int_mul(sw, lw, &format!("q.pv.{n}.pr"))
+                    .unwrap();
+                let hi_w = self
+                    .builder
+                    .build_right_shift(
+                        pr,
+                        i128_t.const_int(64, false),
+                        false,
+                        &format!("q.pv.{n}.hw"),
+                    )
+                    .unwrap();
+                self.builder
+                    .build_int_truncate(hi_w, i64_t, &format!("q.pv.{n}.m"))
+                    .unwrap()
+            };
             idxs.push(
                 self.builder
                     .build_int_add(lo, m, &format!("q.pv.{n}.i"))
