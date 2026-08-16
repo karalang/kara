@@ -11587,6 +11587,83 @@ fn main() {
             assert_eq!(out.trim(), "5");
         }
     }
+
+    /// B-2026-08-16-1 — two independent `let`s from calls returning a heap
+    /// collection, gathered into a COLLECTION LITERAL, failed the DEFAULT build
+    /// with `codegen failed: Undefined variable 'a'` while `KARAC_AUTO_PAR=0`
+    /// and `--interp` both compiled and ran it.
+    ///
+    /// The grouping was right and the bug was one arm downstream. `refs_in_expr`
+    /// — the walker deciding which names are read OUTSIDE a par group, and so
+    /// which bindings need a return slot across the join — had an arm for
+    /// `ArrayLiteral` but none for `PrefixCollectionLiteral`. A bare `[a, b]`
+    /// checked against a `Vec`-typed annotation is NORMALIZED to the prefix form
+    /// before codegen runs, so the ordinary `let c: Vec[Vec[i64]] = [a, b]`
+    /// landed on the `_ => {}` wildcard: `a` and `b` never entered the
+    /// outside-reads set, got no return slot, stayed branch-local, and the
+    /// parent body had no binding to load.
+    ///
+    /// Scalars "passing" was the misleading part of the original report — a
+    /// scalar `mk` allocates nothing, so no group forms at all and the walker is
+    /// never consulted; same for the tuple control. The real contrast is `agg`,
+    /// which forks identically and consumes the bindings as `a.len() + b.len()`
+    /// — an ordinary `Binary`/`MethodCall` chain the walker always covered.
+    ///
+    /// `map_lit` and `repeat_lit` cover the sibling literal forms missing the
+    /// same way; `nested_five` is the shape the bug was found on (kata 277's
+    /// table of test matrices).
+    #[test]
+    fn test_e2e_autopar_joined_binding_in_collection_literal() {
+        let src = r#"
+fn mk(x: i64) -> Vec[i64] { let mut r: Vec[i64] = Vec.new(); r.push(x); return r; }
+fn row(a: bool, b: bool) -> Vec[bool] { let mut r: Vec[bool] = Vec.new(); r.push(a); r.push(b); return r; }
+fn bare_lit() -> i64 {
+    let a: Vec[i64] = mk(1i64);
+    let b: Vec[i64] = mk(2i64);
+    let c: Vec[Vec[i64]] = [a, b];
+    return c.len();
+}
+fn prefix_lit() -> i64 {
+    let a: Vec[i64] = mk(3i64);
+    let b: Vec[i64] = mk(4i64);
+    let c: Vec[Vec[i64]] = Vec[a, b];
+    return c.len();
+}
+fn map_lit() -> i64 {
+    let a: Vec[i64] = mk(5i64);
+    let b: Vec[i64] = mk(6i64);
+    let m: Map[String, Vec[i64]] = Map["a": a, "b": b];
+    return m.len();
+}
+fn repeat_lit() -> i64 {
+    let a: i64 = mk(7i64).len();
+    let b: Vec[i64] = mk(8i64);
+    let c: Vec[i64] = [a; 3];
+    return c.len() + b.len();
+}
+fn nested_five() -> i64 {
+    let m1: Vec[bool] = row(true, false);
+    let m2: Vec[bool] = row(false, true);
+    let m3: Vec[bool] = row(true, true);
+    let m4: Vec[bool] = row(false, false);
+    let m5: Vec[bool] = row(true, false);
+    let cases: Vec[Vec[bool]] = [m1, m2, m3, m4, m5];
+    return cases.len();
+}
+fn agg() -> i64 {
+    let a: Vec[i64] = mk(9i64);
+    let b: Vec[i64] = mk(10i64);
+    return a.len() + b.len();
+}
+fn main() {
+    println(f"{bare_lit()} {prefix_lit()} {map_lit()} {repeat_lit()} {nested_five()} {agg()}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref().map(str::trim),
+            Some("2 2 2 4 5 2")
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

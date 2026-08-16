@@ -4744,9 +4744,45 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.refs_in_expr(e, refs, defs);
                 }
             }
-            ExprKind::StructLiteral { fields, .. } => {
+            // The PREFIX collection forms — `Vec[a, b]`, `Set[..]`, `Map[..]`,
+            // `[v; n]` — and the map literal. A BARE `[a, b]` checked against a
+            // `Vec`-typed annotation is normalized to
+            // `PrefixCollectionLiteral{type_name:"Vec"}` before codegen sees it,
+            // so the `ArrayLiteral` arm above does NOT cover the common
+            // `let c: Vec[Vec[i64]] = [a, b]` (B-2026-08-16-1): the elements
+            // went unseen, `a`/`b` never entered the outside-reads set, the
+            // auto-par group gave them no return slot, and the parent body died
+            // on "Undefined variable 'a'" — a DEFAULT-build failure on a program
+            // that compiles with `KARAC_AUTO_PAR=0`.
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for e in items {
+                    self.refs_in_expr(e, refs, defs);
+                }
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.refs_in_expr(value, refs, defs);
+                self.refs_in_expr(count, refs, defs);
+            }
+            ExprKind::MapLiteral(pairs) => {
+                for (k, v) in pairs {
+                    self.refs_in_expr(k, refs, defs);
+                    self.refs_in_expr(v, refs, defs);
+                }
+            }
+            // `spread` as well as `fields`: `Point { x: 1, ..base }` READS
+            // `base`, and dropping it would be the same under-approximation as
+            // the literal arms above. Unreachable TODAY — the parser accepts
+            // spread but the typechecker rejects the form ("missing field 'y'")
+            // and design.md does not spec it — so this is the sibling arms'
+            // stated policy applied ahead of time: a variant that is merely
+            // unreachable is one language widening away from the same bug, and
+            // the walker costs nothing to keep correct.
+            ExprKind::StructLiteral { fields, spread, .. } => {
                 for f in fields {
                     self.refs_in_expr(&f.value, refs, defs);
+                }
+                if let Some(s) = spread {
+                    self.refs_in_expr(s, refs, defs);
                 }
             }
             ExprKind::Cast { expr: inner, .. } => self.refs_in_expr(inner, refs, defs),
@@ -4870,7 +4906,41 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 self.refs_in_block(body, refs, defs);
             }
-            _ => {}
+            // LEAF variants — enumerated rather than swallowed by a `_ => {}`,
+            // because a wildcard here fails OPEN. This walker's output is the
+            // set of names read outside a par group, and a name it misses gets
+            // no return slot: the binding is lifted into a branch fn and left
+            // undefined in the parent ("Undefined variable 'x'"). Over-
+            // approximating is free — slots are `defined ∩ refs`, so a name that
+            // no group statement binds is simply filtered out — while under-
+            // approximating is a build failure on valid code. The asymmetry is
+            // entirely one-directional, so the match is exhaustive on purpose:
+            // a new `ExprKind` breaks THIS LINE at compile time instead of
+            // silently reading as "mentions nothing" (the same fail-closed
+            // discipline `bce_length_pin::block_all` documents).
+            //
+            // `Path`'s `generic_args` can hold a `GenericArg::Const(Expr)`, but
+            // a const generic argument is a compile-time constant and cannot
+            // name a runtime local, so there is nothing here for a par group to
+            // return.
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(..)
+            | ExprKind::ByteLit(..)
+            | ExprKind::StringLit(..)
+            | ExprKind::MultiStringLit(..)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Bool(..)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfType
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Continue { .. }
+            // `PipePlaceholder` is the `_` standing in for the piped value —
+            // the value itself is the `Pipe` arm's `left`, already walked
+            // there. `Error` is the parser's recovery placeholder and never
+            // reaches a compiled body.
+            | ExprKind::PipePlaceholder
+            | ExprKind::Error => {}
         }
     }
 

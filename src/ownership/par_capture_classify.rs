@@ -436,9 +436,37 @@ fn refs_in_expr(expr: &Expr, refs: &mut HashSet<String>, defs: &mut HashSet<Stri
                 refs_in_expr(e, refs, defs);
             }
         }
-        ExprKind::StructLiteral { fields, .. } => {
+        // The PREFIX collection forms and the map literal — the twins of the
+        // `ArrayLiteral` arm above. A bare `[a, b]` checked against a
+        // `Vec`-typed annotation is normalized to `PrefixCollectionLiteral`
+        // before this pass runs, so without these a `shared` binding captured
+        // ONLY inside a collection literal is invisible here: it defaults to
+        // `Copy`, the branch prologue emits no rc_inc, and the very
+        // single-branch capture this module exists to make correct is back to
+        // the latent miscompile. Codegen's twin missed the same forms and that
+        // was B-2026-08-16-1; the module contract above ("any divergence
+        // between the two is a bug") means both get the arms or neither does.
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for e in items {
+                refs_in_expr(e, refs, defs);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            refs_in_expr(value, refs, defs);
+            refs_in_expr(count, refs, defs);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                refs_in_expr(k, refs, defs);
+                refs_in_expr(v, refs, defs);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
             for f in fields {
                 refs_in_expr(&f.value, refs, defs);
+            }
+            if let Some(s) = spread {
+                refs_in_expr(s, refs, defs);
             }
         }
         ExprKind::Cast { expr: inner, .. } => refs_in_expr(inner, refs, defs),
@@ -514,7 +542,67 @@ fn refs_in_expr(expr: &Expr, refs: &mut HashSet<String>, defs: &mut HashSet<Stri
         ExprKind::Par(b) | ExprKind::Try(b) | ExprKind::Unsafe(b) => {
             refs_in_block(b, refs, defs);
         }
-        _ => {}
+        // The rest of `Codegen::refs_in_expr`'s recursing arms, which this copy
+        // had drifted out of sync with. Each one is the same defect as the
+        // literal arms above: a `shared` binding read ONLY through one of these
+        // forms inside a `par {}` block was invisible to the classifier, so it
+        // defaulted to `Copy` and its branch got no rc_inc. They are transcribed
+        // from the codegen twin rather than re-derived, because the module
+        // contract is shape-for-shape parity, not merely equivalent behaviour.
+        ExprKind::Question(operand) => refs_in_expr(operand, refs, defs),
+        ExprKind::Pipe { left, right } | ExprKind::NilCoalesce { left, right } => {
+            refs_in_expr(left, refs, defs);
+            refs_in_expr(right, refs, defs);
+        }
+        ExprKind::OptionalChain { object, args, .. } => {
+            refs_in_expr(object, refs, defs);
+            if let Some(args) = args {
+                for a in args {
+                    refs_in_expr(&a.value, refs, defs);
+                }
+            }
+        }
+        ExprKind::Lock { body, .. } => refs_in_block(body, refs, defs),
+        ExprKind::WhileLet {
+            pattern,
+            value,
+            body,
+            ..
+        } => {
+            refs_in_expr(value, refs, defs);
+            for name in pattern.binding_names() {
+                defs.insert(name);
+            }
+            refs_in_block(body, refs, defs);
+        }
+        ExprKind::LabeledBlock { body, .. } | ExprKind::Comptime(body) => {
+            refs_in_block(body, refs, defs)
+        }
+        ExprKind::Providers { bindings, body } => {
+            for b in bindings {
+                refs_in_expr(&b.value, refs, defs);
+            }
+            refs_in_block(body, refs, defs);
+        }
+        // LEAF variants, enumerated rather than swallowed — see the matching
+        // comment on `Codegen::refs_in_expr`. Exhaustive on purpose: this
+        // walker and its codegen twin must stay shape-for-shape identical, and
+        // a `_ => {}` on either side is how they silently drifted apart in the
+        // first place. A new `ExprKind` now breaks BOTH at compile time.
+        ExprKind::Integer(..)
+        | ExprKind::Float(..)
+        | ExprKind::CharLit(..)
+        | ExprKind::ByteLit(..)
+        | ExprKind::StringLit(..)
+        | ExprKind::MultiStringLit(..)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(..)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfType
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Continue { .. }
+        | ExprKind::PipePlaceholder
+        | ExprKind::Error => {}
     }
 }
 
