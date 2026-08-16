@@ -37,6 +37,7 @@ mod gpu_safe;
 mod inference;
 mod items;
 mod lowering;
+mod method_column_analytics;
 mod method_numeric;
 mod method_optres_combinator;
 mod method_vec_mutation;
