@@ -41,6 +41,7 @@ mod method_column_analytics;
 mod method_column_elementwise;
 mod method_identifier_receiver;
 mod method_iterator_agg;
+mod method_nominal_tail;
 mod method_numeric;
 mod method_optres_combinator;
 mod method_pointer;
