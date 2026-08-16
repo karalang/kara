@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 122 | 0 |
 | codegen-gap | 112 | 0 |
 | missing-feature | 96 | 0 |
-| perf | 71 | 2 |
+| perf | 71 | 1 |
 | false-positive | 67 | 0 |
 | diagnostics | 60 | 0 |
 | crash | 47 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 892 | 2 |
+| codegen | 892 | 1 |
 | typecheck | 174 | 0 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
@@ -124,23 +124,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1237 surfaced · 2 open · 1223 fixed · 2 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1237 surfaced · 1 open · 1223 fixed · 3 wontfix** (2026-05-20 → 2026-08-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-15-30 | 2026-08-15 | codegen | medium | The shuffled-uniform `sort_by` residual closed as `wontfix` in B-2026-08-11-28 at ~1.6x Rust is MATERIALLY LARGER on the canonical Apple-silicon host: 3.70x on kata #252 and 2.04x on kata #253, measured on M5 Pro with 50a50e8 IN the compiler. The disposition was reached entirely on a shared x86 cloud container, and `wontfix` was argued from a residual roughly half this size. Not a regression of 50a50e8 -- that fix is present and the ordered-input win it bought is not in question -- but the remaining gap is bigger than the number the wontfix was decided against, so the disposition deserves re-deciding on this host rather than inheriting. | mono sort_by lowering (natural-run merge sort, 50a50e8) -- shuffled-uniform residual, on arm64 |
-| B-2026-08-15-31 | 2026-08-15 | codegen | medium | MECHANISM PINNED (was: not pinned). Kata #246's 1.57x deficit to `clang -O3` on arm64 is ENTIRELY LOOP UNROLLING, and karac is at `clang -O2` PARITY. Dynamic counts: kara 527.4M instrs / 66.2M cycles, clang -O3 370.7M / 42.0M, clang -O2 500.5M / 74.4M, clang -O3 -fno-unroll-loops 500.6M / 63.7M. So kara vs equal-treatment C is 1.05x on instructions and 1.06x on wall time, and kara is 11% AHEAD of clang -O2 on cycles. karac's own full-unroll hint machinery is live and working, but declines this loop on THREE independent AST gates in `while_loop_wants_full_unroll`. | control_flow_bce.rs `while_loop_wants_full_unroll` -- converging two-pointer loop with a call and an early return is declined by three gates |
 
-### Wontfix (2)
+### Wontfix (3)
 
-<details><summary>2 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
+<details><summary>3 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
 
 | id | date | surface | sev | title |
 |---|---|---|---|---|
 | B-2026-08-10-20 | 2026-08-10 | codegen | low | ACCEPTED COST, not a pending fix: `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~1.30x Rust's `sort_by` (karac ~11.1 ms vs driftsort 8.2-8.9, 150k pairs, this host). Residual of B-2026-08-10-19. FIVE DIRECTIONS WERE MEASURED AGAINST IT AND NONE CLOSES IT -- merge-kernel tweaks, RUN tuning, the bounds-check hoist, a 3-way quicksort run-builder and a 2-way one; do not reopen any of them without new information. The last and most promising, a stable 2-way branchless quicksort run-builder, was BUILT IN FULL, verified correct (98/98 pattern x size, element-type coverage across AOT/LLJIT/interp) and measured: random 11.11 -> 11.73 ms (0.95x, i.e. SLOWER) with instructions 74.05M -> 82.18M (+11%); sawtooth 2.82 -> 3.22 (0.87x). A sweep of the configuration space (span 512/2048/8192/16384/65536, base 16/32/64) found NO setting that beats main on random -- the best, span 16384 base 64, reaches 11.17 vs main's 11.11, i.e. parity. Not merged; the implementation was reverted. This is the cost of the algorithm karac has. The one direction that DID pay, few-unique, is split out as its own open row B-2026-08-11-10. Full write-up in docs/spikes/sort-algorithm-gap.md. |
 | B-2026-08-11-28 | 2026-08-11 | codegen | low | RESIDUAL of B-2026-08-10-9, split out per the live-remainder rule: on SHUFFLED-UNIFORM input the mono `sort_by` is still ~1.6x Rust's driftsort. 50a50e8 replaced the fixed-32-run merge sort with a natural-run merge sort, which was the right fix and moved the ORDERED patterns enormously (sorted and reverse went from 39-54x behind to roughly 2x AHEAD -- measured here at 0.47x and 0.52x). It deliberately did not move the shuffled case, and the closing note records that in its own numbers: `random 14.91 -> 14.60 ms (UNCHANGED)`, because shuffled input has ~2-element natural runs so the RUN padding reproduces the old run length and the old pass count. MEASURED FRESH (hyperfine, 10 runs each, clone subtracted via an identical kernel minus the sort call; 25 rounds x 150k (i64,i64) pairs, x86 container): kara pure sort 260.6 ms vs rust 159.0 ms = 1.64x. Same kernel by pattern: shuffled 1.51x total / 1.64x pure, sorted 0.47x, reverse 0.52x. SEVERITY LOW deliberately -- shuffled-uniform is the regime where an adaptive sort has least to exploit, driftsort is a strong baseline, and 1.6x on the hardest pattern while beating it 2x on ordered input is a defensible place to sit. Filed so the remainder is visible in the work queue rather than only inside a closed row's prose, NOT as a claim that it must be closed. CAVEAT: single host, x86_64 shared container, not the canonical Apple-silicon bench host. NEXT STEP if picked up: compare the emitted merge inner loop against driftsort's on shuffled input; the run-detection phase is already known not to help there, so any remaining gap is in the merge itself. |
+| B-2026-08-15-31 | 2026-08-15 | codegen | medium | MECHANISM PINNED (was: not pinned). Kata #246's 1.57x deficit to `clang -O3` on arm64 is ENTIRELY LOOP UNROLLING, and karac is at `clang -O2` PARITY. Dynamic counts: kara 527.4M instrs / 66.2M cycles, clang -O3 370.7M / 42.0M, clang -O2 500.5M / 74.4M, clang -O3 -fno-unroll-loops 500.6M / 63.7M. So kara vs equal-treatment C is 1.05x on instructions and 1.06x on wall time, and kara is 11% AHEAD of clang -O2 on cycles. karac's own full-unroll hint machinery is live and working but declines this loop, and THREE ways of making it fire were then built and measured -- hint the converging guard (LLVM refuses and warns), canonicalise to a counted loop + full unroll (works, #246 -> 1.08x of clang -O3, but unbounded: kata #189's million-iteration reverse took `karac build` from 0.6s to killed at 300s), and canonicalise + bounded partial unroll (safe, but a corpus NET REGRESSION -- 10 rows better, 11 worse). WONTFIX: the blocker is that a converging loop's trip count has NO COMPILE-TIME BOUND, and until that changes every unroll strategy either misfires or over-applies. |
 
 </details>
 
