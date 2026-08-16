@@ -1716,13 +1716,13 @@ impl<'a> Interpreter<'a> {
             }
         }
 
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             if let Item::EffectResource(r) = item {
                 self.effect_resources.insert(r.name.clone());
             }
         }
-        for item in &items {
+        for item in items {
             match item {
                 Item::Function(f) => {
                     let val = Value::Function {

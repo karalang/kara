@@ -1014,8 +1014,8 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Validate that every type deriving Copy also derives Clone.
     pub(super) fn validate_copy_implies_clone(&mut self) {
-        let items: Vec<_> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::StructDef(s) => {
                     let traits = extract_derived_traits(&s.attributes);
@@ -1269,8 +1269,8 @@ impl<'a> super::TypeChecker<'a> {
         // the diagnostic. We only flag the *direct* head; recursion
         // through `Vec[Inner]` etc. is intentionally allowed
         // (CP5 carve-out is about size-recursion, not name presence).
-        let items: Vec<_> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             if let Item::EnumDef(e) = item {
                 // Pointer-form enums carry their payload behind an indirection,
                 // so nesting depth in the VALUE layout is not their problem —
@@ -1340,8 +1340,8 @@ impl<'a> super::TypeChecker<'a> {
     /// - Reject on struct/enum (must use manual impls).
     /// - Reject on distinct types whose base type is non-numeric.
     pub(super) fn validate_derive_arithmetic(&mut self) {
-        let items: Vec<_> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::StructDef(s)
                     if extract_derived_traits(&s.attributes).contains("Arithmetic") =>
@@ -1507,8 +1507,8 @@ impl<'a> super::TypeChecker<'a> {
         if self.profile_config.panics_on_alloc_failure() {
             return;
         }
-        let items: Vec<_> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             let (name, attrs, overrides, span) = match item {
                 Item::StructDef(s) => (&s.name, &s.attributes, &s.lint_overrides, &s.span),
                 Item::EnumDef(e) => (&e.name, &e.attributes, &e.lint_overrides, &e.span),

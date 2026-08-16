@@ -325,8 +325,8 @@ impl<'a> super::EffectChecker<'a> {
         }
 
         // For each private trait method with no explicit ceiling, union impl effects.
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             let t = match item {
                 Item::TraitDef(t) => t,
                 _ => continue,

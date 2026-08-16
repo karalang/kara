@@ -57,8 +57,8 @@ impl OwnershipChecker<'_> {
     /// would race between non-atomic parent dec and the branch's
     /// dec — atomic on one side, plain on the other, undefined.
     pub(crate) fn classify_par_capture_modes(&mut self) {
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::Function(f) => {
                     let param_types = collect_param_type_names(&f.params);

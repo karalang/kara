@@ -530,7 +530,7 @@ impl<'a> super::OwnershipChecker<'a> {
     /// are skipped — design.md only calls out the struct/shared-struct/
     /// shared-enum cases.
     pub(crate) fn check_concurrent_shared_struct(&mut self) {
-        let items: Vec<Item> = self.program.items.clone();
+        let items: &[Item] = &self.program.items;
         let mut errors: Vec<OwnershipError> = Vec::new();
         let mut fix_diffs: HashMap<SpanKey, Vec<TextEdit>> = HashMap::new();
         // B-2026-08-01-33 mechanism 2 — `shared` types this pass promoted to
@@ -542,7 +542,7 @@ impl<'a> super::OwnershipChecker<'a> {
             method_callee_types: &self.typecheck_result.method_callee_types,
             method_self_modes: &self.method_self_modes,
         };
-        for item in &items {
+        for item in items {
             match item {
                 Item::Function(f) => {
                     let tracked = self.collect_tracked_bindings(&f.params, &f.body);
@@ -552,7 +552,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         scan_block_for_par_conflicts(
                             &f.body,
                             &tracked,
-                            &items,
+                            items,
                             closure_captures,
                             &closure_bindings,
                             &classifier,
@@ -576,7 +576,7 @@ impl<'a> super::OwnershipChecker<'a> {
                                 scan_block_for_par_conflicts(
                                     &m.body,
                                     &tracked,
-                                    &items,
+                                    items,
                                     closure_captures,
                                     &closure_bindings,
                                     &classifier,

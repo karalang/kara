@@ -57,7 +57,7 @@ impl<'a> super::TypeChecker<'a> {
         // MUST precede every local item walk below — see the method's docs.
         self.register_imported_type_aliases();
 
-        let items: Vec<Item> = self.program.items.clone();
+        let items: &[Item] = &self.program.items;
 
         // Stub pre-pass for self-referential shared types. Field-type
         // lowering inside `env_add_struct` / `env_add_enum` calls
@@ -72,7 +72,7 @@ impl<'a> super::TypeChecker<'a> {
         // diagnostic. Insert empty-fields stubs first so the self-ref
         // path hits the populated entry; the real pass below overwrites
         // with the fully-lowered fields.
-        for item in &items {
+        for item in items {
             match item {
                 Item::StructDef(s) => {
                     let gp = Self::generic_param_names(&s.generic_params);
@@ -130,7 +130,7 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        for item in &items {
+        for item in items {
             match item {
                 Item::StructDef(s) => self.env_add_struct(s),
                 Item::UnionDef(u) => self.env_add_union(u),
@@ -168,7 +168,7 @@ impl<'a> super::TypeChecker<'a> {
         // loop so an enum-variant-valued const sees a fully-populated
         // `env.enums`. Failures are silent here — a non-const initializer is
         // reported by the const decl's own check elsewhere.
-        for item in &items {
+        for item in items {
             if let Item::ConstDecl(c) = item {
                 let ty = self.lower_type_expr(&c.ty, &[]);
                 if let Ok(cv) = self.eval_const_expr(&c.value, &ty) {
@@ -183,7 +183,7 @@ impl<'a> super::TypeChecker<'a> {
         // case types from the trait declaration instead and needs no
         // scan). Runs after the items pass so `user_effect_resources` is
         // populated.
-        self.collect_user_resource_override_types(&items);
+        self.collect_user_resource_override_types(items);
 
         // Cross-module origins: record every imported item's declared
         // visibility in its origin module so `check_signature_visibility`

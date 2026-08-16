@@ -547,10 +547,10 @@ impl<'a> super::EffectChecker<'a> {
     /// - `Polymorphic` / `PolymorphicWithFixed` / `None` / missing key → no check
     ///   (wildcard or unbound ceiling means impls are free).
     pub(crate) fn verify_impl_trait_ceilings(&mut self) {
-        let items: Vec<Item> = self.program.items.clone();
+        let items: &[Item] = &self.program.items;
         let mut new_errors: Vec<EffectError> = Vec::new();
 
-        for item in &items {
+        for item in items {
             let imp = match item {
                 Item::ImplBlock(imp) => imp,
                 _ => continue,
@@ -636,10 +636,10 @@ impl<'a> super::EffectChecker<'a> {
     /// - `DeclaredEffects::Explicit(ceiling)` → inferred must be ⊆ ceiling.
     /// - `Polymorphic` / `PolymorphicWithFixed` / `None` / missing key → no check.
     pub(crate) fn verify_trait_default_bodies(&mut self) {
-        let items: Vec<Item> = self.program.items.clone();
+        let items: &[Item] = &self.program.items;
         let mut new_errors: Vec<EffectError> = Vec::new();
 
-        for item in &items {
+        for item in items {
             let t = match item {
                 Item::TraitDef(t) => t,
                 _ => continue,

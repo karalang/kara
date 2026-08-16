@@ -25,8 +25,8 @@ use super::{ConstEvalError, LocalTypeScope, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
     pub(super) fn check_items(&mut self) {
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::Function(f) => {
                     // `#[compiler_builtin]` declarations carry a placeholder
@@ -656,8 +656,8 @@ impl<'a> super::TypeChecker<'a> {
     /// payloads, type aliases, and constants. See CR-18.
     pub(super) fn check_signature_visibility(&mut self) {
         let type_vis = self.collect_type_visibility();
-        let items = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::Function(f) if f.is_pub => {
                     let scope = Self::generic_param_names(&f.generic_params);
@@ -1068,8 +1068,8 @@ impl<'a> super::TypeChecker<'a> {
         if scope_local_types.is_empty() {
             return;
         }
-        let items = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::Function(f) => {
                     let scope = Self::generic_param_names(&f.generic_params);

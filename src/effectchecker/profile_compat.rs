@@ -24,8 +24,8 @@ use super::{verb_name, EffectError, EffectErrorKind};
 
 impl super::EffectChecker<'_> {
     pub(crate) fn check_profile_compat(&mut self) {
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::Function(f) if !f.profile_compat.is_empty() => {
                     self.check_one_profile_compat(&f.name, f);

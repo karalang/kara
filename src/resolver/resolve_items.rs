@@ -27,9 +27,8 @@ impl<'a> super::Resolver<'a> {
     // ── Pass 2: Resolve all items ───────────────────────────────
 
     pub(crate) fn resolve_items(&mut self) {
-        // Clone items to avoid borrow conflict
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::Function(f) => self.resolve_function(f),
                 Item::StructDef(s) => self.resolve_struct_def(s),

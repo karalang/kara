@@ -240,8 +240,8 @@ impl<'a> super::OwnershipChecker<'a> {
     /// region is Arc for its entire live range (one decision per value,
     /// matching design.md § Rc vs Arc — Two-Phase Algorithm).
     pub(crate) fn promote_rc_to_arc(&mut self) {
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::Function(f) => {
                     let params = collect_channel_param_types(&f.params);

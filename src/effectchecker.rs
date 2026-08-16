@@ -1276,8 +1276,8 @@ impl<'a> EffectChecker<'a> {
     }
 
     fn collect_declared_effects(&mut self) {
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::Function(f) => {
                     let decl = self.parse_effect_list(&f.effects);
@@ -1459,7 +1459,8 @@ impl<'a> EffectChecker<'a> {
             })
             .collect();
 
-        for item in &self.program.items.clone() {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             let t = match item {
                 Item::TraitDef(t) => t,
                 _ => continue,
@@ -1488,8 +1489,8 @@ impl<'a> EffectChecker<'a> {
     }
 
     fn collect_function_info(&mut self) {
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 Item::Function(f) => {
                     self.function_bodies

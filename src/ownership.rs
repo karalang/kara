@@ -1971,8 +1971,8 @@ impl<'a> OwnershipChecker<'a> {
         // O(functions × program) — the super-linear factor measured in the
         // G8 front-end benchmark. See `ClassifierPrelude`.
         let prelude = ClassifierPrelude::new(self.program, self.typecheck_result);
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             match item {
                 // Skip `#[compiler_builtin]` bodies everywhere — they are
                 // never-evaluated placeholders (the real behavior is a

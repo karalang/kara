@@ -74,8 +74,8 @@ impl<'a> super::Resolver<'a> {
     }
 
     pub(crate) fn validate_layouts(&mut self) {
-        let items: Vec<Item> = self.program.items.clone();
-        for item in &items {
+        let items: &[Item] = &self.program.items;
+        for item in items {
             if let Item::LayoutDef(layout) = item {
                 self.validate_layout(layout);
             }
