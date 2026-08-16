@@ -39,6 +39,7 @@ mod items;
 mod lowering;
 mod method_column_analytics;
 mod method_column_elementwise;
+mod method_identifier_receiver;
 mod method_numeric;
 mod method_optres_combinator;
 mod method_user_impl;
