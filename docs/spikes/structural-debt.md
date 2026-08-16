@@ -13,7 +13,10 @@ and ownership/ (13) has not reached:
 
 - `src/cli.rs` — 14.5k lines; `src/cli/` holds only 3 files (args, explain,
   help). The largest file in the repo and the least-structured.
-- `src/concurrency.rs` — 7.5k lines, no submodule dir at all.
+- ~~`src/concurrency.rs` — 7.5k lines, no submodule dir at all~~ STARTED —
+  first five submodules extracted (predicates, reduction_shapes,
+  var_extract, reads, effects_collect); driver down to 4.8k lines. The
+  remaining ~3.3k-line checker impl body still wants further seams.
 - `src/codegen/method_call.rs` — regrew to 20.7k lines *after* extraction;
   needs a second-level split (peers: `stmts.rs` 13.8k, `vec_method.rs` 12.7k,
   `runtime.rs` 12.2k, `control_flow_match.rs` 10.5k).
@@ -35,9 +38,10 @@ compile-time measurements, not opportunistically.
 
 ## Smaller residuals
 
-- `stacker::maybe_grow` at the parser's three descent entries would decouple
-  input-nesting acceptance from debug frame-size drift entirely (currently a
-  fixed 128 ceiling sized to an 8 MiB stack — B-2026-08-16-4's SIZING NOTE).
+- ~~`stacker::maybe_grow` at the parser's descent entries~~ DONE — stacker
+  was already a direct dep (interpreter eval site); the three entries now
+  grow the stack (512 KiB red zone / 16 MiB chunks), parsing survives any
+  thread size, and the 128 ceiling is purely semantic.
 - ~~Whole-program `program.items.clone()` walks~~ DONE — all 19 sites across
   resolver/typechecker/effectchecker/ownership/interpreter converted to
   `&[Item]` reborrows (the `&'a Program` field is `Copy`, so the clones were
