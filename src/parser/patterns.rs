@@ -20,7 +20,19 @@ use super::{starts_upper, ParseError};
 impl super::Parser {
     // ── Patterns ─────────────────────────────────────────────────
 
+    // Depth-guarded shell: pattern nesting (tuple / variant destructuring)
+    // shares the recursion budget with expressions and types
+    // (B-2026-08-16-4).
     pub(crate) fn parse_pattern(&mut self) -> Option<Pattern> {
+        if !self.enter_recursion() {
+            return None;
+        }
+        let result = self.parse_pattern_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_pattern_inner(&mut self) -> Option<Pattern> {
         let start = self.current_span();
         let first = self.parse_single_pattern()?;
 

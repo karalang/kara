@@ -13593,3 +13593,87 @@ fn interp_hole_that_parses_as_a_statement_is_still_an_error() {
         );
     }
 }
+
+// ── Recursion-depth guard (B-2026-08-16-4) ──────────────────────────
+
+/// Parse on a generously sized (32 MiB) thread. These tests pin the guard's
+/// SEMANTIC contract — pathological nesting produces a diagnostic, never a
+/// stack-overflow abort — not a particular stack budget: debug-build frame
+/// sizes differ between the CLI and the test harness builds (a default 2 MiB
+/// test thread overflows at ~24 nesting levels), so the thread is sized well
+/// past both. The product-side margin arithmetic lives at
+/// MAX_RECURSION_DEPTH's doc in src/parser.rs.
+fn parse_errors_on_big_stack(src: String) -> Vec<karac::parser::ParseError> {
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || karac::parse(&src).errors)
+        .expect("spawn parse thread")
+        .join()
+        .expect("parse thread panicked")
+}
+
+/// Pathologically nested input must produce a structured diagnostic, not a
+/// stack-overflow abort. Before the guard, ~210 nested `(` overflowed the
+/// CLI's 8 MiB main thread in a debug build; the parser now stops at
+/// MAX_RECURSION_DEPTH (128) with a single spanned error. All three descent
+/// entries share one budget, so each surface is pinned separately.
+#[test]
+fn deep_expr_nesting_errors_instead_of_overflowing() {
+    let n = 500;
+    let src = format!(
+        "fn main() {{ let x = {}1{}; }}",
+        "(".repeat(n),
+        ")".repeat(n)
+    );
+    let errors = parse_errors_on_big_stack(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("nesting too deep")),
+        "expected the depth diagnostic, got: {errors:?}"
+    );
+}
+
+#[test]
+fn deep_type_nesting_errors_instead_of_overflowing() {
+    let n = 500;
+    let src = format!("fn f(x: {}i64{}) {{}}", "(".repeat(n), ")".repeat(n));
+    let errors = parse_errors_on_big_stack(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("nesting too deep")),
+        "expected the depth diagnostic, got: {errors:?}"
+    );
+}
+
+#[test]
+fn deep_pattern_nesting_errors_instead_of_overflowing() {
+    let n = 500;
+    let src = format!(
+        "fn main() {{ let {}a{} = 1; }}",
+        "(".repeat(n),
+        ")".repeat(n)
+    );
+    let errors = parse_errors_on_big_stack(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("nesting too deep")),
+        "expected the depth diagnostic, got: {errors:?}"
+    );
+}
+
+/// Realistic nesting stays well inside the budget: 100 paren levels (below
+/// the 128 ceiling) must still parse clean.
+#[test]
+fn nesting_below_the_limit_parses_clean() {
+    let n = 100;
+    let src = format!(
+        "fn main() {{ let x = {}1{}; }}",
+        "(".repeat(n),
+        ")".repeat(n)
+    );
+    let errors = parse_errors_on_big_stack(src);
+    assert!(errors.is_empty(), "expected clean parse, got: {errors:?}");
+}

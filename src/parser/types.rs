@@ -31,7 +31,18 @@ impl super::Parser {
         )
     }
 
+    // Depth-guarded shell: type nesting (`Vec[Vec[…]]`, tuple types) shares
+    // the recursion budget with expressions and patterns (B-2026-08-16-4).
     pub(crate) fn parse_type(&mut self) -> Option<TypeExpr> {
+        if !self.enter_recursion() {
+            return None;
+        }
+        let result = self.parse_type_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_type_inner(&mut self) -> Option<TypeExpr> {
         let start = self.current_span();
 
         // One-shot: take the permission and clear it, so ONLY the outermost

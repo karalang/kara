@@ -81,7 +81,19 @@ impl super::Parser {
         self.parse_expr_bp_with_ctx(min_bp, false)
     }
 
+    // Depth-guarded shell: every level of expression nesting passes through
+    // here, so this is where the shared recursion budget is claimed
+    // (B-2026-08-16-4).
     fn parse_expr_bp_with_ctx(&mut self, min_bp: u8, stmt_ctx: bool) -> Option<Expr> {
+        if !self.enter_recursion() {
+            return None;
+        }
+        let result = self.parse_expr_bp_with_ctx_inner(min_bp, stmt_ctx);
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_expr_bp_with_ctx_inner(&mut self, min_bp: u8, stmt_ctx: bool) -> Option<Expr> {
         let mut lhs = self.parse_prefix()?;
 
         if stmt_ctx && Self::is_block_like_prefix(&lhs) {

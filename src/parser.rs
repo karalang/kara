@@ -138,10 +138,32 @@ pub(crate) fn starts_upper(s: &str) -> bool {
 /// Phase-11 embedded/hardware tracker and design.md § FFI.
 const RESERVED_FFI_ABIS: &[&str] = &["stdcall", "fastcall", "win64", "sysv64"];
 
+/// Maximum shared nesting depth for expressions, types, and patterns. Sized
+/// for the stack the product actually parses on — the CLI / JIT-runner MAIN
+/// thread (8 MiB): one level of the expression descent costs ~38 KiB of stack
+/// in a debug build (measured: the unguarded parser overflowed 8 MiB at ~210
+/// levels), so 128 levels ≈ 4.9 MiB worst-case with headroom to spare, while
+/// still being far deeper than any human- or machine-written program nests.
+/// The ceiling is NOT sized for Rust's default 2 MiB spawned threads — a
+/// debug build overflows those at ~24 levels, no useful ceiling fits — so an
+/// embedder driving `karac::parse` from its own small thread must size that
+/// thread's stack (the regression tests in `tests/parser.rs` parse on a
+/// 32 MiB thread for exactly this reason). See [`Parser::enter_recursion`]
+/// for the guard itself. B-2026-08-16-4.
+pub(crate) const MAX_RECURSION_DEPTH: usize = 128;
+
 pub struct Parser {
     pub(crate) tokens: Vec<SpannedToken>,
     pub(crate) pos: usize,
     pub(crate) errors: Vec<ParseError>,
+    /// Current depth across the mutually-recursive descent entries
+    /// (`parse_expr_bp_with_ctx`, `parse_type`, `parse_pattern`), guarded
+    /// against [`MAX_RECURSION_DEPTH`]: pathologically nested input (hundreds
+    /// of `(`) must produce a structured diagnostic, not a stack-overflow
+    /// abort. One shared counter because the three entries interleave on the
+    /// same call stack — an expression nested inside a type inside a pattern
+    /// consumes one budget. B-2026-08-16-4.
+    pub(crate) recursion_depth: usize,
     /// B-2026-08-01-33 mechanism 3, stage 1: `true` only while parsing the
     /// TOP-LEVEL type of a parameter, which is the one position the stage
     /// claims. `frozen` elsewhere (a `let` annotation, a struct field, a
@@ -283,6 +305,7 @@ impl Parser {
             pos: 0,
             loop_labels: Vec::new(),
             errors: Vec::new(),
+            recursion_depth: 0,
             frozen_ok: false,
             frozen_consumed: false,
             frozen_self_consumed: false,
@@ -828,6 +851,31 @@ impl Parser {
     }
 
     // ── Error Recovery ───────────────────────────────────────────
+
+    /// Claim one level of the shared recursion budget. Returns `false` — after
+    /// emitting a structured diagnostic — once [`MAX_RECURSION_DEPTH`] is
+    /// reached; the caller must then return `None` WITHOUT calling
+    /// [`Self::exit_recursion`]. The limit is far below the depth where the
+    /// descent overflows the stack in a debug build (~210 nested `(` at the
+    /// time of measurement), and deep enough that no human- or
+    /// machine-written program should meet it. B-2026-08-16-4.
+    #[must_use]
+    pub(crate) fn enter_recursion(&mut self) -> bool {
+        if self.recursion_depth >= MAX_RECURSION_DEPTH {
+            self.error(&format!(
+                "nesting too deep: expressions, types, and patterns may nest at \
+                 most {MAX_RECURSION_DEPTH} levels"
+            ));
+            return false;
+        }
+        self.recursion_depth += 1;
+        true
+    }
+
+    /// Release the level claimed by a successful [`Self::enter_recursion`].
+    pub(crate) fn exit_recursion(&mut self) {
+        self.recursion_depth -= 1;
+    }
 
     fn error(&mut self, message: &str) {
         self.error_kind(ParseErrorKind::Syntax, message);
