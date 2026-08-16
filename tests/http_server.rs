@@ -1571,10 +1571,18 @@ mod http_server_tests {
             }
         };
 
-        // Settle race window between BOUND_PORT print and accept().
-        std::thread::sleep(Duration::from_millis(50));
-
-        let result: Result<KeepAlivePair, String> = run_keepalive_round_trip(port);
+        // Absorb the race window between the BOUND_PORT print and accept()
+        // arming with a bounded retry of the (idempotent) round trip — a
+        // fixed settle sleep can still miss under CI load, and this file's
+        // connect loops already use the retry shape.
+        let settle_started = Instant::now();
+        let result: Result<KeepAlivePair, String> = loop {
+            let r = run_keepalive_round_trip(port);
+            if r.is_ok() || settle_started.elapsed() > Duration::from_secs(5) {
+                break r;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
 
         let _ = child.kill();
         let _ = child.wait();
@@ -1747,8 +1755,17 @@ mod http_server_tests {
             }
         };
 
-        std::thread::sleep(Duration::from_millis(50));
-        let result = send_chunked_post(port);
+        // Same bounded-retry shape as the keep-alive test above: absorb the
+        // BOUND_PORT→accept() race by retrying the idempotent POST briefly
+        // instead of a fixed settle sleep.
+        let settle_started = Instant::now();
+        let result = loop {
+            let r = send_chunked_post(port);
+            if r.is_ok() || settle_started.elapsed() > Duration::from_secs(5) {
+                break r;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
 
         let _ = child.kill();
         let _ = child.wait();
