@@ -9,6 +9,32 @@
 //! versions built in lockstep and is NOT stable across independently built
 //! pairs. Distribution is always compiler+runtime bundled.
 //!
+//! ## Null-handling rule (crate-wide, B-2026-08-16-5)
+//!
+//! Two conventions coexist for raw pointers arriving over the C ABI, and
+//! every entry point must pick one EXPLICITLY:
+//!
+//! * **Defensive (the default).** Guard with `is_null()` (usually
+//!   `if ptr.is_null() || len == 0 { … empty/no-op … }`) before any
+//!   `from_raw_parts` / deref. Required for every parameter that can
+//!   legitimately carry null — above all any Kāra `String`/`Vec` `{ptr, len}`
+//!   pair, because the canonical EMPTY value is `{null, 0, 0}`: "codegen
+//!   always passes a valid String" INCLUDES the null-empty form, and
+//!   `from_raw_parts` requires non-null even at len 0 (library UB — the
+//!   B-2026-08-16-5 class). Free/drop entry points also sit here: null in is
+//!   a no-op, matching `free(NULL)`.
+//! * **Trust-codegen (the exception, opt-in per module).** Dereference
+//!   unconditionally because the compiler guarantees a non-null invariant
+//!   the hot path should not re-check (e.g. `map.rs` access fns, where
+//!   exclusivity and liveness are proven by the effect system). A module
+//!   choosing this MUST say so in its module docs (as map.rs does) and its
+//!   `# Safety` sections must state the non-null guarantee — and the
+//!   guarantee must actually hold for every value codegen can pass,
+//!   including canonical empties.
+//!
+//! When in doubt, be defensive: the cost is one branch; the alternative is
+//! UB that only Miri or a hardened allocator will ever surface.
+//!
 //! ## Debugger Contract (design.md § Debugger Contract)
 //!
 //! The four-piece contract surface that gives slice 5's
