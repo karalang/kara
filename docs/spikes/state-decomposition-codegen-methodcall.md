@@ -107,7 +107,7 @@ Plus: the slice diff must be **pure motion** (no logic edits, no opportunistic c
 The refactor **always yields to bug fixes**; a fix never waits on the refactor.
 
 1. **Before starting a Phase-2 slice**, check `grep '"status": "open"' docs/bug-ledger.jsonl` and recent `main` commits. If an open or in-flight bug touches the target cluster's fields, **pick a different cluster**.
-2. **Known live conflict as of 2026-08-15:** B-2026-08-15-6 and B-2026-08-15-7 are both RC/drop leaks, whose fixes land squarely in cluster 13 (`DropRc`). That cluster is **blocked** until they close. B-2026-08-15-3 (loop-bound pre-sizing) touches vec/pre-sizing paths.
+2. **Live conflicts as of 2026-08-16:** B-2026-08-15-6 / -7 (the RC/drop leaks that blocked cluster 13 `DropRc`) are **closed**, so that cluster is unblocked. The two currently-open bugs are B-2026-08-16-1 (high; auto-par forks two independent `let`s and codegen cannot see their bindings — touches clusters 11 `Concurrency` and 15 `VarTables`) and B-2026-08-15-30 (medium, perf; `sort_by` residual — touches the BCE/vec paths in cluster 6). Prefer other clusters while those are open.
 3. **A slice is in flight for hours, not days.** If you find `codegen.rs` mid-migration and need to fix a bug in it, just fix the bug — the refactor rebases onto you, not the other way round.
 4. **Update the status table below** when a slice lands, so the next session (or agent) knows what has moved.
 
@@ -149,7 +149,7 @@ for fp in files:
 | 1 | slice 12 — **fresh-temp receiver recording** (`method_temp_receiver.rs`) + **`Vector[T, N]` SIMD** (`method_simd.rs`): the span-keyed `temp_recv_*` side tables codegen reads to reconstruct a temporary receiver's shape, and the portable-SIMD instance surface | **landed** — 536 lines moved; 1,346 → 828 | 2026-08-16 |
 | 1 | slice 13 — **named containers** (`method_mapset.rs`): `Map`/`Entry`/`SortedMap`/`SortedSet`/`Set` (type params thread through return types), plus the `Regex`, `CStr`/`CString` and HTTP named types | **landed** — 142 lines moved; 828 → 694 | 2026-08-16 |
 | 1 | **remaining residual** — the receiver-normalization preamble (`obj_ty` → `receiver_for_lookup` / `obj_ty_for_named` / `vec_elem_for_dispatch`), 14 extracted-family call sites, and ~10 small blocks of 9–27 lines each (`spawn`/`join`, refinement, slice, `to_string`, fallible-alloc). No further clean family boundary — the residual is the function's own logic. | judgement call: stop here | — |
-| 2 | cluster 1 `RuntimeFns` | not started | — |
+| 2 | cluster 1 **`RuntimeFns`** (`src/codegen/runtime_fns.rs`) | **landed** — 66 fields moved (not 67: `static_init_fn` is a *synthesized* fn, not a declare-once cache, so it stays); 338 call sites across 38 files rewritten to `self.runtime_fns.*`; `Codegen` 439 → 374 fields | 2026-08-16 |
 | 2 | clusters 2–12 | not started | — |
 | 2 | cluster 13 `DropRc` | **blocked** — B-2026-08-15-6 / -7 in flight | — |
 | 2 | clusters 14–15 (`FnCtx`, `VarTables`) | deferred — decide after 13 | — |

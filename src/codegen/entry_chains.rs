@@ -663,8 +663,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Bare `and_modify(...)` must NOT insert on Vacant — use the
         // lookup-only variant.
         let runtime_fn = match terminal_method {
-            "or_insert" | "or_insert_with" => self.karac_map_entry_fn,
-            "and_modify" => self.karac_map_lookup_slot_fn,
+            "or_insert" | "or_insert_with" => self.runtime_fns.karac_map_entry_fn,
+            "and_modify" => self.runtime_fns.karac_map_lookup_slot_fn,
             _ => unreachable!("terminal method already validated by caller"),
         };
         let occupied = self

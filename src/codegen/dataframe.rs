@@ -194,7 +194,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ctrl_bytes = self.dataframe_control_struct_type().size_of().unwrap();
         let control = self
             .builder
-            .build_call(self.malloc_fn, &[ctrl_bytes.into()], "df.ctrl")
+            .build_call(self.runtime_fns.malloc_fn, &[ctrl_bytes.into()], "df.ctrl")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -301,7 +301,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let cmp = self
             .builder
             .build_call(
-                self.memcmp_fn,
+                self.runtime_fns.memcmp_fn,
                 &[name_data.into(), e_name_data.into(), name_len.into()],
                 "df.find.memcmp",
             )
@@ -435,7 +435,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let cmp = self
             .builder
             .build_call(
-                self.memcmp_fn,
+                self.runtime_fns.memcmp_fn,
                 &[name_data.into(), e_name_data.into(), name_len.into()],
                 "df.oh.memcmp",
             )
@@ -521,7 +521,11 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<PointerValue<'ctx>, String> {
         let dst = self
             .builder
-            .build_call(self.malloc_fn, &[name_len.into()], "df.name.copy")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[name_len.into()],
+                "df.name.copy",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -879,7 +883,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[buf_bytes.into()], "df.cn.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[buf_bytes.into()], "df.cn.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1397,7 +1401,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         self.column_free_allocations(col, col_size);
         self.builder
-            .build_call(self.free_fn, &[name.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[name.into()], "")
             .unwrap();
         let i_next = self
             .builder
@@ -1409,10 +1413,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(after_bb);
         // entries may be null (empty frame); free() of null is a no-op.
         self.builder
-            .build_call(self.free_fn, &[entries.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[entries.into()], "")
             .unwrap();
         self.builder
-            .build_call(self.free_fn, &[control.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[control.into()], "")
             .unwrap();
         self.builder.build_unconditional_branch(skip_bb).unwrap();
 

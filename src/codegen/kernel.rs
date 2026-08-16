@@ -1777,7 +1777,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let nbuf = self
             .builder
-            .build_call(self.malloc_fn, &[nbytes.into()], "sort.nb.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[nbytes.into()], "sort.nb.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1830,7 +1830,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(exit);
         self.builder
-            .build_call(self.free_fn, &[buf8.into()], "sort.nb.free")
+            .build_call(self.runtime_fns.free_fn, &[buf8.into()], "sort.nb.free")
             .unwrap();
         self.stats_build_vec(nbuf, k)
     }
@@ -1862,7 +1862,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let wbuf = self
             .builder
-            .build_call(self.malloc_fn, &[nbytes.into()], "sort.wd.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[nbytes.into()], "sort.wd.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()

@@ -2633,7 +2633,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let new_box = self
                 .builder
-                .build_call(self.malloc_fn, &[size.into()], "p14oe.newbox")
+                .build_call(self.runtime_fns.malloc_fn, &[size.into()], "p14oe.newbox")
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -2872,7 +2872,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let new_box = self
                     .builder
                     .build_call(
-                        self.malloc_fn,
+                        self.runtime_fns.malloc_fn,
                         &[size.into()],
                         &format!("p14re.{label}.newbox"),
                     )

@@ -1410,7 +1410,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder
             .build_call(
-                self.karac_par_reduce_fn,
+                self.runtime_fns.karac_par_reduce_fn,
                 &[desc_alloca.into(), out_slot.into(), spawn_site_id.into()],
                 "",
             )
@@ -1912,7 +1912,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let new_data = self
             .builder
-            .build_call(self.alloc_or_panic_fn, &[new_bytes.into()], "new.data")
+            .build_call(
+                self.runtime_fns.alloc_or_panic_fn,
+                &[new_bytes.into()],
+                "new.data",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -2602,7 +2606,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             let buf = self
                 .builder
-                .build_call(self.alloc_or_panic_fn, &[bytes.into()], "tab.buf")
+                .build_call(
+                    self.runtime_fns.alloc_or_panic_fn,
+                    &[bytes.into()],
+                    "tab.buf",
+                )
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -2799,7 +2807,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder
             .build_call(
-                self.karac_par_reduce_fn,
+                self.runtime_fns.karac_par_reduce_fn,
                 &[desc_alloca.into(), out_slot.into(), spawn_site_id.into()],
                 "",
             )

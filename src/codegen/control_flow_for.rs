@@ -3261,7 +3261,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let new_off = self
             .builder
             .build_call(
-                self.karac_string_decode_char_fn,
+                self.runtime_fns.karac_string_decode_char_fn,
                 &[data.into(), len.into(), cur.into(), cp_slot.into()],
                 "for.sb.decode",
             )
@@ -3433,7 +3433,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let slow_off = self
             .builder
             .build_call(
-                self.karac_string_decode_char_fn,
+                self.runtime_fns.karac_string_decode_char_fn,
                 &[
                     data.into(),
                     len.into(),
@@ -3714,7 +3714,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let key_val = self.builder.build_load(key_ty, kptr, "smf.k").unwrap();
             self.builder
                 .build_call(
-                    self.karac_map_get_fn,
+                    self.runtime_fns.karac_map_get_fn,
                     &[map_handle.into(), kptr.into(), out_val.into()],
                     "smf.get",
                 )
@@ -3752,7 +3752,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.loop_stack.pop();
             self.builder.position_at_end(exit_bb);
             self.builder
-                .build_call(self.free_fn, &[kbuf.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[kbuf.into()], "")
                 .unwrap();
             return Ok(self.context.i64_type().const_int(0, false).into());
         }
@@ -3925,7 +3925,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // Create the iterator (opaque ptr, lives for the duration of the loop).
         let iter_ptr = self
             .builder
-            .build_call(self.karac_map_iter_new_fn, &[map_handle.into()], "map.iter")
+            .build_call(
+                self.runtime_fns.karac_map_iter_new_fn,
+                &[map_handle.into()],
+                "map.iter",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -3969,7 +3973,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let has_next = self
             .builder
             .build_call(
-                self.karac_map_iter_next_fn,
+                self.runtime_fns.karac_map_iter_next_fn,
                 &[iter_ptr.into(), out_key.into(), out_val.into()],
                 "map.iter.next",
             )
@@ -4014,7 +4018,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
         self.builder
-            .build_call(self.karac_map_iter_free_fn, &[iter_final.into()], "")
+            .build_call(
+                self.runtime_fns.karac_map_iter_free_fn,
+                &[iter_final.into()],
+                "",
+            )
             .unwrap();
         self.builder
             .build_store(iter_slot, ptr_ty.const_null())
@@ -4146,14 +4154,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // `free(NULL)` is a no-op, so freeing an empty-set (len == 0) null
             // buffer is safe.
             self.builder
-                .build_call(self.free_fn, &[buf.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[buf.into()], "")
                 .unwrap();
             return Ok(self.context.i64_type().const_int(0, false).into());
         }
 
         let iter_ptr = self
             .builder
-            .build_call(self.karac_map_iter_new_fn, &[set_handle.into()], "set.iter")
+            .build_call(
+                self.runtime_fns.karac_map_iter_new_fn,
+                &[set_handle.into()],
+                "set.iter",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -4193,7 +4205,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let has_next = self
             .builder
             .build_call(
-                self.karac_map_iter_next_fn,
+                self.runtime_fns.karac_map_iter_next_fn,
                 &[iter_ptr.into(), out_elem.into(), dummy_val.into()],
                 "set.iter.next",
             )
@@ -4231,7 +4243,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
         self.builder
-            .build_call(self.karac_map_iter_free_fn, &[iter_final.into()], "")
+            .build_call(
+                self.runtime_fns.karac_map_iter_free_fn,
+                &[iter_final.into()],
+                "",
+            )
             .unwrap();
         self.builder
             .build_store(iter_slot, ptr_ty.const_null())

@@ -100,10 +100,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // binary (+49% on the lean-binary floor when it crept in). Output is
         // byte-identical (`%s` of `""`).
         let prefix: BasicValueEnum<'ctx> = if self.runtime_panic_prefix_needed {
-            b.build_call(self.karac_runtime_panic_prefix_fn, &[], "panic_prefix")
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_basic()
+            b.build_call(
+                self.runtime_fns.karac_runtime_panic_prefix_fn,
+                &[],
+                "panic_prefix",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
         } else {
             b.build_global_string_ptr("\0", "panic_prefix_static")
                 .unwrap()
@@ -171,7 +175,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_global_string_ptr(&format!("{}\0", self.current_fn_name), "panic_fn")
                     .unwrap();
                 b.build_call(
-                    self.printf_fn,
+                    self.runtime_fns.printf_fn,
                     &[
                         fmt.as_pointer_value().into(),
                         file_ptr.into(),
@@ -190,7 +194,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_global_string_ptr("panic: %s%s\n\0", "panic_fmt")
                     .unwrap();
                 b.build_call(
-                    self.printf_fn,
+                    self.runtime_fns.printf_fn,
                     &[
                         fmt.as_pointer_value().into(),
                         prefix.into(),
@@ -202,7 +206,8 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         let exit_code = self.context.i32_type().const_int(1, false);
-        b.build_call(self.exit_fn, &[exit_code.into()], "").unwrap();
+        b.build_call(self.runtime_fns.exit_fn, &[exit_code.into()], "")
+            .unwrap();
         b.build_unreachable().unwrap();
 
         // The landing pad in the enclosing function. Normally one zero-operand
@@ -230,7 +235,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let size = heap_type.size_of().expect("heap type must be sized");
         let call = self
             .builder
-            .build_call(self.malloc_fn, &[size.into()], "rc_alloc")
+            .build_call(self.runtime_fns.malloc_fn, &[size.into()], "rc_alloc")
             .unwrap();
         let ptr = call
             .try_as_basic_value()
@@ -433,7 +438,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
         } else {
             self.builder
-                .build_call(self.free_fn, &[ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[ptr.into()], "")
                 .unwrap();
         }
     }
@@ -583,7 +588,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(do_free_bb).unwrap();
         self.builder.position_at_end(do_free_bb);
         self.builder
-            .build_call(self.free_fn, &[env_box.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[env_box.into()], "")
             .unwrap();
         self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
@@ -598,7 +603,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let size = twin.size_of().expect("twin type must be sized");
         let call = self
             .builder
-            .build_call(self.malloc_fn, &[size.into()], "hl_alloc")
+            .build_call(self.runtime_fns.malloc_fn, &[size.into()], "hl_alloc")
             .unwrap();
         call.try_as_basic_value()
             .unwrap_basic()
@@ -1132,7 +1137,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if !dropped {
             self.builder
-                .build_call(self.free_fn, &[ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[ptr.into()], "")
                 .unwrap();
         }
         self.builder.build_unconditional_branch(done_bb).unwrap();
@@ -2092,7 +2097,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let fn_ptr = val_fn.as_global_value().as_pointer_value();
             self.builder
                 .build_call(
-                    self.karac_map_free_with_val_drop_fn_fn,
+                    self.runtime_fns.karac_map_free_with_val_drop_fn_fn,
                     &[handle.into(), key_flag.into(), fn_ptr.into()],
                     "",
                 )
@@ -2105,14 +2110,14 @@ impl<'ctx> super::Codegen<'ctx> {
             let val_flag = i32_t.const_int(if drop.val_is_vec { 1 } else { 0 }, false);
             self.builder
                 .build_call(
-                    self.karac_map_free_with_drop_vec_fn,
+                    self.runtime_fns.karac_map_free_with_drop_vec_fn,
                     &[handle.into(), key_flag.into(), val_flag.into()],
                     "",
                 )
                 .unwrap();
         } else {
             self.builder
-                .build_call(self.karac_map_free_fn, &[handle.into()], "")
+                .build_call(self.runtime_fns.karac_map_free_fn, &[handle.into()], "")
                 .unwrap();
         }
     }
@@ -2313,7 +2318,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.position_at_end(free_bb);
         self.builder
-            .build_call(self.free_fn, &[ptr.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[ptr.into()], "")
             .unwrap();
         self.builder.build_unconditional_branch(done_bb).unwrap();
         self.builder.position_at_end(done_bb);
@@ -3360,7 +3365,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.position_at_end(free_bb);
         self.builder
-            .build_call(self.free_fn, &[env_box.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[env_box.into()], "")
             .unwrap();
         self.builder.build_unconditional_branch(ret_bb).unwrap();
         self.builder.position_at_end(ret_bb);
@@ -4016,7 +4021,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[alloc_bytes.into()], "dcopy.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[alloc_bytes.into()],
+                "dcopy.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -5351,7 +5360,11 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
         self.builder
-            .build_call(self.free_buf_fn, &[data.into(), hint.into()], "")
+            .build_call(
+                self.runtime_fns.free_buf_fn,
+                &[data.into(), hint.into()],
+                "",
+            )
             .unwrap();
     }
 
@@ -6741,7 +6754,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_pointer_value();
                 self.builder
-                    .build_call(self.free_fn, &[inner_data.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[inner_data.into()], "")
                     .unwrap();
                 self.builder
                     .build_unconditional_branch(inner_skip_bb)
@@ -7816,7 +7829,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.position_at_end(do_bb);
         self.builder
-            .build_call(self.free_fn, &[cur.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[cur.into()], "")
             .unwrap();
         self.builder.build_store(slot, null).unwrap();
         self.builder.build_unconditional_branch(join_bb).unwrap();
@@ -8279,7 +8292,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Reached on every path, including the two guard failures above: this
         // box exists and is ours regardless of what it turned out to contain.
         self.builder
-            .build_call(self.free_fn, &[box_ptr.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
             .unwrap();
     }
 
@@ -8299,7 +8312,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // placement.
             CleanupAction::ProviderPop => {
                 self.builder
-                    .build_call(self.karac_provider_pop_fn, &[], "")
+                    .build_call(self.runtime_fns.karac_provider_pop_fn, &[], "")
                     .unwrap();
             }
             CleanupAction::FreeClusterWalk {
@@ -8385,7 +8398,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_pointer_value();
                 self.builder
-                    .build_call(self.free_fn, &[cur.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[cur.into()], "")
                     .unwrap();
                 let body_end = self.builder.get_insert_block().unwrap();
                 phi.add_incoming(&[(&next, body_end)]);
@@ -8506,7 +8519,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_pointer_value();
                 self.builder
-                    .build_call(self.free_fn, &[cur.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[cur.into()], "")
                     .unwrap();
                 let body_end = self.builder.get_insert_block().unwrap();
                 phi.add_incoming(&[(&next, body_end)]);
@@ -8544,7 +8557,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder.position_at_end(do_bb);
                 self.builder
-                    .build_call(self.free_fn, &[current_ptr.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[current_ptr.into()], "")
                     .unwrap();
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
@@ -8627,7 +8640,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder.position_at_end(free_bb);
                 self.builder
-                    .build_call(self.free_fn, &[t_ptr.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[t_ptr.into()], "")
                     .unwrap();
                 self.builder.build_unconditional_branch(skip_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
@@ -8766,13 +8779,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.position_at_end(done);
                 }
                 self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[data.into()], "")
                     .unwrap();
                 self.builder
-                    .build_call(self.free_fn, &[bitmap.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[bitmap.into()], "")
                     .unwrap();
                 self.builder
-                    .build_call(self.free_fn, &[ctrl.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[ctrl.into()], "")
                     .unwrap();
                 self.builder.build_unconditional_branch(skip_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
@@ -9188,7 +9201,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into_pointer_value();
                     self.builder
-                        .build_call(self.free_fn, &[elem_p.into()], "")
+                        .build_call(self.runtime_fns.free_fn, &[elem_p.into()], "")
                         .unwrap();
                     let one = i64_t.const_int(1, false);
                     let next = self
@@ -9559,7 +9572,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into_pointer_value();
                     self.builder
-                        .build_call(self.free_fn, &[grp_ptr.into()], "")
+                        .build_call(self.runtime_fns.free_fn, &[grp_ptr.into()], "")
                         .unwrap();
                 }
                 self.builder.build_unconditional_branch(skip_bb).unwrap();
@@ -9627,7 +9640,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_pointer_value();
                 self.builder
-                    .build_call(self.karac_map_iter_free_fn, &[handle.into()], "")
+                    .build_call(
+                        self.runtime_fns.karac_map_iter_free_fn,
+                        &[handle.into()],
+                        "",
+                    )
                     .unwrap();
             }
             // LazyFrame codegen twin — release a `LazyExpr` handle produced
@@ -10055,7 +10072,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 if deeper_tags.is_empty() {
                     self.builder
-                        .build_call(self.free_fn, &[box_ptr.into()], "")
+                        .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                         .unwrap();
                 } else {
                     self.emit_nested_box_chain_free(fn_val, box_ptr, deeper_tags, name);
@@ -10859,7 +10876,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let new_buf = self
             .builder
-            .build_call(self.malloc_fn, &[new_cap.into()], "fsa.new_buf")
+            .build_call(self.runtime_fns.malloc_fn, &[new_cap.into()], "fsa.new_buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -11301,7 +11318,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let written = self
                     .builder
                     .build_call(
-                        self.snprintf_fn,
+                        self.runtime_fns.snprintf_fn,
                         &[
                             buf_ptr.into(),
                             buf_size.into(),
@@ -11419,7 +11436,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder
                     .build_call(
-                        self.snprintf_fn,
+                        self.runtime_fns.snprintf_fn,
                         &[
                             buf_ptr.into(),
                             size_of(self, width as u64 + 1).into(),
@@ -11498,7 +11515,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let written = self
                     .builder
                     .build_call(
-                        self.snprintf_fn,
+                        self.runtime_fns.snprintf_fn,
                         &[
                             buf_ptr.into(),
                             size_of(self, cap).into(),
@@ -11966,7 +11983,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[alloc_bytes.into()], "ts.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[alloc_bytes.into()], "ts.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -12013,7 +12030,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let len = self
             .builder
             .build_call(
-                self.karac_string_encode_char_fn,
+                self.runtime_fns.karac_string_encode_char_fn,
                 &[cp.into(), buf_ptr.into()],
                 "u8.enc",
             )

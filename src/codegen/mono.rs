@@ -2115,7 +2115,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
             self.builder.position_at_end(yield_bb);
             self.builder
-                .build_call(self.sched_yield_fn, &[], "kara.yield_result")
+                .build_call(self.runtime_fns.sched_yield_fn, &[], "kara.yield_result")
                 .expect("call sched_yield for per-mono cooperative yield");
             self.builder
                 .build_unconditional_branch(loop_bb)
@@ -2148,7 +2148,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.context.i64_type().const_int(0, false).into()
                 };
             self.builder
-                .build_call(self.free_fn, &[state_ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[state_ptr.into()], "")
                 .expect("call free on per-mono state struct");
             return Ok(call_result);
         }
@@ -4470,7 +4470,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let slow_existed = self
             .builder
             .build_call(
-                self.karac_map_insert_old_fn,
+                self.runtime_fns.karac_map_insert_old_fn,
                 &[
                     map_arg.into(),
                     slow_key_slot.into(),
@@ -4747,7 +4747,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let safe_existed = self
             .builder
             .build_call(
-                self.karac_map_insert_old_fn,
+                self.runtime_fns.karac_map_insert_old_fn,
                 &[
                     map_arg.into(),
                     safe_key_slot.into(),
@@ -5375,7 +5375,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let existed = cg
                 .builder
                 .build_call(
-                    cg.karac_map_insert_old_fn,
+                    cg.runtime_fns.karac_map_insert_old_fn,
                     &[
                         map_arg.into(),
                         key_slot.into(),

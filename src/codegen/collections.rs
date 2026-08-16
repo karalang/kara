@@ -67,7 +67,11 @@ impl<'ctx> super::Codegen<'ctx> {
             "len" => {
                 let len = self
                     .builder
-                    .build_call(self.karac_map_len_fn, &[set_handle.into()], "set.len")
+                    .build_call(
+                        self.runtime_fns.karac_map_len_fn,
+                        &[set_handle.into()],
+                        "set.len",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic();
@@ -76,7 +80,11 @@ impl<'ctx> super::Codegen<'ctx> {
             "is_empty" => {
                 let len = self
                     .builder
-                    .build_call(self.karac_map_len_fn, &[set_handle.into()], "set.len")
+                    .build_call(
+                        self.runtime_fns.karac_map_len_fn,
+                        &[set_handle.into()],
+                        "set.len",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -157,7 +165,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.builder
                             .build_call(
-                                self.karac_map_insert_old_fn,
+                                self.runtime_fns.karac_map_insert_old_fn,
                                 &[
                                     set_handle.into(),
                                     elem_slot.into(),
@@ -250,7 +258,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let status = self
                     .builder
                     .build_call(
-                        self.karac_map_try_insert_fn,
+                        self.runtime_fns.karac_map_try_insert_fn,
                         &[
                             set_handle.into(),
                             elem_slot.into(),
@@ -384,7 +392,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.builder
                             .build_call(
-                                self.karac_map_contains_fn,
+                                self.runtime_fns.karac_map_contains_fn,
                                 &[set_handle.into(), elem_slot.into()],
                                 "set.contains",
                             )
@@ -433,7 +441,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let existed = self
                     .builder
                     .build_call(
-                        self.karac_map_remove_old_fn,
+                        self.runtime_fns.karac_map_remove_old_fn,
                         &[
                             set_handle.into(),
                             elem_slot.into(),
@@ -457,7 +465,11 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             "clear" => {
                 self.builder
-                    .build_call(self.karac_map_clear_fn, &[set_handle.into()], "")
+                    .build_call(
+                        self.runtime_fns.karac_map_clear_fn,
+                        &[set_handle.into()],
+                        "",
+                    )
                     .unwrap();
                 Ok(i64_t.const_int(0, false).into())
             }
@@ -486,7 +498,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let new_handle = self
                     .builder
                     .build_call(
-                        self.karac_map_new_fn,
+                        self.runtime_fns.karac_map_new_fn,
                         &[
                             elem_size.into(),
                             val_size.into(),
@@ -601,7 +613,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let some_payload_words = self.coerce_to_payload_words(val, 3)?;
                 // Buffer is non-null here (len > 0); free the header array.
                 self.builder
-                    .build_call(self.free_fn, &[buf.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[buf.into()], "")
                     .unwrap();
                 let some_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
@@ -653,7 +665,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let iter_handle = self
             .builder
             .build_call(
-                self.karac_map_iter_new_fn,
+                self.runtime_fns.karac_map_iter_new_fn,
                 &[src_handle.into()],
                 "setop.iter",
             )
@@ -671,7 +683,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let has = self
             .builder
             .build_call(
-                self.karac_map_iter_next_fn,
+                self.runtime_fns.karac_map_iter_next_fn,
                 &[iter_handle.into(), elem_out.into(), dummy.into()],
                 "setop.iter.has",
             )
@@ -691,7 +703,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let found = self
                     .builder
                     .build_call(
-                        self.karac_map_contains_fn,
+                        self.runtime_fns.karac_map_contains_fn,
                         &[other.into(), elem_out.into()],
                         "setop.contains",
                     )
@@ -731,7 +743,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(exit_bb);
         self.builder
-            .build_call(self.karac_map_iter_free_fn, &[iter_handle.into()], "")
+            .build_call(
+                self.runtime_fns.karac_map_iter_free_fn,
+                &[iter_handle.into()],
+                "",
+            )
             .unwrap();
     }
 
@@ -1148,7 +1164,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let buf = self
             .builder
             .build_call(
-                self.karac_map_sorted_keys_fn,
+                self.runtime_fns.karac_map_sorted_keys_fn,
                 &[handle.into(), len_slot.into(), cmp_ptr.into()],
                 "sk.buf",
             )
@@ -1427,7 +1443,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[alloc_bytes.into()], "vec.lit.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[alloc_bytes.into()],
+                "vec.lit.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1585,7 +1605,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let alloc_bytes = self.checked_alloc_bytes(n, elem_size, "filled")?;
         let buf = self
             .builder
-            .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "filled.buf")
+            .build_call(
+                self.runtime_fns.alloc_or_panic_fn,
+                &[alloc_bytes.into()],
+                "filled.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -3689,7 +3713,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let new_ptr = self
             .builder
             .build_call(
-                self.karac_string_slice_fn,
+                self.runtime_fns.karac_string_slice_fn,
                 &[
                     data_ptr.into(),
                     str_len.into(),
@@ -3788,7 +3812,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let view_ptr = self
             .builder
             .build_call(
-                self.karac_string_slice_borrow_fn,
+                self.runtime_fns.karac_string_slice_borrow_fn,
                 &[
                     data_ptr.into(),
                     str_len.into(),
@@ -5174,7 +5198,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into_pointer_value();
             self.builder
-                .build_call(self.free_fn, &[old_block.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[old_block.into()], "")
                 .unwrap();
             self.builder.build_store(elem_ptr, val).unwrap();
             return Ok(());

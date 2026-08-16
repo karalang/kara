@@ -1217,7 +1217,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let nl_len = size_t.const_int(nl.len() as u64, false);
             self.builder
                 .build_call(
-                    self.write_console_line_fn,
+                    self.runtime_fns.write_console_line_fn,
                     &[
                         BasicMetadataValueEnum::from(data),
                         BasicMetadataValueEnum::from(len_st),
@@ -1237,7 +1237,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // element-size, so only (data, len, stream) cross the call boundary.
         self.builder
             .build_call(
-                self.write_console_fn,
+                self.runtime_fns.write_console_fn,
                 &[
                     BasicMetadataValueEnum::from(data),
                     BasicMetadataValueEnum::from(len_st),
@@ -1309,7 +1309,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.position_at_end(do_free);
         self.builder
-            .build_call(self.free_fn, &[data.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[data.into()], "")
             .unwrap();
         self.builder.build_unconditional_branch(after).unwrap();
         self.builder.position_at_end(after);
@@ -1740,7 +1740,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let written = self
                     .builder
                     .build_call(
-                        self.snprintf_fn,
+                        self.runtime_fns.snprintf_fn,
                         &[
                             buf_ptr.into(),
                             size_t.const_int(32, false).into(),

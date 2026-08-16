@@ -614,7 +614,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let t_ptr = self
             .builder
-            .build_call(self.malloc_fn, &[total.into()], "t.alloc")
+            .build_call(self.runtime_fns.malloc_fn, &[total.into()], "t.alloc")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -727,7 +727,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let total = i64_t.const_int(8 * (1 + rank as u64) + (count as u64) * elem_size, false);
         let t_ptr = self
             .builder
-            .build_call(self.malloc_fn, &[total.into()], "t.alloc")
+            .build_call(self.runtime_fns.malloc_fn, &[total.into()], "t.alloc")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -908,7 +908,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[bytes.into()], "t.shape.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[bytes.into()], "t.shape.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1041,12 +1041,12 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if receiver_is_fresh_temp {
             self.builder
-                .build_call(self.free_fn, &[t_ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[t_ptr.into()], "")
                 .unwrap();
         }
         if let Some((o_ptr, true)) = matmul_arg {
             self.builder
-                .build_call(self.free_fn, &[o_ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[o_ptr.into()], "")
                 .unwrap();
         }
         Ok(Some(v))
@@ -1256,7 +1256,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let t_ptr = self
             .builder
-            .build_call(self.malloc_fn, &[total.into()], "t.alloc")
+            .build_call(self.runtime_fns.malloc_fn, &[total.into()], "t.alloc")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -2346,7 +2346,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let sub_t = self
             .builder
-            .build_call(self.malloc_fn, &[sub_total.into()], "t.fia.row")
+            .build_call(self.runtime_fns.malloc_fn, &[sub_total.into()], "t.fia.row")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -2501,7 +2501,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(exit_bb);
         // The loop owned the buffer; free it once. `break` lands here too.
         self.builder
-            .build_call(self.free_fn, &[sub_t.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[sub_t.into()], "")
             .unwrap();
         self.tensor_var_infos.remove(row_name.as_str());
         self.variables.remove(row_name.as_str());
@@ -2562,7 +2562,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             let buf = self
                 .builder
-                .build_call(self.malloc_fn, &[bytes.into()], "t.ia.buf")
+                .build_call(self.runtime_fns.malloc_fn, &[bytes.into()], "t.ia.buf")
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -2633,7 +2633,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let result_buf = self
             .builder
-            .build_call(self.malloc_fn, &[buf_bytes.into()], "t.ia.rbuf")
+            .build_call(self.runtime_fns.malloc_fn, &[buf_bytes.into()], "t.ia.rbuf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -2678,7 +2678,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let sub_t = self
             .builder
-            .build_call(self.malloc_fn, &[sub_total.into()], "t.ia.subt.a")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[sub_total.into()],
+                "t.ia.subt.a",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -2902,7 +2906,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let new = self
             .builder
-            .build_call(self.malloc_fn, &[total.into()], "t.cl.new")
+            .build_call(self.runtime_fns.malloc_fn, &[total.into()], "t.cl.new")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -3473,12 +3477,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // Free fresh-temporary operands (intermediates owned by nothing else).
         if left_is_tensor && self.tensor_operand_is_owned_fresh_temp(left) {
             self.builder
-                .build_call(self.free_fn, &[lhs_val.into_pointer_value().into()], "")
+                .build_call(
+                    self.runtime_fns.free_fn,
+                    &[lhs_val.into_pointer_value().into()],
+                    "",
+                )
                 .unwrap();
         }
         if right_is_tensor && self.tensor_operand_is_owned_fresh_temp(right) {
             self.builder
-                .build_call(self.free_fn, &[rhs_val.into_pointer_value().into()], "")
+                .build_call(
+                    self.runtime_fns.free_fn,
+                    &[rhs_val.into_pointer_value().into()],
+                    "",
+                )
                 .unwrap();
         }
 
@@ -3531,7 +3543,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_elementwise_map(&lhs, &MapOther::Unary, &MapKernelOp::Neg, &dest)?;
         if self.tensor_operand_is_owned_fresh_temp(operand) {
             self.builder
-                .build_call(self.free_fn, &[tptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[tptr.into()], "")
                 .unwrap();
         }
         Ok(res.into())
@@ -3612,7 +3624,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // identifier receiver is a live binding and is never freed here.
         if self.tensor_operand_is_owned_fresh_temp(arg) {
             self.builder
-                .build_call(self.free_fn, &[b_ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[b_ptr.into()], "")
                 .unwrap();
         }
         Ok(Some(result))
@@ -3955,7 +3967,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // after the reduction has read it (mirrors the binop fresh-temp free).
         if self.tensor_operand_is_owned_fresh_temp(object) {
             self.builder
-                .build_call(self.free_fn, &[t_ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[t_ptr.into()], "")
                 .unwrap();
         }
         Ok(Some(result))
@@ -5340,7 +5352,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let keys = self.sort_widen_data_buffer(data, count, elem, unsigned);
                 let vec = self.stats_argsort(keys, count, is_int, unsigned)?;
                 self.builder
-                    .build_call(self.free_fn, &[keys.into()], "t.sort.keyfree")
+                    .build_call(self.runtime_fns.free_fn, &[keys.into()], "t.sort.keyfree")
                     .unwrap();
                 Ok(vec)
             }

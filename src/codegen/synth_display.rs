@@ -89,7 +89,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let written = self
             .builder
             .build_call(
-                self.snprintf_fn,
+                self.runtime_fns.snprintf_fn,
                 &[
                     buf_ptr.into(),
                     size.into(),
@@ -574,7 +574,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // Initialize iter, is_first.
         let iter_ptr = self
             .builder
-            .build_call(self.karac_map_iter_new_fn, &[map_handle.into()], "md.iter")
+            .build_call(
+                self.runtime_fns.karac_map_iter_new_fn,
+                &[map_handle.into()],
+                "md.iter",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -606,7 +610,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let has_next = self
             .builder
             .build_call(
-                self.karac_map_iter_next_fn,
+                self.runtime_fns.karac_map_iter_next_fn,
                 &[iter_cur.into(), out_key.into(), out_val.into()],
                 "md.next",
             )
@@ -658,7 +662,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
         self.builder
-            .build_call(self.karac_map_iter_free_fn, &[iter_final.into()], "")
+            .build_call(
+                self.runtime_fns.karac_map_iter_free_fn,
+                &[iter_final.into()],
+                "",
+            )
             .unwrap();
         self.disp_append_lit(acc, "}");
     }
@@ -754,7 +762,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let iter_ptr = self
             .builder
-            .build_call(self.karac_map_iter_new_fn, &[set_handle.into()], "sd.iter")
+            .build_call(
+                self.runtime_fns.karac_map_iter_new_fn,
+                &[set_handle.into()],
+                "sd.iter",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -783,7 +795,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let has_next = self
             .builder
             .build_call(
-                self.karac_map_iter_next_fn,
+                self.runtime_fns.karac_map_iter_next_fn,
                 &[iter_cur.into(), out_elem.into(), dummy_val.into()],
                 "sd.next",
             )
@@ -825,7 +837,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
         self.builder
-            .build_call(self.karac_map_iter_free_fn, &[iter_final.into()], "")
+            .build_call(
+                self.runtime_fns.karac_map_iter_free_fn,
+                &[iter_final.into()],
+                "",
+            )
             .unwrap();
         self.disp_append_lit(acc, "}");
     }
@@ -1028,7 +1044,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.disp_append_lit(acc, ": ");
             self.builder
                 .build_call(
-                    self.karac_map_get_fn,
+                    self.runtime_fns.karac_map_get_fn,
                     &[handle.into(), kptr.into(), ov.into()],
                     "smd.get",
                 )
@@ -1046,7 +1062,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(exit_bb);
         self.builder
-            .build_call(self.free_fn, &[kbuf.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[kbuf.into()], "")
             .unwrap();
         self.disp_append_lit(acc, "}");
         self.builder.build_return(None).unwrap();

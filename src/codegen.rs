@@ -15,6 +15,7 @@ use inkwell::targets::{FileType, TargetData};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, StructType};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue};
 use inkwell::AddressSpace;
+use runtime_fns::RuntimeFns;
 
 use crate::ast::*;
 use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency};
@@ -85,6 +86,7 @@ mod provider;
 mod reduce;
 mod refinement;
 mod runtime;
+mod runtime_fns;
 mod shadow;
 mod slice_alias;
 mod sso;
@@ -1111,6 +1113,13 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    /// Cached declarations of the C / `karac_*` runtime functions this
+    /// module calls. Grouped out of `Codegen` as the first Phase-2
+    /// decomposition slice — see
+    /// [`docs/spikes/state-decomposition-codegen-methodcall.md`]. Every
+    /// entry is declared once by `Codegen::new` and only ever read
+    /// afterwards, which is what makes the group safe to move wholesale.
+    pub(crate) runtime_fns: RuntimeFns<'ctx>,
     pub(crate) context: &'ctx Context,
     pub(crate) module: Module<'ctx>,
     pub(crate) builder: Builder<'ctx>,
@@ -1497,23 +1506,6 @@ pub(super) struct Codegen<'ctx> {
     /// on alongside contract stripping). The gate lives at the two emission
     /// sites in `compile_expr`'s `?` lowering.
     pub(crate) strip_error_trace: bool,
-    /// Runtime contract-predicate-context FFI (design.md § Contracts rule 2).
-    /// `emit_contract_assert` brackets a predicate's *runtime* evaluation with
-    /// `karac_runtime_enter_predicate()` / `karac_runtime_exit_predicate()` (a
-    /// thread-local depth counter in the runtime), and `emit_panic` reads
-    /// `karac_runtime_panic_prefix()` to choose its fault category. A panic that
-    /// fires while the depth is non-zero — whether an inline bounds/div/unwrap
-    /// check lexically inside the predicate (`requires v[i] >= 0`) OR a panic
-    /// inside a function the predicate transitively *calls* — is the distinct
-    /// `contract predicate panicked: <msg>` fault, not `contract violated`
-    /// (reserved for the predicate evaluating to `false`, where the depth is
-    /// back to 0). The runtime flag subsumes the prior compile-time flag: it
-    /// sees cross-call panics a lexical flag cannot, matching the interpreter's
-    /// global `pending_cf` behavior. The depth is a counter, not a bool, so a
-    /// predicate that calls a function with its own contract nests correctly.
-    pub(crate) karac_runtime_enter_predicate_fn: FunctionValue<'ctx>,
-    pub(crate) karac_runtime_exit_predicate_fn: FunctionValue<'ctx>,
-    pub(crate) karac_runtime_panic_prefix_fn: FunctionValue<'ctx>,
     /// Whether `emit_panic` must read the fault-category prefix from the
     /// runtime (`karac_runtime_panic_prefix()`) rather than folding it to the
     /// static `""`. Set at the top of `compile_program`: `true` when the
@@ -1581,34 +1573,6 @@ pub(super) struct Codegen<'ctx> {
     /// inline blocking drive (allocate slot, ramp, wait, free).
     pub(crate) coro_spawn_slot: Option<PointerValue<'ctx>>,
     pub(crate) current_fn: Option<FunctionValue<'ctx>>,
-    pub(crate) printf_fn: FunctionValue<'ctx>,
-    /// `int snprintf(char* buf, size_t n, const char* fmt, ...)` — used by f-string
-    /// codegen to convert integers and floats to their decimal string forms.
-    pub(crate) snprintf_fn: FunctionValue<'ctx>,
-    /// `size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream)` —
-    /// the NUL-safe string-print primitive (L5). Unlike `printf("%.*s")`, which
-    /// stops at the first interior NUL even with a precision, `fwrite` writes
-    /// exactly `len` bytes. It shares libc's stdio buffer with the `printf`
-    /// int/bool paths, so output ordering across mixed prints is preserved.
-    /// `void karac_runtime_write_console(ptr data, size_t len, ptr stream)` —
-    /// the runtime console-write chokepoint every print path funnels through
-    /// (auto-par ordered-output). At the top level it `fwrite`s to `stream`
-    /// (byte-for-byte the old inline path); inside a parallel branch it records
-    /// the bytes for ordered replay at the join so parallelized logging-bearing
-    /// work keeps sequential output order. `size_t`-width `len` (i32 wasm32 /
-    /// i64 native) matches the runtime's `usize` parameter.
-    pub(crate) write_console_fn: FunctionValue<'ctx>,
-    /// B-2026-07-30-9 — `__karac_write_console_line(data, len, nl, nl_len,
-    /// stream)`: stage a payload and its trailing newline into ONE buffer and
-    /// hand them to [`Self::write_console_fn`] as a single write, so a `println`
-    /// is line-atomic.
-    ///
-    /// `println` used to emit two `write_console` calls, and the lock that keeps
-    /// a write intact — glibc's per-`FILE` lock inside `fwrite` — is released
-    /// between them. Two `spawn`ed tasks printing concurrently therefore
-    /// interleaved as payload-A, payload-B, newline-A, newline-B, i.e. `12\n\n`
-    /// instead of `1\n2\n`.
-    pub(crate) write_console_line_fn: FunctionValue<'ctx>,
     /// The libc `FILE*` globals for stdout / stderr, used as the `fwrite`
     /// stream argument. The symbol name is platform-specific (`__stdoutp` /
     /// `__stderrp` on Apple, `stdout` / `stderr` elsewhere, incl. wasi-libc).
@@ -2158,41 +2122,6 @@ pub(super) struct Codegen<'ctx> {
     // ── Shared types (RC) ─────────────────────────────────────────
     /// Shared type metadata (struct/enum name → heap layout info).
     pub(crate) shared_types: HashMap<String, SharedTypeInfo<'ctx>>,
-    /// malloc function for heap allocation.
-    pub(crate) malloc_fn: FunctionValue<'ctx>,
-    /// `karac_alloc_fallible(size) -> ptr` — non-null on success, null on OOM
-    /// (phase-8-stdlib-floor item 8). The `try_*` collection companions call
-    /// this and branch on null to build `Result.Err(AllocError)`.
-    pub(crate) alloc_fallible_fn: FunctionValue<'ctx>,
-    /// `karac_alloc_or_panic(size) -> ptr` — the panicking counterpart that
-    /// aborts on OOM instead of returning null. The panicking collection
-    /// methods (`Vec.with_capacity`, `Vec.from_slice`, grow paths) route
-    /// through it so OOM is a clean abort, not a null-deref segfault.
-    pub(crate) alloc_or_panic_fn: FunctionValue<'ctx>,
-    /// free function for heap deallocation.
-    pub(crate) free_fn: FunctionValue<'ctx>,
-    /// `karac_free_buf(ptr, bytes_hint)` — recycling-aware release for
-    /// Vec/String DATA buffers (`runtime/src/alloc.rs` large-buffer cache).
-    /// Emitted at the buffer-release sites that own a `{data, len, cap}`
-    /// heap buffer (scope-exit `FreeVecBuffer` drain, overwrite-free,
-    /// synthesized Vec/String drop fns); everything else stays on `free_fn`.
-    /// `bytes_hint` is `cap * elem_size` when the site knows the element
-    /// size, else `0` = "unknown, runtime asks the allocator" — a wrong
-    /// hint can only cost a recycling opportunity, never correctness.
-    pub(crate) free_buf_fn: FunctionValue<'ctx>,
-    /// exit function for runtime panics.
-    pub(crate) exit_fn: FunctionValue<'ctx>,
-    /// memcmp for string comparison.
-    pub(crate) memcmp_fn: FunctionValue<'ctx>,
-    /// `int sched_yield(void)` — POSIX thread-yield primitive. Phase 6
-    /// line 26 slice 8e wires this into the caller-side network-boundary
-    /// intercept's Pending path so the parent thread cooperatively
-    /// yields to the OS scheduler / dispatcher between poll-fn
-    /// invocations instead of busy-looping. Linked from libc (same
-    /// path as malloc / free). Windows IOCP support (line 17 sub-item 7)
-    /// will need a `SwitchToThread` analog; v1 targets Linux / macOS
-    /// where sched_yield is available.
-    pub(crate) sched_yield_fn: FunctionValue<'ctx>,
     /// Local bindings that alias `vec_var.len()` — populated at let-sites of
     /// the form `let n = v.len()` where `v` is a Vec identifier in scope.
     /// Consulted by the bounds-check-elision pass when parsing while-guard
@@ -3958,13 +3887,6 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) par_counter: u32,
     /// Runtime struct `KaracBranch { ptr func, ptr ctx }` — shared across par blocks.
     pub(crate) karac_branch_ty: StructType<'ctx>,
-    /// Runtime entry point `void karac_par_run(const KaracBranch*, usize)`.
-    pub(crate) karac_par_run_fn: FunctionValue<'ctx>,
-    /// Runtime entry point `void karac_par_reduce(*const KaracReduceDescriptor,
-    /// *mut u8 out_slot, u32 spawn_site_id)`. Declared in slice 3a, called
-    /// from slice 3b's `src/codegen/reduce.rs::emit_reduce_call`. See
-    /// `runtime/src/lib.rs`'s `karac_par_reduce` for the ABI.
-    pub(crate) karac_par_reduce_fn: FunctionValue<'ctx>,
     // ── Debugger contract: SpawnSiteId metadata (slice 3) ─────────
     /// One entry per `par {}` block (explicit or inferred). Populated by
     /// `record_spawn_site`; emitted as the `KARAC_SPAWN_SITES` global by
@@ -4060,58 +3982,6 @@ pub(super) struct Codegen<'ctx> {
     /// (impl-target type name, trait name) → emitted vtable global.
     /// Populated after impl method declarations run in `compile_program`.
     pub(crate) provider_vtables: HashMap<(String, String), GlobalValue<'ctx>>,
-    /// Runtime extern: `karac_provider_push(frame_ptr, resource_id, data_ptr, vtable_ptr)`.
-    /// Consumed by `with_provider[R]` lowering (sub-step 3).
-    pub(crate) karac_provider_push_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_provider_pop()`. Consumed by `with_provider[R]`
-    /// lowering (sub-step 3) for the matching pop on body exit.
-    pub(crate) karac_provider_pop_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_provider_lookup(resource_id) -> ProviderLookupResult`.
-    /// Consumed by `R.method(...)` dispatch (sub-step 4) to find the
-    /// active provider's data pointer and vtable.
-    pub(crate) karac_provider_lookup_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_provider_get_stack_head() -> *const ProviderFrame`.
-    /// Consumed by par-block lowering (sub-step 5) to snapshot the
-    /// calling thread's stack head into the par-block env-struct.
-    pub(crate) karac_provider_get_stack_head_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_provider_set_stack_head(head)`. Consumed
-    /// by par-branch fn prologues (sub-step 5) to seed each worker
-    /// thread's TLS from the env-struct snapshot, so providers in
-    /// scope at the par-block site stay visible inside spawned branches.
-    pub(crate) karac_provider_set_stack_head_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_tracing_get_active_span() -> i64` (phase-8
-    /// line 153). Consumed by the `tracing_active_span()` builtin (which
-    /// `Log.*` / `LogEvent` use to auto-stamp the ambient span) and by
-    /// the `with_span` lowering to snapshot the prior active span.
-    pub(crate) karac_tracing_get_active_span_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_tracing_set_active_span(i64)` (phase-8 line
-    /// 153). Consumed by the `with_span(span, ||body)` lowering to install
-    /// the body's active span and restore the prior one on exit, and by
-    /// par-branch prologues to inherit the parent's active span.
-    pub(crate) karac_tracing_set_active_span_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_tracing_get_min_level() -> i64` (phase-8 line
-    /// 156, codegen half). The `tracing_level_enabled(rank)` builtin lowers
-    /// to `rank >= this`, so a compiled `Log.*` honors `Log.set_min_level`.
-    pub(crate) karac_tracing_get_min_level_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_tracing_set_min_level(i64)` (phase-8 line
-    /// 156). The `tracing_set_min_level(rank)` builtin (called from
-    /// `Log.set_min_level`'s lowered body) writes the process-global level.
-    pub(crate) karac_tracing_set_min_level_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_tracing_set_exporter(*const u8, *const u8)`
-    /// (phase-8 line 156). The `tracing_set_exporter(e)` builtin registers
-    /// the heap-leaked exporter value + its `export_event` fn-ptr here.
-    pub(crate) karac_tracing_set_exporter_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_tracing_get_exporter_data() -> *const u8`
-    /// (phase-8 line 156). The `tracing_emit_event` lowering branches on
-    /// this (null → default `StdoutExporter`, else indirect-dispatch).
-    pub(crate) karac_tracing_get_exporter_data_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_tracing_get_exporter_fn() -> *const u8`
-    /// (phase-8 line 156). The registered sink's `export_event` fn-ptr, used
-    /// by the `tracing_emit_event` lowering for the indirect call.
-    pub(crate) karac_tracing_get_exporter_fn_fn: FunctionValue<'ctx>,
-    /// Runtime extern: `karac_tracing_reset()` (phase-8 line 156). Clears
-    /// the min level and registered sink; `Log.reset`'s body lowers to it.
-    pub(crate) karac_tracing_reset_fn: FunctionValue<'ctx>,
     /// LLVM struct type for `ProviderFrame { prev, resource_id, data, vtable }`
     /// — `#[repr(C)]` matches `runtime/src/lib.rs::ProviderFrame`. Consumed
     /// at `with_provider[R]` lowering sites for the alloca'd frame storage
@@ -4353,107 +4223,6 @@ pub(super) struct Codegen<'ctx> {
     /// avoids redundant emission and keeps the IR stable. Pinned by
     /// `tests/codegen.rs::test_server_serve_handler_shim_caches`.
     pub(crate) http_shim_cache: HashMap<String, FunctionValue<'ctx>>,
-    pub(crate) karac_map_new_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_free_fn: FunctionValue<'ctx>,
-    /// `karac_map_free_with_drop_vec(map: ptr, drop_key: i32, drop_val: i32)`
-    /// — `karac_map_free` variant that recursively drops per-entry
-    /// Vec/String content before deallocating the bucket storage.
-    /// `drop_key != 0` releases each live entry's key data buffer when
-    /// the key follows the `{ptr, len, cap}` layout; `drop_val != 0`
-    /// does the same for the value. Selected by the `FreeMapHandle`
-    /// cleanup arm whenever either flag is set. Replaces the narrower
-    /// `karac_map_free_with_val_drop_vec` (val-only) helper that
-    /// shipped 2026-05-13.
-    ///
-    /// Closes leaks for `Set[Vec[T]]` / `Set[String]` (key drop only),
-    /// `Map[String, V]` / `Map[Vec[T], V]` (key drop only),
-    /// `Map[String, Vec[U]]` / `Map[Vec[T], Vec[U]]` (both flags). The
-    /// primitive-only `Map[i64, i64]` case stays on plain
-    /// `karac_map_free` for zero overhead.
-    pub(crate) karac_map_free_with_drop_vec_fn: FunctionValue<'ctx>,
-    /// `karac_map_free_with_val_drop_fn(map: ptr, drop_key: i32,
-    /// val_drop_fn: ptr)` — slice 3r (deferred gap (d)): frees each live
-    /// entry's VALUE via a synthesized `karac_drop_<T>(ptr)` (values that
-    /// aren't the one-level Vec/String overlay: user structs/enums, inner
-    /// Maps/Sets, Option/Result, Vec-with-heap-elements). Key side keeps
-    /// the flag contract of `karac_map_free_with_drop_vec`.
-    pub(crate) karac_map_free_with_val_drop_fn_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_insert_old_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_try_insert_fn: FunctionValue<'ctx>,
-    /// Borrowed-String-key insert: deep-copies the key only on a fresh
-    /// insertion, so a slice-into-source key (`m.insert(s[a..b], v)`)
-    /// allocates once per distinct key instead of once per call.
-    pub(crate) karac_map_insert_borrowed_str_old_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_get_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_remove_old_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_contains_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_len_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_clear_fn: FunctionValue<'ctx>,
-    /// `karac_map_clear_with_drop_vec(map, drop_key, drop_val)` — clear that
-    /// frees heap key/value buffers first (peer of
-    /// `karac_map_free_with_drop_vec`); selected for heap-keyed/valued maps.
-    pub(crate) karac_map_clear_with_drop_vec_fn: FunctionValue<'ctx>,
-    /// `karac_map_clear_with_val_drop_fn(map, drop_key, val_drop_fn)` — the
-    /// clear sibling of `karac_map_free_with_val_drop_fn` (slice 3r).
-    pub(crate) karac_map_clear_with_val_drop_fn_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_iter_new_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_sorted_keys_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_iter_next_fn: FunctionValue<'ctx>,
-    pub(crate) karac_map_iter_free_fn: FunctionValue<'ctx>,
-    /// `i64 karac_string_decode_char(*const u8 data, i64 len, i64 byte_offset, *mut u32 out_cp)`.
-    /// Returns the byte offset after the decoded char and writes the
-    /// codepoint through the out-param. Drives `for c in s` / `for c in
-    /// s.chars()` lowering — see `compile_for_string_chars`.
-    pub(crate) karac_string_decode_char_fn: FunctionValue<'ctx>,
-    /// `i64 karac_string_encode_char(u32 cp, *mut u8 out)`. Writes 1–4
-    /// UTF-8 bytes for the codepoint through `out`, returns the byte
-    /// count. Peer of `karac_string_decode_char_fn`; used by the print
-    /// and f-string char arms to render the glyph rather than the
-    /// integer codepoint. See `emit_codepoint_to_utf8`.
-    pub(crate) karac_string_encode_char_fn: FunctionValue<'ctx>,
-    /// `karac_map_entry(map: ptr, key: ptr, out_slot_ptr: ptr) -> i1` —
-    /// probe-and-insert-on-vacant. Used by entry chains whose terminal is
-    /// `or_insert` / `or_insert_with` — codegen will write a default through
-    /// the slot when occupied=false, so the runtime claims the bucket up
-    /// front.
-    pub(crate) karac_map_entry_fn: FunctionValue<'ctx>,
-    /// `karac_map_lookup_slot(map: ptr, key: ptr, out_slot_ptr: ptr) -> i1`
-    /// — read-only variant used by entry chains whose terminal is
-    /// `and_modify`. The closure runs only when occupied=true; nothing is
-    /// inserted on the Vacant path.
-    pub(crate) karac_map_lookup_slot_fn: FunctionValue<'ctx>,
-    /// `karac_string_clone(src: ptr, dst: ptr) -> void` — runtime helper
-    /// for the codegen-emitted String case in `emit_clone_fn_for_type_expr`.
-    /// Allocates a fresh buffer, copies len bytes, writes the new
-    /// `{data, len, cap}` to `dst`. Static-literal sources (cap = 0) get
-    /// a heap-owned copy so scope-exit cleanup fires; source untouched.
-    pub(crate) karac_string_clone_fn: FunctionValue<'ctx>,
-    pub(crate) karac_string_slice_fn: FunctionValue<'ctx>,
-    /// `karac_string_slice_borrow(data, len, start, end) -> ptr` — validating,
-    /// non-allocating slice; returns `data + start`. Backs borrowed
-    /// `{ptr, len, cap=0}` String views used as non-retained map keys.
-    pub(crate) karac_string_slice_borrow_fn: FunctionValue<'ctx>,
-    /// Allocating String→String transforms (full Unicode, matching the
-    /// interpreter's Rust stdlib). Each `(data, len, *mut out_len) -> ptr`
-    /// returns a fresh NUL-terminated buffer and writes the result byte length
-    /// to `out_len` (null + 0 for an empty result). See `runtime/src/clone.rs`.
-    pub(crate) karac_string_to_lowercase_fn: FunctionValue<'ctx>,
-    pub(crate) karac_string_to_uppercase_fn: FunctionValue<'ctx>,
-    pub(crate) karac_string_trim_fn: FunctionValue<'ctx>,
-    /// `String.trim_start()` / `.trim_end()` — strip only leading / trailing
-    /// Unicode whitespace. Same `(data, len, *mut out_len) -> ptr` xform shape
-    /// as `trim`.
-    pub(crate) karac_string_trim_start_fn: FunctionValue<'ctx>,
-    pub(crate) karac_string_trim_end_fn: FunctionValue<'ctx>,
-    /// `String.sorted()` — chars sorted ascending into a fresh String (the
-    /// anagram key). Same `(data, len, *mut out_len) -> ptr` xform shape.
-    pub(crate) karac_string_sorted_fn: FunctionValue<'ctx>,
-    /// `karac_string_replace(data, len, from, from_len, to, to_len, *mut out_len)
-    /// -> ptr` — every `from` replaced with `to` (Rust `str::replace`).
-    pub(crate) karac_string_replace_fn: FunctionValue<'ctx>,
-    /// `karac_string_replacen(data, len, from, from_len, to, to_len, n, *mut out_len)
-    /// -> ptr` — first `n` `from` replaced with `to` (Rust `str::replacen`).
-    pub(crate) karac_string_replacen_fn: FunctionValue<'ctx>,
     /// Per-type clone function cache. Keyed on the canonical mangled type
     /// name (`display_mangle_te`). Each emitted fn has signature
     /// `void karac_clone_<typename>(*const T src, *mut T dst)` — caller
@@ -4515,22 +4284,6 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_print` integration). Remove the allow when subtask 7 lands.
     #[allow(dead_code)]
     pub(crate) display_fn_cache: HashMap<String, FunctionValue<'ctx>>,
-    // ── Error return trace runtime ────────────────────────────────
-    /// `void karac_error_trace_push(ptr file, i64 file_len, i32 line, i32 col)`.
-    /// Called by `compile_question` at each `?` failure block before
-    /// `emit_scope_cleanup`. The runtime maintains a thread-local depth-64
-    /// ring buffer; an atexit handler prints it to stderr at program exit.
-    pub(crate) karac_error_trace_push_fn: FunctionValue<'ctx>,
-    /// `void karac_error_trace_clear()`. Emitted at every `?` success site
-    /// so a recovered earlier propagation doesn't leak frames into a later
-    /// failure.
-    pub(crate) karac_error_trace_clear_fn: FunctionValue<'ctx>,
-    /// `void karac_test_record_failure(ptr file, i64 file_len, i32 line, i32 col,
-    /// ptr msg, i64 msg_len, ptr left, i64 left_len, ptr right, i64 right_len)`.
-    /// Lowered `assert` / `assert_eq` / `assert_ne` failure path calls this then
-    /// `exit(1)`. The runtime writes a `KARAC_TEST_FAILURE {...JSON...}` line to
-    /// stderr; `cmd_test` (Slice c.3) parses the line into a `TestOutcome`.
-    pub(crate) karac_test_record_failure_fn: FunctionValue<'ctx>,
     /// Lazily-initialized `TargetData` consumed by the layout-introspection
     /// intrinsics (`align_of[T]()`, `offset_of[T](field)`). Constructed
     /// via `create_target_machine().get_target_data()` on first use; the
@@ -5057,7 +4810,7 @@ impl<'ctx> Codegen<'ctx> {
         // `karac_par_reduce` doc-comment for the ABI shape. Declared
         // alongside `karac_par_run` so future slices (3b, the actual
         // lowering of recognized reductions into a fan-out + serial-combine
-        // call) can route through `self.karac_par_reduce_fn` without
+        // call) can route through `self.runtime_fns.karac_par_reduce_fn` without
         // touching this declaration site again. The slice-3a wiring proves
         // the extern is linkable; slice 3b populates the call sites.
         let karac_par_reduce_type = context.void_type().fn_type(
@@ -8165,17 +7918,78 @@ impl<'ctx> Codegen<'ctx> {
             constructor_invariant_self_type: None,
             strip_contracts: read_strip_contracts_env(),
             strip_error_trace: read_strip_error_trace_env(),
-            karac_runtime_enter_predicate_fn,
-            karac_runtime_exit_predicate_fn,
-            karac_runtime_panic_prefix_fn,
+            runtime_fns: RuntimeFns {
+                karac_runtime_enter_predicate_fn,
+                karac_runtime_exit_predicate_fn,
+                karac_runtime_panic_prefix_fn,
+                printf_fn,
+                snprintf_fn,
+                write_console_fn,
+                write_console_line_fn,
+                malloc_fn,
+                alloc_fallible_fn,
+                alloc_or_panic_fn,
+                free_fn,
+                free_buf_fn,
+                exit_fn,
+                memcmp_fn,
+                sched_yield_fn,
+                karac_par_run_fn,
+                karac_par_reduce_fn,
+                karac_provider_push_fn,
+                karac_provider_pop_fn,
+                karac_provider_lookup_fn,
+                karac_provider_get_stack_head_fn,
+                karac_provider_set_stack_head_fn,
+                karac_tracing_get_active_span_fn,
+                karac_tracing_set_active_span_fn,
+                karac_tracing_get_min_level_fn,
+                karac_tracing_set_min_level_fn,
+                karac_tracing_set_exporter_fn,
+                karac_tracing_get_exporter_data_fn,
+                karac_tracing_get_exporter_fn_fn,
+                karac_tracing_reset_fn,
+                karac_map_new_fn,
+                karac_map_free_fn,
+                karac_map_free_with_drop_vec_fn,
+                karac_map_free_with_val_drop_fn_fn,
+                karac_map_insert_old_fn,
+                karac_map_try_insert_fn,
+                karac_map_insert_borrowed_str_old_fn,
+                karac_map_get_fn,
+                karac_map_remove_old_fn,
+                karac_map_contains_fn,
+                karac_map_len_fn,
+                karac_map_clear_fn,
+                karac_map_clear_with_drop_vec_fn,
+                karac_map_clear_with_val_drop_fn_fn,
+                karac_map_iter_new_fn,
+                karac_map_sorted_keys_fn,
+                karac_map_iter_next_fn,
+                karac_map_iter_free_fn,
+                karac_string_decode_char_fn,
+                karac_string_encode_char_fn,
+                karac_map_entry_fn,
+                karac_map_lookup_slot_fn,
+                karac_string_clone_fn,
+                karac_string_slice_fn,
+                karac_string_slice_borrow_fn,
+                karac_string_to_lowercase_fn,
+                karac_string_to_uppercase_fn,
+                karac_string_trim_fn,
+                karac_string_trim_start_fn,
+                karac_string_trim_end_fn,
+                karac_string_sorted_fn,
+                karac_string_replace_fn,
+                karac_string_replacen_fn,
+                karac_error_trace_push_fn,
+                karac_error_trace_clear_fn,
+                karac_test_record_failure_fn,
+            },
             runtime_panic_prefix_needed: true,
             panic_site_counter: std::cell::Cell::new(0),
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
-            printf_fn,
-            snprintf_fn,
-            write_console_fn,
-            write_console_line_fn,
             stdout_global,
             stderr_global,
             struct_types: HashMap::new(),
@@ -8239,14 +8053,6 @@ impl<'ctx> Codegen<'ctx> {
             block_tail_shared_transfer: false,
             freshtemp_field_access_slot: None,
             shared_types: HashMap::new(),
-            malloc_fn,
-            alloc_fallible_fn,
-            alloc_or_panic_fn,
-            free_fn,
-            free_buf_fn,
-            exit_fn,
-            memcmp_fn,
-            sched_yield_fn,
             len_alias: HashMap::new(),
             asserted_index_bounds: Vec::new(),
             pending_vec_len_pins: HashMap::new(),
@@ -8457,8 +8263,6 @@ impl<'ctx> Codegen<'ctx> {
             debug_info: None,
             par_counter: 0,
             karac_branch_ty,
-            karac_par_run_fn,
-            karac_par_reduce_fn,
             spawn_sites: Vec::new(),
             runtime_debug_metadata_enabled: read_runtime_debug_metadata_env(),
             // Env gate OR wasm target — see the field doc-comment
@@ -8471,19 +8275,6 @@ impl<'ctx> Codegen<'ctx> {
             provider_trait_methods: HashMap::new(),
             user_ambient_resource_methods: HashMap::new(),
             provider_vtables: HashMap::new(),
-            karac_provider_push_fn,
-            karac_provider_pop_fn,
-            karac_provider_lookup_fn,
-            karac_provider_get_stack_head_fn,
-            karac_provider_set_stack_head_fn,
-            karac_tracing_get_active_span_fn,
-            karac_tracing_set_active_span_fn,
-            karac_tracing_get_min_level_fn,
-            karac_tracing_set_min_level_fn,
-            karac_tracing_set_exporter_fn,
-            karac_tracing_get_exporter_data_fn,
-            karac_tracing_get_exporter_fn_fn,
-            karac_tracing_reset_fn,
             provider_frame_ty,
             provider_lookup_result_ty,
             gpu_buffer_elem_structs: HashMap::new(),
@@ -8513,47 +8304,11 @@ impl<'ctx> Codegen<'ctx> {
             ascii_const_string_lets: HashMap::new(),
             cstr_vars: HashSet::new(),
             http_shim_cache: HashMap::new(),
-            karac_map_new_fn,
-            karac_map_free_fn,
-            karac_map_free_with_drop_vec_fn,
-            karac_map_free_with_val_drop_fn_fn,
-            karac_map_insert_old_fn,
-            karac_map_try_insert_fn,
-            karac_map_insert_borrowed_str_old_fn,
-            karac_map_get_fn,
-            karac_map_remove_old_fn,
-            karac_map_contains_fn,
-            karac_map_len_fn,
-            karac_map_clear_fn,
-            karac_map_clear_with_drop_vec_fn,
-            karac_map_clear_with_val_drop_fn_fn,
-            karac_map_iter_new_fn,
-            karac_map_iter_next_fn,
-            karac_map_iter_free_fn,
-            karac_map_sorted_keys_fn,
-            karac_string_decode_char_fn,
-            karac_string_encode_char_fn,
-            karac_map_entry_fn,
-            karac_map_lookup_slot_fn,
-            karac_string_clone_fn,
-            karac_string_slice_fn,
-            karac_string_slice_borrow_fn,
-            karac_string_to_lowercase_fn,
-            karac_string_to_uppercase_fn,
-            karac_string_trim_fn,
-            karac_string_trim_start_fn,
-            karac_string_trim_end_fn,
-            karac_string_sorted_fn,
-            karac_string_replace_fn,
-            karac_string_replacen_fn,
             clone_fn_cache: HashMap::new(),
             try_clone_fn_cache: HashMap::new(),
             drop_fn_cache: HashMap::new(),
             map_mono_methods: HashMap::new(),
             display_fn_cache: HashMap::new(),
-            karac_error_trace_push_fn,
-            karac_error_trace_clear_fn,
-            karac_test_record_failure_fn,
             target_data: init_target_data,
             target_is_aarch64: !crate::target::active_target_is_wasm()
                 && driver::native_target_is_aarch64(),
@@ -10659,7 +10414,7 @@ impl<'ctx> Codegen<'ctx> {
         }
         // Then free the box allocation itself.
         self.builder
-            .build_call(self.free_fn, &[handle.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[handle.into()], "")
             .unwrap();
         self.builder.build_unconditional_branch(ret_bb).unwrap();
 
@@ -10752,7 +10507,7 @@ impl<'ctx> Codegen<'ctx> {
     /// compute binary (B-2026-06-15-2). Idempotent; must run after all function
     /// bodies are compiled so the par use-check sees every site.
     fn finalize_write_console_wrapper(&mut self) {
-        let wrapper = self.write_console_fn;
+        let wrapper = self.runtime_fns.write_console_fn;
         if wrapper.get_first_basic_block().is_some() {
             return;
         }
@@ -10837,7 +10592,7 @@ impl<'ctx> Codegen<'ctx> {
     /// whose own body decides inline-`fwrite` vs capture based on whether `par`
     /// is used anywhere, and that decision has to be made first.
     fn finalize_write_console_line_wrapper(&mut self) {
-        let wrapper = self.write_console_line_fn;
+        let wrapper = self.runtime_fns.write_console_line_fn;
         if wrapper.get_first_basic_block().is_some() {
             return;
         }
@@ -10887,7 +10642,7 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.build_memcpy(tail, 1, nl, 1, nl_len).unwrap();
         self.builder
             .build_call(
-                self.write_console_fn,
+                self.runtime_fns.write_console_fn,
                 &[buf.into(), total.into(), stream.into()],
                 "",
             )
@@ -10898,14 +10653,14 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(split_bb);
         self.builder
             .build_call(
-                self.write_console_fn,
+                self.runtime_fns.write_console_fn,
                 &[data.into(), len.into(), stream.into()],
                 "",
             )
             .unwrap();
         self.builder
             .build_call(
-                self.write_console_fn,
+                self.runtime_fns.write_console_fn,
                 &[nl.into(), nl_len.into(), stream.into()],
                 "",
             )

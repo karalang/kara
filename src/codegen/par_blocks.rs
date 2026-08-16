@@ -811,7 +811,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let head_val = self
             .builder
             .build_call(
-                self.karac_provider_get_stack_head_fn,
+                self.runtime_fns.karac_provider_get_stack_head_fn,
                 &[],
                 "__par_env_head_snap",
             )
@@ -833,7 +833,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let active_span_snap = self
             .builder
             .build_call(
-                self.karac_tracing_get_active_span_fn,
+                self.runtime_fns.karac_tracing_get_active_span_fn,
                 &[],
                 "__par_env_active_span_snap",
             )
@@ -1057,7 +1057,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.builder
             .build_call(
-                self.karac_par_run_fn,
+                self.runtime_fns.karac_par_run_fn,
                 &[
                     branches_alloca.into(),
                     count.into(),
@@ -1195,7 +1195,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let slots_ptr = self
             .builder
-            .build_call(self.malloc_fn, &[slots_bytes.into()], "cav.slots")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[slots_bytes.into()],
+                "cav.slots",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1207,7 +1211,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let ctxs_ptr = self
             .builder
-            .build_call(self.malloc_fn, &[ctxs_bytes.into()], "cav.ctxs")
+            .build_call(self.runtime_fns.malloc_fn, &[ctxs_bytes.into()], "cav.ctxs")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1219,7 +1223,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let branches_ptr = self
             .builder
-            .build_call(self.malloc_fn, &[branches_bytes.into()], "cav.branches")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[branches_bytes.into()],
+                "cav.branches",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1340,7 +1348,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.builder
             .build_call(
-                self.karac_par_run_fn,
+                self.runtime_fns.karac_par_run_fn,
                 &[
                     branches_ptr.into(),
                     n.into(),
@@ -1354,10 +1362,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // 5. Free the temp arrays (the slots buffer is kept — it becomes the
         //    output Vec's storage).
         self.builder
-            .build_call(self.free_fn, &[branches_ptr.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[branches_ptr.into()], "")
             .unwrap();
         self.builder
-            .build_call(self.free_fn, &[ctxs_ptr.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[ctxs_ptr.into()], "")
             .unwrap();
 
         // 5b. Free the input Vec's buffer. `fs` is a moved owned param (the
@@ -1399,7 +1407,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.position_at_end(free_bb);
         self.builder
-            .build_call(self.free_fn, &[slots_ptr.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[slots_ptr.into()], "")
             .unwrap();
         self.builder.build_unconditional_branch(done_bb).unwrap();
         self.builder.position_at_end(done_bb);
@@ -1529,7 +1537,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.builder
             .build_call(
-                self.karac_par_run_fn,
+                self.runtime_fns.karac_par_run_fn,
                 &[
                     branches_base.into(),
                     i64_t.const_int(n as u64, false).into(),
@@ -1789,7 +1797,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder
             .build_call(
-                self.karac_provider_set_stack_head_fn,
+                self.runtime_fns.karac_provider_set_stack_head_fn,
                 &[head_val.into()],
                 "",
             )
@@ -1809,7 +1817,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder
             .build_call(
-                self.karac_tracing_set_active_span_fn,
+                self.runtime_fns.karac_tracing_set_active_span_fn,
                 &[active_span_val.into()],
                 "",
             )

@@ -265,7 +265,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder
             .build_call(
-                self.karac_test_record_failure_fn,
+                self.runtime_fns.karac_test_record_failure_fn,
                 &[
                     BasicMetadataValueEnum::from(file_ptr),
                     file_len.into(),
@@ -284,7 +284,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let exit_code = i32_ty.const_int(1, false);
         self.builder
-            .build_call(self.exit_fn, &[exit_code.into()], "")
+            .build_call(self.runtime_fns.exit_fn, &[exit_code.into()], "")
             .unwrap();
         self.builder.build_unreachable().unwrap();
     }

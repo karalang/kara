@@ -183,14 +183,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let ctrl_bytes = self.column_control_struct_type().size_of().unwrap();
         let control = self
             .builder
-            .build_call(self.malloc_fn, &[ctrl_bytes.into()], "col.cp.ctrl")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[ctrl_bytes.into()],
+                "col.cp.ctrl",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
         let data = self
             .builder
-            .build_call(self.malloc_fn, &[data_bytes.into()], "col.cp.data")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[data_bytes.into()],
+                "col.cp.data",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -200,7 +208,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .map_err(|e| format!("column_deep_copy data memcpy failed: {e:?}"))?;
         let bitmap = self
             .builder
-            .build_call(self.malloc_fn, &[bm_bytes.into()], "col.cp.bm")
+            .build_call(self.runtime_fns.malloc_fn, &[bm_bytes.into()], "col.cp.bm")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -281,7 +289,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
             };
             self.builder
-                .build_call(self.karac_string_clone_fn, &[slot.into(), slot.into()], "")
+                .build_call(
+                    self.runtime_fns.karac_string_clone_fn,
+                    &[slot.into(), slot.into()],
+                    "",
+                )
                 .unwrap();
             self.builder.build_unconditional_branch(cont).unwrap();
             self.builder.position_at_end(cont);
@@ -413,7 +425,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into_pointer_value();
             self.builder
-                .build_call(self.free_fn, &[sptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[sptr.into()], "")
                 .unwrap();
             self.builder.build_unconditional_branch(cont).unwrap();
             self.builder.position_at_end(cont);
@@ -430,13 +442,13 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.builder
-            .build_call(self.free_fn, &[data.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[data.into()], "")
             .unwrap();
         self.builder
-            .build_call(self.free_fn, &[bitmap.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[bitmap.into()], "")
             .unwrap();
         self.builder
-            .build_call(self.free_fn, &[ctrl.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[ctrl.into()], "")
             .unwrap();
     }
 
@@ -747,7 +759,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ctrl_bytes = self.column_control_struct_type().size_of().unwrap();
         let control = self
             .builder
-            .build_call(self.malloc_fn, &[ctrl_bytes.into()], "col.ctrl")
+            .build_call(self.runtime_fns.malloc_fn, &[ctrl_bytes.into()], "col.ctrl")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -759,7 +771,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let data = self
             .builder
-            .build_call(self.malloc_fn, &[data_bytes.into()], "col.data")
+            .build_call(self.runtime_fns.malloc_fn, &[data_bytes.into()], "col.data")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -779,7 +791,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let bitmap = self
             .builder
-            .build_call(self.malloc_fn, &[bm_bytes.into()], "col.bm")
+            .build_call(self.runtime_fns.malloc_fn, &[bm_bytes.into()], "col.bm")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1585,7 +1597,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[bytes.into()], "col.iter.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[bytes.into()], "col.iter.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1704,7 +1716,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[bytes.into()], "col.iv.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[bytes.into()], "col.iv.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -2933,7 +2945,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[nbytes.into()], "col.cmp.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[nbytes.into()], "col.cmp.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -3101,7 +3113,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             self.emit_sort_scratch(buf, k, &key);
             self.builder
-                .build_call(self.free_fn, &[wdata.into()], "col.as.keyfree")
+                .build_call(self.runtime_fns.free_fn, &[wdata.into()], "col.as.keyfree")
                 .unwrap();
             Ok(self.stats_build_vec(buf, k))
         }
@@ -3537,7 +3549,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[nbytes.into()], "col.srt.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[nbytes.into()], "col.srt.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -3709,7 +3721,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_float_add(blo, scaled, "col.q.result")
             .unwrap();
         self.builder
-            .build_call(self.free_fn, &[buf.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[buf.into()], "")
             .unwrap();
         Ok(result.into())
     }
@@ -3959,7 +3971,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[nbytes.into()], "df.st.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[nbytes.into()], "df.st.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -4201,7 +4213,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let q50 = q(self, 0.50, "df.st.q50");
         let q75 = q(self, 0.75, "df.st.q75");
         self.builder
-            .build_call(self.free_fn, &[buf.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[buf.into()], "")
             .unwrap();
 
         // Build the result Column[f64] of the 8 stats (all valid).
@@ -4388,13 +4400,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
         self.builder
-            .build_call(self.free_fn, &[data.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[data.into()], "")
             .unwrap();
         self.builder
-            .build_call(self.free_fn, &[bm.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[bm.into()], "")
             .unwrap();
         self.builder
-            .build_call(self.free_fn, &[control.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[control.into()], "")
             .unwrap();
     }
 

@@ -911,7 +911,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let active_span_snap = self
             .builder
             .build_call(
-                self.karac_tracing_get_active_span_fn,
+                self.runtime_fns.karac_tracing_get_active_span_fn,
                 &[],
                 "kara.coro.active_span.snap",
             )
@@ -1096,7 +1096,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         self.builder
-            .build_call(self.karac_tracing_set_active_span_fn, &[saved.into()], "")
+            .build_call(
+                self.runtime_fns.karac_tracing_set_active_span_fn,
+                &[saved.into()],
+                "",
+            )
             .unwrap();
     }
 

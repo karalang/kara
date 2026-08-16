@@ -1605,7 +1605,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let found = self
             .builder
             .build_call(
-                self.karac_map_lookup_slot_fn,
+                self.runtime_fns.karac_map_lookup_slot_fn,
                 &[map_handle.into(), key_slot.into(), slot_pp.into()],
                 "m.mr.found",
             )
@@ -3320,7 +3320,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             self.builder.position_at_end(free_bb);
             self.builder
-                .build_call(self.free_fn, &[box_ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                 .unwrap();
             self.builder.build_unconditional_branch(cont_bb).unwrap();
             self.builder.position_at_end(cont_bb);

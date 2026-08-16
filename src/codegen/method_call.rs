@@ -1431,7 +1431,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             let buf = self
                 .builder
-                .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "rx.fa.buf")
+                .build_call(
+                    self.runtime_fns.alloc_or_panic_fn,
+                    &[alloc_bytes.into()],
+                    "rx.fa.buf",
+                )
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -1503,7 +1507,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
             self.builder.position_at_end(exit_bb);
             self.builder
-                .build_call(self.free_fn, &[arr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[arr.into()], "")
                 .unwrap();
             return Ok(self.build_vec_value(buf, count, count));
         }
@@ -2379,7 +2383,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .expect("br on poll discriminant");
                 self.builder.position_at_end(yield_bb);
                 self.builder
-                    .build_call(self.sched_yield_fn, &[], "kara.yield_result")
+                    .build_call(self.runtime_fns.sched_yield_fn, &[], "kara.yield_result")
                     .expect("call sched_yield");
                 self.builder
                     .build_unconditional_branch(loop_bb)
@@ -2410,7 +2414,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.context.i64_type().const_int(0, false).into()
                     };
                 self.builder
-                    .build_call(self.free_fn, &[state_ptr.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[state_ptr.into()], "")
                     .expect("call free on state struct");
                 return Ok(call_result);
             }
@@ -8026,7 +8030,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let allocated = self
             .builder
             .build_call(
-                self.alloc_or_panic_fn,
+                self.runtime_fns.alloc_or_panic_fn,
                 &[alloc_bytes.into()],
                 &format!("{tag}.buf"),
             )
@@ -16421,7 +16425,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let id_v = i32_t.const_int(resource_id as u64, false);
         let lookup_sv = self
             .builder
-            .build_call(self.karac_provider_lookup_fn, &[id_v.into()], "amb.lookup")
+            .build_call(
+                self.runtime_fns.karac_provider_lookup_fn,
+                &[id_v.into()],
+                "amb.lookup",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -16860,7 +16868,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// optionally with a trailing newline. Backs the `Stdout.{print,println}`
     /// / `Stderr.{print,println}` ambient methods (L646 slice 4b).
     ///
-    /// **Stdout** reuses `self.printf_fn` — the SAME libc `printf` / stdout
+    /// **Stdout** reuses `self.runtime_fns.printf_fn` — the SAME libc `printf` / stdout
     /// buffer the free `print`/`println` builtins use (`compile_print`), so a
     /// program mixing `println(x)` and `Stdout.println(y)` never interleaves
     /// out of order. **Stderr** writes to fd 2 via POSIX `dprintf`, avoiding

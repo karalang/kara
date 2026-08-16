@@ -46,12 +46,12 @@ impl<'ctx> super::Codegen<'ctx> {
         fault_msg: &str,
     ) -> Result<(), String> {
         self.builder
-            .build_call(self.karac_runtime_enter_predicate_fn, &[], "")
+            .build_call(self.runtime_fns.karac_runtime_enter_predicate_fn, &[], "")
             .unwrap();
         let cond = self.compile_expr(pred).map(|v| v.into_int_value());
         // Exit on the common post-evaluation path, before the branch below.
         self.builder
-            .build_call(self.karac_runtime_exit_predicate_fn, &[], "")
+            .build_call(self.runtime_fns.karac_runtime_exit_predicate_fn, &[], "")
             .unwrap();
         let cond = cond?;
         let fn_val = self

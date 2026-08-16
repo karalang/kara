@@ -809,7 +809,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder
             .build_call(
-                self.karac_par_reduce_fn,
+                self.runtime_fns.karac_par_reduce_fn,
                 &[desc_alloca.into(), out_slot.into(), spawn_site_id.into()],
                 "",
             )

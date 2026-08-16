@@ -246,7 +246,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         .into_int_value();
                     let buf = self
                         .builder
-                        .build_call(self.malloc_fn, &[alloc_bytes.into()], "fstr.buf")
+                        .build_call(
+                            self.runtime_fns.malloc_fn,
+                            &[alloc_bytes.into()],
+                            "fstr.buf",
+                        )
                         .unwrap()
                         .try_as_basic_value()
                         .unwrap_basic()
@@ -1985,7 +1989,11 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(ok_bb);
             if !self.strip_error_trace {
                 self.builder
-                    .build_call(self.karac_error_trace_clear_fn, &[], "q_trace_clear")
+                    .build_call(
+                        self.runtime_fns.karac_error_trace_clear_fn,
+                        &[],
+                        "q_trace_clear",
+                    )
                     .unwrap();
             }
             return self.reconstruct_question_ok_payload(inner, val, w0);
@@ -2051,7 +2059,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // Paired with the push above — also elided under `strip_error_trace`.
         if !self.strip_error_trace {
             self.builder
-                .build_call(self.karac_error_trace_clear_fn, &[], "q_trace_clear")
+                .build_call(
+                    self.runtime_fns.karac_error_trace_clear_fn,
+                    &[],
+                    "q_trace_clear",
+                )
                 .unwrap();
         }
         // Reconstruct a multi-word Ok/Some payload from all its words. The
@@ -2179,7 +2191,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(ok_llvm, box_ptr, "q.box.ld")
                 .unwrap();
             self.builder
-                .build_call(self.free_fn, &[box_ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                 .unwrap();
             return Ok(loaded);
         }
@@ -2413,7 +2425,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let col = i32_ty.const_int(outer_span.column as u64, false);
         self.builder
             .build_call(
-                self.karac_error_trace_push_fn,
+                self.runtime_fns.karac_error_trace_push_fn,
                 &[
                     file_ptr.into(),
                     file_len_val.into(),
@@ -3679,7 +3691,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(exit_bb);
         self.builder
-            .build_call(self.free_fn, &[aos_ptr.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[aos_ptr.into()], "")
             .unwrap();
         Ok(())
     }
@@ -3907,7 +3919,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into_pointer_value();
             self.builder
-                .build_call(self.free_fn, &[grp_ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[grp_ptr.into()], "")
                 .unwrap();
         }
         self.builder.build_unconditional_branch(cont_bb).unwrap();
@@ -4016,7 +4028,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_pointer_value()
             } else {
                 self.builder
-                    .build_call(self.malloc_fn, &[alloc_bytes.into()], "g.new")
+                    .build_call(self.runtime_fns.malloc_fn, &[alloc_bytes.into()], "g.new")
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -4044,7 +4056,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_memcpy(new_buf, 8, old_buf, 8, old_bytes)
                 .unwrap();
             self.builder
-                .build_call(self.free_fn, &[old_buf.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[old_buf.into()], "")
                 .unwrap();
             self.builder.build_store(old_ptr_ptr, new_buf).unwrap();
         }

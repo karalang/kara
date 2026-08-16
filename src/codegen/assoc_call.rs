@@ -1785,7 +1785,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 let cstr_buf = self
                     .builder
-                    .build_call(self.malloc_fn, &[needed.into()], "addr.cstr.buf")
+                    .build_call(
+                        self.runtime_fns.malloc_fn,
+                        &[needed.into()],
+                        "addr.cstr.buf",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -1907,7 +1911,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let msg_len = i64_ty.const_int(msg.len() as u64, false);
                 let msg_buf = self
                     .builder
-                    .build_call(self.malloc_fn, &[msg_len.into()], "err.msg.buf")
+                    .build_call(self.runtime_fns.malloc_fn, &[msg_len.into()], "err.msg.buf")
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -2007,7 +2011,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             let addr_cstr = self
                 .builder
-                .build_call(self.malloc_fn, &[needed.into()], "http.serve.addr.cstr.buf")
+                .build_call(
+                    self.runtime_fns.malloc_fn,
+                    &[needed.into()],
+                    "http.serve.addr.cstr.buf",
+                )
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -2113,7 +2121,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let msg_len = i64_ty.const_int(msg.len() as u64, false);
             let msg_buf = self
                 .builder
-                .build_call(self.malloc_fn, &[msg_len.into()], "err.msg.buf")
+                .build_call(self.runtime_fns.malloc_fn, &[msg_len.into()], "err.msg.buf")
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -2191,7 +2199,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let addr_cstr = self
                 .builder
                 .build_call(
-                    self.malloc_fn,
+                    self.runtime_fns.malloc_fn,
                     &[needed.into()],
                     "http.servews.addr.cstr.buf",
                 )
@@ -2298,7 +2306,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let msg_len = i64_ty.const_int(msg.len() as u64, false);
             let msg_buf = self
                 .builder
-                .build_call(self.malloc_fn, &[msg_len.into()], "err.msg.buf")
+                .build_call(self.runtime_fns.malloc_fn, &[msg_len.into()], "err.msg.buf")
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -2371,7 +2379,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             let addr_cstr = self
                 .builder
-                .build_call(self.malloc_fn, &[needed.into()], "wss.serve.addr.cstr.buf")
+                .build_call(
+                    self.runtime_fns.malloc_fn,
+                    &[needed.into()],
+                    "wss.serve.addr.cstr.buf",
+                )
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -2499,7 +2511,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let msg_len = i64_ty.const_int(msg.len() as u64, false);
             let msg_buf = self
                 .builder
-                .build_call(self.malloc_fn, &[msg_len.into()], "err.msg.buf")
+                .build_call(self.runtime_fns.malloc_fn, &[msg_len.into()], "err.msg.buf")
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -2580,7 +2592,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let addr_cstr = self
                 .builder
                 .build_call(
-                    self.malloc_fn,
+                    self.runtime_fns.malloc_fn,
                     &[needed.into()],
                     "https.serve.addr.cstr.buf",
                 )
@@ -2728,7 +2740,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let msg_len = i64_ty.const_int(msg.len() as u64, false);
             let msg_buf = self
                 .builder
-                .build_call(self.malloc_fn, &[msg_len.into()], "err.msg.buf")
+                .build_call(self.runtime_fns.malloc_fn, &[msg_len.into()], "err.msg.buf")
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -3389,7 +3401,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let new_buf = self
                 .builder
                 .build_call(
-                    self.alloc_or_panic_fn,
+                    self.runtime_fns.alloc_or_panic_fn,
                     &[alloc_bytes.into()],
                     "from_slice.buf",
                 )
@@ -3456,7 +3468,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let new_buf = self
                 .builder
                 .build_call(
-                    self.alloc_fallible_fn,
+                    self.runtime_fns.alloc_fallible_fn,
                     &[alloc_bytes.into()],
                     "try_from_slice.buf",
                 )
@@ -3668,7 +3680,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(alloc_bb);
         let buf = self
             .builder
-            .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], label)
+            .build_call(
+                self.runtime_fns.alloc_or_panic_fn,
+                &[alloc_bytes.into()],
+                label,
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -3724,7 +3740,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(alloc_bb);
         let alloc_buf = self
             .builder
-            .build_call(self.alloc_fallible_fn, &[alloc_bytes.into()], label)
+            .build_call(
+                self.runtime_fns.alloc_fallible_fn,
+                &[alloc_bytes.into()],
+                label,
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()

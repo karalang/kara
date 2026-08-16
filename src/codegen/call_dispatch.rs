@@ -252,7 +252,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if args.is_empty() && is_tracing_active_span {
             let v = self
                 .builder
-                .build_call(self.karac_tracing_get_active_span_fn, &[], "active_span")
+                .build_call(
+                    self.runtime_fns.karac_tracing_get_active_span_fn,
+                    &[],
+                    "active_span",
+                )
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic();
@@ -1205,7 +1209,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // catastrophic failure and isn't recoverable from here).
             self.builder.position_at_end(yield_bb);
             self.builder
-                .build_call(self.sched_yield_fn, &[], "kara.yield_result")
+                .build_call(self.runtime_fns.sched_yield_fn, &[], "kara.yield_result")
                 .expect("call sched_yield");
             self.builder
                 .build_unconditional_branch(loop_bb)
@@ -1244,7 +1248,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.context.i64_type().const_int(0, false).into()
                 };
             self.builder
-                .build_call(self.free_fn, &[state_ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[state_ptr.into()], "")
                 .expect("call free on state struct");
             return Ok(call_result);
         }
@@ -8135,7 +8139,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let box_ptr = self
                 .builder
-                .build_call(self.malloc_fn, &[size.into()], "enumbox")
+                .build_call(self.runtime_fns.malloc_fn, &[size.into()], "enumbox")
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()

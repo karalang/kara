@@ -719,7 +719,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(alloc_bb);
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[str_len_i64.into()], "json.str.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[str_len_i64.into()],
+                "json.str.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1036,7 +1040,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(str_alloc_bb);
         let str_buf = self
             .builder
-            .build_call(self.malloc_fn, &[str_len_i64.into()], "lift.str.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[str_len_i64.into()],
+                "lift.str.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1126,7 +1134,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(arr_alloc_bb);
         let arr_buf_ptr = self
             .builder
-            .build_call(self.malloc_fn, &[arr_buf_bytes.into()], "lift.arr.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[arr_buf_bytes.into()],
+                "lift.arr.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1311,7 +1323,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(obj_alloc_bb);
         let obj_buf_ptr = self
             .builder
-            .build_call(self.malloc_fn, &[obj_buf_bytes.into()], "lift.obj.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[obj_buf_bytes.into()],
+                "lift.obj.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1423,7 +1439,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(key_alloc_bb);
         let key_buf = self
             .builder
-            .build_call(self.malloc_fn, &[key_len_i64.into()], "lift.obj.key.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[key_len_i64.into()],
+                "lift.obj.key.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1604,7 +1624,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let cstr_buf = self
             .builder
-            .build_call(self.malloc_fn, &[cstr_size.into()], "parse.cstr.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[cstr_size.into()],
+                "parse.cstr.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1848,7 +1872,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(msg_alloc_bb);
         let msg_buf = self
             .builder
-            .build_call(self.malloc_fn, &[msg_len_i64.into()], "parse.err.msg.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[msg_len_i64.into()],
+                "parse.err.msg.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()

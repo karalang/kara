@@ -3089,7 +3089,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let box_ptr = self
             .builder
-            .build_call(self.malloc_fn, &[size.into()], "kret.box")
+            .build_call(self.runtime_fns.malloc_fn, &[size.into()], "kret.box")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()

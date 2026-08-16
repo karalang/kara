@@ -405,7 +405,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .unwrap();
                                 self.builder.position_at_end(free_bb);
                                 self.builder
-                                    .build_call(self.free_fn, &[box_ptr.into()], "")
+                                    .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                                     .unwrap();
                                 self.builder
                                     .build_store(word_ptr, i64_t.const_int(0, false))
@@ -515,7 +515,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let i32_t = self.context.i32_type();
                             self.builder
                                 .build_call(
-                                    self.karac_map_free_with_drop_vec_fn,
+                                    self.runtime_fns.karac_map_free_with_drop_vec_fn,
                                     &[
                                         handle.into(),
                                         i32_t.const_int(dk, false).into(),
@@ -2605,7 +2605,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // has the handle and the key flag in hand.
                         self.builder
                             .build_call(
-                                self.karac_map_free_with_val_drop_fn_fn,
+                                self.runtime_fns.karac_map_free_with_val_drop_fn_fn,
                                 &[
                                     handle.into(),
                                     i32_t.const_int(dk, false).into(),
@@ -2617,7 +2617,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.builder
                             .build_call(
-                                self.karac_map_free_with_drop_vec_fn,
+                                self.runtime_fns.karac_map_free_with_drop_vec_fn,
                                 &[
                                     handle.into(),
                                     i32_t.const_int(dk, false).into(),
@@ -3905,7 +3905,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let (dk, dv) = self.map_drop_flags(te);
                             self.builder
                                 .build_call(
-                                    self.karac_map_free_with_drop_vec_fn,
+                                    self.runtime_fns.karac_map_free_with_drop_vec_fn,
                                     &[
                                         handle.into(),
                                         i32_t.const_int(dk, false).into(),
@@ -4855,7 +4855,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the flag contract, same split as the non-shared twin.
                         self.builder
                             .build_call(
-                                self.karac_map_free_with_val_drop_fn_fn,
+                                self.runtime_fns.karac_map_free_with_val_drop_fn_fn,
                                 &[
                                     handle.into(),
                                     i32_t.const_int(dk, false).into(),
@@ -4867,7 +4867,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.builder
                             .build_call(
-                                self.karac_map_free_with_drop_vec_fn,
+                                self.runtime_fns.karac_map_free_with_drop_vec_fn,
                                 &[
                                     handle.into(),
                                     i32_t.const_int(dk, false).into(),
@@ -5150,7 +5150,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             Some(false),
                         );
                         self.builder
-                            .build_call(self.free_fn, &[box_ptr.into()], "")
+                            .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                             .unwrap();
                         self.builder.build_unconditional_branch(skip_bb).unwrap();
                         self.builder.position_at_end(skip_bb);
@@ -5359,7 +5359,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let (dk, dv) = self.map_drop_flags(te);
                 self.builder
                     .build_call(
-                        self.karac_map_free_with_drop_vec_fn,
+                        self.runtime_fns.karac_map_free_with_drop_vec_fn,
                         &[
                             handle.into(),
                             i32_t.const_int(dk, false).into(),
@@ -5611,7 +5611,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(free_bb);
         self.builder
-            .build_call(self.free_fn, &[p_arg.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[p_arg.into()], "")
             .unwrap();
         self.builder.build_return(None).unwrap();
 
@@ -5688,7 +5688,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
         self.builder
             .build_call(
-                self.free_fn,
+                self.runtime_fns.free_fn,
                 &[p.as_basic_value().into_pointer_value().into()],
                 "",
             )
@@ -7698,7 +7698,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let kbuf = self
                 .builder
                 .build_call(
-                    self.karac_map_sorted_keys_fn,
+                    self.runtime_fns.karac_map_sorted_keys_fn,
                     &[handle.into(), len_slot.into(), cmp_ptr.into()],
                     "ds.kbuf",
                 )
@@ -7716,7 +7716,7 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 Some(
                     self.builder
-                        .build_call(self.malloc_fn, &[val_size.into()], "ds.scratch")
+                        .build_call(self.runtime_fns.malloc_fn, &[val_size.into()], "ds.scratch")
                         .unwrap()
                         .try_as_basic_value()
                         .unwrap_basic()
@@ -7753,7 +7753,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(s) => {
                     self.builder
                         .build_call(
-                            self.karac_map_get_fn,
+                            self.runtime_fns.karac_map_get_fn,
                             &[handle.into(), kptr.into(), s.into()],
                             "ds.get",
                         )
@@ -7789,11 +7789,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
             self.builder.position_at_end(done_bb);
             self.builder
-                .build_call(self.free_fn, &[kbuf.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[kbuf.into()], "")
                 .unwrap();
             if let Some(s) = scratch {
                 self.builder
-                    .build_call(self.free_fn, &[s.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[s.into()], "")
                     .unwrap();
             }
             self.builder.build_unconditional_branch(exit).unwrap();

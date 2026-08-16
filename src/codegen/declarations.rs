@@ -2303,7 +2303,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("timer state struct size_of always succeeds for sized types");
         let state_ptr = self
             .builder
-            .build_call(self.malloc_fn, &[size.into()], "timer.state.alloc")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[size.into()],
+                "timer.state.alloc",
+            )
             .expect("call malloc for timer state struct")
             .try_as_basic_value()
             .unwrap_basic()
@@ -2576,7 +2580,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Call malloc(size) — returns ptr to the fresh heap allocation.
         let malloc_call = self
             .builder
-            .build_call(self.malloc_fn, &[size.into()], "state.alloc")
+            .build_call(self.runtime_fns.malloc_fn, &[size.into()], "state.alloc")
             .expect("call malloc for state struct");
         let state_ptr = malloc_call
             .try_as_basic_value()
@@ -2965,7 +2969,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .expect("load Vec data ptr for destructor")
                         .into_pointer_value();
                     self.builder
-                        .build_call(self.free_fn, &[data.into()], "")
+                        .build_call(self.runtime_fns.free_fn, &[data.into()], "")
                         .expect("call free for captured-local Vec data");
                     self.builder
                         .build_unconditional_branch(skip_bb)

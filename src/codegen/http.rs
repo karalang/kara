@@ -514,7 +514,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let buf = self
             .builder
             .build_call(
-                self.malloc_fn,
+                self.runtime_fns.malloc_fn,
                 &[len_i64.into()],
                 &format!("req.{method}.buf"),
             )
@@ -723,7 +723,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let buf = self
             .builder
             .build_call(
-                self.malloc_fn,
+                self.runtime_fns.malloc_fn,
                 &[val_len_i64.into()],
                 &format!("{prefix}.val.buf.alloc"),
             )
@@ -881,7 +881,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(alloc_bb);
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[len_i64.into()], "req.body.buf.alloc")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[len_i64.into()],
+                "req.body.buf.alloc",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -993,7 +997,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let buf = self
             .builder
             .build_call(
-                self.malloc_fn,
+                self.runtime_fns.malloc_fn,
                 &[len_i64.into()],
                 &format!("{prefix}.buf.alloc"),
             )
@@ -1249,7 +1253,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let buf = self
             .builder
             .build_call(
-                self.malloc_fn,
+                self.runtime_fns.malloc_fn,
                 &[alloc_bytes.into()],
                 &format!("{prefix}.buf.alloc"),
             )
@@ -2014,7 +2018,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let dst_slot = self.create_entry_alloca(fn_val, &format!("{label}.dst"), str_ty.into());
         self.builder
             .build_call(
-                self.karac_string_clone_fn,
+                self.runtime_fns.karac_string_clone_fn,
                 &[src_ptr.into(), dst_slot.into()],
                 &format!("{label}.clone"),
             )

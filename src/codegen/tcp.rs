@@ -240,7 +240,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(done_bb);
         self.builder
-            .build_call(self.free_fn, &[state_ptr.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[state_ptr.into()], "")
             .expect("free karac_park_on_fd state struct");
     }
 
@@ -370,7 +370,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(done_bb);
         self.builder
-            .build_call(self.free_fn, &[state_ptr.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[state_ptr.into()], "")
             .expect("free karac_park_on_timer state struct");
     }
 

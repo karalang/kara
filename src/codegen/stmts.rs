@@ -8478,7 +8478,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .unwrap()
                                 .into_pointer_value();
                             self.builder
-                                .build_call(self.free_fn, &[old.into()], "")
+                                .build_call(self.runtime_fns.free_fn, &[old.into()], "")
                                 .unwrap();
                         }
                     }

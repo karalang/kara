@@ -7140,7 +7140,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let cmp_result = self
                     .builder
                     .build_call(
-                        self.memcmp_fn,
+                        self.runtime_fns.memcmp_fn,
                         &[l_ptr.into(), r_ptr.into(), min_len.into()],
                         "memcmp",
                     )
@@ -7178,7 +7178,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let cmp_result = self
                     .builder
                     .build_call(
-                        self.memcmp_fn,
+                        self.runtime_fns.memcmp_fn,
                         &[l_ptr.into(), r_ptr.into(), min_len.into()],
                         "memcmp",
                     )
@@ -7224,7 +7224,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let new_len = self.builder.build_int_add(l_len, r_len, "cat_len").unwrap();
                 let new_buf = self
                     .builder
-                    .build_call(self.malloc_fn, &[new_len.into()], "cat_buf")
+                    .build_call(self.runtime_fns.malloc_fn, &[new_len.into()], "cat_buf")
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()

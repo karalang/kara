@@ -468,7 +468,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
         let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
         self.builder
-            .build_call(self.karac_string_clone_fn, &[src.into(), dst.into()], "")
+            .build_call(
+                self.runtime_fns.karac_string_clone_fn,
+                &[src.into(), dst.into()],
+                "",
+            )
             .unwrap();
         self.builder.build_return(None).unwrap();
 
@@ -616,7 +620,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let new_data = self
             .builder
-            .build_call(self.malloc_fn, &[alloc_bytes.into()], "new.data")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[alloc_bytes.into()],
+                "new.data",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -746,7 +754,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let new_handle = self
             .builder
             .build_call(
-                self.karac_map_new_fn,
+                self.runtime_fns.karac_map_new_fn,
                 &[
                     key_size.into(),
                     val_size.into(),
@@ -770,7 +778,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // Iterator handle.
         let iter_handle = self
             .builder
-            .build_call(self.karac_map_iter_new_fn, &[src_handle.into()], "iter")
+            .build_call(
+                self.runtime_fns.karac_map_iter_new_fn,
+                &[src_handle.into()],
+                "iter",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -785,7 +797,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let has = self
             .builder
             .build_call(
-                self.karac_map_iter_next_fn,
+                self.runtime_fns.karac_map_iter_next_fn,
                 &[iter_handle.into(), key_out.into(), val_out.into()],
                 "iter.has",
             )
@@ -820,7 +832,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(exit_bb);
         self.builder
-            .build_call(self.karac_map_iter_free_fn, &[iter_handle.into()], "")
+            .build_call(
+                self.runtime_fns.karac_map_iter_free_fn,
+                &[iter_handle.into()],
+                "",
+            )
             .unwrap();
         self.builder.build_store(dst, new_handle).unwrap();
         self.builder.build_return(None).unwrap();
@@ -1222,7 +1238,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap_or_else(|| i64_t.const_int(32, false));
                 let new_box = self
                     .builder
-                    .build_call(self.malloc_fn, &[size.into()], "clone.optres.box")
+                    .build_call(
+                        self.runtime_fns.malloc_fn,
+                        &[size.into()],
+                        "clone.optres.box",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -1462,7 +1482,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let new_data = self
             .builder
-            .build_call(self.alloc_fallible_fn, &[alloc_bytes.into()], "s.new")
+            .build_call(
+                self.runtime_fns.alloc_fallible_fn,
+                &[alloc_bytes.into()],
+                "s.new",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1651,7 +1675,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.alloc_fallible_fn, &[alloc_bytes.into()], "buf")
+            .build_call(
+                self.runtime_fns.alloc_fallible_fn,
+                &[alloc_bytes.into()],
+                "buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1766,7 +1794,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(cln_done);
         self.builder
-            .build_call(self.free_fn, &[buf.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[buf.into()], "")
             .unwrap();
         self.builder
             .build_return(Some(&bool_t.const_int(0, false)))
@@ -2188,7 +2216,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
         self.builder
-            .build_call(self.free_fn, &[block.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[block.into()], "")
             .unwrap();
         self.builder.build_return(None).unwrap();
 
@@ -2318,7 +2346,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(free_bb);
                 self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
                 self.builder
-                    .build_call(self.free_fn, &[box_ptr.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                     .unwrap();
             } else {
                 self.builder
@@ -2371,7 +2399,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(free_bb);
                 self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
                 self.builder
-                    .build_call(self.free_fn, &[box_ptr.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                     .unwrap();
             } else {
                 self.builder
@@ -2526,7 +2554,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_call(payload_drop, &[box_ptr.into()], "")
                 .unwrap();
             self.builder
-                .build_call(self.free_fn, &[box_ptr.into()], "")
+                .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                 .unwrap();
         } else {
             self.builder

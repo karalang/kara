@@ -340,7 +340,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[nbytes.into()], "stats.med.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[nbytes.into()],
+                "stats.med.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -395,7 +399,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_float_value();
         self.builder
-            .build_call(self.free_fn, &[buf.into()], "stats.med.free")
+            .build_call(self.runtime_fns.free_fn, &[buf.into()], "stats.med.free")
             .unwrap();
         Ok(median)
     }
@@ -491,7 +495,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[nbytes.into()], "stats.pct.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[nbytes.into()],
+                "stats.pct.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -564,7 +572,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_float_add(blo, scaled, "stats.pct.res")
             .unwrap();
         self.builder
-            .build_call(self.free_fn, &[buf.into()], "stats.pct.free")
+            .build_call(self.runtime_fns.free_fn, &[buf.into()], "stats.pct.free")
             .unwrap();
         Ok(res)
     }
@@ -627,7 +635,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[nbytes.into()], "stats.srt.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[nbytes.into()],
+                "stats.srt.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -663,7 +675,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[nbytes.into()], "stats.as.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[nbytes.into()], "stats.as.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()

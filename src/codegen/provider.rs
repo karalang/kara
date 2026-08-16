@@ -169,7 +169,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let id_v = self.context.i32_type().const_int(resource_id as u64, false);
         self.builder
             .build_call(
-                self.karac_provider_push_fn,
+                self.runtime_fns.karac_provider_push_fn,
                 &[
                     frame_ptr.into(),
                     id_v.into(),
@@ -533,7 +533,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // 1. Snapshot the prior active span id.
         let prev = self
             .builder
-            .build_call(self.karac_tracing_get_active_span_fn, &[], "ws.prev")
+            .build_call(
+                self.runtime_fns.karac_tracing_get_active_span_fn,
+                &[],
+                "ws.prev",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic();
@@ -545,7 +549,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // 3. Install the body's active span.
         self.builder
-            .build_call(self.karac_tracing_set_active_span_fn, &[span_id.into()], "")
+            .build_call(
+                self.runtime_fns.karac_tracing_set_active_span_fn,
+                &[span_id.into()],
+                "",
+            )
             .unwrap();
 
         // 4. Inline the closure body (only `||body` literals; mirrors
@@ -565,7 +573,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // 5. Restore the prior active span.
         self.builder
-            .build_call(self.karac_tracing_set_active_span_fn, &[prev.into()], "")
+            .build_call(
+                self.runtime_fns.karac_tracing_set_active_span_fn,
+                &[prev.into()],
+                "",
+            )
             .unwrap();
 
         Ok(body_result)
@@ -623,7 +635,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 let rank = self.compile_expr(&args[0].value)?.into_int_value();
                 let min = self
                     .builder
-                    .build_call(self.karac_tracing_get_min_level_fn, &[], "min_level")
+                    .build_call(
+                        self.runtime_fns.karac_tracing_get_min_level_fn,
+                        &[],
+                        "min_level",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -640,13 +656,17 @@ impl<'ctx> super::Codegen<'ctx> {
             "tracing_set_min_level" if args.len() == 1 => {
                 let rank = self.compile_expr(&args[0].value)?.into_int_value();
                 self.builder
-                    .build_call(self.karac_tracing_set_min_level_fn, &[rank.into()], "")
+                    .build_call(
+                        self.runtime_fns.karac_tracing_set_min_level_fn,
+                        &[rank.into()],
+                        "",
+                    )
                     .unwrap();
                 Ok(Some(unit))
             }
             "tracing_reset" if args.is_empty() => {
                 self.builder
-                    .build_call(self.karac_tracing_reset_fn, &[], "")
+                    .build_call(self.runtime_fns.karac_tracing_reset_fn, &[], "")
                     .unwrap();
                 Ok(Some(unit))
             }
@@ -694,7 +714,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let heap = self
             .builder
-            .build_call(self.malloc_fn, &[size.into()], "exp.box")
+            .build_call(self.runtime_fns.malloc_fn, &[size.into()], "exp.box")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -705,7 +725,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_ptr = export_fn.as_global_value().as_pointer_value();
         self.builder
             .build_call(
-                self.karac_tracing_set_exporter_fn,
+                self.runtime_fns.karac_tracing_set_exporter_fn,
                 &[heap.into(), fn_ptr.into()],
                 "",
             )
@@ -745,7 +765,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let data = self
             .builder
-            .build_call(self.karac_tracing_get_exporter_data_fn, &[], "exp.data")
+            .build_call(
+                self.runtime_fns.karac_tracing_get_exporter_data_fn,
+                &[],
+                "exp.data",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -780,7 +804,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(registered_bb);
         let fn_ptr = self
             .builder
-            .build_call(self.karac_tracing_get_exporter_fn_fn, &[], "exp.fn")
+            .build_call(
+                self.runtime_fns.karac_tracing_get_exporter_fn_fn,
+                &[],
+                "exp.fn",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -928,7 +956,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let id_v = self.context.i32_type().const_int(resource_id as u64, false);
         self.builder
             .build_call(
-                self.karac_provider_push_fn,
+                self.runtime_fns.karac_provider_push_fn,
                 &[
                     frame_ptr.into(),
                     id_v.into(),
@@ -1561,7 +1589,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // 1. karac_provider_lookup(resource_id) → { data, vtable }.
         let lookup_call = self
             .builder
-            .build_call(self.karac_provider_lookup_fn, &[id_v.into()], "wp.lookup")
+            .build_call(
+                self.runtime_fns.karac_provider_lookup_fn,
+                &[id_v.into()],
+                "wp.lookup",
+            )
             .unwrap();
         let lookup_sv = lookup_call
             .try_as_basic_value()

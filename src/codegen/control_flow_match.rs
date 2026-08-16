@@ -1252,7 +1252,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let cmp = self
                 .builder
                 .build_call(
-                    self.memcmp_fn,
+                    self.runtime_fns.memcmp_fn,
                     &[scrut_ptr.into(), kw_ptr.into(), len_v.into()],
                     "sd.memcmp",
                 )

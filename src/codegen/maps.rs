@@ -102,7 +102,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder
             .build_call(
-                self.karac_map_new_fn,
+                self.runtime_fns.karac_map_new_fn,
                 &[
                     key_size.into(),
                     val_size.into(),
@@ -186,7 +186,7 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(
             self.builder
                 .build_call(
-                    self.karac_map_new_fn,
+                    self.runtime_fns.karac_map_new_fn,
                     &[
                         key_size.into(),
                         val_size.into(),
@@ -447,7 +447,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_store(val_slot, v_val).unwrap();
             self.builder
                 .build_call(
-                    self.karac_map_insert_old_fn,
+                    self.runtime_fns.karac_map_insert_old_fn,
                     &[
                         map_handle.into(),
                         key_slot.into(),
@@ -526,7 +526,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder
             .build_call(
-                self.karac_map_insert_old_fn,
+                self.runtime_fns.karac_map_insert_old_fn,
                 &[
                     map_handle.into(),
                     key_slot.into(),
@@ -593,7 +593,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let found = self
             .builder
             .build_call(
-                self.karac_map_get_fn,
+                self.runtime_fns.karac_map_get_fn,
                 &[map_handle.into(), key_slot.into(), val_slot.into()],
                 "map.idx.found",
             )
@@ -697,7 +697,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // len = karac_map_len(map)
         let len = self
             .builder
-            .build_call(self.karac_map_len_fn, &[map_handle.into()], "kvg.len")
+            .build_call(
+                self.runtime_fns.karac_map_len_fn,
+                &[map_handle.into()],
+                "kvg.len",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -713,7 +717,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[alloc_bytes.into()], "kvg.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[alloc_bytes.into()], "kvg.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -722,7 +726,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // Map iterator + per-iteration out-slots.
         let iter_ptr = self
             .builder
-            .build_call(self.karac_map_iter_new_fn, &[map_handle.into()], "kvg.iter")
+            .build_call(
+                self.runtime_fns.karac_map_iter_new_fn,
+                &[map_handle.into()],
+                "kvg.iter",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -745,7 +753,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let has_next = self
             .builder
             .build_call(
-                self.karac_map_iter_next_fn,
+                self.runtime_fns.karac_map_iter_next_fn,
                 &[iter_ptr.into(), out_key.into(), out_val.into()],
                 "kvg.next",
             )
@@ -821,7 +829,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // exit_bb: free iterator, build Vec struct {data, len, cap=len}.
         self.builder.position_at_end(exit_bb);
         self.builder
-            .build_call(self.karac_map_iter_free_fn, &[iter_ptr.into()], "")
+            .build_call(
+                self.runtime_fns.karac_map_iter_free_fn,
+                &[iter_ptr.into()],
+                "",
+            )
             .unwrap();
 
         let mut vec_val = vec_ty.get_undef();
@@ -888,7 +900,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[alloc_bytes.into()], "smkvg.buf")
+            .build_call(
+                self.runtime_fns.malloc_fn,
+                &[alloc_bytes.into()],
+                "smkvg.buf",
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -934,7 +950,7 @@ impl<'ctx> super::Codegen<'ctx> {
             "values" => {
                 self.builder
                     .build_call(
-                        self.karac_map_get_fn,
+                        self.runtime_fns.karac_map_get_fn,
                         &[map_handle.into(), kptr.into(), out_val.into()],
                         "smkvg.get",
                     )
@@ -954,7 +970,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.kvg_emit_half(key_clone, key_ty, kptr, k_dst, "smkvg.kv.kk");
                 self.builder
                     .build_call(
-                        self.karac_map_get_fn,
+                        self.runtime_fns.karac_map_get_fn,
                         &[map_handle.into(), kptr.into(), out_val.into()],
                         "smkvg.kv.get",
                     )
@@ -977,7 +993,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(exit_bb);
         // `free(NULL)` is a no-op (empty map → null buffer).
         self.builder
-            .build_call(self.free_fn, &[kbuf.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[kbuf.into()], "")
             .unwrap();
         let mut vec_val = vec_ty.get_undef();
         vec_val = self
@@ -1230,7 +1246,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let raw_val = self.create_entry_alloca(fn_val, "smol.rawv", val_ty);
         self.builder
             .build_call(
-                self.karac_map_get_fn,
+                self.runtime_fns.karac_map_get_fn,
                 &[map_handle.into(), kptr.into(), raw_val.into()],
                 "smol.get",
             )
@@ -1262,7 +1278,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let opt = self.build_option_some_via_phis(&words, some_end_bb, none_bb, "smol.opt");
         // `free(NULL)` is a no-op (empty map → null buffer).
         self.builder
-            .build_call(self.free_fn, &[kbuf.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[kbuf.into()], "")
             .unwrap();
         Ok(opt)
     }
@@ -1322,7 +1338,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[alloc_bytes.into()], "smr.buf")
+            .build_call(self.runtime_fns.malloc_fn, &[alloc_bytes.into()], "smr.buf")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1413,7 +1429,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.kvg_emit_half(Some(key_clone), key_ty, kptr, k_dst, "smr.k.clone");
         self.builder
             .build_call(
-                self.karac_map_get_fn,
+                self.runtime_fns.karac_map_get_fn,
                 &[map_handle.into(), kptr.into(), raw_val.into()],
                 "smr.get",
             )
@@ -1436,7 +1452,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(exit_bb);
         self.builder
-            .build_call(self.free_fn, &[kbuf.into()], "")
+            .build_call(self.runtime_fns.free_fn, &[kbuf.into()], "")
             .unwrap();
         // Free fresh-owned lo/hi pivots (lookup args, never stored).
         self.free_fresh_owned_str_arg(&lo_arg.value, lo_v);
@@ -1513,7 +1529,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let len_fn = if self.should_use_mono_map_for(key_ty, val_ty) {
                     self.get_or_emit_map_mono_methods(key_ty, val_ty).len_fn
                 } else {
-                    self.karac_map_len_fn
+                    self.runtime_fns.karac_map_len_fn
                 };
                 let len = self
                     .builder
@@ -1526,7 +1542,11 @@ impl<'ctx> super::Codegen<'ctx> {
             "is_empty" => {
                 let len = self
                     .builder
-                    .build_call(self.karac_map_len_fn, &[map_handle.into()], "map.len")
+                    .build_call(
+                        self.runtime_fns.karac_map_len_fn,
+                        &[map_handle.into()],
+                        "map.len",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -1595,7 +1615,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let status = self
                     .builder
                     .build_call(
-                        self.karac_map_try_insert_fn,
+                        self.runtime_fns.karac_map_try_insert_fn,
                         &[
                             map_handle.into(),
                             key_slot.into(),
@@ -1832,7 +1852,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.deep_copy_pushed_for_loop_agg_element(&args[1].value, val_slot);
                     self.builder
                         .build_call(
-                            self.karac_map_insert_borrowed_str_old_fn,
+                            self.runtime_fns.karac_map_insert_borrowed_str_old_fn,
                             &[
                                 map_handle.into(),
                                 key_slot.into(),
@@ -1900,7 +1920,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         staged_key_slot = Some(key_slot);
                         self.builder
                             .build_call(
-                                self.karac_map_insert_old_fn,
+                                self.runtime_fns.karac_map_insert_old_fn,
                                 &[
                                     map_handle.into(),
                                     key_slot.into(),
@@ -2097,7 +2117,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     self.builder
                         .build_call(
-                            self.karac_map_get_fn,
+                            self.runtime_fns.karac_map_get_fn,
                             &[map_handle.into(), key_slot.into(), val_slot.into()],
                             "map.get.found",
                         )
@@ -2252,7 +2272,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     self.builder
                         .build_call(
-                            self.karac_map_get_fn,
+                            self.runtime_fns.karac_map_get_fn,
                             &[map_handle.into(), key_slot.into(), val_slot.into()],
                             "map.getor.found",
                         )
@@ -2365,7 +2385,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let found = self
                     .builder
                     .build_call(
-                        self.karac_map_remove_old_fn,
+                        self.runtime_fns.karac_map_remove_old_fn,
                         &[
                             map_handle.into(),
                             key_slot.into(),
@@ -2464,7 +2484,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let found = self
                     .builder
                     .build_call(
-                        self.karac_map_contains_fn,
+                        self.runtime_fns.karac_map_contains_fn,
                         &[map_handle.into(), key_slot.into()],
                         "map.contains",
                     )
@@ -2524,7 +2544,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let fn_ptr = val_fn.as_global_value().as_pointer_value();
                     self.builder
                         .build_call(
-                            self.karac_map_clear_with_val_drop_fn_fn,
+                            self.runtime_fns.karac_map_clear_with_val_drop_fn_fn,
                             &[map_handle.into(), key_flag.into(), fn_ptr.into()],
                             "",
                         )
@@ -2535,14 +2555,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     let val_flag = i32_t.const_int(if val_is_vec { 1 } else { 0 }, false);
                     self.builder
                         .build_call(
-                            self.karac_map_clear_with_drop_vec_fn,
+                            self.runtime_fns.karac_map_clear_with_drop_vec_fn,
                             &[map_handle.into(), key_flag.into(), val_flag.into()],
                             "",
                         )
                         .unwrap();
                 } else {
                     self.builder
-                        .build_call(self.karac_map_clear_fn, &[map_handle.into()], "")
+                        .build_call(
+                            self.runtime_fns.karac_map_clear_fn,
+                            &[map_handle.into()],
+                            "",
+                        )
                         .unwrap();
                 }
                 // Map.clear returns Unit — codegen represents Unit as i64 0.

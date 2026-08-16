@@ -220,7 +220,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fr_data = self
             .builder
             .build_call(
-                self.alloc_or_panic_fn,
+                self.runtime_fns.alloc_or_panic_fn,
                 &[new_cap.into()],
                 &format!("{prefix}.fr_data"),
             )
@@ -699,7 +699,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Implementation: load `recv.len`, evaluate the prefix String,
             // extract `prefix.len`; short-circuit to `false` when
             // `recv.len < prefix.len`; otherwise `memcmp(recv.data,
-            // prefix.data, prefix.len) == 0`. Uses the same `self.memcmp_fn`
+            // prefix.data, prefix.len) == 0`. Uses the same `self.runtime_fns.memcmp_fn`
             // declared in `Codegen::new` that `compile_string_binop` uses
             // for the `==` operator.
             "starts_with" | "ends_with" => {
@@ -789,7 +789,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let cmp_result = self
                     .builder
                     .build_call(
-                        self.memcmp_fn,
+                        self.runtime_fns.memcmp_fn,
                         &[cmp_ptr.into(), prefix_data.into(), prefix_len.into()],
                         "sw.memcmp",
                     )
@@ -1261,7 +1261,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let cmp = self
                     .builder
                     .build_call(
-                        self.memcmp_fn,
+                        self.runtime_fns.memcmp_fn,
                         &[window.into(), needle_data.into(), needle_len.into()],
                         "fd.memcmp",
                     )
@@ -1605,7 +1605,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 let buf = self
                     .builder
-                    .build_call(self.alloc_or_panic_fn, &[new_len.into()], "ss.buf")
+                    .build_call(
+                        self.runtime_fns.alloc_or_panic_fn,
+                        &[new_len.into()],
+                        "ss.buf",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -1653,11 +1657,11 @@ impl<'ctx> super::Codegen<'ctx> {
             "trim" | "trim_start" | "trim_end" | "to_lowercase" | "to_uppercase" => {
                 let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "sx");
                 let func = match method {
-                    "trim" => self.karac_string_trim_fn,
-                    "trim_start" => self.karac_string_trim_start_fn,
-                    "trim_end" => self.karac_string_trim_end_fn,
-                    "to_lowercase" => self.karac_string_to_lowercase_fn,
-                    "to_uppercase" => self.karac_string_to_uppercase_fn,
+                    "trim" => self.runtime_fns.karac_string_trim_fn,
+                    "trim_start" => self.runtime_fns.karac_string_trim_start_fn,
+                    "trim_end" => self.runtime_fns.karac_string_trim_end_fn,
+                    "to_lowercase" => self.runtime_fns.karac_string_to_lowercase_fn,
+                    "to_uppercase" => self.runtime_fns.karac_string_to_uppercase_fn,
                     _ => unreachable!(),
                 };
                 Ok(self.build_string_xform_result(
@@ -1673,7 +1677,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `push` String-vs-Vec disambiguation above).
             "sorted" if self.string_vars.contains(var_name) => {
                 let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "ss");
-                let func = self.karac_string_sorted_fn;
+                let func = self.runtime_fns.karac_string_sorted_fn;
                 Ok(self.build_string_xform_result(
                     func,
                     vec![recv_data.into(), recv_len.into()],
@@ -1998,7 +2002,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
                 let result = self.build_string_xform_result(
-                    self.karac_string_replace_fn,
+                    self.runtime_fns.karac_string_replace_fn,
                     vec![
                         recv_data.into(),
                         recv_len.into(),
@@ -2054,7 +2058,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 let n_val = self.compile_expr(&args[2].value)?.into_int_value();
                 let result = self.build_string_xform_result(
-                    self.karac_string_replacen_fn,
+                    self.runtime_fns.karac_string_replacen_fn,
                     vec![
                         recv_data.into(),
                         recv_len.into(),
@@ -2267,7 +2271,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(fill_bb);
                 let buf = self
                     .builder
-                    .build_call(self.alloc_or_panic_fn, &[total.into()], "rep.buf")
+                    .build_call(
+                        self.runtime_fns.alloc_or_panic_fn,
+                        &[total.into()],
+                        "rep.buf",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -3179,7 +3187,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let new_data = self
                     .builder
                     .build_call(
-                        self.alloc_fallible_fn,
+                        self.runtime_fns.alloc_fallible_fn,
                         &[alloc_bytes.into()],
                         "tpush.new_data",
                     )
@@ -3205,7 +3213,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_memcpy(new_data, 8, data, 8, old_bytes)
                     .unwrap();
                 self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[data.into()], "")
                     .unwrap();
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
                 self.builder.build_store(cap_ptr, new_cap).unwrap();
@@ -3379,7 +3387,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 let new_data = self
                     .builder
-                    .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "new_data")
+                    .build_call(
+                        self.runtime_fns.alloc_or_panic_fn,
+                        &[alloc_bytes.into()],
+                        "new_data",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -3392,7 +3404,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_memcpy(new_data, 8, data, 8, old_bytes)
                     .unwrap();
                 self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[data.into()], "")
                     .unwrap();
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
                 self.builder.build_store(cap_ptr, new_cap).unwrap();
@@ -3544,7 +3556,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let new_data = self
                     .builder
                     .build_call(
-                        self.alloc_fallible_fn,
+                        self.runtime_fns.alloc_fallible_fn,
                         &[alloc_bytes.into()],
                         "tpf.new_data",
                     )
@@ -3566,7 +3578,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_memcpy(new_data, 8, data, 8, old_bytes)
                     .unwrap();
                 self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[data.into()], "")
                     .unwrap();
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
                 self.builder.build_store(cap_ptr, new_cap).unwrap();
@@ -4357,7 +4369,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 let new_data = self
                     .builder
-                    .build_call(self.alloc_fallible_fn, &[new_cap.into()], "tss.new_data")
+                    .build_call(
+                        self.runtime_fns.alloc_fallible_fn,
+                        &[new_cap.into()],
+                        "tss.new_data",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -4385,7 +4401,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder.position_at_end(free_bb);
                 self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[data.into()], "")
                     .unwrap();
                 self.builder
                     .build_unconditional_branch(after_free_bb)
@@ -4655,7 +4671,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let new_data = self
                     .builder
                     .build_call(
-                        self.alloc_or_panic_fn,
+                        self.runtime_fns.alloc_or_panic_fn,
                         &[new_alloc_bytes.into()],
                         "efs.new_data",
                     )
@@ -4683,7 +4699,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder.position_at_end(free_bb);
                 self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[data.into()], "")
                     .unwrap();
                 self.builder
                     .build_unconditional_branch(after_free_bb)
@@ -5006,7 +5022,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let new_data = self
                     .builder
                     .build_call(
-                        self.alloc_fallible_fn,
+                        self.runtime_fns.alloc_fallible_fn,
                         &[new_alloc_bytes.into()],
                         "tefs.new_data",
                     )
@@ -5045,7 +5061,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder.position_at_end(free_bb);
                 self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
+                    .build_call(self.runtime_fns.free_fn, &[data.into()], "")
                     .unwrap();
                 self.builder
                     .build_unconditional_branch(after_free_bb)
@@ -6483,7 +6499,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Fresh buffer for the tail; byte-copy [i, len).
                 let new_buf = self
                     .builder
-                    .build_call(self.malloc_fn, &[tail_bytes.into()], "so.buf")
+                    .build_call(self.runtime_fns.malloc_fn, &[tail_bytes.into()], "so.buf")
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -6761,7 +6777,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let cmp = self
                     .builder
                     .build_call(
-                        self.memcmp_fn,
+                        self.runtime_fns.memcmp_fn,
                         &[window.into(), needle_data.into(), needle_len.into()],
                         "ct.memcmp",
                     )
