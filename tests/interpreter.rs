@@ -33674,3 +33674,45 @@ fn test_tuple_elem_store_through_mut_slice_param_oracle() {
          }\n");
     assert_eq!(out, "4\n99\n70 4\n104\n0 10 20\nreplaced 5\n");
 }
+
+#[test]
+fn test_second_field_move_of_one_binding_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s
+    // `test_e2e_second_field_move_of_one_binding_still_defensively_copies`
+    // (B-2026-08-16-7). The interpreter's value semantics were always right
+    // here — only the compiled defensive-copy planner deduped per binding —
+    // so this pins the values the build side must match.
+    let out = run("\n\
+         enum Cmd { Clear(Vec[String]) }\n\
+         struct Doc { lines: Vec[String] }\n\
+         struct Ed { doc: Doc }\n\
+         fn apply(d: mut ref Doc, c: Cmd) -> Cmd {\n\
+             match c {\n\
+                 Clear(old) => {\n\
+                     let mut snap: Vec[String] = Vec.new();\n\
+                     for i in 0..d.lines.len() { snap.push(d.lines[i]); }\n\
+                     d.lines.clear();\n\
+                     for i in 0..old.len() { d.lines.push(old[i]); }\n\
+                     Cmd.Clear(snap)\n\
+                 }\n\
+             }\n\
+         }\n\
+         fn render(d: ref Doc) -> String {\n\
+             let mut s = String.new();\n\
+             for i in 0..d.lines.len() { s.push_str(d.lines[i]); }\n\
+             s\n\
+         }\n\
+         fn main() {\n\
+             let mut l: Vec[String] = Vec.new();\n\
+             let mut a = String.new(); a.push_str(\"ALPHA\");\n\
+             l.push(a);\n\
+             let mut e = Ed { doc: Doc { lines: l } };\n\
+             let mut snapshot: Vec[String] = Vec.new();\n\
+             let cur = e.doc;\n\
+             for i in 0..cur.lines.len() { snapshot.push(cur.lines[i]); }\n\
+             let _inv = apply(mut e.doc, Cmd.Clear(snapshot));\n\
+             let after = e.doc;\n\
+             println(f\"[{render(e.doc)}] lines={after.lines.len()}\")\n\
+         }\n");
+    assert_eq!(out, "[ALPHA] lines=1\n");
+}

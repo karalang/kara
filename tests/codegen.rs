@@ -96586,6 +96586,98 @@ fn main() {
         );
     }
 
+    /// B-2026-08-16-7 — a struct FIELD moved TWICE, with a reuse after each
+    /// move, lost its heap contents on both compiled backends: the second
+    /// move ran its source-zeroing suppression with NO defensive copy, so
+    /// the reuse after it read a zeroed Vec — length intact, Strings gone.
+    ///
+    /// The `UseAfterMove` diagnostic dedups to one witness per binding (the
+    /// first in source order), and the defensive-copy planner harvested the
+    /// DIAGNOSTICS, inheriting the dedup. The copy set now carries every
+    /// reused consume; the warning is unchanged.
+    ///
+    /// The row's 31-line repro, verbatim — its reduction record shows every
+    /// ingredient is needed (dropping the `Ed` wrapper, the snapshot build,
+    /// or the `mut ref` call each makes the bug vanish), so it is kept whole
+    /// rather than re-reduced. Paired with an interpreter oracle in
+    /// `tests/interpreter.rs` and a leak/double-free fixture in
+    /// `tests/memory_sanitizer.rs` — the copy-at-every-move fix moves
+    /// ownership balance, so the value assertions here are necessary but
+    /// not sufficient.
+    #[test]
+    fn test_e2e_second_field_move_of_one_binding_still_defensively_copies() {
+        assert_eq!(
+            run_program(
+                r#"
+enum Cmd { Clear(Vec[String]) }
+struct Doc { lines: Vec[String] }
+struct Ed { doc: Doc }
+fn apply(d: mut ref Doc, c: Cmd) -> Cmd {
+    match c {
+        Clear(old) => {
+            let mut snap: Vec[String] = Vec.new();
+            for i in 0..d.lines.len() { snap.push(d.lines[i]); }
+            d.lines.clear();
+            for i in 0..old.len() { d.lines.push(old[i]); }
+            Cmd.Clear(snap)
+        }
+    }
+}
+fn render(d: ref Doc) -> String {
+    let mut s = String.new();
+    for i in 0..d.lines.len() { s.push_str(d.lines[i]); }
+    s
+}
+fn main() {
+    let mut l: Vec[String] = Vec.new();
+    let mut a = String.new(); a.push_str("ALPHA");
+    l.push(a);
+    let mut e = Ed { doc: Doc { lines: l } };
+    let mut snapshot: Vec[String] = Vec.new();
+    let cur = e.doc;
+    for i in 0..cur.lines.len() { snapshot.push(cur.lines[i]); }
+    let _inv = apply(mut e.doc, Cmd.Clear(snapshot));
+    let after = e.doc;
+    println(f"[{render(e.doc)}] lines={after.lines.len()}")
+}
+"#
+            ),
+            Some("[ALPHA] lines=1\n".to_string())
+        );
+    }
+
+    /// The minimal red member of the same family: two field moves of one
+    /// binding, then borrow reads of the source. At baseline the SECOND
+    /// move's suppression zeroed `e.doc.lines`'s len with no copy, so
+    /// `text(e.doc)`'s `lines[0]` PANICKED out of bounds — the same defect
+    /// as the fixture above with a louder symptom and half the moving
+    /// parts. (A chain of consuming CALLS on a plain binding — `eat(a);
+    /// eat(a); eat(a)` — is NOT in this family: measured green at baseline,
+    /// heap-backed or not, so by-value call args reach a different copy
+    /// path. Field moves are the shape the dedup starved.)
+    #[test]
+    fn test_e2e_two_field_moves_then_borrow_reads() {
+        assert_eq!(
+            run_program(
+                r#"
+struct Doc { lines: Vec[String] }
+struct Ed { doc: Doc }
+fn count(d: ref Doc) -> i64 { return d.lines.len(); }
+fn text(d: ref Doc) -> String { return d.lines[0]; }
+fn main() {
+    let mut l: Vec[String] = Vec.new();
+    l.push("alphaalphaalpha");
+    let mut e = Ed { doc: Doc { lines: l } };
+    let cur = e.doc;
+    let after = e.doc;
+    println(f"{cur.lines[0]} {after.lines[0]} [{text(e.doc)}] {count(e.doc)}");
+}
+"#
+            ),
+            Some("alphaalphaalpha alphaalphaalpha [alphaalphaalpha] 1\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-24 — the TUPLE-element sibling of B-2026-08-15-21.
     /// `s[0].0 = v` through a `mut Slice[(A, B)]` param failed the build with
     /// "tuple-element assignment through this receiver shape is not yet

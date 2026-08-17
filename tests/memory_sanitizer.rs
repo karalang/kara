@@ -50198,6 +50198,79 @@ fn main() {
         );
     }
 
+    /// B-2026-08-16-7, memory half. The fix makes EVERY reused consume of a
+    /// binding defensively copy, not just the first — which multiplies
+    /// ownership: after `let cur = e.doc; … let after = e.doc;` there are
+    /// THREE live owners of that heap shape (the source and two copies),
+    /// where the value assertions alone cannot tell a correct three-owner
+    /// balance from a copy that aliased (double free at the three scope
+    /// exits) or a source whose cleanup was disarmed one time too many
+    /// (leak). Every ingredient of the row's repro is kept — the `Ed`
+    /// wrapper, the `mut ref` field call between the two moves — because its
+    /// reduction record shows each is needed, plus the minimal
+    /// three-consumes shape and a loop that re-runs a reused-move pair so a
+    /// per-iteration imbalance accumulates.
+    #[test]
+    fn asan_every_reused_consume_copy_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+enum Cmd { Clear(Vec[String]) }
+struct Doc { lines: Vec[String] }
+struct Ed { doc: Doc }
+fn apply(d: mut ref Doc, c: Cmd) -> Cmd {
+    match c {
+        Clear(old) => {
+            let mut snap: Vec[String] = Vec.new();
+            for i in 0..d.lines.len() { snap.push(d.lines[i]); }
+            d.lines.clear();
+            for i in 0..old.len() { d.lines.push(old[i]); }
+            Cmd.Clear(snap)
+        }
+    }
+}
+fn render(d: ref Doc) -> String {
+    let mut s = String.new();
+    for i in 0..d.lines.len() { s.push_str(d.lines[i]); }
+    s
+}
+fn eat(s: String) -> i64 { return s.len(); }
+fn main() {
+    let mut l: Vec[String] = Vec.new();
+    let mut a = String.new(); a.push_str("ALPHAALPHAALPHA");
+    l.push(a);
+    let mut e = Ed { doc: Doc { lines: l } };
+    let mut snapshot: Vec[String] = Vec.new();
+    let cur = e.doc;
+    for i in 0..cur.lines.len() { snapshot.push(cur.lines[i]); }
+    let _inv = apply(mut e.doc, Cmd.Clear(snapshot));
+    let after = e.doc;
+    println(f"[{render(e.doc)}] lines={after.lines.len()}");
+
+    let b = "betabetabetabeta";
+    let x = eat(b);
+    let y = eat(b);
+    let z = eat(b);
+    println(f"{x} {y} {z} {b.len()}");
+
+    let mut k = 0;
+    let mut t = 0;
+    while k < 10 {
+        let mut v: Vec[String] = Vec.new();
+        v.push("gammagammagamma");
+        let first = v;
+        let second = v;
+        t = t + first.len() + second.len();
+        k = k + 1;
+    }
+    println(f"{t}");
+    println("end");
+}
+"#,
+            &["[ALPHAALPHAALPHA] lines=1", "16 16 16 16", "20", "end"],
+            "asan_every_reused_consume_copy_is_balanced",
+        );
+    }
+
     /// B-2026-08-15-24, memory half — the TUPLE-element twin of the fixture
     /// below, on the same reasoning.
     ///

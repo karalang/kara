@@ -599,6 +599,24 @@ fn first_uam_witness(
     uses: &[(BlockId, usize, UseSite)],
     dom: &DominatorTree,
 ) -> Option<UamWitness> {
+    uam_witnesses_for_binding(binding, uses, dom, true)
+        .into_iter()
+        .next()
+}
+
+/// Every (C, U) witness for one binding — or just the first, when
+/// `first_only`. Shared body of [`first_uam_witness`] (the diagnostic,
+/// which reports one witness per binding) and
+/// [`direct_uam_all_consume_sites`] (the defensive-copy planner, which
+/// must see every reused consume). One function so the two consumers can
+/// never drift on the filter set — the drift IS B-2026-08-16-7.
+fn uam_witnesses_for_binding(
+    binding: &str,
+    uses: &[(BlockId, usize, UseSite)],
+    dom: &DominatorTree,
+    first_only: bool,
+) -> Vec<UamWitness> {
+    let mut out = Vec::new();
     for (i, (cb, ci, c)) in uses.iter().enumerate() {
         if c.kind != UseKind::Consume {
             continue;
@@ -633,16 +651,53 @@ fn first_uam_witness(
             if reassign_kills(uses, *cb, *ci, *ub, *ui, dom, &c.place) {
                 continue;
             }
-            return Some(UamWitness {
+            out.push(UamWitness {
                 binding: binding.to_string(),
                 consume_span: c.span,
                 other_use_span: u.span,
                 consume_block: *cb,
                 other_block: *ub,
             });
+            break; // one witness per consume site C — the next C, not the next U
+        }
+        if first_only && !out.is_empty() {
+            return out;
         }
     }
-    None
+    out
+}
+
+/// The consume span of EVERY (C, U) witness in the function — every move
+/// whose source is read again afterwards, not merely the first per
+/// binding.
+///
+/// B-2026-08-16-7 — this distinction is load-bearing for the
+/// `UseAfterMove` defensive copy, and conflating it was the bug. The
+/// DIAGNOSTIC dedups to one witness per binding (the first in source
+/// order), which is right for a human reading warnings. The copy
+/// planner inherited that dedup by harvesting the diagnostics, so a
+/// binding moved twice with reuse after each (`let cur = e.doc; …
+/// apply(mut e.doc, ..); let after = e.doc; render(e.doc)`) got a copy
+/// at the FIRST move only; the second move ran the source-zeroing
+/// suppression with no copy, and the reuse after it read a zeroed Vec —
+/// length intact, contents gone, on both compiled backends.
+pub fn direct_uam_all_consume_sites(cfg: &Cfg, dom: &DominatorTree) -> Vec<crate::token::Span> {
+    let mut sites: HashMap<String, Vec<(BlockId, usize, UseSite)>> = HashMap::new();
+    for block in &cfg.blocks {
+        for (idx, u) in block.uses.iter().enumerate() {
+            sites
+                .entry(u.binding.clone())
+                .or_default()
+                .push((block.id, idx, u.clone()));
+        }
+    }
+    let mut spans = Vec::new();
+    for (binding, uses) in &sites {
+        for w in uam_witnesses_for_binding(binding, uses, dom, false) {
+            spans.push(w.consume_span);
+        }
+    }
+    spans
 }
 
 // ── Loop-of-consume rule (round 12.22) ────────────────────────────

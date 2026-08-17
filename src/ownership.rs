@@ -7,7 +7,9 @@
 
 use crate::ast::*;
 use crate::cfg::ConsumeOrigin;
-use crate::rc_predicate::{direct_uam_candidates, run_predicate_for_function_with};
+use crate::rc_predicate::{
+    direct_uam_all_consume_sites, direct_uam_candidates, run_predicate_for_function_with,
+};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{FloatSize, IntSize, Type, TypeCheckResult, UIntSize};
@@ -1006,6 +1008,15 @@ pub struct OwnershipChecker<'a> {
     pub(crate) program: &'a Program,
     pub(crate) typecheck_result: &'a TypeCheckResult,
     pub(crate) param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
+    /// B-2026-08-16-7 — the consume span of EVERY (C, U) use-after-move
+    /// witness, across all functions, not merely the first per binding
+    /// that the diagnostic reports. Unioned into
+    /// `OwnershipCheckResult::use_after_move_consume_sites` so codegen's
+    /// defensive copy fires at each reused move: a binding moved twice
+    /// with reuse after each got a copy at the first move only, and the
+    /// second move's source-zeroing suppression then stranded the later
+    /// reuse with a zeroed value.
+    pub(crate) all_uam_consume_sites: std::collections::HashSet<(usize, usize)>,
     /// Inferred closure parameter modes (round 12.23). Keyed by the
     /// closure expression's `SpanKey`; values mirror `param_modes`'s
     /// per-fn `(name, mode)` shape. Surfaced via
@@ -1319,6 +1330,7 @@ impl<'a> OwnershipChecker<'a> {
             program,
             typecheck_result,
             param_modes: HashMap::new(),
+            all_uam_consume_sites: std::collections::HashSet::new(),
             closure_param_modes: HashMap::new(),
             closure_captures: HashMap::new(),
             closure_capture_paths: HashMap::new(),
@@ -1465,13 +1477,24 @@ impl<'a> OwnershipChecker<'a> {
         // for codegen's defensive copy. Derived from the diagnostics rather
         // than recomputed, so the set and the warning can never disagree about
         // which moves are reused: if the user was told, codegen copies.
-        let use_after_move_consume_sites: std::collections::HashSet<(usize, usize)> = self
+        let mut use_after_move_consume_sites: std::collections::HashSet<(usize, usize)> = self
             .errors
             .iter()
             .filter(|e| e.kind == OwnershipErrorKind::UseAfterMove)
             .filter_map(|e| e.consume_span.as_ref())
             .map(|sp| (sp.offset, sp.length))
             .collect();
+        // B-2026-08-16-7 — union in every OTHER reused consume of an
+        // already-diagnosed binding. The diagnostic dedups to one witness
+        // per binding, so deriving the copy set from the diagnostics alone
+        // missed a binding's second and later moves; each ran its
+        // source-zeroing suppression with no copy and the reuse after it
+        // read a zeroed value ("length intact, contents empty"). The
+        // documented invariant survives in the direction that matters: if
+        // the user was told, codegen still copies — this only adds sites,
+        // for moves whose reuse the user was ALSO told about (same binding,
+        // same warning).
+        use_after_move_consume_sites.extend(self.all_uam_consume_sites.iter().copied());
 
         OwnershipCheckResult {
             param_modes: self.param_modes,
@@ -2266,6 +2289,15 @@ impl<'a> OwnershipChecker<'a> {
         // witnesses by predicate construction (RC fires only for
         // dominance-incomparable C, U; UAM fires only for
         // dominance-comparable C, U), so no de-duplication needed.
+        // B-2026-08-16-7 — collect EVERY reused consume for the defensive
+        // copy, before the per-binding dedup below narrows to the first
+        // witness for the diagnostic. The two serve different masters: a
+        // human wants one warning per binding; codegen must copy at every
+        // move whose source is read again, or the moves after the first run
+        // their source-zeroing suppression uncopied.
+        for sp in direct_uam_all_consume_sites(&cfg, &dom) {
+            self.all_uam_consume_sites.insert((sp.offset, sp.length));
+        }
         let uam_witnesses = direct_uam_candidates(&cfg, &dom);
         for (binding, w) in uam_witnesses {
             // Strip the internal rename suffix for the user-facing message
