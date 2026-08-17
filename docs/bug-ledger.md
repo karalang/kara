@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 130 | 0 |
 | run-vs-build | 124 | 1 |
 | codegen-gap | 113 | 0 |
-| missing-feature | 97 | 1 |
+| missing-feature | 98 | 2 |
 | perf | 75 | 1 |
 | false-positive | 70 | 0 |
 | diagnostics | 63 | 0 |
@@ -120,13 +120,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 17 | 0 |
-| effect | 6 | 0 |
+| effect | 7 | 1 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1259 surfaced · 4 open · 1240 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1260 surfaced · 5 open · 1240 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1259 surfaced
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-7 | 2026-08-17 | typecheck | low | DESIGN CALL, not a defect report: should a bare `Span(...)` resolve to the USER's enum variant when the colliding prelude name has no bare-callable form? The same bare name already binds that variant in PATTERN position, so the two positions disagree today. Its sibling row fixed only the diagnostic; the resolution rule is untouched and wants an owner's decision. | resolve_identifier_type (src/typechecker/expr_ops.rs) — the `if is_prelude_type_or_module_name(name) { continue; }` in the variant fallback; decide whether the skip should be narrowed, and to what |
+| B-2026-08-17-8 | 2026-08-17 | effect | low | `#[no_effect(allocates(Heap))]` is spec vocabulary with NO implementation — design.md prescribes it in three passages (5792's purposes list, the corrected real-time-guarantee bullets, 4299's carve-out parenthetical) and the attribute does not parse: `error[parse]: 'allocates' is a reserved keyword`. The B-2026-08-17-4 close predicted this row; this files it, with the measured parse failure and the shipped equivalent the implementer can crib from. | a new `#[no_effect(<verb>(<resource>)…)]` attribute: parser (the reserved-keyword rejection must admit effect-verb syntax inside this attribute's args), AST field, resolver placement validation, effectchecker enforcement. The shipped `#[profile(...)]` machinery (parser/items.rs scan, resolver/collect.rs validation, effectchecker/profile_compat.rs check) is the same shape end to end and is the implementation to mirror. |
 
 ### Wontfix (5)
 
