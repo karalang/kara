@@ -207,20 +207,36 @@ front-end total ~−2.5%; instructions **0.671B → 0.630B (−6.1%)**.
 Effectcheck's allocations are now down **82%** from the spike's start
 (643k → 117k post-stage-1). Same full verification battery as 3a.
 
+### Stage 3c — rc_predicate's quadruplicated sites build (LANDED)
+
+The other DHAT standout: `rc_predicate`'s four candidate passes
+(`rc_candidates`, `direct_uam_candidates`,
+`direct_uam_all_consume_sites`, `loop_of_consume_candidates`) each
+rebuilt the same by-binding use-sites map from the same CFG — cloning
+every binding String and every `UseSite` (place vectors included) per
+build — and `run_predicate_for_function_with` runs three of them per
+function, plus ownership.rs's UAM pair two more. One borrowed
+`UseSitesByBinding<'_>` (`&str` keys, `&UseSite` triples) is now built
+once per CFG and shared; the public per-pass entry points remain as
+thin wrappers.
+
+Result (interleaved A/B, 3 rounds, synthetic): ownership
+**38–41 → 33–37 ms (−11–13%)**, its allocations **365k → 252k (−31%)**;
+instructions **0.630B → 0.593B (−5.9%)**. Same full verification
+battery.
+
 ### Remaining stage-3 phases (not started)
 
-Post-3b profile: allocator ~30% — the remainder now genuinely lives in
-parse (token/`Expr` allocs, 13%+5% of bytes), ownership
-(`rc_predicate` ~6%, `check_function` ~2.6%), and typecheck
-(`infer_expr`/`infer_binary` ~4%, `Type` clones); SipHash ~9%
-(`Scope.names`, remaining std maps); `Token`/`Type` clone tails.
-Next in line by the phase-at-a-time rule: **ownership** (its
-String-keyed binding/method tables were Fx'd in 2½ but still clone
-keys; note its module tree is ~29k lines across 13 submodules — 3–4×
-the effectchecker conversion surface, so plan a full session), then
-**typechecker** (`TypeEnv` string keys — though its allocs are
-dominated by `Type` clones, a different lever), AST identifiers last.
-Each is its own session-sized slice with 3a as the template.
+Post-3c: session net front end **240.8 → ~125 ms (−48%), instructions
+1.62B → 0.593B (−63%), allocations 3.14M → 0.73M (−77%)**. What
+remains, per DHAT: parse (token/`Expr` allocs, ~18% of bytes — the "AST
+identifiers" leg), typecheck (`infer_expr`/`infer_binary`/`Type`
+clones), ownership's residual (`check_function` binding tables — the
+String-keyed maps Fx'd in 2½ but still cloning keys; its module tree is
+~29k lines across 13 submodules — 3–4× the effectchecker conversion
+surface, so plan a full session for the Symbol conversion), and the
+~9% SipHash tail (`Scope.names`, remaining std maps). Each is its own
+session-sized slice with 3a as the template.
 
 ## Lifecycle
 

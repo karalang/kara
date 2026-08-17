@@ -7,9 +7,7 @@
 
 use crate::ast::*;
 use crate::cfg::ConsumeOrigin;
-use crate::rc_predicate::{
-    direct_uam_all_consume_sites, direct_uam_candidates, run_predicate_for_function_with,
-};
+use crate::rc_predicate::run_predicate_for_function_with;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{FloatSize, IntSize, Type, TypeCheckResult, UIntSize};
@@ -2298,10 +2296,12 @@ impl<'a> OwnershipChecker<'a> {
         // human wants one warning per binding; codegen must copy at every
         // move whose source is read again, or the moves after the first run
         // their source-zeroing suppression uncopied.
-        for sp in direct_uam_all_consume_sites(&cfg, &dom) {
+        let sites = crate::rc_predicate::collect_use_sites(&cfg);
+        for sp in crate::rc_predicate::direct_uam_all_consume_sites_from_sites(&sites, &dom) {
             self.all_uam_consume_sites.insert((sp.offset, sp.length));
         }
-        let uam_witnesses = direct_uam_candidates(&cfg, &dom);
+        let uam_witnesses = crate::rc_predicate::direct_uam_candidates_from_sites(&sites, &dom);
+        drop(sites);
         for (binding, w) in uam_witnesses {
             // Strip the internal rename suffix for the user-facing message
             // (a within-arm sequential consume+use is dominance-comparable and

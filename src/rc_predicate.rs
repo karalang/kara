@@ -66,23 +66,40 @@ pub struct RcWitness {
 /// with no Consume sites, or whose Consume sites all dominate / are
 /// dominated by every other use, are absent from the map.
 pub fn rc_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<String, RcWitness> {
-    // Bucket every (block, use) pair by binding name. Source order is
-    // preserved within each bucket because `cfg.blocks` is iterated in
-    // ascending id order and `block.uses` is in source order.
-    let mut sites: HashMap<String, Vec<(BlockId, usize, UseSite)>> = HashMap::new();
+    rc_candidates_from_sites(&collect_use_sites(cfg), cfg, dom)
+}
+
+/// Every `(block, intra-block index, use)` triple bucketed by binding
+/// name, BY REFERENCE into the CFG. Source order is preserved within
+/// each bucket because `cfg.blocks` is iterated in ascending id order
+/// and `block.uses` is in source order. Built once per CFG and shared
+/// by the candidate passes — the four per-pass builds this replaces
+/// each cloned every binding String and every `UseSite` (DHAT: ~6.5%
+/// of all front-end allocation bytes).
+pub(crate) type UseSitesByBinding<'a> = HashMap<&'a str, Vec<(BlockId, usize, &'a UseSite)>>;
+
+pub(crate) fn collect_use_sites(cfg: &Cfg) -> UseSitesByBinding<'_> {
+    let mut sites: UseSitesByBinding<'_> = HashMap::new();
     for block in &cfg.blocks {
         for (idx, u) in block.uses.iter().enumerate() {
             sites
-                .entry(u.binding.clone())
+                .entry(u.binding.as_str())
                 .or_default()
-                .push((block.id, idx, u.clone()));
+                .push((block.id, idx, u));
         }
     }
+    sites
+}
 
+pub(crate) fn rc_candidates_from_sites(
+    sites: &UseSitesByBinding<'_>,
+    cfg: &Cfg,
+    dom: &DominatorTree,
+) -> HashMap<String, RcWitness> {
     let mut witnesses = HashMap::new();
-    for (binding, uses) in &sites {
+    for (binding, uses) in sites {
         if let Some(w) = first_witness(binding, uses, cfg, dom) {
-            witnesses.insert(binding.clone(), w);
+            witnesses.insert(binding.to_string(), w);
         }
     }
     witnesses
@@ -117,7 +134,7 @@ fn precedes(ab: BlockId, ai: usize, bb: BlockId, bi: usize, dom: &DominatorTree)
 /// incomparability). The kill is therefore vacuous for `first_witness`;
 /// it bites for the UAM check, where (C, U) are dominance-comparable.
 fn reassign_kills(
-    uses: &[(BlockId, usize, UseSite)],
+    uses: &[(BlockId, usize, &UseSite)],
     cb: BlockId,
     ci: usize,
     ub: BlockId,
@@ -162,7 +179,7 @@ fn reassign_kills(
 /// reachable and keep firing). `cb != ub` is guaranteed by the caller's
 /// dominance-comparability filter (a block dominates itself).
 fn reassign_kills_by_reachability(
-    uses: &[(BlockId, usize, UseSite)],
+    uses: &[(BlockId, usize, &UseSite)],
     cfg: &Cfg,
     cb: BlockId,
     ci: usize,
@@ -270,7 +287,7 @@ fn cfg_reaches(cfg: &Cfg, from: BlockId, to: BlockId) -> bool {
 /// in source order too. Returns `None` if no such pair exists.
 fn first_witness(
     binding: &str,
-    uses: &[(BlockId, usize, UseSite)],
+    uses: &[(BlockId, usize, &UseSite)],
     cfg: &Cfg,
     dom: &DominatorTree,
 ) -> Option<RcWitness> {
@@ -473,9 +490,17 @@ pub fn run_predicate_for_function_with(
     let param_names = param_binding_names(f);
     let cfg = build_cfg_with_classification(&f.body, &classification, &param_names);
     let dom = compute_dominators(&cfg);
-    let mut witnesses = rc_candidates(&cfg, &dom);
-    let uam_keys: HashSet<String> = direct_uam_candidates(&cfg, &dom).into_keys().collect();
-    for (binding, w) in loop_of_consume_candidates(&cfg, &dom) {
+    // One shared sites build for all three candidate passes.
+    let (mut witnesses, uam_keys, loop_witnesses) = {
+        let sites = collect_use_sites(&cfg);
+        let witnesses = rc_candidates_from_sites(&sites, &cfg, &dom);
+        let uam_keys: HashSet<String> = direct_uam_candidates_from_sites(&sites, &dom)
+            .into_keys()
+            .collect();
+        let loop_witnesses = loop_of_consume_candidates_from_sites(&sites, &cfg, &dom);
+        (witnesses, uam_keys, loop_witnesses)
+    };
+    for (binding, w) in loop_witnesses {
         if witnesses.contains_key(&binding) || uam_keys.contains(&binding) {
             continue;
         }
@@ -572,20 +597,17 @@ pub struct UamWitness {
 /// (RC fallback shape) or read-then-consumed (sequentially fine) —
 /// are absent from the map.
 pub fn direct_uam_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<String, UamWitness> {
-    let mut sites: HashMap<String, Vec<(BlockId, usize, UseSite)>> = HashMap::new();
-    for block in &cfg.blocks {
-        for (idx, u) in block.uses.iter().enumerate() {
-            sites
-                .entry(u.binding.clone())
-                .or_default()
-                .push((block.id, idx, u.clone()));
-        }
-    }
+    direct_uam_candidates_from_sites(&collect_use_sites(cfg), dom)
+}
 
+pub(crate) fn direct_uam_candidates_from_sites(
+    sites: &UseSitesByBinding<'_>,
+    dom: &DominatorTree,
+) -> HashMap<String, UamWitness> {
     let mut witnesses = HashMap::new();
-    for (binding, uses) in &sites {
+    for (binding, uses) in sites {
         if let Some(w) = first_uam_witness(binding, uses, dom) {
-            witnesses.insert(binding.clone(), w);
+            witnesses.insert(binding.to_string(), w);
         }
     }
     witnesses
@@ -596,7 +618,7 @@ pub fn direct_uam_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<String, 
 /// reassignment of the binding rebinds it between C and U.
 fn first_uam_witness(
     binding: &str,
-    uses: &[(BlockId, usize, UseSite)],
+    uses: &[(BlockId, usize, &UseSite)],
     dom: &DominatorTree,
 ) -> Option<UamWitness> {
     uam_witnesses_for_binding(binding, uses, dom, true)
@@ -612,7 +634,7 @@ fn first_uam_witness(
 /// never drift on the filter set — the drift IS B-2026-08-16-7.
 fn uam_witnesses_for_binding(
     binding: &str,
-    uses: &[(BlockId, usize, UseSite)],
+    uses: &[(BlockId, usize, &UseSite)],
     dom: &DominatorTree,
     first_only: bool,
 ) -> Vec<UamWitness> {
@@ -682,17 +704,15 @@ fn uam_witnesses_for_binding(
 /// suppression with no copy, and the reuse after it read a zeroed Vec —
 /// length intact, contents gone, on both compiled backends.
 pub fn direct_uam_all_consume_sites(cfg: &Cfg, dom: &DominatorTree) -> Vec<crate::token::Span> {
-    let mut sites: HashMap<String, Vec<(BlockId, usize, UseSite)>> = HashMap::new();
-    for block in &cfg.blocks {
-        for (idx, u) in block.uses.iter().enumerate() {
-            sites
-                .entry(u.binding.clone())
-                .or_default()
-                .push((block.id, idx, u.clone()));
-        }
-    }
+    direct_uam_all_consume_sites_from_sites(&collect_use_sites(cfg), dom)
+}
+
+pub(crate) fn direct_uam_all_consume_sites_from_sites(
+    sites: &UseSitesByBinding<'_>,
+    dom: &DominatorTree,
+) -> Vec<crate::token::Span> {
     let mut spans = Vec::new();
-    for (binding, uses) in &sites {
+    for (binding, uses) in sites {
         for w in uam_witnesses_for_binding(binding, uses, dom, false) {
             spans.push(w.consume_span);
         }
@@ -779,23 +799,21 @@ fn natural_loops(cfg: &Cfg, dom: &DominatorTree) -> Vec<HashSet<BlockId>> {
 /// contains it AND that loop has no Reassign of the same binding
 /// — sibling-loop and non-containing-loop rebinds do not suppress.
 pub fn loop_of_consume_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<String, RcWitness> {
+    loop_of_consume_candidates_from_sites(&collect_use_sites(cfg), cfg, dom)
+}
+
+pub(crate) fn loop_of_consume_candidates_from_sites(
+    sites: &UseSitesByBinding<'_>,
+    cfg: &Cfg,
+    dom: &DominatorTree,
+) -> HashMap<String, RcWitness> {
     let loops = natural_loops(cfg, dom);
     if loops.is_empty() {
         return HashMap::new();
     }
 
-    let mut sites: HashMap<String, Vec<(BlockId, usize, UseSite)>> = HashMap::new();
-    for block in &cfg.blocks {
-        for (idx, u) in block.uses.iter().enumerate() {
-            sites
-                .entry(u.binding.clone())
-                .or_default()
-                .push((block.id, idx, u.clone()));
-        }
-    }
-
     let mut witnesses = HashMap::new();
-    for (binding, uses) in &sites {
+    for (binding, uses) in sites {
         for (cb, _ci, c) in uses.iter() {
             if c.kind != UseKind::Consume {
                 continue;
@@ -833,9 +851,9 @@ pub fn loop_of_consume_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<Str
                 continue;
             }
             witnesses.insert(
-                binding.clone(),
+                binding.to_string(),
                 RcWitness {
-                    binding: binding.clone(),
+                    binding: binding.to_string(),
                     consume_span: c.span,
                     other_use_span: c.span,
                     consume_block: *cb,
