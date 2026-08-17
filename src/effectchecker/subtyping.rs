@@ -25,7 +25,7 @@ use super::{
 
 impl<'a> super::EffectChecker<'a> {
     pub(crate) fn check_call_site_subtyping(&mut self) {
-        let bodies: Vec<std::rc::Rc<crate::ast::Function>> = self
+        let bodies: Vec<super::FnHandle> = self
             .function_bodies
             .values()
             .cloned()

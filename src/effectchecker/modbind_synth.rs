@@ -504,15 +504,11 @@ impl<'a> super::EffectChecker<'a> {
         // analysis loop without re-borrowing the maps. Cloning is
         // cheap here: the walk produces few results, and this only
         // runs once per program.
-        let work: Vec<(Symbol, std::rc::Rc<crate::ast::Function>)> = self
+        let work: Vec<(Symbol, super::FnHandle)> = self
             .function_bodies
             .iter()
-            .map(|(&n, f)| (n, std::rc::Rc::clone(f)))
-            .chain(
-                self.method_bodies
-                    .iter()
-                    .map(|(&n, f)| (n, std::rc::Rc::clone(f))),
-            )
+            .map(|(&n, f)| (n, f.clone()))
+            .chain(self.method_bodies.iter().map(|(&n, f)| (n, f.clone())))
             .collect();
         for (_fn_name, f) in &work {
             let par_blocks = collect_par_blocks_in_block(&f.body);
@@ -597,7 +593,7 @@ impl<'a> super::EffectChecker<'a> {
     /// SIBLING branch are conservatively skipped (a rare false negative, never
     /// a false positive).
     pub(crate) fn check_captured_local_par_writes(&mut self) {
-        let work: Vec<std::rc::Rc<crate::ast::Function>> = self
+        let work: Vec<super::FnHandle> = self
             .function_bodies
             .values()
             .cloned()

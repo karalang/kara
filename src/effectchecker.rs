@@ -426,6 +426,30 @@ impl BuiltinSyms {
     }
 }
 
+/// Handle to a function body the checker walks: a direct borrow of the
+/// AST for real functions and impl methods (`program` outlives the
+/// checker, so this is the zero-clone common case) or a synthesized
+/// trait-default stub (owned, `Rc`-shared). Cloning a handle is a
+/// pointer copy / refcount bump — never a deep body clone. Before this
+/// existed, `collect_function_info` deep-cloned EVERY function body in
+/// the program into the checker (`Rc::new(f.clone())`) — ~89% of all
+/// front-end `Expr` clone allocations (name-interning spike, DHAT).
+#[derive(Clone)]
+pub(crate) enum FnHandle<'a> {
+    Ast(&'a Function),
+    Stub(Rc<Function>),
+}
+
+impl std::ops::Deref for FnHandle<'_> {
+    type Target = Function;
+    fn deref(&self) -> &Function {
+        match self {
+            FnHandle::Ast(f) => f,
+            FnHandle::Stub(f) => f,
+        }
+    }
+}
+
 pub struct EffectChecker<'a> {
     pub(crate) program: &'a Program,
     /// Per-compilation name interner: every function-name key in the
@@ -457,12 +481,13 @@ pub struct EffectChecker<'a> {
     pub(crate) function_visibility: FxHashMap<Symbol, bool>,
     /// Function spans for error reporting.
     pub(crate) function_spans: FxHashMap<Symbol, Span>,
-    /// Functions and their AST bodies (for inference). `Rc` so the SCC
-    /// convergence loop and the whole-program walks can take a handle
-    /// without deep-cloning every body per pass (review item 9b).
-    pub(crate) function_bodies: FxHashMap<Symbol, Rc<Function>>,
-    /// Impl method bodies: "TypeName.method" → Function (same `Rc` rationale).
-    pub(crate) method_bodies: FxHashMap<Symbol, Rc<Function>>,
+    /// Functions and their AST bodies (for inference). [`FnHandle`]
+    /// borrows the AST directly (the SCC convergence loop and
+    /// whole-program walks clone the HANDLE, never the body — review
+    /// item 9b, then the stage-3 zero-copy upgrade).
+    pub(crate) function_bodies: FxHashMap<Symbol, FnHandle<'a>>,
+    /// Impl method bodies: "TypeName.method" → Function (same rationale).
+    pub(crate) method_bodies: FxHashMap<Symbol, FnHandle<'a>>,
     /// Bare method name → the `method_bodies` keys ending in `.name`, built
     /// once at the end of `collect_function_info`. The name-only fallback in
     /// `collect_calls_in_expr` consults this instead of scanning every key
@@ -1648,12 +1673,15 @@ impl<'a> EffectChecker<'a> {
     }
 
     fn collect_function_info(&mut self) {
-        let items: &[Item] = &self.program.items;
+        // Copy the `&'a Program` out of `self` so the handles borrow the
+        // PROGRAM's lifetime, not this method's `&self` borrow.
+        let program: &'a Program = self.program;
+        let items: &'a [Item] = &program.items;
         for item in items {
             match item {
                 Item::Function(f) => {
                     let sym = self.interner.intern(&f.name);
-                    self.function_bodies.insert(sym, Rc::new(f.clone()));
+                    self.function_bodies.insert(sym, FnHandle::Ast(f));
                     // Seed inferred effects from declarations.
                     // Functions that declare effects are trusted — their bodies
                     // may contain effectful calls we can't trace (e.g., FFI, stdlib).
@@ -1678,7 +1706,7 @@ impl<'a> EffectChecker<'a> {
                         let key = self.interner.dotted(type_sym, bare);
                         if self
                             .method_bodies
-                            .insert(key, Rc::new((**method).clone()))
+                            .insert(key, FnHandle::Ast(method))
                             .is_none()
                         {
                             self.method_name_index.entry(bare).or_default().push(key);
@@ -1738,7 +1766,11 @@ impl<'a> EffectChecker<'a> {
                             no_effect: Vec::new(),
                             abi: None,
                         };
-                        if self.method_bodies.insert(key, Rc::new(stub)).is_none() {
+                        if self
+                            .method_bodies
+                            .insert(key, FnHandle::Stub(Rc::new(stub)))
+                            .is_none()
+                        {
                             self.method_name_index.entry(bare).or_default().push(key);
                         }
                     }

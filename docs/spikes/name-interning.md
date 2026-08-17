@@ -1,6 +1,6 @@
 # Name interning — front-end name-handling cost, measured
 
-**Status:** Stages 0–3e DONE (2026-08-17). Stage 3a is the first slice of the
+**Status:** Stages 0–3f DONE (2026-08-17). Stage 3a is the first slice of the
 `Symbol(u32)` interner proper (the effectchecker's full key space); 3b–3d are
 the DHAT-guided allocation/hashing tails that followed it. Remaining stage-3
 phases (ownership, typechecker, AST identifiers) scoped below. Origin:
@@ -260,6 +260,27 @@ features had moved the baseline from 3d's 0.588B). Verified on fresh
 runtime archives after a sibling runtime symbol (`karac_par_run_auto`)
 staled all four — the loud undefined-symbol failure mode working as
 designed (B-2026-07-28-1).
+
+### Stage 3f — the effectchecker stops cloning the whole AST (LANDED)
+
+The other DHAT standout: 89% of all `Expr::clone` allocations traced to
+ONE line — `collect_function_info`'s `Rc::new(f.clone())`, which
+deep-cloned EVERY function and impl-method body in the program into the
+checker's body tables. The `Rc` (review item 9b) had solved per-pass
+cloning but left the one-time whole-AST clone. `FnHandle<'a>` replaces
+it: a direct `&'a Function` borrow for real functions/methods (the
+checker already holds `&'a Program`, and a borrowed handle even drops
+the old need to detach via `Rc` — the borrow points into the program,
+not into `self`), with `Rc<Function>` kept only for the synthesized
+trait-default stubs. `Deref<Target = Function>` keeps all ~45 access
+sites untouched; five whole-program snapshot sites retype to
+`Vec<FnHandle>`.
+
+Result (interleaved A/B, 3 rounds, synthetic): effectcheck
+**48–52 → 35–41 ms (−25%)**, its allocations **117k → 64k (−45%)**;
+total allocations 657k → 605k; instructions **0.548B → 0.520B (−5.1%)**.
+Effectcheck allocations are now down **97%** from the spike's start
+(2.44M → 64k). Same full verification battery.
 
 ### Remaining stage-3 phases (not started)
 

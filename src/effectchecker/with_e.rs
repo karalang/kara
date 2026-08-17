@@ -28,7 +28,7 @@ impl<'a> super::EffectChecker<'a> {
     /// so they remain independent — a function with two `with _` slots gets
     /// no cross-slot constraint, exactly as today.
     pub(crate) fn check_with_e_unification(&mut self) {
-        let bodies: Vec<std::rc::Rc<crate::ast::Function>> = self
+        let bodies: Vec<super::FnHandle> = self
             .function_bodies
             .values()
             .cloned()
