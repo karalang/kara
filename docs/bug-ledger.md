@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 130 | 0 |
 | run-vs-build | 124 | 1 |
 | codegen-gap | 113 | 0 |
-| missing-feature | 98 | 2 |
+| missing-feature | 98 | 1 |
 | perf | 75 | 1 |
 | false-positive | 70 | 0 |
 | diagnostics | 64 | 0 |
@@ -120,13 +120,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 17 | 0 |
-| effect | 7 | 1 |
+| effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1261 surfaced · 5 open · 1241 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1261 surfaced · 4 open · 1242 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1261 surfaced
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-7 | 2026-08-17 | typecheck | low | DESIGN CALL, not a defect report: should a bare `Span(...)` resolve to the USER's enum variant when the colliding prelude name has no bare-callable form? The same bare name already binds that variant in PATTERN position, so the two positions disagree today. Its sibling row fixed only the diagnostic; the resolution rule is untouched and wants an owner's decision. | resolve_identifier_type (src/typechecker/expr_ops.rs) — the `if is_prelude_type_or_module_name(name) { continue; }` in the variant fallback; decide whether the skip should be narrowed, and to what |
-| B-2026-08-17-8 | 2026-08-17 | effect | low | `#[no_effect(allocates(Heap))]` is spec vocabulary with NO implementation — design.md prescribes it in three passages (5792's purposes list, the corrected real-time-guarantee bullets, 4299's carve-out parenthetical) and the attribute does not parse: `error[parse]: 'allocates' is a reserved keyword`. The B-2026-08-17-4 close predicted this row; this files it, with the measured parse failure and the shipped equivalent the implementer can crib from. | a new `#[no_effect(<verb>(<resource>)…)]` attribute: parser (the reserved-keyword rejection must admit effect-verb syntax inside this attribute's args), AST field, resolver placement validation, effectchecker enforcement. The shipped `#[profile(...)]` machinery (parser/items.rs scan, resolver/collect.rs validation, effectchecker/profile_compat.rs check) is the same shape end to end and is the implementation to mirror. |
 
 ### Wontfix (5)
 
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1261 surfaced
 
 </details>
 
-### Fixed (1241)
+### Fixed (1242)
 
-<details><summary>1241 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1242 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9872,6 +9871,95 @@ test still leaves the env var in a defined state for the next one, and convertin
 its failure into a second "poisoned lock" failure would only bury the real one.
 The header now states the invariant — nothing in this binary may touch
 `KARAC_PAR_ATOMIC_PROMOTION` without holding `ENV_GUARD`. |
+| B-2026-08-17-8 | effect | low | `#[no_effect(allocates(Heap))]` is spec vocabulary with NO implementation — design.md prescribes it in three passages (5792's purposes list, the corr… | FIXED by f0ee064c — `#[no_effect(VERB, ...)]` implemented end to end, mirroring the
+`#[profile(...)]` template the row identified.
+
+WHAT SHIPPED, in the four places the row's tracker named plus two it did not:
+
+  parser/attributes.rs  a carve-out in `parse_attribute` for `no_effect`,
+                        delegating to `try_parse_effect_verb` (now pub(crate))
+  parser/items.rs       `scan_no_effect_attr` → `Function.no_effect`
+  ast                   `Attribute.effect_args`, `Function.no_effect`
+  attribute_validator   `no_effect` added to RECOGNIZED_BARE_ATTRIBUTES
+  resolver/collect.rs   `reject_no_effect_attr`, mirrored at all 12 placement
+                        sites alongside `reject_profile_attr`
+  effectchecker/no_effect.rs   `check_no_effect`, new `NoEffectViolated` kind,
+                        E0416 in the JSON diagnostic map
+  formatter/items.rs    render `effect_args` (see the hazard below)
+  design.md             § No-Effect Attribute — and the `#[profile]` paragraph
+                        the row asked for in the same pass
+  book appendix D       `#[no_effect(...)]` entry beside `#[profile(...)]`
+
+WHY THE VERBS NEEDED THEIR OWN AST FIELD. `AttrArg::value` is an `Expr`, and
+effect verbs are reserved KEYWORDS — that is the whole reason the spec spelling
+died at parse. Routing them through `args` would mean flattening `allocates(Heap)`
+into an identifier string, and that does not round-trip: `reads(A, B)` and
+`reads(fs.File[N])` are both legal effect syntax. So `Attribute.effect_args`
+holds real `EffectVerb`s, parsed by the SAME routine a `with` clause uses. One
+grammar, so the spelling that declares an effect and the spelling that forbids it
+cannot drift.
+
+MATCHING RULE, and why the bare form is the broad one. A bare verb forbids every
+occurrence; a resource list narrows it. `#[no_effect(allocates)]` rejects
+`allocates(Heap)`; `#[no_effect(allocates(Heap))]` rejects `allocates(Heap)` and
+permits `allocates(Arena)`. The alternative reading — bare verb means
+"resource-less occurrences only" — was rejected because `panics` / `blocks` /
+`suspends` carry no resource at all, so it would make `#[no_effect(allocates)]`
+nearly a no-op while `#[no_effect(panics)]` worked: one spelling with two
+strengths depending on which verb it names.
+
+THE FORMATTER WOULD HAVE SILENTLY DESTROYED THE GUARANTEE, which is the find
+worth recording. `format_attributes` renders `attr.args`, so with the verbs in a
+sibling field `karac fmt` emitted a bare `#[no_effect]` — dropping the safety
+declaration entirely, and producing source that no longer parses, since an empty
+list is `E_NO_EFFECT_EMPTY`. Caught by asking what the formatter does with a
+field it was never taught about, not by a failing test. Fixed and pinned by
+`no_effect_attribute_keeps_its_verbs`, which also asserts the fixpoint and that a
+resource-less verb renders bare — `panics()` would not re-parse, because
+`try_parse_effect_verb` returns before looking for `(`.
+
+MEASURED, every arm on the built compiler:
+
+  #[no_effect(allocates(Heap))] + direct Vec.new/push      REJECTED
+  #[no_effect(allocates(Heap))] + allocating callee        REJECTED (transitive)
+  #[no_effect(allocates(Heap))] + pure arithmetic          accepted, runs
+  #[no_effect(allocates)]       + allocates(Heap)          REJECTED (bare = broad)
+  #[no_effect(allocates(Arena))]+ allocates(Heap)          accepted (narrowed)
+  #[no_effect(panics)]          + transitive panic, priv   REJECTED (inferred)
+  #[no_effect(panics)]          + declared `with panics`   REJECTED (declared)
+  inherent method in an impl block                         REJECTED
+  placement on a struct                                    E_NO_EFFECT_INVALID_TARGET
+  #[no_effect] / #[no_effect()]                            E_NO_EFFECT_EMPTY
+  #[no_effect = "allocates"]                               E_NO_EFFECT_STRING_VALUE
+  #[no_effect(embedded)]                                   E_NO_EFFECT_BAD_VERB
+
+THE DECLARED/INFERRED PAIR IS THE ONE THAT MATTERS for correctness: the check
+reads `inferred_effects`, where the declared set (Explicit signatures) and the
+inference result converge, so `pub fn f() with panics` claiming
+`#[no_effect(panics)]` is convicted by its own declaration. A check reading only
+the inference result would have passed every other row in that table.
+
+SPEC EXAMPLES ARE COMPILED, NOT ILLUSTRATIVE. The row exists because design.md
+prescribed a spelling that did not parse, so writing the new section with
+untested code would have reproduced the defect one section over. The first draft
+DID: it used an invented `Array.as_mut_slice()` and omitted the `with panics`
+that indexing's bounds check requires. Both examples in § No-Effect Attribute now
+compile and run as written, and the book snippet is covered by
+`tests/book_snippets.rs`.
+
+NOT DONE, deliberately: module-level `#![no_effect(...)]`. `#[profile]` has the
+same gap for the same reason — the module-attribute AST surface does not carry
+item attributes yet — and design.md's 10508 metaphor ("a project-wide
+`#[no_effect]` applied to every function") describes a profile, not a module
+attribute, so nothing in the spec is left unimplemented by stopping here.
+
+TESTS: 5 parser (spec spelling, multi-verb + bare verb, both empty spellings,
+string shorthand, non-verb arg), 3 effectchecker (the allocation-free twin the
+sibling test's comment promised, the verb/resource matching pair, method +
+declared-effect), 1 formatter round-trip.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features
+llvm` suite. |
 | B-2026-08-17-9 | other | low | `scripts/asan-o0-leg.sh` calls every new -O0 failure a real leak -- "ASAN is reporting on memory the program actually touched" -- but under KARAC_REQ… | FIXED by 394fc56d, in the new-failure branch of scripts/asan-o0-leg.sh.
 
 THE MESSAGE ASSERTED ITS OWN DIAGNOSIS. Every entry in `new_failures` got the
