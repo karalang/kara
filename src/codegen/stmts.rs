@@ -10073,7 +10073,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     | "char"
                             ))
                 });
-                if !is_scalar && !is_string && !(vec_elem.is_some() && vec_elem_ok) {
+                if !(is_scalar || is_string || (vec_elem.is_some() && vec_elem_ok)) {
                     return Err(format!(
                         "deferred initialization of this type (`let {name}: …;`) is not \
                          yet lowered — initialize at the declaration (`let {name}: T = \
