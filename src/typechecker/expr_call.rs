@@ -978,12 +978,23 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // Built-in diverging functions: todo() and unreachable()
+        // Built-in diverging functions: todo(), unreachable(), and panic().
         // Accept 0 or 1 String argument; return Never (they never return normally).
         // Local-binding shadow guard (B-2026-08-01-26): a closure bound to the
         // name wins, same as the `spawn` / `ref_eq` intercepts above.
+        //
+        // `panic` joined this intercept with B-2026-08-16-6: it had NO
+        // typechecker arm at all — the interpreter (`eval_builtin_diverge`)
+        // and codegen (`call_dispatch`) both handle the three names as one
+        // diverging family, but a `panic(..)` call fell through here to the
+        // lenient unknown-callee path and typed as `Error`, which unifies
+        // with anything. That made `fn f() -> i64 { panic("boom"); }` a
+        // false positive for the missing-return check (the body read as
+        // falling through rather than diverging) and let
+        // `let x: String = panic(42)` pass while `todo(42)` errors.
         if let ExprKind::Identifier(name) = &callee.kind {
-            if (name == "todo" || name == "unreachable") && self.local_scope.lookup(name).is_none()
+            if (name == "todo" || name == "unreachable" || name == "panic")
+                && self.local_scope.lookup(name).is_none()
             {
                 match args.len() {
                     0 => {}

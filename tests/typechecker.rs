@@ -12929,7 +12929,7 @@ fn test_regex_replace_all_ok() {
     typecheck_ok(
         r#"fn f() -> String {
              let r = Regex.compile("[0-9]+").unwrap();
-             let _s = r.replace_all("abc 123", "NUM");
+             r.replace_all("abc 123", "NUM")
          }"#,
     );
 }
@@ -38427,4 +38427,107 @@ fn ref_string_scrutinee_without_a_wildcard_is_rejected() {
             .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
         "an open-domain `ref` scrutinee still needs a wildcard, got: {errors:?}"
     );
+}
+
+// ── B-2026-08-16-6: a tail-less body must satisfy the declared return ──────
+
+/// The five accepted-when-filed shapes: a declared non-Unit return with a body
+/// that can complete without producing a value. All were passing `karac check`
+/// while the interpreter handed back `()` (rendering `[()]` for a String-typed
+/// call) and the AOT binary printed nothing.
+#[test]
+fn tailless_body_with_non_unit_return_is_rejected() {
+    for (label, src) in [
+        ("empty body -> String", "fn f() -> String { }"),
+        ("empty body -> i64", "fn f() -> i64 { }"),
+        (
+            "empty body -> user struct",
+            "struct S { x: i64 }\nfn f() -> S { }",
+        ),
+        (
+            "ref param, empty body -> String",
+            "fn f(d: ref String) -> String { }",
+        ),
+        ("stmt but no tail -> i64", "fn f() -> i64 { let x = 1; }"),
+        (
+            "impl method, empty body -> i64",
+            "struct S { x: i64 }\nimpl S { fn m(ref self) -> i64 { } }",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::ReturnTypeMismatch
+                    && e.message.contains("without producing a value")),
+            "{label}: expected the missing-return-value error, got: {errors:?}"
+        );
+    }
+    // A trailing `if` with a partial `return` parses as the block's final
+    // expression, so it is (and was) rejected on the tail-expression path
+    // instead — a different message, the same rejection. Pinned so the two
+    // paths keep covering the whole surface between them.
+    let errors = typecheck_errors("fn f(c: bool) -> i64 { if c { return 1; } }");
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "partial-return trailing if: expected the tail mismatch, got: {errors:?}"
+    );
+}
+
+/// The guard the ledger row asks for: every correct form keeps compiling — a
+/// tail expression, an explicit `return`, a genuine no-return function, and
+/// each diverging body shape (`return` on every path, `loop`, all-arms-return
+/// `match`, `panic`).
+#[test]
+fn correct_return_forms_stay_accepted() {
+    for (label, src) in [
+        ("tail expression", "fn f() -> i64 { 42 }"),
+        ("explicit return", "fn f() -> i64 { return 42; }"),
+        ("no return type", "fn f() { }"),
+        ("unit return type", "fn f() -> () { }"),
+        (
+            "both if arms return",
+            "fn f(c: bool) -> i64 { if c { return 1; } else { return 2; } }",
+        ),
+        (
+            "if-return then unconditional return",
+            "fn f(c: bool) -> i64 { if c { return 1; } return 2; }",
+        ),
+        (
+            "loop then return after break",
+            "fn f() -> i64 { loop { break; } return 3; }",
+        ),
+        (
+            "all match arms return",
+            "fn f(n: i64) -> String { match n { 0 => { return \"zero\"; } _ => { return \"many\"; } } }",
+        ),
+        ("body diverges via panic", "fn f() -> i64 { panic(\"unreachable\"); }"),
+        ("body diverges via todo", "fn f() -> i64 { todo(); }"),
+    ] {
+        let result = typecheck_ok(src);
+        assert!(
+            result.errors.is_empty(),
+            "{label}: must stay accepted, got: {:?}",
+            result.errors
+        );
+    }
+}
+
+/// `panic` joined the `todo`/`unreachable` diverging-builtin intercept as part
+/// of the same fix: it previously had no typechecker arm at all and typed as
+/// the lenient `Error` (unifying with anything), which both made diverging
+/// bodies look like fall-through and let `let x: String = panic(42)` pass
+/// while `todo(42)` errors.
+#[test]
+fn panic_types_as_never_and_checks_its_argument() {
+    // A non-str message is rejected, exactly as todo()/unreachable() already do.
+    let errors = typecheck_errors("fn main() { panic(42); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("message must be a 'str'")),
+        "panic(42) must reject the non-str message, got: {errors:?}"
+    );
+    // A local binding shadowing the builtin still wins (B-2026-08-01-26).
+    typecheck_ok("fn main() { let panic = |n: i64| n + 1; let _ = panic(42); }");
 }

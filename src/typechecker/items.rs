@@ -1817,7 +1817,33 @@ impl<'a> super::TypeChecker<'a> {
         if f.body.final_expr.is_some() {
             self.check_block_against(&f.body, &return_type);
         } else {
-            self.infer_block(&f.body);
+            // B-2026-08-16-6 — a tail-less body must still satisfy the
+            // declared return type. `infer_block` answers `Never` when the
+            // statement walk diverged on every path (explicit `return`s, a
+            // `loop`, a both-arms-return `if`/`match`, `panic`) and `Unit`
+            // when control can fall off the end — and a body that can fall
+            // off the end produces no value, so a non-Unit declaration is
+            // unsatisfiable. Without this arm the declared type was never
+            // reconciled at all on this path: `fn f() -> String { }` passed
+            // check, the interpreter handed back `()` (rendering `[()]` for
+            // a String-typed call), and the AOT binary printed nothing.
+            // `ReturnTypeMismatch` keeps it soft for `karac run`'s lenient
+            // script path, same as every other return mismatch.
+            let body_ty = self.infer_block(&f.body);
+            if body_ty == Type::Unit && !matches!(return_type, Type::Unit | Type::Error) {
+                let span = f.return_type.as_ref().map(|rt| rt.span).unwrap_or(f.span);
+                self.type_error(
+                    format!(
+                        "function '{}' declares return type '{}' but its body can complete \
+                         without producing a value — end it with a tail expression, `return` \
+                         on every path, or declare no return type",
+                        f.name,
+                        type_display(&return_type)
+                    ),
+                    span,
+                    TypeErrorKind::ReturnTypeMismatch,
+                );
+            }
         }
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
