@@ -37868,51 +37868,71 @@ fn test_bare_type_name_in_call_position_rejected() {
     );
 }
 
-// ── a prelude-colliding enum variant gets the QUALIFIED remedy ──
+// ── a prelude-colliding enum variant RESOLVES bare in value position ──
 
 #[test]
-fn prelude_colliding_variant_remedy_names_the_qualified_form() {
-    // `Span` / `File` are scope-0 stdlib types, so the variant fallback in
-    // `resolve_identifier_type` deliberately skips the user's variant and the
-    // bare name resolves to the type — by design, and the variant stays
-    // reachable qualified. The DIAGNOSTIC did not say so: it fell through to
-    // the generic prelude arm and suggested `Span.new(…)`, naming the
-    // `std.tracing` struct, which has no `new` either. Following the compiler's
-    // own advice therefore produced a SECOND error and no reachable third step
-    // — the dead end this pins shut.
-    for (src, owner, want) in [
-        (
-            "enum Shape { Point(String), Span(String, i64) }\n\
-             fn main() { let a = Span(\"b\", 1); let _ = a; }",
-            "Shape",
-            "`Shape.Span(…)`",
-        ),
-        // Unit variant: the remedy must NOT grow a call form it cannot take.
-        (
-            "enum Mode { Fast(i64), File }\n\
-             fn main() { let a = File; let _ = a; }",
-            "Mode",
-            "`Mode.File`",
-        ),
+fn prelude_colliding_variant_resolves_bare_in_value_position() {
+    // B-2026-08-17-7. `Span` / `File` are scope-0 stdlib types, so the
+    // variant fallback in `resolve_identifier_type` skips the user's variant
+    // (load-bearing for path FIRST segments — `String.from` must stay the
+    // type). But a bare identifier that is the WHOLE expression — which is
+    // also how a call's callee is typed — has no legal type-name meaning at
+    // all, so every one of these shapes was an error, while PATTERN position
+    // already bound the user's variant (`match t { Span(n, w) => … }`). The
+    // fix resolves exactly that erroring set to the variant, closing the
+    // positional asymmetry: what a match can bind, an expression can build.
+    for src in [
+        // Tuple variant called bare, prelude-colliding name.
+        "enum Shape { Point(String), Span(String, i64) }\n\
+         fn main() { let a = Span(\"b\", 1); match a { Shape.Span(_, n) => print(n), _ => print(0) } }",
+        // Unit variant as a bare value.
+        "enum Mode { Fast(i64), File }\n\
+         fn main() { let a = File; match a { Mode.File => print(1), _ => print(0) } }",
+        // Generic enum: the constructor instantiates from the argument.
+        "enum Box[T] { Entry(T), Empty }\n\
+         fn main() { let b = Entry(42); match b { Box.Entry(v) => print(v), _ => print(0) } }",
     ] {
-        let errors = typecheck_errors(src);
-        let msgs: Vec<&String> = errors.iter().map(|e| &e.message).collect();
-        assert!(
-            msgs.iter().any(|m| m.contains(want)),
-            "remedy must name the qualified form {want}, got: {msgs:?}"
-        );
-        assert!(
-            msgs.iter().any(|m| m.contains(owner)),
-            "remedy must name the owning enum {owner}, got: {msgs:?}"
-        );
-        // The whole point: the OLD advice is gone. `.new(` on a stdlib type the
-        // author never mentioned is the unfollowable step.
-        assert!(
-            !msgs.iter().any(|m| m.contains(".new(")),
-            "remedy must not suggest an associated `new` on the shadowing type, \
-             got: {msgs:?}"
-        );
+        typecheck_ok(src);
     }
+    // The path-root meaning is untouched: `String` at the head of a dotted
+    // path stays the stdlib type even when a user variant borrows the name.
+    typecheck_ok(
+        "enum Json { Null, String(String) }\n\
+         fn main() { let s = String.from(7); let _ = s; }",
+    );
+    // Builtin bare-callable variants (`Some`/`Ok`/…) never route through the
+    // user's enum, even when a user variant shares the name.
+    typecheck_ok(
+        "enum Wrap { Some(i64), Other }\n\
+         fn main() { let s = Some(\"x\"); match s { Option.Some(v) => print(v), _ => print(\"n\") } }",
+    );
+}
+
+// ── a STRUCT-shaped colliding variant keeps the qualified remedy ──
+
+#[test]
+fn prelude_colliding_struct_variant_remedy_names_the_braced_form() {
+    // The one variant shape `user_variant_value_type` deliberately declines:
+    // a struct-shaped variant has no bare-call form anywhere, so it keeps
+    // B-2026-08-11-6's diagnostic — with B-2026-08-17-5's qualified remedy,
+    // now rendered as the braced literal (the `(…)` call form would be a
+    // guaranteed second error for this shape).
+    let errors = typecheck_errors(
+        "enum Shape { Point(String), Span { lo: i64 } }\n\
+         fn main() { let a = Span(1); let _ = a; }",
+    );
+    let msgs: Vec<&String> = errors.iter().map(|e| &e.message).collect();
+    assert!(
+        msgs.iter().any(|m| m.contains("`Shape.Span { lo: … }`")),
+        "remedy must name the braced qualified form, got: {msgs:?}"
+    );
+    // The pre-B-2026-08-17-5 dead end stays shut: no `.new(` on a stdlib type
+    // the author never mentioned.
+    assert!(
+        !msgs.iter().any(|m| m.contains(".new(")),
+        "remedy must not suggest an associated `new` on the shadowing type, \
+         got: {msgs:?}"
+    );
 }
 
 #[test]

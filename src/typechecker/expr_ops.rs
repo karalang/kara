@@ -504,14 +504,27 @@ impl<'a> super::TypeChecker<'a> {
         // SECOND error and no reachable third step. Name the qualified form
         // instead; it is the one edit that compiles.
         if let Some(owner) = self.user_enum_owning_variant(name) {
-            let unit = self.env.enums[&owner]
+            // Since B-2026-08-17-7, unit and tuple variants RESOLVE bare at
+            // the one call site that surfaces this message (`infer_expr`'s
+            // bare-identifier arm checks `user_variant_value_type` first), so
+            // the variant reaching this arm as a diagnostic is Struct-shaped —
+            // the shape with no bare-call form anywhere. The remedy must name
+            // the braced literal; the `(…)` call form it used to suggest is a
+            // guaranteed second error for it. Unit/Tuple formats are kept
+            // correct anyway for the `fields.rs` gate caller (which discards
+            // the text) and any future caller.
+            let call = match self.env.enums[&owner]
                 .variants
                 .iter()
-                .any(|(v, t)| v == name && matches!(t, VariantTypeInfo::Unit));
-            let call = if unit {
-                format!("{owner}.{name}")
-            } else {
-                format!("{owner}.{name}(…)")
+                .find(|(v, _)| v == name)
+                .map(|(_, t)| t)
+            {
+                Some(VariantTypeInfo::Unit) => format!("{owner}.{name}"),
+                Some(VariantTypeInfo::Struct(fields)) => match fields.first() {
+                    Some((f, _)) => format!("{owner}.{name} {{ {f}: … }}"),
+                    None => format!("{owner}.{name} {{ }}"),
+                },
+                _ => format!("{owner}.{name}(…)"),
             };
             return Some(format!(
                 "'{name}' is a type, not a function — it is also a variant of \
@@ -587,6 +600,64 @@ impl<'a> super::TypeChecker<'a> {
             .collect();
         owners.sort_unstable();
         owners.first().map(|n| (*n).clone())
+    }
+
+    /// B-2026-08-17-7 — the value/constructor type of a USER-declared enum
+    /// variant whose bare name collides with a prelude type, for the ONE
+    /// position where that name can only mean the variant: a bare identifier
+    /// that is the whole expression (which is also how `infer_call` types a
+    /// call's callee). `None` for every name the built-ins genuinely own.
+    ///
+    /// This deliberately does NOT live in `resolve_identifier_type`'s variant
+    /// fallback, whose prelude skip is load-bearing for a different caller:
+    /// that helper also resolves a path's FIRST segment, where `String` in
+    /// `String.from(...)` must stay the type even when `Json.String(String)`
+    /// exists — the Slice F scenario its comment documents. Here, by
+    /// contrast, the identifier is the entire expression, so a type or module
+    /// name has no legal meaning at all; before this fallback every one of
+    /// these shapes was an error (B-2026-08-11-6's diagnostic, with
+    /// B-2026-08-17-5's qualified-form remedy). Resolving them can therefore
+    /// change no working program — it converts exactly the erroring set, and
+    /// it converts it to the meaning PATTERN position has always given the
+    /// same bare name (`match t { Span(n, w) => .. }` binds the user's
+    /// variant), closing the positional asymmetry the row measured.
+    ///
+    /// Exclusions, each load-bearing:
+    ///   - `builtin_variant_owner` names (`Some`/`None`/`Ok`/`Err`): the
+    ///     built-in variant IS bare-callable, resolves fine, and never
+    ///     reaches the error path — listed here for the reader, not the code.
+    ///   - stdlib-origin and prelude-NAMED enums: only a variant the USER
+    ///     declared can outrank a prelude name they also chose to use.
+    ///   - `Struct`-shaped variants: no bare-call form exists for them
+    ///     anywhere, so they keep the diagnostic (with -5's qualified-form
+    ///     remedy) rather than resolving to something uncallable.
+    ///
+    /// Owner choice mirrors `user_enum_owning_variant` (sorted, first) so the
+    /// diagnostic and the resolution can never name different enums.
+    pub(super) fn user_variant_value_type(&self, name: &str) -> Option<Type> {
+        if Self::builtin_variant_owner(name).is_some() {
+            return None;
+        }
+        let owner = self.user_enum_owning_variant(name)?;
+        let enum_info = &self.env.enums[&owner];
+        let (_, variant_type) = enum_info.variants.iter().find(|(v, _)| v == name)?;
+        let return_args: Vec<Type> = enum_info
+            .generic_params
+            .iter()
+            .map(|p| Type::TypeParam(p.clone()))
+            .collect();
+        let return_ty = Type::Named {
+            name: owner.clone(),
+            args: return_args,
+        };
+        match variant_type {
+            VariantTypeInfo::Unit => Some(return_ty),
+            VariantTypeInfo::Tuple(fields) => Some(Type::Function {
+                params: fields.clone(),
+                return_type: Box::new(return_ty),
+            }),
+            VariantTypeInfo::Struct(_) => None,
+        }
     }
 
     pub(super) fn resolve_path_type(&mut self, segments: &[String], span: &Span) -> Type {

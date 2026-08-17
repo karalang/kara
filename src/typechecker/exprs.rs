@@ -3729,6 +3729,19 @@ impl<'a> super::TypeChecker<'a> {
                 // dispatch like `RandomSource.next()` legitimately passes
                 // through before later machinery resolves it.
                 if ty == Type::Error {
+                    // B-2026-08-17-7 — before diagnosing a type name in value
+                    // position, try the USER's colliding enum variant. In this
+                    // position (a bare identifier that is the whole
+                    // expression, including a call's callee) a prelude type
+                    // or module name has no legal meaning, so every shape
+                    // this resolves was an error until now — and pattern
+                    // position already binds the same bare name to the same
+                    // variant. See `user_variant_value_type` for the
+                    // exclusions and why this must not live in
+                    // `resolve_identifier_type`.
+                    if let Some(vt) = self.user_variant_value_type(name) {
+                        return vt;
+                    }
                     if let Some(msg) = self.type_name_in_value_position_message(name) {
                         self.type_error(
                             msg,

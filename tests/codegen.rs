@@ -96715,6 +96715,44 @@ fn main() {
         );
     }
 
+    /// B-2026-08-17-7 — a user enum variant whose bare name collides with a
+    /// prelude type constructs BARE in value position, the same meaning
+    /// pattern position always gave it. `Request`/`Response` are std.http
+    /// prelude names and `File` is a scope-0 stdlib type; before the fix
+    /// every bare use below was "'Request' is a type, not a function" while
+    /// `match e { Request(p) => … }` happily bound the user's variant.
+    /// Paired with `test_prelude_colliding_variant_ctor_oracle` in
+    /// `tests/interpreter.rs`.
+    #[test]
+    fn test_e2e_prelude_colliding_variant_constructs_bare() {
+        assert_eq!(
+            run_program(
+                r#"
+enum Ev { Request(String), Response(i64), Idle }
+enum Mode { Fast(i64), File }
+fn describe(e: Ev) -> String {
+    match e {
+        Request(p) => f"req {p}",
+        Response(c) => f"resp {c}",
+        Idle => "idle",
+    }
+}
+fn main() {
+    let a = Request("/users");
+    let b = Response(200);
+    let c = Idle;
+    println(describe(a));
+    println(describe(b));
+    println(describe(c));
+    let m = File;
+    match m { Mode.File => println("file"), _ => println("fast") }
+}
+"#
+            ),
+            Some("req /users\nresp 200\nidle\nfile\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-24 — the TUPLE-element sibling of B-2026-08-15-21.
     /// `s[0].0 = v` through a `mut Slice[(A, B)]` param failed the build with
     /// "tuple-element assignment through this receiver shape is not yet

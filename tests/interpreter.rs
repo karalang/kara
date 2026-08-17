@@ -33716,3 +33716,32 @@ fn test_second_field_move_of_one_binding_oracle() {
          }\n");
     assert_eq!(out, "[ALPHA] lines=1\n");
 }
+
+#[test]
+fn test_prelude_colliding_variant_ctor_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s
+    // `test_e2e_prelude_colliding_variant_constructs_bare` (B-2026-08-17-7).
+    // `Request`/`Response`/`File` are prelude names; the bare constructor in
+    // value position must mean the USER's variant on all three backends.
+    let out = run("\n\
+         enum Ev { Request(String), Response(i64), Idle }\n\
+         enum Mode { Fast(i64), File }\n\
+         fn describe(e: Ev) -> String {\n\
+             match e {\n\
+                 Request(p) => f\"req {p}\",\n\
+                 Response(c) => f\"resp {c}\",\n\
+                 Idle => \"idle\",\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let a = Request(\"/users\");\n\
+             let b = Response(200);\n\
+             let c = Idle;\n\
+             println(describe(a));\n\
+             println(describe(b));\n\
+             println(describe(c));\n\
+             let m = File;\n\
+             match m { Mode.File => println(\"file\"), _ => println(\"fast\") }\n\
+         }\n");
+    assert_eq!(out, "req /users\nresp 200\nidle\nfile\n");
+}
