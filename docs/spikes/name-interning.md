@@ -1,6 +1,6 @@
 # Name interning — front-end name-handling cost, measured
 
-**Status:** Stages 0–2½ DONE (2026-08-17). Stage 3 (the `Symbol(u32)` interner
+**Status:** Stages 0–2¾ DONE (2026-08-17). Stage 3 (the `Symbol(u32)` interner
 proper) is scoped below with measured expectations, not started. Origin:
 `docs/spikes/structural-debt.md` § "Name interning (review item 9c)".
 
@@ -106,12 +106,32 @@ structs (~50 `TypeCheckResult` fields and every consumer annotation in
 interpreter/codegen/concurrency) — a separate decision recorded here, not
 taken opportunistically. Landed as `cccfc6d9`.
 
+## Stage 2¾ — the seam moved through the result structs
+
+The SpanKey decision, taken: every `HashMap<SpanKey, _>` /
+`HashSet<SpanKey>` in the crate went Fx — public result structs
+(TypeCheckResult, OwnershipCheckResult, ResolveResult, EffectCheckResult)
+included, with consumers in interpreter/codegen/lowering/monomorphization
+following mechanically (the compiler found every mismatch site; nothing
+needed judgment beyond keeping `Program`'s lowering-mirrored tables
+consistent end-to-end). The stage-2½ boundary collects on the typechecker
+result reverted to direct moves — moving the seam *removed* code.
+
+Result (interleaved A/B, 3 rounds): front end **157–169 ms vs 168–184 ms
+(−6–8% wall)** — typecheck −9%, ownership −7%, effectcheck −4% —
+instructions **0.863B (−3.9%)**. Roughly double the stage-2½ win, i.e. the
+original "span-keyed maps stay std" rule was leaving more on the table
+than the String-keyed swap it accompanied. Remaining SipHash: ~9.5%
+(Scope.names, the effectchecker's Effect sets, AST-side tables — all
+colder). Landed as `e02d28f6`.
+
 ## Stage 3 — the interner proper (NOT STARTED; scope before starting)
 
-What the remaining profile says (post-stage-2½ callgrind): ~33% allocator,
-~13% SipHash (nearly all `SpanKey` maps + `Scope.names`, see stage 2½), ~4%
+What the remaining profile says (post-stage-2¾ callgrind): ~33% allocator,
+~9.5% SipHash (Scope.names, Effect sets, AST tables — the cold tail), ~4%
 memcpy. The clone traffic FxHash cannot touch — 1.37M allocs, largely
-`String` key clones and `Type`/`Token` clones — is the interning target.
+`String` key clones and `Type`/`Token` clones — is the interning target:
+hashing is now largely burned down, and the allocator is the wall.
 
 - **Ceiling:** eliminating all string hash+clone+compare overhead is worth
   roughly 30–40% of the *current* front end (diffuse; no single site).
@@ -122,13 +142,9 @@ memcpy. The clone traffic FxHash cannot touch — 1.37M allocs, largely
   hundreds of sites; every one becomes an intern() or a Symbol-carrying AST.
   This is the "large, cross-phase change" the backlog predicted — multiple
   dedicated sessions, each ending green.
-- **Cheaper intermediates, ranked by the stage-2½ profile:** (a) moving the
-  std/Fx seam through the public result structs so the `SpanKey` maps go Fx
-  — mechanical but wide (~50 result fields + consumer annotations), worth
-  a good share of the remaining ~13% SipHash; (b) the Symbol conversion
-  itself, which subsumes (a) for String keys but not for `SpanKey`s. If
-  stage 3 is taken up, do (a) first as its own slice — it is
-  independently testable and shrinks the Symbol diff.
+- **Cheaper intermediates:** exhausted — stage 2¾ took the last one.
+  What remains is the Symbol conversion itself (the allocator share) and
+  the cold SipHash tail, which is not worth a slice on its own.
 
 ## Lifecycle
 

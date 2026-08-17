@@ -34,7 +34,7 @@ the `expr_method_call.rs` region (~1,490), `contextual_scalar_collection_type`
 forced the parser recursion ceiling (B-2026-08-16-4) down to 128 — shrinking
 them buys both readability and nesting headroom.
 
-## Name interning (review item 9c) — spike RUNNING, stages 0–2 landed
+## Name interning (review item 9c) — spike RUNNING, stages 0–2¾ landed
 
 Measured and partially burned down in
 [`name-interning.md`](name-interning.md) (2026-08-17): a front-end phase
@@ -44,10 +44,12 @@ of front-end instructions in string-identity overhead; fixing the
 effectchecker's internal tables, and the seam extended to
 typechecker/ownership/resolver internals (stage 2½) cut the front end
 **~-33% wall / −57% allocations** on the 10.9k-line synthetic corpus.
-Remaining, per the spike doc's ranked list: move the std/Fx seam through
-the public result structs so the high-traffic `SpanKey` maps go Fx (most
-of the remaining ~13% SipHash), then decide the `Symbol(u32)` conversion
-proper — scope and expected ceiling are in the spike doc.
+Stage 2¾ then moved the std/Fx seam through the public result structs so
+every `SpanKey` map went Fx (−6–8% wall on top; session net ~−36%,
+instructions 1.62B → 0.863B). Hashing is now largely burned down (~9.5%
+SipHash left, all cold); the remaining lever is the `Symbol(u32)`
+conversion proper against the ~33% allocator share — scope and expected
+ceiling are in the spike doc.
 
 ## Smaller residuals
 
