@@ -101,8 +101,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 75 | 1 |
 | false-positive | 71 | 1 |
 | diagnostics | 65 | 1 |
+| soundness | 49 | 1 |
 | crash | 49 | 1 |
-| soundness | 48 | 0 |
 | other | 35 | 1 |
 | use-after-free | 20 | 0 |
 
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 899 | 2 |
 | typecheck | 179 | 2 |
 | interp | 146 | 1 |
-| ownership | 54 | 1 |
+| ownership | 55 | 2 |
 | other | 49 | 1 |
 | autopar | 47 | 0 |
 | cli | 35 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1264 surfaced · 6 open · 1243 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced · 7 open · 1243 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1264 surfaced
 | B-2026-08-17-10 | 2026-08-17 | typecheck+interp+codegen | medium | INDEXING AN ITERATOR TYPECHECKS, THEN EVERY BACKEND IMPROVISES DIFFERENTLY: `karac check` passes `w.chars()[0]` and `v.iter()[0]`; the interpreter dies on an `unreachable!()` INTERNAL ERROR, while codegen either compiles it correctly (let-bound `chars`) or fails the build (`iter`, or `chars` indexed inline). The typechecker should reject the index. | The typechecker's index-expression rule admits an `Iterator` operand. `src/interpreter/eval_expr.rs:747` then hits `unreachable!()` — and its own panic text names the two candidate causes, the second of which is the right one: "the typechecker accepted an unindexable operand pair". |
 | B-2026-08-17-11 | 2026-08-17 | typecheck+cli | medium | E0200'S SUGGESTED REPAIR IS THE UNSAFE ONE: `cannot mix 'u8' and 'i64' ... cast explicitly with `as` (e.g. the operand as 'u8')` names the NARROWING direction, which turns a compile error into a runtime overflow trap; widening to i64 is the correct repair. It also carries no `replacement`, so `karac fix` declines it — a diagnostic that states its own fix in prose but cannot apply it. | The E0200 mixed-integer-width diagnostic: both its example text (`the operand as 'u8'`) and its missing `replacement` field. Machine-applicable diagnostics (e.g. E0001 `!` -> `not`) emit `replacement: {offset, length, text}`; E0200 emits none. |
 | B-2026-08-17-12 | 2026-08-17 | ownership | high | MULTIPLE READERS IN A `par {}` BLOCK ARE REJECTED -- design.md's edge case #1, written out verbatim and labelled "ALLOWED (multiple readers)", fails with `plain struct `Vec` cannot be accessed from multiple concurrent tasks`. Nothing is written anywhere in the program. The check counts REFERENCES per branch with no read/write distinction, so the case the whole effect-conflict apparatus exists to permit is the one it refuses. | src/ownership/concurrent_shared.rs -- `E_CONCURRENT_PLAIN_STRUCT` / `check_concurrent_shared_struct`. Its own module doc states the rule: "Detects struct/enum bindings that are REFERENCED from two or more top-level statements (branches)" -- a reference count, not a conflict analysis. |
+| B-2026-08-17-13 | 2026-08-17 | ownership | high | READING AN UNINITIALIZED BINDING IS NOT REJECTED: `let x: i64; println(f"{x}")` passes `karac check`, the interpreter prints `()` -- the UNIT value in an `i64` slot -- and both compiled backends fail with `codegen failed: Undefined variable 'x'`. design.md calls this "always a DA error". Every flow-sensitive definite-assignment rule the spec specifies is unenforced; the `ValueState::Uninit` machinery exists and drives the init-vs-reassign rule, but no read is ever checked against it. | src/ownership.rs -- `ValueState::Uninit`, `snapshot_uninit`, `restore_uninit_after_loop` (whose own doc comment cites "the 'loop body might run zero times' invariant for definite-assignment"). The state exists and is maintained; the READ check is what is missing. Lead, not a conclusion -- I did not trace every consumer. |
 
 ### Wontfix (5)
 
