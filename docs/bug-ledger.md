@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 124 | 1 |
-| codegen-gap | 114 | 1 |
+| codegen-gap | 114 | 0 |
 | missing-feature | 98 | 0 |
 | perf | 76 | 1 |
 | false-positive | 73 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 901 | 2 |
+| codegen | 901 | 1 |
 | typecheck | 180 | 0 |
 | interp | 146 | 0 |
 | ownership | 57 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 5 open · 1250 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 4 open · 1251 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-17 | 2026-08-17 | ownership | low | `let x: i64; loop { x = 1; break; } println(x);` is REJECTED with use-of-uninitialized, but design.md's DA table lists the shape as OK — an infinite `loop`'s body runs at least once, so an assignment that dominates every `break` initializes. The restore-after-loop is applied uniformly to `loop` as if the body could run zero times. Masked until now by the f-string hole (the spec-transcription probes printed via f-strings, so the row that produced B-2026-08-17-13 recorded this shape as accepted-correct). | restore_uninit_after_loop — an infinite `loop` runs its body at least once, but the post-loop restore treats it like a zero-iteration-capable while/for |
-| B-2026-08-17-18 | 2026-08-17 | codegen | low | Deferred initialization of NON-SCALAR locals (`let s: String; if c { s = ... } else { s = ... }`) is check-clean and interp-correct but refuses to build — now with an actionable message (B-2026-08-17-13 replaced the silent store-drop + cryptic `Undefined variable` with a loud deferral naming the remedy). Scalars lower fully; the heap classes need the let-site sidecar registration (string_vars / vec_elem_types / drop wiring) replayed from a TypeExpr instead of a value. | the StmtKind::LetUninit arm in src/codegen/stmts.rs — extend past the scalar class |
 
 ### Wontfix (5)
 
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced
 
 </details>
 
-### Fixed (1250)
+### Fixed (1251)
 
-<details><summary>1250 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1251 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10280,6 +10279,31 @@ THE GATE: the RHS's recorded type discriminates what the span cannot. `expr_type
 VERIFIED: the row's repro accepts and runs identically on all three backends (interp / AOT / auto-par); the genuine-conflict controls still fire (live mut-slice binding vs new slice -> SliceBorrowConflict; ref-carrying chain -> still errors). The grandfathered harness entry for test_e2e_string_bytes_round_trip_and_slice_to_vec (tests/common/mod.rs OWNERSHIP_GATE_GRANDFATHERED) is REMOVED per this row -- the list is empty again on that side -- and that E2E passes under the strict gate; it and the new ownership tests (slice_chain_copied_out_does_not_borrow_the_source, slice_binding_and_ref_carrying_chain_still_conflict) are red at baseline.
 
 DELIBERATELY LEFT: the `.first()` shape's rejection is arguably over-strict in ITS OWN way (the error fires at creation, before any conflicting use), but it is sound conservatism over a genuinely borrow-carrying value, pre-existing, and out of this row's copy-out scope. |
+| B-2026-08-17-18 | codegen | low | Deferred initialization of NON-SCALAR locals (`let s: String; if c { s = .. | FIXED by f52a7f9 for the String and Vec classes — the row's headline shape
+(`let s: String; if c { s = ... } else { s = ... }`) now builds and runs
+with interpreter parity, as do `Vec[i64]`-family and `Vec[String]` deferred
+declarations.
+
+THE ZERO-HEADER CLAIM, MEASURED AS THE ROW DEMANDED. The argument — a
+zeroed {ptr, len, cap} makes uniform drop-previous safe because every
+displaced-value path is cap-guarded — held under ASAN+LSan for all three
+classes, including the shapes that would expose it failing: a REASSIGNMENT
+over an owned heap buffer (the first value must be freed exactly once, the
+zero header never), realloc-forcing pushes, and a per-element Vec[String]
+drain at scope exit. Fixtures asan_deferred_init_* run under
+KARAC_REQUIRE_RUNTIME_ARCHIVE=1 so they provably exercised real binaries.
+
+WHAT REMAINS DEFERRED, fail-closed by an element gate rather than by
+omission: user-struct / Map / Set / nested-Vec elements and Map/Set/user
+types themselves — each needs the per-element drop-fn plumbing
+(elem_agg_drop / elem_map_drop) threaded from the declared TypeExpr, and
+per the row's own discipline that is a claim to measure, not assume. The
+deferral message names the widened supported set (scalars, String, Vec of
+scalar/String), so the next person hitting the wall knows exactly where it
+now stands. If someone needs those classes, the pattern to follow is this
+fix plus vec_elem_agg_drop_for_type_expr at the registration site.
+
+Full llvm suite 105 binaries green, clippy --all-targets + fmt clean. |
 
 </details>
 
