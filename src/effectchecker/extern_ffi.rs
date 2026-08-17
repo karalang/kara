@@ -122,16 +122,16 @@ impl<'a> super::EffectChecker<'a> {
         // Advisory linter hints for commonly-omitted effects.
         self.check_ffi_linter_hints(&e.name, &e.span, &final_decl);
 
-        self.declared_effects.insert(e.name.clone(), final_decl);
-        self.function_visibility.insert(e.name.clone(), true);
-        self.function_spans.insert(e.name.clone(), e.span);
+        let sym = self.interner.intern(&e.name);
+        self.declared_effects.insert(sym, final_decl);
+        self.function_visibility.insert(sym, true);
+        self.function_spans.insert(sym, e.span);
         // Seed inferred_effects from the merged set so callers accumulate
         // the correct leaf effects (ABI defaults + programmer annotations).
-        if let Some(DeclaredEffects::Explicit(ref set)) = self.declared_effects.get(&e.name) {
-            self.inferred_effects.insert(e.name.clone(), set.clone());
+        if let Some(DeclaredEffects::Explicit(ref set)) = self.declared_effects.get(&sym) {
+            self.inferred_effects.insert(sym, set.clone());
         } else {
-            self.inferred_effects
-                .insert(e.name.clone(), EffectSet::new());
+            self.inferred_effects.insert(sym, EffectSet::new());
         }
     }
 

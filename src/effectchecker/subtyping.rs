@@ -15,6 +15,7 @@
 use std::collections::HashSet;
 
 use crate::ast::*;
+use crate::intern::Symbol;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
@@ -81,14 +82,19 @@ impl<'a> super::EffectChecker<'a> {
     /// `call_span` is the span of the call expression itself (not the args).
     /// Used to look up `call_type_subs` so the diagnostic can render a fully
     /// monomorphized callee signature when the call is generic.
-    fn check_call_args_subtyping(&mut self, callee_name: &str, args: &[CallArg], call_span: &Span) {
+    fn check_call_args_subtyping(
+        &mut self,
+        callee_name: Symbol,
+        args: &[CallArg],
+        call_span: &Span,
+    ) {
         let params = self
             .function_bodies
-            .get(callee_name)
+            .get(&callee_name)
             .map(|f| f.params.clone())
             .or_else(|| {
                 self.method_bodies
-                    .get(callee_name)
+                    .get(&callee_name)
                     .map(|f| f.params.clone())
             });
         let Some(params) = params else {
@@ -96,11 +102,11 @@ impl<'a> super::EffectChecker<'a> {
         };
         let return_type = self
             .function_bodies
-            .get(callee_name)
+            .get(&callee_name)
             .map(|f| f.return_type.clone())
             .or_else(|| {
                 self.method_bodies
-                    .get(callee_name)
+                    .get(&callee_name)
                     .map(|f| f.return_type.clone())
             })
             .flatten();
@@ -182,7 +188,7 @@ impl<'a> super::EffectChecker<'a> {
                 None
             } else {
                 Some(format_monomorphized_signature(
-                    callee_name,
+                    &self.interner.resolve(callee_name),
                     &params,
                     return_type.as_ref(),
                     &type_subs,
@@ -229,7 +235,7 @@ impl<'a> super::EffectChecker<'a> {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
                 if let Some(cname) = self.extract_callee_name(callee) {
-                    self.check_call_args_subtyping(&cname, args, &expr.span);
+                    self.check_call_args_subtyping(cname, args, &expr.span);
                 }
                 // Recurse into callee and args
                 self.check_subtyping_in_expr(callee);
@@ -303,7 +309,7 @@ impl<'a> super::EffectChecker<'a> {
                 // satisfy a method's pure `Fn()` slot whenever the enclosing
                 // caller declared the effects.
                 if let Some(callee_key) = self.resolve_method_callee_key(&expr.span) {
-                    self.check_call_args_subtyping(&callee_key, args, &expr.span);
+                    self.check_call_args_subtyping(callee_key, args, &expr.span);
                 }
                 self.check_subtyping_in_expr(object);
                 for arg in args {

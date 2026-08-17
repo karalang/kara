@@ -44,6 +44,7 @@ use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::Item;
+use crate::intern::Symbol;
 use crate::token::Span;
 
 use super::{EffectError, EffectErrorKind, EffectOrigin};
@@ -60,7 +61,7 @@ impl<'a> super::EffectChecker<'a> {
 
         // Entry points: `main` today (native binaries). Library builds
         // and test entry points are follow-ons recorded in the tracker.
-        if !self.function_bodies.contains_key("main") {
+        if !self.function_bodies.contains_key(&self.syms.main) {
             return;
         }
 
@@ -85,9 +86,9 @@ impl<'a> super::EffectChecker<'a> {
 
         // Per-function provider bindings (function-granular discharge)
         // and direct host-resource violations.
-        let mut bound_in: HashMap<String, HashSet<String>> = HashMap::new();
-        let mut direct: HashMap<String, Vec<(String, Span)>> = HashMap::new();
-        for (fn_name, set) in &self.inferred_effects {
+        let mut bound_in: HashMap<Symbol, HashSet<String>> = HashMap::new();
+        let mut direct: HashMap<Symbol, Vec<(String, Span)>> = HashMap::new();
+        for (&fn_name, set) in &self.inferred_effects {
             for te in &set.effects {
                 if te.effect.resource.is_empty() {
                     continue; // verb-only effects (blocks/suspends/panics)
@@ -105,7 +106,13 @@ impl<'a> super::EffectChecker<'a> {
                         fn_name: callee,
                         span,
                     } => {
-                        if graph.contains_key(callee) {
+                        // Origins carry resolved names; probe back to a
+                        // symbol (non-inserting — graph keys are minted).
+                        let callee_in_graph = self
+                            .interner
+                            .get(callee)
+                            .is_some_and(|sym| graph.contains_key(&sym));
+                        if callee_in_graph {
                             None // examined at the callee's own node
                         } else {
                             Some(*span) // body-less callee: charge here
@@ -114,7 +121,7 @@ impl<'a> super::EffectChecker<'a> {
                 };
                 if let Some(span) = direct_here {
                     direct
-                        .entry(fn_name.clone())
+                        .entry(fn_name)
                         .or_default()
                         .push((resource.clone(), span));
                 }
@@ -124,14 +131,12 @@ impl<'a> super::EffectChecker<'a> {
         // the graph it returns, so bindings are recovered from a raw
         // call collection per body.
         let empty_bounds = FxHashMap::default();
-        for (name, func) in self.function_bodies.iter().chain(self.method_bodies.iter()) {
-            let bounds = self.fn_bounds_index.get(name).unwrap_or(&empty_bounds);
+        for (&name, func) in self.function_bodies.iter().chain(self.method_bodies.iter()) {
+            let bounds = self.fn_bounds_index.get(&name).unwrap_or(&empty_bounds);
             for (callee, _) in self.collect_calls_in_block(&func.body, bounds) {
-                if let Some(resource) = callee.strip_prefix(PROVIDERS_BIND_PREFIX) {
-                    bound_in
-                        .entry(name.clone())
-                        .or_default()
-                        .insert(canon(resource));
+                let callee_text = self.interner.resolve(callee);
+                if let Some(resource) = callee_text.strip_prefix(PROVIDERS_BIND_PREFIX) {
+                    bound_in.entry(name).or_default().insert(canon(resource));
                 }
             }
         }
@@ -140,10 +145,10 @@ impl<'a> super::EffectChecker<'a> {
         // (function, discharged-set) so shared subgraphs re-walk only
         // when the discharge state genuinely differs.
         let mut errors: Vec<EffectError> = Vec::new();
-        let mut visited: HashSet<(String, Vec<String>)> = HashSet::new();
-        let mut path: Vec<String> = Vec::new();
+        let mut visited: HashSet<(Symbol, Vec<String>)> = HashSet::new();
+        let mut path: Vec<Symbol> = Vec::new();
         self.gate_dfs(
-            "main",
+            self.syms.main,
             &HashSet::new(),
             target,
             &graph,
@@ -159,37 +164,41 @@ impl<'a> super::EffectChecker<'a> {
     #[allow(clippy::too_many_arguments)]
     fn gate_dfs(
         &self,
-        fn_name: &str,
+        fn_name: Symbol,
         discharged: &HashSet<String>,
         target: &str,
-        graph: &FxHashMap<String, Vec<(String, Span)>>,
-        bound_in: &HashMap<String, HashSet<String>>,
-        direct: &HashMap<String, Vec<(String, Span)>>,
-        path: &mut Vec<String>,
-        visited: &mut HashSet<(String, Vec<String>)>,
+        graph: &FxHashMap<Symbol, Vec<(Symbol, Span)>>,
+        bound_in: &HashMap<Symbol, HashSet<String>>,
+        direct: &HashMap<Symbol, Vec<(String, Span)>>,
+        path: &mut Vec<Symbol>,
+        visited: &mut HashSet<(Symbol, Vec<String>)>,
         errors: &mut Vec<EffectError>,
     ) {
         // Discharge set including this function's own bindings — they
         // cover its own direct uses and everything below.
         let mut here = discharged.clone();
-        if let Some(bound) = bound_in.get(fn_name) {
+        if let Some(bound) = bound_in.get(&fn_name) {
             here.extend(bound.iter().cloned());
         }
 
         let mut memo_key: Vec<String> = here.iter().cloned().collect();
         memo_key.sort();
-        if !visited.insert((fn_name.to_string(), memo_key)) {
+        if !visited.insert((fn_name, memo_key)) {
             return;
         }
 
-        path.push(fn_name.to_string());
+        path.push(fn_name);
 
-        if let Some(violations) = direct.get(fn_name) {
+        if let Some(violations) = direct.get(&fn_name) {
             for (resource, span) in violations {
                 if here.contains(resource) {
                     continue;
                 }
-                let chain = path.join(" → ");
+                let chain = path
+                    .iter()
+                    .map(|s| self.interner.resolve(*s))
+                    .collect::<Vec<_>>()
+                    .join(" \u{2192} ");
                 errors.push(EffectError {
                     message: format!(
                         "target `{target}` does not provide resource '{resource}' — \
@@ -206,12 +215,12 @@ impl<'a> super::EffectChecker<'a> {
             }
         }
 
-        if let Some(calls) = graph.get(fn_name) {
+        if let Some(calls) = graph.get(&fn_name) {
             // Dedup callees — multiple call sites to the same function
             // produce identical subtree walks.
-            let mut seen: HashSet<&str> = HashSet::new();
-            for (callee, _) in calls {
-                if !seen.insert(callee.as_str()) {
+            let mut seen: HashSet<Symbol> = HashSet::new();
+            for &(callee, _) in calls {
+                if !seen.insert(callee) {
                     continue;
                 }
                 self.gate_dfs(

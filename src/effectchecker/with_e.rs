@@ -18,6 +18,7 @@
 use std::collections::HashSet;
 
 use crate::ast::*;
+use crate::intern::Symbol;
 
 use super::{verb_name, Effect, EffectError, EffectErrorKind, EffectOrigin, EffectSet};
 
@@ -74,7 +75,7 @@ impl<'a> super::EffectChecker<'a> {
     fn check_with_e_in_expr(&mut self, expr: &Expr) {
         if let ExprKind::Call { callee, args } = &expr.kind {
             if let Some(cname) = self.extract_callee_name(callee) {
-                self.check_call_with_e_unification(&cname, args);
+                self.check_call_with_e_unification(cname, args);
             }
             self.check_with_e_in_expr(callee);
             for a in args {
@@ -91,7 +92,7 @@ impl<'a> super::EffectChecker<'a> {
                 // parameters, so `args` indices align 1:1 with the indices
                 // recorded in `fn_effect_var_positions`.
                 if let Some(callee_key) = self.resolve_method_callee_key(&expr.span) {
-                    self.check_call_with_e_unification(&callee_key, args);
+                    self.check_call_with_e_unification(callee_key, args);
                 }
                 self.check_with_e_in_expr(object);
                 for a in args {
@@ -207,8 +208,8 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
-    fn check_call_with_e_unification(&mut self, callee_name: &str, args: &[CallArg]) {
-        let positions = match self.fn_effect_var_positions.get(callee_name).cloned() {
+    fn check_call_with_e_unification(&mut self, callee_name: Symbol, args: &[CallArg]) {
+        let positions = match self.fn_effect_var_positions.get(&callee_name).cloned() {
             Some(p) => p,
             None => return,
         };

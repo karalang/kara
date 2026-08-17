@@ -34,22 +34,21 @@ the `expr_method_call.rs` region (~1,490), `contextual_scalar_collection_type`
 forced the parser recursion ceiling (B-2026-08-16-4) down to 128 — shrinking
 them buys both readability and nesting headroom.
 
-## Name interning (review item 9c) — spike RUNNING, stages 0–2¾ landed
+## Name interning (review item 9c) — spike RUNNING, stages 0–3a landed
 
-Measured and partially burned down in
+Measured and progressively burned down in
 [`name-interning.md`](name-interning.md) (2026-08-17): a front-end phase
 benchmark (`examples/bench_frontend.rs`) + callgrind attribution found ~60%
-of front-end instructions in string-identity overhead; fixing the
-`collect_calls_in_expr` key-scan quadratic (B-2026-08-17-1), FxHash on the
-effectchecker's internal tables, and the seam extended to
-typechecker/ownership/resolver internals (stage 2½) cut the front end
-**~-33% wall / −57% allocations** on the 10.9k-line synthetic corpus.
-Stage 2¾ then moved the std/Fx seam through the public result structs so
-every `SpanKey` map went Fx (−6–8% wall on top; session net ~−36%,
-instructions 1.62B → 0.863B). Hashing is now largely burned down (~9.5%
-SipHash left, all cold); the remaining lever is the `Symbol(u32)`
-conversion proper against the ~33% allocator share — scope and expected
-ceiling are in the spike doc.
+of front-end instructions in string-identity overhead. Stages 1–2¾ (the
+`collect_calls_in_expr` quadratic B-2026-08-17-1, FxHash on internal
+tables, the seam through the result structs) took wall −36% / instructions
+1.62B → 0.863B. Stage 3a then landed the first slice of the `Symbol(u32)`
+interner proper (`src/intern.rs` + the effectchecker's full key space):
+effectcheck **−35% wall / −69% allocations**, instructions
+**0.863B → 0.671B**. Session net on the 10.9k-line synthetic corpus:
+front end **240.8 → ~140 ms (−42%), instructions −59%, allocations −70%**.
+Remaining: the ownership / typechecker / AST-identifier key spaces, one
+session-sized slice each — scope in the spike doc.
 
 ## Smaller residuals
 

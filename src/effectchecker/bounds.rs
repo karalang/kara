@@ -27,20 +27,21 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashSet;
 
 use crate::ast::*;
+use crate::intern::Symbol;
 
 use super::{
     effect_var_names_in_type, tarjan_scc, verb_name, MutualRecursionGroup, ResolvedEffect,
 };
 
 impl<'a> super::EffectChecker<'a> {
-    pub(crate) fn extract_callee_name(&self, callee: &Expr) -> Option<String> {
+    pub(crate) fn extract_callee_name(&self, callee: &Expr) -> Option<Symbol> {
         match &callee.kind {
-            ExprKind::Identifier(name) => Some(name.clone()),
+            ExprKind::Identifier(name) => Some(self.interner.intern(name)),
             ExprKind::Path { segments, .. } => {
                 if segments.len() == 2 {
-                    Some(format!("{}.{}", segments[0], segments[1]))
+                    Some(self.interner.dotted_str(&segments[0], &segments[1]))
                 } else {
-                    segments.last().cloned()
+                    segments.last().map(|s| self.interner.intern(s))
                 }
             }
             _ => None,
@@ -61,7 +62,7 @@ impl<'a> super::EffectChecker<'a> {
         &self,
         callee: &Expr,
         bounds: &FxHashMap<String, Vec<TraitBound>>,
-    ) -> Vec<String> {
+    ) -> Vec<Symbol> {
         match &callee.kind {
             ExprKind::Path { segments, .. } if segments.len() == 2 => {
                 let head = &segments[0];
@@ -69,9 +70,9 @@ impl<'a> super::EffectChecker<'a> {
                 if let Some(bs) = bounds.get(head) {
                     return bs
                         .iter()
-                        .filter_map(|b| b.path.last().cloned())
+                        .filter_map(|b| b.path.last())
                         .filter(|t| self.trait_declares_no_self_method(t, method))
-                        .map(|t| format!("{}.{}", t, method))
+                        .map(|t| self.interner.dotted_str(t, method))
                         .collect();
                 }
                 Vec::new()
@@ -80,19 +81,21 @@ impl<'a> super::EffectChecker<'a> {
                 // Only redirect if the bare name does not resolve as a value
                 // (free function, builtin, enum variant); otherwise the
                 // existing key flows through unchanged.
-                if self.function_bodies.contains_key(name)
-                    || self.declared_effects.contains_key(name)
-                {
-                    return Vec::new();
+                if let Some(sym) = self.interner.get(name) {
+                    if self.function_bodies.contains_key(&sym)
+                        || self.declared_effects.contains_key(&sym)
+                    {
+                        return Vec::new();
+                    }
                 }
-                let mut seen: HashSet<String> = HashSet::new();
+                let mut seen: HashSet<&str> = HashSet::new();
                 bounds
                     .values()
                     .flat_map(|bs| bs.iter())
-                    .filter_map(|b| b.path.last().cloned())
+                    .filter_map(|b| b.path.last())
                     .filter(|t| self.trait_declares_no_self_method(t, name))
-                    .filter(|t| seen.insert(t.clone()))
-                    .map(|t| format!("{}.{}", t, name))
+                    .filter(|t| seen.insert(t.as_str()))
+                    .map(|t| self.interner.dotted_str(t, name))
                     .collect()
             }
             _ => Vec::new(),
@@ -250,14 +253,14 @@ impl<'a> super::EffectChecker<'a> {
     /// inference.
     pub(crate) fn build_fn_bounds_index(
         &self,
-    ) -> FxHashMap<String, FxHashMap<String, Vec<TraitBound>>> {
-        let mut index: FxHashMap<String, FxHashMap<String, Vec<TraitBound>>> = FxHashMap::default();
+    ) -> FxHashMap<Symbol, FxHashMap<String, Vec<TraitBound>>> {
+        let mut index: FxHashMap<Symbol, FxHashMap<String, Vec<TraitBound>>> = FxHashMap::default();
         for item in &self.program.items {
             match item {
                 Item::Function(f) => {
                     let bounds = Self::fn_generic_bounds(f);
                     if !bounds.is_empty() {
-                        index.insert(f.name.clone(), bounds);
+                        index.insert(self.interner.intern(&f.name), bounds);
                     }
                 }
                 Item::ImplBlock(imp) => {
@@ -267,7 +270,7 @@ impl<'a> super::EffectChecker<'a> {
                     };
                     for impl_item in &imp.items {
                         if let ImplItem::Method(m) = impl_item {
-                            let key = format!("{}.{}", type_name, m.name);
+                            let key = self.interner.dotted_str(&type_name, &m.name);
                             let bounds = Self::impl_method_bounds(imp, m);
                             if !bounds.is_empty() {
                                 index.insert(key, bounds);
@@ -279,7 +282,7 @@ impl<'a> super::EffectChecker<'a> {
                     for ti in &t.items {
                         if let TraitItem::Method(m) = ti {
                             if m.body.is_some() {
-                                let key = format!("{}.{}", t.name, m.name);
+                                let key = self.interner.dotted_str(&t.name, &m.name);
                                 let bounds = Self::trait_method_bounds(t, m);
                                 if !bounds.is_empty() {
                                     index.insert(key, bounds);
@@ -305,8 +308,8 @@ impl<'a> super::EffectChecker<'a> {
     /// return-position slot likewise inherits from input bindings).
     pub(crate) fn build_fn_effect_var_positions(
         &self,
-    ) -> FxHashMap<String, FxHashMap<String, Vec<usize>>> {
-        let mut index: FxHashMap<String, FxHashMap<String, Vec<usize>>> = FxHashMap::default();
+    ) -> FxHashMap<Symbol, FxHashMap<String, Vec<usize>>> {
+        let mut index: FxHashMap<Symbol, FxHashMap<String, Vec<usize>>> = FxHashMap::default();
         let scan = |f: &Function| -> FxHashMap<String, Vec<usize>> {
             let declared: HashSet<String> = f
                 .generic_params
@@ -332,7 +335,7 @@ impl<'a> super::EffectChecker<'a> {
                 Item::Function(f) => {
                     let by_var = scan(f);
                     if !by_var.is_empty() {
-                        index.insert(f.name.clone(), by_var);
+                        index.insert(self.interner.intern(&f.name), by_var);
                     }
                 }
                 Item::ImplBlock(imp) => {
@@ -344,7 +347,7 @@ impl<'a> super::EffectChecker<'a> {
                         if let ImplItem::Method(m) = impl_item {
                             let by_var = scan(m);
                             if !by_var.is_empty() {
-                                index.insert(format!("{}.{}", type_name, m.name), by_var);
+                                index.insert(self.interner.dotted_str(&type_name, &m.name), by_var);
                             }
                         }
                     }
@@ -391,7 +394,7 @@ impl<'a> super::EffectChecker<'a> {
                             };
                             let by_var = scan(&stub);
                             if !by_var.is_empty() {
-                                index.insert(format!("{}.{}", t.name, m.name), by_var);
+                                index.insert(self.interner.dotted_str(&t.name, &m.name), by_var);
                             }
                         }
                     }
@@ -408,13 +411,13 @@ impl<'a> super::EffectChecker<'a> {
     /// For each group, build a resolution trace showing how effects propagated.
     pub(crate) fn detect_mutual_recursion_groups(&self) -> Vec<MutualRecursionGroup> {
         let call_graph = self.build_call_graph();
-        let all_fn_names: FxHashSet<String> = self
+        let all_fn_names: FxHashSet<Symbol> = self
             .function_bodies
             .keys()
             .chain(self.method_bodies.keys())
-            .cloned()
+            .copied()
             .collect();
-        let sccs = tarjan_scc(&all_fn_names, &call_graph);
+        let sccs = tarjan_scc(&all_fn_names, &call_graph, &self.interner);
 
         // Filter to SCCs with >1 function (actual mutual recursion)
         let mut groups = Vec::new();
@@ -423,19 +426,19 @@ impl<'a> super::EffectChecker<'a> {
                 continue;
             }
 
-            let scc_set: HashSet<&String> = scc.iter().collect();
+            let scc_set: HashSet<Symbol> = scc.iter().copied().collect();
 
             // Build resolution trace: for each function in the SCC, find calls
             // to other SCC members and record which effects were resolved through them
             let mut trace = Vec::new();
-            for fn_name in &scc {
-                if let Some(calls) = call_graph.get(fn_name) {
-                    for (callee, span) in calls {
-                        if !scc_set.contains(callee) || callee == fn_name {
+            for &fn_name in &scc {
+                if let Some(calls) = call_graph.get(&fn_name) {
+                    for &(callee, span) in calls {
+                        if !scc_set.contains(&callee) || callee == fn_name {
                             continue;
                         }
                         // Find effects that this caller inherited from this callee
-                        if let Some(callee_effects) = self.inferred_effects.get(callee) {
+                        if let Some(callee_effects) = self.inferred_effects.get(&callee) {
                             for te in &callee_effects.effects {
                                 let effect_str = format!(
                                     "{}({})",
@@ -443,9 +446,9 @@ impl<'a> super::EffectChecker<'a> {
                                     te.effect.resource,
                                 );
                                 trace.push(ResolvedEffect {
-                                    call_site_function: fn_name.clone(),
+                                    call_site_function: self.interner.resolve(fn_name).to_string(),
                                     call_site_line: span.line,
-                                    resolved_via: callee.clone(),
+                                    resolved_via: self.interner.resolve(callee).to_string(),
                                     effect: effect_str,
                                 });
                             }
@@ -466,7 +469,10 @@ impl<'a> super::EffectChecker<'a> {
             });
 
             groups.push(MutualRecursionGroup {
-                functions: scc,
+                functions: scc
+                    .iter()
+                    .map(|s| self.interner.resolve(*s).to_string())
+                    .collect(),
                 resolution_trace: trace,
             });
         }

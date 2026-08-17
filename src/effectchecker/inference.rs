@@ -17,6 +17,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashSet;
 
 use crate::ast::*;
+use crate::intern::Symbol;
 use crate::token::Span;
 
 use super::{
@@ -192,7 +193,7 @@ impl<'a> super::EffectChecker<'a> {
                         });
                     }
                 }
-                let key = format!("{}.{}", r.name, m.name);
+                let key = self.interner.dotted_str(&r.name, &m.name);
                 let mut set = EffectSet::new();
                 set.add(
                     Effect {
@@ -212,7 +213,7 @@ impl<'a> super::EffectChecker<'a> {
                 // the same conservative skip as the E0412 predicate.
                 match self
                     .declared_effects
-                    .get(&format!("{}.{}", m.trait_name, m.name))
+                    .get(&self.interner.dotted_str(&m.trait_name, &m.name))
                 {
                     Some(DeclaredEffects::Explicit(declared))
                     | Some(DeclaredEffects::PolymorphicWithFixed(declared)) => {
@@ -231,10 +232,10 @@ impl<'a> super::EffectChecker<'a> {
 
     pub(crate) fn infer_effects(&mut self) {
         // Initialize all functions with empty effect sets (except externs, already done)
-        for name in self.function_bodies.keys().cloned().collect::<Vec<_>>() {
+        for name in self.function_bodies.keys().copied().collect::<Vec<_>>() {
             self.inferred_effects.entry(name).or_default();
         }
-        for name in self.method_bodies.keys().cloned().collect::<Vec<_>>() {
+        for name in self.method_bodies.keys().copied().collect::<Vec<_>>() {
             self.inferred_effects.entry(name).or_default();
         }
 
@@ -243,24 +244,24 @@ impl<'a> super::EffectChecker<'a> {
         // roots last — so processing them in order propagates callee effects
         // into callers before callers are processed.
         let call_graph = self.build_call_graph();
-        let all_fn_names: FxHashSet<String> = self
+        let all_fn_names: FxHashSet<Symbol> = self
             .function_bodies
             .keys()
             .chain(self.method_bodies.keys())
-            .cloned()
+            .copied()
             .collect();
-        let sccs = tarjan_scc(&all_fn_names, &call_graph);
+        let sccs = tarjan_scc(&all_fn_names, &call_graph, &self.interner);
 
         for scc in &sccs {
             if scc.len() == 1 {
                 // Non-recursive: one pass is sufficient because all callees
                 // (in earlier SCCs) are already fully resolved.
-                let name = &scc[0];
+                let name = scc[0];
                 let body = self
                     .function_bodies
-                    .get(name)
+                    .get(&name)
                     .cloned()
-                    .or_else(|| self.method_bodies.get(name).cloned());
+                    .or_else(|| self.method_bodies.get(&name).cloned());
                 if let Some(f) = body {
                     self.infer_function_effects(name, &f.body);
                 }
@@ -270,12 +271,12 @@ impl<'a> super::EffectChecker<'a> {
                 // (each pass can propagate effects one hop around the cycle).
                 for _ in 0..=scc.len() {
                     let mut changed = false;
-                    for name in scc {
+                    for &name in scc {
                         let body = self
                             .function_bodies
-                            .get(name)
+                            .get(&name)
                             .cloned()
-                            .or_else(|| self.method_bodies.get(name).cloned());
+                            .or_else(|| self.method_bodies.get(&name).cloned());
                         if let Some(f) = body {
                             if self.infer_function_effects(name, &f.body) {
                                 changed = true;
@@ -299,7 +300,7 @@ impl<'a> super::EffectChecker<'a> {
     /// left untouched — their declared ceilings are authoritative.
     pub(crate) fn infer_private_trait_ceilings(&mut self) {
         // Build (trait_name, method_name) → [impl_type_name] from all impl blocks.
-        let mut trait_impl_types: FxHashMap<(String, String), Vec<String>> = FxHashMap::default();
+        let mut trait_impl_types: FxHashMap<(Symbol, Symbol), Vec<Symbol>> = FxHashMap::default();
         for item in &self.program.items {
             let imp = match item {
                 Item::ImplBlock(i) => i,
@@ -319,9 +320,12 @@ impl<'a> super::EffectChecker<'a> {
                     ImplItem::AssocType(_) => continue,
                 };
                 trait_impl_types
-                    .entry((trait_name.clone(), method.name.clone()))
+                    .entry((
+                        self.interner.intern(&trait_name),
+                        self.interner.intern(&method.name),
+                    ))
                     .or_default()
-                    .push(type_name.clone());
+                    .push(self.interner.intern(&type_name));
             }
         }
 
@@ -340,7 +344,7 @@ impl<'a> super::EffectChecker<'a> {
                     TraitItem::Method(m) => m,
                     TraitItem::AssocType(_) => continue,
                 };
-                let trait_key = format!("{}.{}", t.name, m.name);
+                let trait_key = self.interner.dotted_str(&t.name, &m.name);
                 // Only infer for methods with no explicit ceiling (None).
                 if !matches!(
                     self.declared_effects.get(&trait_key),
@@ -349,12 +353,14 @@ impl<'a> super::EffectChecker<'a> {
                     continue;
                 }
                 let impl_types = trait_impl_types
-                    .get(&(t.name.clone(), m.name.clone()))
+                    .get(&(self.interner.intern(&t.name), self.interner.intern(&m.name)))
                     .cloned()
                     .unwrap_or_default();
                 let mut ceiling = EffectSet::new();
-                for type_name in &impl_types {
-                    let impl_key = format!("{}.{}", type_name, m.name);
+                for &type_sym in &impl_types {
+                    let impl_key = self
+                        .interner
+                        .dotted(type_sym, self.interner.intern(&m.name));
                     if let Some(impl_set) = self.inferred_effects.get(&impl_key) {
                         for te in &impl_set.effects {
                             if !ceiling.contains(&te.effect) {
@@ -375,32 +381,32 @@ impl<'a> super::EffectChecker<'a> {
     /// Edges to builtins and external callees are omitted since they have no
     /// bodies to infer from (their effects are seeded directly into
     /// `inferred_effects` during initialization).
-    pub(crate) fn build_call_graph(&self) -> FxHashMap<String, Vec<(String, Span)>> {
-        let all_fn_names: FxHashSet<String> = self
+    pub(crate) fn build_call_graph(&self) -> FxHashMap<Symbol, Vec<(Symbol, Span)>> {
+        let all_fn_names: FxHashSet<Symbol> = self
             .function_bodies
             .keys()
             .chain(self.method_bodies.keys())
-            .cloned()
+            .copied()
             .collect();
-        let mut graph: FxHashMap<String, Vec<(String, Span)>> = FxHashMap::default();
+        let mut graph: FxHashMap<Symbol, Vec<(Symbol, Span)>> = FxHashMap::default();
         let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
-        for (name, func) in &self.function_bodies {
-            let bounds = self.fn_bounds_index.get(name).unwrap_or(&empty_bounds);
+        for (&name, func) in &self.function_bodies {
+            let bounds = self.fn_bounds_index.get(&name).unwrap_or(&empty_bounds);
             let relevant = self
                 .collect_calls_in_block(&func.body, bounds)
                 .into_iter()
                 .filter(|(callee, _)| all_fn_names.contains(callee))
                 .collect();
-            graph.insert(name.clone(), relevant);
+            graph.insert(name, relevant);
         }
-        for (name, func) in &self.method_bodies {
-            let bounds = self.fn_bounds_index.get(name).unwrap_or(&empty_bounds);
+        for (&name, func) in &self.method_bodies {
+            let bounds = self.fn_bounds_index.get(&name).unwrap_or(&empty_bounds);
             let relevant = self
                 .collect_calls_in_block(&func.body, bounds)
                 .into_iter()
                 .filter(|(callee, _)| all_fn_names.contains(callee))
                 .collect();
-            graph.insert(name.clone(), relevant);
+            graph.insert(name, relevant);
         }
         graph
     }
@@ -424,11 +430,21 @@ impl<'a> super::EffectChecker<'a> {
 
     /// Walk a function body, find all calls, and add callee effects.
     /// Returns true if any new effects were added.
-    pub(crate) fn infer_function_effects(&mut self, fn_name: &str, body: &Block) -> bool {
+    ///
+    /// Callees are deduplicated per pass (first call site wins): repeated
+    /// calls to the same callee could only re-contribute the same effects,
+    /// and `EffectSet::add` keeps the first origin anyway, so skipping the
+    /// duplicates is behavior-identical and drops the per-call-site
+    /// effect-clone traffic. `fn_name`'s own entry is temporarily taken out
+    /// of `inferred_effects` while its callees are consulted — a
+    /// self-recursive lookup then sees an empty set instead of the pre-pass
+    /// set, which is equivalent: everything the pre-pass set contains is
+    /// already in `current`, so those adds were no-ops either way.
+    pub(crate) fn infer_function_effects(&mut self, fn_name: Symbol, body: &Block) -> bool {
         let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
         let bounds = self
             .fn_bounds_index
-            .get(fn_name)
+            .get(&fn_name)
             .cloned()
             .unwrap_or(empty_bounds);
         let mut calls = self.collect_calls_in_block(body, &bounds);
@@ -438,53 +454,49 @@ impl<'a> super::EffectChecker<'a> {
         // dispatching to seeded `__modbind_*` synthetic keys.
         let param_names: Vec<String> = self
             .function_bodies
-            .get(fn_name)
+            .get(&fn_name)
             .map(|f| self.function_param_names(f))
             .or_else(|| {
                 self.method_bodies
-                    .get(fn_name)
+                    .get(&fn_name)
                     .map(|f| self.function_param_names(f))
             })
             .unwrap_or_default();
         calls.extend(self.collect_modbind_synth_calls_in_block(body, &param_names));
-        let mut new_effects = Vec::new();
 
-        for (callee_name, call_span) in &calls {
+        let mut changed = false;
+        let mut current = self.inferred_effects.remove(&fn_name).unwrap_or_default();
+        let mut seen_callees: FxHashSet<Symbol> = FxHashSet::default();
+        for &(callee_name, call_span) in &calls {
+            if !seen_callees.insert(callee_name) {
+                continue;
+            }
             // Propagate the polymorphic marker only for callees that use
             // `with _` (anonymous polymorphism). A callee that declares
             // only `with E` (named) resolves its effect variable at the
             // call site against concrete bindings, so it does not "leak"
             // through callers that lack a `with _` of their own.
-            let callee_is_poly = self.fn_uses_with_underscore.contains(callee_name)
-                || self.calls_polymorphic.contains(callee_name);
+            let callee_is_poly = self.fn_uses_with_underscore.contains(&callee_name)
+                || self.calls_polymorphic.contains(&callee_name);
             if callee_is_poly {
-                self.calls_polymorphic.insert(fn_name.to_string());
+                self.calls_polymorphic.insert(fn_name);
             }
 
             // Look up callee's effects
-            let callee_effects = self.get_callee_effects(callee_name);
-            for effect in callee_effects {
-                new_effects.push((
-                    effect.clone(),
-                    EffectOrigin::Callee {
-                        fn_name: callee_name.clone(),
-                        span: *call_span,
-                    },
-                ));
+            for effect in self.get_callee_effects(callee_name) {
+                if !current.contains(&effect) {
+                    current.add(
+                        effect,
+                        EffectOrigin::Callee {
+                            fn_name: self.interner.resolve(callee_name).to_string(),
+                            span: call_span,
+                        },
+                    );
+                    changed = true;
+                }
             }
         }
-
-        let mut changed = false;
-        let current = self
-            .inferred_effects
-            .entry(fn_name.to_string())
-            .or_default();
-        for (effect, origin) in new_effects {
-            if !current.contains(&effect) {
-                current.add(effect, origin);
-                changed = true;
-            }
-        }
+        self.inferred_effects.insert(fn_name, current);
         changed
     }
 
@@ -529,10 +541,10 @@ impl<'a> super::EffectChecker<'a> {
         for (expr, kind) in &clauses {
             let mut calls = Vec::new();
             self.collect_calls_in_expr(expr, &mut calls, &empty_bounds);
-            for (callee, call_span) in &calls {
+            for &(callee, call_span) in &calls {
                 for effect in self.get_callee_effects(callee) {
                     if effect.verb != EffectVerbKind::Panics {
-                        violations.push((effect, *call_span, *kind));
+                        violations.push((effect, call_span, *kind));
                     }
                 }
             }
@@ -565,23 +577,23 @@ impl<'a> super::EffectChecker<'a> {
     /// the function's own internal effects are contributed to the caller).
     /// Note: effects from closure arguments are already propagated because
     /// `collect_calls_in_expr` walks into closure bodies at the call site.
-    pub(crate) fn get_callee_effects(&self, callee_name: &str) -> Vec<Effect> {
+    pub(crate) fn get_callee_effects(&self, callee_name: Symbol) -> Vec<Effect> {
         let is_pub = self
             .function_visibility
-            .get(callee_name)
+            .get(&callee_name)
             .copied()
             .unwrap_or(false);
 
         if is_pub {
             // Use declared effects
-            match self.declared_effects.get(callee_name) {
+            match self.declared_effects.get(&callee_name) {
                 Some(DeclaredEffects::Explicit(set)) => set.effect_set().into_iter().collect(),
                 Some(DeclaredEffects::Polymorphic) => {
                     // `with _` — transparent: use the callee's inferred effects so its
                     // own fixed effects (allocations, I/O, etc.) propagate to the caller.
                     // Closure-argument effects are handled separately by the caller's
                     // body scan (collect_calls_in_expr walks into closure bodies).
-                    match self.inferred_effects.get(callee_name) {
+                    match self.inferred_effects.get(&callee_name) {
                         Some(set) => set.effect_set().into_iter().collect(),
                         None => Vec::new(),
                     }
@@ -591,7 +603,7 @@ impl<'a> super::EffectChecker<'a> {
                     // effects plus the callee's inferred effects. Closure-argument effects
                     // are propagated by the caller's body scan.
                     let mut effects: HashSet<Effect> = fixed.effect_set();
-                    if let Some(inferred) = self.inferred_effects.get(callee_name) {
+                    if let Some(inferred) = self.inferred_effects.get(&callee_name) {
                         effects.extend(inferred.effect_set());
                     }
                     effects.into_iter().collect()
@@ -600,7 +612,7 @@ impl<'a> super::EffectChecker<'a> {
             }
         } else {
             // Use inferred effects
-            match self.inferred_effects.get(callee_name) {
+            match self.inferred_effects.get(&callee_name) {
                 Some(set) => set.effect_set().into_iter().collect(),
                 None => Vec::new(),
             }
@@ -615,7 +627,7 @@ impl<'a> super::EffectChecker<'a> {
         &self,
         block: &Block,
         bounds: &FxHashMap<String, Vec<TraitBound>>,
-    ) -> Vec<(String, Span)> {
+    ) -> Vec<(Symbol, Span)> {
         let mut calls = Vec::new();
         for stmt in &block.stmts {
             self.collect_calls_in_stmt(stmt, &mut calls, bounds);
@@ -629,7 +641,7 @@ impl<'a> super::EffectChecker<'a> {
     pub(crate) fn collect_calls_in_stmt(
         &self,
         stmt: &Stmt,
-        calls: &mut Vec<(String, Span)>,
+        calls: &mut Vec<(Symbol, Span)>,
         bounds: &FxHashMap<String, Vec<TraitBound>>,
     ) {
         match &stmt.kind {
@@ -658,16 +670,20 @@ impl<'a> super::EffectChecker<'a> {
     }
 
     /// True if `name` is a `with _` (polymorphic) callee.
-    fn is_polymorphic_callee(&self, name: &str) -> bool {
+    fn is_polymorphic_callee(&self, name: Symbol) -> bool {
         matches!(
-            self.declared_effects.get(name),
+            self.declared_effects.get(&name),
             Some(DeclaredEffects::Polymorphic | DeclaredEffects::PolymorphicWithFixed(_))
         )
     }
 
-    /// True if `name` is a user-defined function (not a local variable).
-    fn is_user_function(&self, name: &str) -> bool {
-        self.function_bodies.contains_key(name) || self.method_bodies.contains_key(name)
+    /// The symbol for `name` iff it names a user-defined function (not a
+    /// local variable). A non-inserting probe: a name the interner has
+    /// never seen cannot key either body table.
+    fn user_function_sym(&self, name: &str) -> Option<Symbol> {
+        let sym = self.interner.get(name)?;
+        (self.function_bodies.contains_key(&sym) || self.method_bodies.contains_key(&sym))
+            .then_some(sym)
     }
 
     /// True iff `ty` is a path naming a refinement type alias — i.e. an
@@ -677,7 +693,10 @@ impl<'a> super::EffectChecker<'a> {
     fn cast_target_is_refinement(&self, ty: &crate::ast::TypeExpr) -> bool {
         if let crate::ast::TypeKind::Path(path) = &ty.kind {
             if let Some(name) = path.segments.last() {
-                return self.refinement_type_names.contains(name);
+                return self
+                    .interner
+                    .get(name)
+                    .is_some_and(|sym| self.refinement_type_names.contains(&sym));
             }
         }
         false
@@ -686,7 +705,7 @@ impl<'a> super::EffectChecker<'a> {
     pub(crate) fn collect_calls_in_expr(
         &self,
         expr: &Expr,
-        calls: &mut Vec<(String, Span)>,
+        calls: &mut Vec<(Symbol, Span)>,
         bounds: &FxHashMap<String, Vec<TraitBound>>,
     ) {
         match &expr.kind {
@@ -697,15 +716,15 @@ impl<'a> super::EffectChecker<'a> {
                 // caller. Concrete-type dispatch (`Wrapper.method()`) and
                 // ordinary free-function calls still use `extract_callee_name`.
                 let trait_keys = self.extract_trait_assoc_fn_keys(callee, bounds);
-                let callee_name: Option<String> = if !trait_keys.is_empty() {
-                    for key in &trait_keys {
-                        calls.push((key.clone(), expr.span));
+                let callee_name: Option<Symbol> = if !trait_keys.is_empty() {
+                    for &key in &trait_keys {
+                        calls.push((key, expr.span));
                     }
                     trait_keys.into_iter().next()
                 } else {
                     let n = self.extract_callee_name(callee);
-                    if let Some(ref name) = n {
-                        calls.push((name.clone(), expr.span));
+                    if let Some(name) = n {
+                        calls.push((name, expr.span));
                     }
                     n
                 };
@@ -717,8 +736,12 @@ impl<'a> super::EffectChecker<'a> {
                 // a bare `Identifier(T)`; `Path` callees (`T.try_from`) carry
                 // their own declared effects.
                 if let ExprKind::Identifier(n) = &callee.kind {
-                    if self.refinement_type_names.contains(n) {
-                        calls.push(("__builtin_refinement_assert".to_string(), expr.span));
+                    if self
+                        .interner
+                        .get(n)
+                        .is_some_and(|sym| self.refinement_type_names.contains(&sym))
+                    {
+                        calls.push((self.syms.builtin_refinement_assert, expr.span));
                     }
                 }
                 self.collect_calls_in_expr(callee, calls, bounds);
@@ -729,14 +752,13 @@ impl<'a> super::EffectChecker<'a> {
                 // transitively calls one), named-function-reference args contribute
                 // their effects directly (per-call-site resolution).
                 // Inline closure args are already handled by the recursive walk above.
-                if let Some(ref cname) = callee_name {
-                    if self.is_polymorphic_callee(cname)
-                        || self.calls_polymorphic.contains(cname.as_str())
+                if let Some(cname) = callee_name {
+                    if self.is_polymorphic_callee(cname) || self.calls_polymorphic.contains(&cname)
                     {
                         for arg in args {
                             if let ExprKind::Identifier(arg_name) = &arg.value.kind {
-                                if self.is_user_function(arg_name) {
-                                    calls.push((arg_name.clone(), arg.value.span));
+                                if let Some(sym) = self.user_function_sym(arg_name) {
+                                    calls.push((sym, arg.value.span));
                                 }
                             }
                         }
@@ -758,7 +780,7 @@ impl<'a> super::EffectChecker<'a> {
                         for b in bs {
                             if let Some(t) = b.path.last() {
                                 if self.trait_declares_no_self_method(t, method) {
-                                    calls.push((format!("{}.{}", t, method), expr.span));
+                                    calls.push((self.interner.dotted_str(t, method), expr.span));
                                 }
                             }
                         }
@@ -780,21 +802,25 @@ impl<'a> super::EffectChecker<'a> {
                 if let Some(precise_key) = self.resolve_method_callee_key(&expr.span) {
                     calls.push((precise_key, expr.span));
                 }
+                // The bare method name as a symbol — a non-inserting probe:
+                // a name the interner never minted cannot key the index, the
+                // stdlib-seed map, or match a pre-minted builtin symbol.
+                let method_sym = self.interner.get(method.as_str());
                 // For method calls without a recorded precise callee, we'd need
                 // type info to know the exact method. Fall back to every impl
                 // method with a matching bare name, via the index built in
                 // `collect_function_info` (scanning all `method_bodies` keys
                 // here, once per call site, was the front end's top hotspot).
-                if let Some(keys) = self.method_name_index.get(method) {
-                    for key in keys {
-                        calls.push((key.clone(), expr.span));
+                if let Some(keys) = method_sym.and_then(|m| self.method_name_index.get(&m)) {
+                    for &key in keys {
+                        calls.push((key, expr.span));
                     }
                 }
                 // unwrap() and expect() always panic on None/Err (F-057).
-                if method == "unwrap" {
-                    calls.push(("__builtin_unwrap".to_string(), expr.span));
-                } else if method == "expect" {
-                    calls.push(("__builtin_expect".to_string(), expr.span));
+                if method_sym == Some(self.syms.unwrap) {
+                    calls.push((self.syms.builtin_unwrap, expr.span));
+                } else if method_sym == Some(self.syms.expect) {
+                    calls.push((self.syms.builtin_expect, expr.span));
                 }
                 // Lowercase stdlib module aliases routed through `MethodCall`
                 // syntax (`env.set(...)`, etc.). The parser produces a
@@ -808,14 +834,17 @@ impl<'a> super::EffectChecker<'a> {
                 // so seeded `inferred_effects` flow to the caller.
                 if let ExprKind::Identifier(mod_name) = &object.kind {
                     if mod_name == "env" {
-                        calls.push((format!("Env.{}", method), expr.span));
+                        calls.push((self.interner.dotted_str("Env", method), expr.span));
                     } else if mod_name == "critical_section" {
                         // `critical_section.acquire()` → the dotted seed key
                         // (`writes(Hardware)`, seeded in
                         // `effectchecker.rs::seed_builtin_effects`). Receiver-
                         // keyed like `env`/`stdin` so the `Hardware` effect
                         // reaches the caller's inferred set.
-                        calls.push((format!("critical_section.{}", method), expr.span));
+                        calls.push((
+                            self.interner.dotted_str("critical_section", method),
+                            expr.span,
+                        ));
                     } else if mod_name == "stdin" {
                         // `stdin.<method>()` → the capitalized `Stdin.<method>`
                         // seed key (phase-8 `Stdin.lines()` slice). Receiver-keyed,
@@ -826,71 +855,17 @@ impl<'a> super::EffectChecker<'a> {
                         // capitalized `Stdin.lines()` form already routes via
                         // `extract_callee_name`. (`stdin.read_line`/`read_to_string`
                         // carry no static seed, so this is inert for them.)
-                        calls.push((format!("Stdin.{}", method), expr.span));
+                        calls.push((self.interner.dotted_str("Stdin", method), expr.span));
                     }
                 }
                 // Stdlib methods whose effects are pre-seeded in inferred_effects.
-                // Matched by method name (conservatively — no receiver type info here).
-                // Conservative over-approximation is acceptable; false negatives are not.
-                const STDLIB_METHOD_MAP: &[(&str, &str)] = &[
-                    ("push", "Vec.push"),
-                    // `Arena.push` shares the `push` method name with
-                    // `Vec.push`; both seed `allocates(Heap)`, so the
-                    // name-keyed over-approximation unions to the same
-                    // verb either way (an `Arena.push` call surfaces both
-                    // keys; the effect set is identical).
-                    ("push", "Arena.push"),
-                    // `Interner.intern` — `intern` is a distinctive method
-                    // name (no other stdlib type carries it), so the
-                    // name-keyed seed routes cleanly to the allocates(Heap)
-                    // key.
-                    ("intern", "Interner.intern"),
-                    ("extend_from_slice", "Vec.extend_from_slice"),
-                    // `VecDeque[T]` mutating method surface — paired with
-                    // the matching `inferred_effects` seeds in
-                    // `effectchecker.rs::seed_builtin_effects`. Without
-                    // these, the auto-parallelizer's
-                    // `method_effects_imply_receiver_mutation` lookup
-                    // doesn't find any non-pure verb on a bare
-                    // `push_back`/etc. method name and the receiver is
-                    // racily captured-by-value (Map+VecDeque corruption
-                    // repro 2026-05-16).
-                    ("push_back", "VecDeque.push_back"),
-                    ("push_front", "VecDeque.push_front"),
-                    ("pop_back", "VecDeque.pop_back"),
-                    ("pop_front", "VecDeque.pop_front"),
-                    ("push_str", "String.push_str"),
-                    ("insert", "Map.insert"),
-                    ("insert", "SortedSet.insert"),
-                    ("insert", "SortedMap.insert"),
-                    ("merge", "SortedMap.merge"),
-                    ("keys", "SortedMap.keys"),
-                    ("values", "SortedMap.values"),
-                    ("entries", "SortedMap.entries"),
-                    ("clone", "SortedMap.clone"),
-                    ("range", "SortedMap.range"),
-                    ("insert", "Set.insert"),
-                    ("try_insert", "Map.try_insert"),
-                    ("entry", "Map.entry"),
-                    ("extend", "Map.extend"),
-                    ("merge", "Map.merge"),
-                    ("keys", "Map.keys"),
-                    ("values", "Map.values"),
-                    ("entries", "Map.entries"),
-                    ("clone", "Map.clone"),
-                    ("clone", "Set.clone"),
-                    ("union", "Set.union"),
-                    ("intersection", "Set.intersection"),
-                    ("difference", "Set.difference"),
-                    ("send", "Sender.send"),
-                    ("recv", "Receiver.recv"),
-                    ("chunk_by", "Iterator.chunk_by"),
-                    ("chunks", "Iterator.chunks"),
-                    ("windows", "Iterator.windows"),
-                ];
-                for &(method_name, qualified) in STDLIB_METHOD_MAP {
-                    if method.as_str() == method_name {
-                        calls.push((qualified.to_string(), expr.span));
+                // Matched by method name (conservatively — no receiver type info
+                // here; the seed list lives in the constructor's
+                // `STDLIB_METHOD_MAP`). Conservative over-approximation is
+                // acceptable; false negatives are not.
+                if let Some(quals) = method_sym.and_then(|m| self.stdlib_method_seeds.get(&m)) {
+                    for &qualified in quals {
+                        calls.push((qualified, expr.span));
                     }
                 }
                 // Fallible-allocation instance companions (phase-8-stdlib-floor
@@ -899,10 +874,7 @@ impl<'a> super::EffectChecker<'a> {
                 // by name (conservative over-approximation, consistent with the
                 // map above) and routed to the seeded `TRY_ALLOC_EFFECT_KEY`.
                 if crate::fallible_alloc::instance_companion_base(method).is_some() {
-                    calls.push((
-                        crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY.to_string(),
-                        expr.span,
-                    ));
+                    calls.push((self.syms.try_alloc, expr.span));
                 }
                 // `f.trunc_to_<intN>()` carries `panics` (the trapping float→int
                 // form — phase-8 cast slice 2). Matched by name prefix: no
@@ -912,7 +884,7 @@ impl<'a> super::EffectChecker<'a> {
                 // `float.trunc_to_int` key seeded in `seed_builtin_effects`.
                 if let Some(suffix) = method.as_str().strip_prefix("trunc_to_") {
                     if crate::numeric_conv::is_int_target(suffix) {
-                        calls.push(("float.trunc_to_int".to_string(), expr.span));
+                        calls.push((self.syms.float_trunc_to_int, expr.span));
                     }
                 }
                 // Function-reference argument propagation, mirror of the
@@ -925,13 +897,13 @@ impl<'a> super::EffectChecker<'a> {
                 // effects through `write_log` even though `run_each` calls
                 // it with `with E`.
                 if let Some(callee_key) = self.resolve_method_callee_key(&expr.span) {
-                    if self.is_polymorphic_callee(&callee_key)
-                        || self.calls_polymorphic.contains(callee_key.as_str())
+                    if self.is_polymorphic_callee(callee_key)
+                        || self.calls_polymorphic.contains(&callee_key)
                     {
                         for arg in args {
                             if let ExprKind::Identifier(arg_name) = &arg.value.kind {
-                                if self.is_user_function(arg_name) {
-                                    calls.push((arg_name.clone(), arg.value.span));
+                                if let Some(sym) = self.user_function_sym(arg_name) {
+                                    calls.push((sym, arg.value.span));
                                 }
                             }
                         }
@@ -946,7 +918,7 @@ impl<'a> super::EffectChecker<'a> {
                 self.collect_calls_in_expr(left, calls, bounds);
                 self.collect_calls_in_expr(right, calls, bounds);
                 if matches!(op, BinOp::Div | BinOp::Mod) {
-                    calls.push(("__builtin_div_rem".to_string(), expr.span));
+                    calls.push((self.syms.builtin_div_rem, expr.span));
                 }
             }
             ExprKind::Pipe { left, right } => {
@@ -1050,7 +1022,7 @@ impl<'a> super::EffectChecker<'a> {
                 self.collect_calls_in_expr(index, calls, bounds);
                 // Indexing with [] calls Index::index which has panics effect
                 // (can panic on out-of-bounds). Use .get() for fallible access.
-                calls.push(("__builtin_index".to_string(), expr.span));
+                calls.push((self.syms.builtin_index, expr.span));
             }
             ExprKind::Tuple(exprs) => {
                 for e in exprs {
@@ -1079,7 +1051,7 @@ impl<'a> super::EffectChecker<'a> {
                 // `panics` effect propagates to the enclosing function.
                 // Numeric / pointer / other casts carry no effect.
                 if self.cast_target_is_refinement(ty) {
-                    calls.push(("__builtin_refinement_assert".to_string(), expr.span));
+                    calls.push((self.syms.builtin_refinement_assert, expr.span));
                 }
                 self.collect_calls_in_expr(inner, calls, bounds);
             }
@@ -1092,13 +1064,17 @@ impl<'a> super::EffectChecker<'a> {
                 }
             }
             ExprKind::Path { segments, .. } => {
-                // A path like Foo::bar used as a value — could be a function reference
+                // A path like Foo::bar used as a value — could be a function
+                // reference. Non-inserting probe: every `method_bodies` key is
+                // minted through `Interner::dotted`, so the pair cache is
+                // authoritative; bare `function_bodies` names can never equal
+                // a dotted composite, so that half of the old check was
+                // vacuous and is dropped.
                 if segments.len() == 2 {
-                    let key = format!("{}.{}", segments[0], segments[1]);
-                    if self.function_bodies.contains_key(&key)
-                        || self.method_bodies.contains_key(&key)
-                    {
-                        calls.push((key, expr.span));
+                    if let Some(key) = self.interner.get_dotted(&segments[0], &segments[1]) {
+                        if self.method_bodies.contains_key(&key) {
+                            calls.push((key, expr.span));
+                        }
                     }
                 }
             }
@@ -1137,7 +1113,11 @@ impl<'a> super::EffectChecker<'a> {
                     // call collection. Real consumers are unaffected:
                     // `build_call_graph` filters to known fn names and
                     // `get_callee_effects` misses harmlessly.
-                    calls.push((format!("__providers_bind::{}", b.resource), b.resource_span));
+                    calls.push((
+                        self.interner
+                            .intern(&format!("__providers_bind::{}", b.resource)),
+                        b.resource_span,
+                    ));
                     self.collect_calls_in_expr(&b.value, calls, bounds);
                 }
                 let block_calls = self.collect_calls_in_block(body, bounds);

@@ -7,6 +7,7 @@
 //! and detects effect conflicts for auto-concurrency analysis.
 
 use crate::ast::*;
+use crate::intern::{Interner, Symbol};
 use crate::manifest::{CompileProfile, ProfileConfig};
 use crate::resolver::SpanKey;
 use crate::token::Span;
@@ -385,8 +386,52 @@ pub struct EffectCheckResult {
 
 // ── Effect Checker ──────────────────────────────────────────────
 
+/// Pre-minted symbols for the fixed names the body walkers push on hot
+/// paths (name-interning spike stage 3). Everything here is interned
+/// once at construction so `collect_calls_in_expr` and friends compare
+/// `Symbol`s instead of allocating/format!-ing per call site.
+pub(crate) struct BuiltinSyms {
+    pub(crate) builtin_index: Symbol,
+    pub(crate) builtin_unwrap: Symbol,
+    pub(crate) builtin_expect: Symbol,
+    pub(crate) builtin_div_rem: Symbol,
+    pub(crate) builtin_refinement_assert: Symbol,
+    pub(crate) float_trunc_to_int: Symbol,
+    pub(crate) try_alloc: Symbol,
+    pub(crate) unwrap: Symbol,
+    pub(crate) expect: Symbol,
+    pub(crate) main: Symbol,
+}
+
+impl BuiltinSyms {
+    fn new(interner: &Interner) -> Self {
+        BuiltinSyms {
+            builtin_index: interner.intern("__builtin_index"),
+            builtin_unwrap: interner.intern("__builtin_unwrap"),
+            builtin_expect: interner.intern("__builtin_expect"),
+            builtin_div_rem: interner.intern("__builtin_div_rem"),
+            builtin_refinement_assert: interner.intern("__builtin_refinement_assert"),
+            float_trunc_to_int: interner.intern("float.trunc_to_int"),
+            try_alloc: interner.intern(crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY),
+            unwrap: interner.intern("unwrap"),
+            expect: interner.intern("expect"),
+            main: interner.intern("main"),
+        }
+    }
+}
+
 pub struct EffectChecker<'a> {
     pub(crate) program: &'a Program,
+    /// Per-compilation name interner: every function-name key in the
+    /// tables below is a `Symbol` minted here. Resolve back to text
+    /// only at diagnostic-emission and result-boundary sites.
+    pub(crate) interner: Interner,
+    /// Pre-minted symbols for fixed walker names (see [`BuiltinSyms`]).
+    pub(crate) syms: BuiltinSyms,
+    /// Bare stdlib method name → pre-seeded qualified keys (the old
+    /// `STDLIB_METHOD_MAP` linear scan, now one `Symbol` map probe per
+    /// method-call site).
+    pub(crate) stdlib_method_seeds: FxHashMap<Symbol, Vec<Symbol>>,
     /// Public-function effect declaration policy (see `PublicEffectsPolicy`).
     pub(crate) public_effects_policy: PublicEffectsPolicy,
     /// Expanded effect groups: group name → EffectSet.
@@ -399,39 +444,39 @@ pub struct EffectChecker<'a> {
     /// Transparent effect verb names.
     pub(crate) transparent_effects: FxHashSet<String>,
     /// Declared effects per function name.
-    pub(crate) declared_effects: FxHashMap<String, DeclaredEffects>,
+    pub(crate) declared_effects: FxHashMap<Symbol, DeclaredEffects>,
     /// Inferred effects per function name.
-    pub(crate) inferred_effects: FxHashMap<String, EffectSet>,
+    pub(crate) inferred_effects: FxHashMap<Symbol, EffectSet>,
     /// Whether each function is public.
-    pub(crate) function_visibility: FxHashMap<String, bool>,
+    pub(crate) function_visibility: FxHashMap<Symbol, bool>,
     /// Function spans for error reporting.
-    pub(crate) function_spans: FxHashMap<String, Span>,
+    pub(crate) function_spans: FxHashMap<Symbol, Span>,
     /// Functions and their AST bodies (for inference). `Rc` so the SCC
     /// convergence loop and the whole-program walks can take a handle
     /// without deep-cloning every body per pass (review item 9b).
-    pub(crate) function_bodies: FxHashMap<String, Rc<Function>>,
+    pub(crate) function_bodies: FxHashMap<Symbol, Rc<Function>>,
     /// Impl method bodies: "TypeName.method" → Function (same `Rc` rationale).
-    pub(crate) method_bodies: FxHashMap<String, Rc<Function>>,
+    pub(crate) method_bodies: FxHashMap<Symbol, Rc<Function>>,
     /// Bare method name → the `method_bodies` keys ending in `.name`, built
     /// once at the end of `collect_function_info`. The name-only fallback in
     /// `collect_calls_in_expr` consults this instead of scanning every key
     /// per call site — that scan (with a `format!` per probe) was the single
     /// largest front-end cost on call-graph-heavy programs.
-    pub(crate) method_name_index: FxHashMap<String, Vec<String>>,
+    pub(crate) method_name_index: FxHashMap<Symbol, Vec<Symbol>>,
     /// Functions that call polymorphic (`with _`) callees.
-    pub(crate) calls_polymorphic: FxHashSet<String>,
+    pub(crate) calls_polymorphic: FxHashSet<Symbol>,
     /// Functions that explicitly declare `with _` (anonymous polymorphism)
     /// — distinct from `with E` (named) declarations. The viral rule fires
     /// only for `with _` callees: `with E` is resolved at the call site
     /// against concrete bindings, so it does not "leak" through callers
     /// that lack a `with _` of their own.
-    pub(crate) fn_uses_with_underscore: FxHashSet<String>,
+    pub(crate) fn_uses_with_underscore: FxHashSet<Symbol>,
     /// Per-function generic-parameter bounds index: function key (e.g.
     /// `"sort"` or `"Wrapper.default"`) → param name → bounds. Populated
     /// once before inference; consulted by `extract_trait_assoc_fn_keys`
     /// to redirect `T.method()` and bare `method()` calls to the matching
     /// `Trait.method` ceiling key.
-    pub(crate) fn_bounds_index: FxHashMap<String, FxHashMap<String, Vec<TraitBound>>>,
+    pub(crate) fn_bounds_index: FxHashMap<Symbol, FxHashMap<String, Vec<TraitBound>>>,
     /// Per-function effect-variable position index: function key → effect
     /// variable name → list of parameter indices whose `Fn(...) with E`
     /// type references that variable. Populated after `collect_function_info`;
@@ -441,7 +486,7 @@ pub struct EffectChecker<'a> {
     /// adds no constraint beyond the existing `with _` polymorphic behavior;
     /// a variable at 2+ positions requires every closure argument's effect
     /// set to agree, with a conflict diagnostic otherwise.
-    pub(crate) fn_effect_var_positions: FxHashMap<String, FxHashMap<String, Vec<usize>>>,
+    pub(crate) fn_effect_var_positions: FxHashMap<Symbol, FxHashMap<String, Vec<usize>>>,
     /// Method-call → resolved `Type.method` key, populated by the typechecker
     /// (`TypeCheckResult.method_callee_types`). Used by `MethodCall` arms in
     /// `collect_calls_in_expr` (function-reference arg propagation), in
@@ -449,7 +494,7 @@ pub struct EffectChecker<'a> {
     /// `check_subtyping_in_expr_owned` (Fn-slot subtyping) to resolve the
     /// callee precisely instead of falling back to per-method-name heuristics.
     /// Empty when constructed via the unparameterised `new` family.
-    pub(crate) method_callee_types: FxHashMap<SpanKey, String>,
+    pub(crate) method_callee_types: FxHashMap<SpanKey, Symbol>,
     /// Per-call-site type-parameter substitutions, populated by the
     /// typechecker (`TypeCheckResult.call_type_subs`). Maps a call-expression
     /// span to a `param_name → resolved_type_name` table — concrete entries
@@ -473,13 +518,13 @@ pub struct EffectChecker<'a> {
     /// `modbind_synth.rs` to emit `__modbind_read.<NAME>` /
     /// `__modbind_write.<NAME>` synthetic call entries at every
     /// read/write site (design.md §1322 + §1330).
-    pub(crate) modbind_let_mut: FxHashMap<String, ModBindingInfo>,
+    pub(crate) modbind_let_mut: FxHashMap<Symbol, ModBindingInfo>,
     /// Names of refinement type aliases (`type Name = Base where <pred>`).
     /// Derived directly from the AST. Consulted by the `Cast` arm of
     /// `collect_calls_in_expr`: an `x as Refined` cast is a runtime
     /// predicate assertion that propagates `panics`, attributed to the
     /// synthetic `__builtin_refinement_assert` callee (phase-9 step 3).
-    pub(crate) refinement_type_names: FxHashSet<String>,
+    pub(crate) refinement_type_names: FxHashSet<Symbol>,
     pub(crate) errors: Vec<EffectError>,
 }
 
@@ -508,8 +553,77 @@ impl<'a> EffectChecker<'a> {
         policy: PublicEffectsPolicy,
         profile_config: ProfileConfig,
     ) -> Self {
+        let interner = Interner::new();
+        let syms = BuiltinSyms::new(&interner);
+        // Bare stdlib method name → pre-seeded qualified keys. The
+        // walker matches these conservatively by method name (no
+        // receiver type info at collection time); see the seed-list
+        // comments in `collect_calls_in_expr`'s history for the
+        // per-entry rationale (over-approximation is acceptable, false
+        // negatives are not).
+        const STDLIB_METHOD_MAP: &[(&str, &str)] = &[
+            ("push", "Vec.push"),
+            ("push", "Arena.push"),
+            ("intern", "Interner.intern"),
+            ("extend_from_slice", "Vec.extend_from_slice"),
+            ("push_back", "VecDeque.push_back"),
+            ("push_front", "VecDeque.push_front"),
+            ("pop_back", "VecDeque.pop_back"),
+            ("pop_front", "VecDeque.pop_front"),
+            ("push_str", "String.push_str"),
+            ("insert", "Map.insert"),
+            ("insert", "SortedSet.insert"),
+            ("insert", "SortedMap.insert"),
+            ("merge", "SortedMap.merge"),
+            ("keys", "SortedMap.keys"),
+            ("values", "SortedMap.values"),
+            ("entries", "SortedMap.entries"),
+            ("clone", "SortedMap.clone"),
+            ("range", "SortedMap.range"),
+            ("insert", "Set.insert"),
+            ("try_insert", "Map.try_insert"),
+            ("entry", "Map.entry"),
+            ("extend", "Map.extend"),
+            ("merge", "Map.merge"),
+            ("keys", "Map.keys"),
+            ("values", "Map.values"),
+            ("entries", "Map.entries"),
+            ("clone", "Map.clone"),
+            ("clone", "Set.clone"),
+            ("union", "Set.union"),
+            ("intersection", "Set.intersection"),
+            ("difference", "Set.difference"),
+            ("send", "Sender.send"),
+            ("recv", "Receiver.recv"),
+            ("chunk_by", "Iterator.chunk_by"),
+            ("chunks", "Iterator.chunks"),
+            ("windows", "Iterator.windows"),
+        ];
+        let mut stdlib_method_seeds: FxHashMap<Symbol, Vec<Symbol>> = FxHashMap::default();
+        for &(method_name, qualified) in STDLIB_METHOD_MAP {
+            stdlib_method_seeds
+                .entry(interner.intern(method_name))
+                .or_default()
+                .push(interner.intern(qualified));
+        }
+        let refinement_type_names = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::TypeAlias(t) if t.refinement.is_some() => Some(interner.intern(&t.name)),
+                // Combined `distinct type T = Base where pred`: the
+                // `T(value)` constructor runs a runtime predicate
+                // assertion, so the constructor call propagates `panics`
+                // (same as a refinement `x as T` cast).
+                Item::DistinctType(d) if d.refinement.is_some() => Some(interner.intern(&d.name)),
+                _ => None,
+            })
+            .collect();
         EffectChecker {
             program,
+            interner,
+            syms,
+            stdlib_method_seeds,
             public_effects_policy: policy,
             profile_config,
             expanded_groups: FxHashMap::default(),
@@ -529,19 +643,7 @@ impl<'a> EffectChecker<'a> {
             call_type_subs: FxHashMap::default(),
             call_effect_subs: FxHashMap::default(),
             modbind_let_mut: FxHashMap::default(),
-            refinement_type_names: program
-                .items
-                .iter()
-                .filter_map(|item| match item {
-                    Item::TypeAlias(t) if t.refinement.is_some() => Some(t.name.clone()),
-                    // Combined `distinct type T = Base where pred`: the
-                    // `T(value)` constructor runs a runtime predicate
-                    // assertion, so the constructor call propagates `panics`
-                    // (same as a refinement `x as T` cast).
-                    Item::DistinctType(d) if d.refinement.is_some() => Some(d.name.clone()),
-                    _ => None,
-                })
-                .collect(),
+            refinement_type_names,
             errors: Vec::new(),
         }
     }
@@ -565,7 +667,10 @@ impl<'a> EffectChecker<'a> {
     /// can resolve to the precise `Type.method` (mirroring the precision the
     /// `Call` arms already get from `extract_callee_name`).
     pub fn with_method_callee_types(mut self, types: FxHashMap<SpanKey, String>) -> Self {
-        self.method_callee_types = types;
+        self.method_callee_types = types
+            .into_iter()
+            .map(|(k, v)| (k, self.interner.intern(&v)))
+            .collect();
         self
     }
 
@@ -587,10 +692,10 @@ impl<'a> EffectChecker<'a> {
     /// Resolve the callee key for a `MethodCall` expression's span. Returns
     /// `None` when the typechecker did not populate an entry (e.g. tests that
     /// skip typecheck, builtin/intrinsic dispatch handled outside `infer_method_call`).
-    fn resolve_method_callee_key(&self, span: &Span) -> Option<String> {
+    fn resolve_method_callee_key(&self, span: &Span) -> Option<Symbol> {
         self.method_callee_types
             .get(&SpanKey::from_span(span))
-            .cloned()
+            .copied()
     }
 
     pub fn check(mut self) -> EffectCheckResult {
@@ -628,7 +733,8 @@ impl<'a> EffectChecker<'a> {
         ] {
             let mut set = EffectSet::new();
             set.add(panics_effect.clone(), EffectOrigin::Direct(builtin_span));
-            self.inferred_effects.insert(builtin.to_string(), set);
+            self.inferred_effects
+                .insert(self.interner.intern(builtin), set);
         }
 
         // `f.trunc_to_<intN>()` traps (panics) on NaN / out-of-range — the
@@ -642,7 +748,7 @@ impl<'a> EffectChecker<'a> {
             let mut set = EffectSet::new();
             set.add(panics_effect.clone(), EffectOrigin::Direct(builtin_span));
             self.inferred_effects
-                .insert("float.trunc_to_int".to_string(), set);
+                .insert(self.interner.intern("float.trunc_to_int"), set);
         }
 
         // Seed effects for stdlib heap-allocating constructors and methods.
@@ -794,14 +900,15 @@ impl<'a> EffectChecker<'a> {
         ] {
             let mut set = EffectSet::new();
             set.add(alloc_heap.clone(), EffectOrigin::Direct(builtin_span));
-            self.inferred_effects.insert(stdlib_fn.to_string(), set);
+            self.inferred_effects
+                .insert(self.interner.intern(stdlib_fn), set);
         }
         // Receiver.recv suspends (blocks until a message arrives).
         {
             let mut set = EffectSet::new();
             set.add(suspends_effect.clone(), EffectOrigin::Direct(builtin_span));
             self.inferred_effects
-                .insert("Receiver.recv".to_string(), set);
+                .insert(self.interner.intern("Receiver.recv"), set);
         }
         // `std.time::sleep_ms(ms)` suspends — the leaf timer-park primitive
         // (auto-par divergence slice A2a-2.2). Like the network surface
@@ -813,7 +920,8 @@ impl<'a> EffectChecker<'a> {
         {
             let mut set = EffectSet::new();
             set.add(suspends_effect.clone(), EffectOrigin::Direct(builtin_span));
-            self.inferred_effects.insert("sleep_ms".to_string(), set);
+            self.inferred_effects
+                .insert(self.interner.intern("sleep_ms"), set);
         }
         // `volatile_read` / `volatile_write` MMIO intrinsics — like the
         // `sleep_ms` seed above, the baked `with reads(Hardware)` /
@@ -834,7 +942,7 @@ impl<'a> EffectChecker<'a> {
                 EffectOrigin::Direct(builtin_span),
             );
             self.inferred_effects
-                .insert("volatile_read".to_string(), set);
+                .insert(self.interner.intern("volatile_read"), set);
         }
         {
             let mut set = EffectSet::new();
@@ -846,7 +954,7 @@ impl<'a> EffectChecker<'a> {
                 EffectOrigin::Direct(builtin_span),
             );
             self.inferred_effects
-                .insert("volatile_write".to_string(), set);
+                .insert(self.interner.intern("volatile_write"), set);
         }
         // `critical_section.acquire()` — disabling interrupts mutates hardware
         // interrupt-enable state, so it performs `writes(Hardware)` (design.md
@@ -867,7 +975,7 @@ impl<'a> EffectChecker<'a> {
                 EffectOrigin::Direct(builtin_span),
             );
             self.inferred_effects
-                .insert("critical_section.acquire".to_string(), set);
+                .insert(self.interner.intern("critical_section.acquire"), set);
         }
         // Network surface (`std.http` + `std.tcp` + `std.tls` + WebSocket):
         // every method that performs network I/O carries sends(Network) +
@@ -932,7 +1040,8 @@ impl<'a> EffectChecker<'a> {
                 let mut set = EffectSet::new();
                 set.add(sends_network.clone(), EffectOrigin::Direct(builtin_span));
                 set.add(receives_network.clone(), EffectOrigin::Direct(builtin_span));
-                self.inferred_effects.insert(fn_name.to_string(), set);
+                self.inferred_effects
+                    .insert(self.interner.intern(fn_name), set);
             }
         }
 
@@ -950,7 +1059,8 @@ impl<'a> EffectChecker<'a> {
             for fn_name in ["Env.set", "env.set"] {
                 let mut set = EffectSet::new();
                 set.add(writes_env.clone(), EffectOrigin::Direct(builtin_span));
-                self.inferred_effects.insert(fn_name.to_string(), set);
+                self.inferred_effects
+                    .insert(self.interner.intern(fn_name), set);
             }
         }
 
@@ -978,7 +1088,8 @@ impl<'a> EffectChecker<'a> {
             for fn_name in ["File.open", "File.read"] {
                 let mut set = EffectSet::new();
                 set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span));
-                self.inferred_effects.insert(fn_name.to_string(), set);
+                self.inferred_effects
+                    .insert(self.interner.intern(fn_name), set);
             }
             for fn_name in [
                 "File.create",
@@ -990,7 +1101,8 @@ impl<'a> EffectChecker<'a> {
             ] {
                 let mut set = EffectSet::new();
                 set.add(writes_fs.clone(), EffectOrigin::Direct(builtin_span));
-                self.inferred_effects.insert(fn_name.to_string(), set);
+                self.inferred_effects
+                    .insert(self.interner.intern(fn_name), set);
             }
             // Phase 8 `BufReader[R]` slice: the buffered read methods carry
             // `reads(FileSystem)` (the v1 concrete binding for `R = File`).
@@ -1013,7 +1125,8 @@ impl<'a> EffectChecker<'a> {
             ] {
                 let mut set = EffectSet::new();
                 set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span));
-                self.inferred_effects.insert(fn_name.to_string(), set);
+                self.inferred_effects
+                    .insert(self.interner.intern(fn_name), set);
             }
             // Phase 8 `BufWriter[W]` slice (Write-side peer of `BufReader`):
             // the buffered write methods carry `writes(FileSystem)` (the v1
@@ -1025,7 +1138,8 @@ impl<'a> EffectChecker<'a> {
             for fn_name in ["BufWriter.write", "BufWriter.write_all", "BufWriter.flush"] {
                 let mut set = EffectSet::new();
                 set.add(writes_fs.clone(), EffectOrigin::Direct(builtin_span));
-                self.inferred_effects.insert(fn_name.to_string(), set);
+                self.inferred_effects
+                    .insert(self.interner.intern(fn_name), set);
             }
             // Phase 11 DataFrame CSV leg: `df.write_csv(path)` writes the
             // serialized table to disk — `writes(FileSystem)`; the
@@ -1039,11 +1153,11 @@ impl<'a> EffectChecker<'a> {
                 let mut set = EffectSet::new();
                 set.add(writes_fs.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects
-                    .insert("DataFrame.write_csv".to_string(), set);
+                    .insert(self.interner.intern("DataFrame.write_csv"), set);
                 let mut rset = EffectSet::new();
                 rset.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects
-                    .insert("DataFrame.read_csv".to_string(), rset);
+                    .insert(self.interner.intern("DataFrame.read_csv"), rset);
             }
             // Phase 8 `Stdin.lines()` slice: the stdin line iterator carries
             // `reads(Stdin), blocks` (design.md § "Source effects flow through
@@ -1069,7 +1183,8 @@ impl<'a> EffectChecker<'a> {
                     },
                     EffectOrigin::Direct(builtin_span),
                 );
-                self.inferred_effects.insert("Stdin.lines".to_string(), set);
+                self.inferred_effects
+                    .insert(self.interner.intern("Stdin.lines"), set);
             }
         }
 
@@ -1086,11 +1201,11 @@ impl<'a> EffectChecker<'a> {
             ("TryFrom", "try_from"),
             ("TryInto", "try_into"),
         ] {
-            let key = format!("{}.{}", trait_name, method);
+            let key = self.interner.dotted_str(trait_name, method);
             self.declared_effects
-                .insert(key.clone(), DeclaredEffects::Polymorphic);
-            self.function_visibility.insert(key.clone(), true);
-            self.function_spans.insert(key.clone(), builtin_span);
+                .insert(key, DeclaredEffects::Polymorphic);
+            self.function_visibility.insert(key, true);
+            self.function_spans.insert(key, builtin_span);
             self.fn_uses_with_underscore.insert(key);
         }
 
@@ -1153,19 +1268,42 @@ impl<'a> EffectChecker<'a> {
         // Phase C: Detect mutual recursion groups and build resolution traces
         let mutual_recursion_groups = self.detect_mutual_recursion_groups();
 
-        // Internal working tables are FxHash-keyed (name-interning spike);
-        // the public result stays std HashMap, so re-collect once here.
+        // Internal working tables are Symbol-keyed (name-interning spike
+        // stage 3); the public result stays String-keyed std HashMap, so
+        // resolve once here — the only symbol→String materialization in
+        // the whole phase.
+        let EffectChecker {
+            interner,
+            inferred_effects,
+            declared_effects,
+            expanded_groups,
+            transparent_effects,
+            function_visibility,
+            public_effects_policy,
+            errors,
+            call_effect_subs,
+            ..
+        } = self;
         EffectCheckResult {
-            inferred_effects: self.inferred_effects.into_iter().collect(),
-            declared_effects: self.declared_effects.into_iter().collect(),
-            expanded_groups: self.expanded_groups.into_iter().collect(),
-            transparent_effects: self.transparent_effects.into_iter().collect(),
+            inferred_effects: inferred_effects
+                .into_iter()
+                .map(|(k, v)| (interner.resolve(k).to_string(), v))
+                .collect(),
+            declared_effects: declared_effects
+                .into_iter()
+                .map(|(k, v)| (interner.resolve(k).to_string(), v))
+                .collect(),
+            expanded_groups: expanded_groups.into_iter().collect(),
+            transparent_effects: transparent_effects.into_iter().collect(),
             mutual_recursion_groups,
-            function_visibility: self.function_visibility.into_iter().collect(),
-            public_effects_policy: self.public_effects_policy,
-            errors: self.errors,
+            function_visibility: function_visibility
+                .into_iter()
+                .map(|(k, v)| (interner.resolve(k).to_string(), v))
+                .collect(),
+            public_effects_policy,
+            errors,
             queries: Vec::new(),
-            call_effect_subs: self.call_effect_subs,
+            call_effect_subs,
         }
     }
 
@@ -1294,12 +1432,13 @@ impl<'a> EffectChecker<'a> {
             match item {
                 Item::Function(f) => {
                     let decl = self.parse_effect_list(&f.effects);
+                    let sym = self.interner.intern(&f.name);
                     if effects_contain_with_underscore(&f.effects) {
-                        self.fn_uses_with_underscore.insert(f.name.clone());
+                        self.fn_uses_with_underscore.insert(sym);
                     }
-                    self.declared_effects.insert(f.name.clone(), decl);
-                    self.function_visibility.insert(f.name.clone(), f.is_pub);
-                    self.function_spans.insert(f.name.clone(), f.span);
+                    self.declared_effects.insert(sym, decl);
+                    self.function_visibility.insert(sym, f.is_pub);
+                    self.function_spans.insert(sym, f.span);
                 }
                 Item::ExternFunction(e) => self.register_extern_function_effects(e, &[]),
                 Item::ExternBlock(b) => {
@@ -1326,14 +1465,14 @@ impl<'a> EffectChecker<'a> {
                             ImplItem::Method(m) => m,
                             ImplItem::AssocType(_) => continue,
                         };
-                        let key = format!("{}.{}", type_name, method.name);
+                        let key = self.interner.dotted_str(&type_name, &method.name);
                         let decl = self.parse_effect_list(&method.effects);
                         if effects_contain_with_underscore(&method.effects) {
-                            self.fn_uses_with_underscore.insert(key.clone());
+                            self.fn_uses_with_underscore.insert(key);
                         }
-                        self.declared_effects.insert(key.clone(), decl);
-                        self.function_visibility.insert(key.clone(), method.is_pub);
-                        self.function_spans.insert(key.clone(), method.span);
+                        self.declared_effects.insert(key, decl);
+                        self.function_visibility.insert(key, method.is_pub);
+                        self.function_spans.insert(key, method.span);
                     }
                 }
                 Item::TraitDef(t) => {
@@ -1350,20 +1489,20 @@ impl<'a> EffectChecker<'a> {
                         } else {
                             trait_ceiling.clone()
                         };
-                        let key = format!("{}.{}", t.name, method.name);
+                        let key = self.interner.dotted_str(&t.name, &method.name);
                         let with_underscore_source = if method.effects.is_some() {
                             &method.effects
                         } else {
                             &t.trait_effects
                         };
                         if effects_contain_with_underscore(with_underscore_source) {
-                            self.fn_uses_with_underscore.insert(key.clone());
+                            self.fn_uses_with_underscore.insert(key);
                         }
-                        self.declared_effects.insert(key.clone(), decl);
+                        self.declared_effects.insert(key, decl);
                         // Trait methods inherit trait visibility for the purpose of
                         // public-declaration verification.
-                        self.function_visibility.insert(key.clone(), t.is_pub);
-                        self.function_spans.insert(key.clone(), method.span);
+                        self.function_visibility.insert(key, t.is_pub);
+                        self.function_spans.insert(key, method.span);
                     }
                 }
                 _ => {}
@@ -1490,9 +1629,9 @@ impl<'a> EffectChecker<'a> {
                     TraitItem::Method(m) => m,
                     TraitItem::AssocType(_) => continue,
                 };
-                let key = format!("{}.{}", t.name, m.name);
+                let key = self.interner.dotted_str(&t.name, &m.name);
                 self.declared_effects
-                    .insert(key.clone(), DeclaredEffects::Polymorphic);
+                    .insert(key, DeclaredEffects::Polymorphic);
                 // Unimpled private traits are treated as opaque `with _`,
                 // not `with E` — callers must propagate the polymorphic
                 // marker via the viral rule.
@@ -1506,15 +1645,15 @@ impl<'a> EffectChecker<'a> {
         for item in items {
             match item {
                 Item::Function(f) => {
-                    self.function_bodies
-                        .insert(f.name.clone(), Rc::new(f.clone()));
+                    let sym = self.interner.intern(&f.name);
+                    self.function_bodies.insert(sym, Rc::new(f.clone()));
                     // Seed inferred effects from declarations.
                     // Functions that declare effects are trusted — their bodies
                     // may contain effectful calls we can't trace (e.g., FFI, stdlib).
                     if let Some(DeclaredEffects::Explicit(ref set)) =
-                        self.declared_effects.get(&f.name)
+                        self.declared_effects.get(&sym)
                     {
-                        self.inferred_effects.insert(f.name.clone(), set.clone());
+                        self.inferred_effects.insert(sym, set.clone());
                     }
                 }
                 Item::ImplBlock(imp) => {
@@ -1522,14 +1661,21 @@ impl<'a> EffectChecker<'a> {
                         TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
                         _ => continue,
                     };
+                    let type_sym = self.interner.intern(&type_name);
                     for item in &imp.items {
                         let method = match item {
                             ImplItem::Method(m) => m,
                             ImplItem::AssocType(_) => continue,
                         };
-                        let key = format!("{}.{}", type_name, method.name);
-                        self.method_bodies
-                            .insert(key.clone(), Rc::new((**method).clone()));
+                        let bare = self.interner.intern(&method.name);
+                        let key = self.interner.dotted(type_sym, bare);
+                        if self
+                            .method_bodies
+                            .insert(key, Rc::new((**method).clone()))
+                            .is_none()
+                        {
+                            self.method_name_index.entry(bare).or_default().push(key);
+                        }
                         if let Some(DeclaredEffects::Explicit(ref set)) =
                             self.declared_effects.get(&key)
                         {
@@ -1547,7 +1693,8 @@ impl<'a> EffectChecker<'a> {
                             Some(b) => b.clone(),
                             None => continue,
                         };
-                        let key = format!("{}.{}", t.name, m.name);
+                        let bare = self.interner.intern(&m.name);
+                        let key = self.interner.dotted_str(&t.name, &m.name);
                         // Synthesise a Function so the SCC inference loop can walk the body.
                         // We intentionally do NOT seed inferred_effects from the declared
                         // ceiling here — the body's inferred effects must stand on their own
@@ -1583,25 +1730,18 @@ impl<'a> EffectChecker<'a> {
                             profile_compat: Vec::new(),
                             abi: None,
                         };
-                        self.method_bodies.insert(key, Rc::new(stub));
+                        if self.method_bodies.insert(key, Rc::new(stub)).is_none() {
+                            self.method_name_index.entry(bare).or_default().push(key);
+                        }
                     }
                 }
                 _ => {}
             }
         }
-        // `method_bodies` is complete from here on (nothing inserts after
-        // this pass) — build the bare-name index the call-collection
-        // fallback consults. A key's bare name is its last dot segment,
-        // matching the old `key.ends_with(".{method}")` test exactly
-        // (method names contain no dots).
-        for key in self.method_bodies.keys() {
-            if let Some(dot) = key.rfind('.') {
-                self.method_name_index
-                    .entry(key[dot + 1..].to_string())
-                    .or_default()
-                    .push(key.clone());
-            }
-        }
+        // `method_bodies` and the bare-name index (built alongside each
+        // insert above, first-insert-wins to mirror the old build over
+        // the final key set) are complete from here on — nothing inserts
+        // after this pass.
     }
 
     fn is_transparent_verb(&self, verb: &EffectVerbKind) -> bool {
@@ -1694,11 +1834,11 @@ impl<'a> EffectChecker<'a> {
     /// (avoiding double-reporting the same disagreement).
     fn compute_call_var_bindings(
         &self,
-        callee_name: &str,
+        callee_name: Symbol,
         args: &[CallArg],
     ) -> HashMap<String, HashSet<Effect>> {
         let mut bindings: HashMap<String, HashSet<Effect>> = HashMap::new();
-        let positions = match self.fn_effect_var_positions.get(callee_name) {
+        let positions = match self.fn_effect_var_positions.get(&callee_name) {
             Some(p) => p,
             None => return bindings,
         };
@@ -1727,10 +1867,11 @@ impl<'a> EffectChecker<'a> {
     fn get_arg_effects(&self, arg: &Expr) -> EffectSet {
         match &arg.kind {
             ExprKind::Identifier(name) => {
-                let effects = self.get_callee_effects(name);
                 let mut result = EffectSet::new();
-                for e in effects {
-                    result.add(e, EffectOrigin::Direct(arg.span));
+                if let Some(sym) = self.interner.get(name) {
+                    for e in self.get_callee_effects(sym) {
+                        result.add(e, EffectOrigin::Direct(arg.span));
+                    }
                 }
                 result
             }
@@ -1740,11 +1881,11 @@ impl<'a> EffectChecker<'a> {
                 self.collect_calls_in_expr(body, &mut calls, &empty_bounds);
                 let mut result = EffectSet::new();
                 for (callee, span) in calls {
-                    for e in self.get_callee_effects(&callee) {
+                    for e in self.get_callee_effects(callee) {
                         result.add(
                             e,
                             EffectOrigin::Callee {
-                                fn_name: callee.clone(),
+                                fn_name: self.interner.resolve(callee).to_string(),
                                 span,
                             },
                         );
@@ -1771,14 +1912,14 @@ impl<'a> EffectChecker<'a> {
     ///   - Origin is a `with _` callee whose body has its own concrete leak
     ///     (`with _` permits this in the callee, but the effect surfaces
     ///     concretely in the caller's inferred set).
-    fn effect_came_via_polymorphic_callee(&self, te: &TracedEffect, verifying_fn: &str) -> bool {
+    fn effect_came_via_polymorphic_callee(&self, te: &TracedEffect, verifying_fn: Symbol) -> bool {
         let EffectOrigin::Callee { fn_name, .. } = &te.origin else {
             return false;
         };
         let Some((_, method_name)) = fn_name.split_once('.') else {
             return false;
         };
-        let Some(bounds_map) = self.fn_bounds_index.get(verifying_fn) else {
+        let Some(bounds_map) = self.fn_bounds_index.get(&verifying_fn) else {
             return false;
         };
         for bounds in bounds_map.values() {
@@ -1786,12 +1927,18 @@ impl<'a> EffectChecker<'a> {
                 let Some(trait_name) = b.path.last() else {
                     continue;
                 };
-                let trait_key = format!("{}.{}", trait_name, method_name);
-                let trait_decl = self.declared_effects.get(&trait_key);
-                let trait_is_poly = matches!(
-                    trait_decl,
-                    Some(DeclaredEffects::Polymorphic | DeclaredEffects::PolymorphicWithFixed(_))
-                );
+                // Non-inserting probe: an unknown Trait.method pair proves
+                // no `declared_effects` entry (its keys are dotted-minted).
+                let trait_is_poly = self
+                    .interner
+                    .get_dotted(trait_name, method_name)
+                    .and_then(|key| self.declared_effects.get(&key))
+                    .is_some_and(|decl| {
+                        matches!(
+                            decl,
+                            DeclaredEffects::Polymorphic | DeclaredEffects::PolymorphicWithFixed(_)
+                        )
+                    });
                 if trait_is_poly {
                     return true;
                 }
@@ -1800,8 +1947,8 @@ impl<'a> EffectChecker<'a> {
         false
     }
 
-    fn format_effect_origin(&self, fn_name: &str, effect: &Effect) -> String {
-        if let Some(inferred_set) = self.inferred_effects.get(fn_name) {
+    fn format_effect_origin(&self, fn_name: Symbol, effect: &Effect) -> String {
+        if let Some(inferred_set) = self.inferred_effects.get(&fn_name) {
             for traced in &inferred_set.effects {
                 if traced.effect == *effect {
                     match &traced.origin {
@@ -2231,62 +2378,68 @@ pub(crate) fn resolve_effect_list_for_render(
 }
 
 /// Tarjan's algorithm for finding strongly connected components.
-/// Returns SCCs in reverse topological order; each SCC is a Vec of function names.
+/// Returns SCCs in reverse topological order; each SCC is a Vec of function
+/// name symbols. Node visit order and SCC member order both sort by the
+/// resolved name text — `Symbol` ordering is mint order, so sorting the
+/// symbols themselves would change the (deliberately alphabetical)
+/// deterministic processing order the String-keyed version had.
 pub(crate) fn tarjan_scc(
-    nodes: &FxHashSet<String>,
-    graph: &FxHashMap<String, Vec<(String, Span)>>,
-) -> Vec<Vec<String>> {
+    nodes: &FxHashSet<Symbol>,
+    graph: &FxHashMap<Symbol, Vec<(Symbol, Span)>>,
+    interner: &Interner,
+) -> Vec<Vec<Symbol>> {
     struct TarjanState {
         index_counter: usize,
-        stack: Vec<String>,
-        on_stack: FxHashSet<String>,
-        index: FxHashMap<String, usize>,
-        lowlink: FxHashMap<String, usize>,
-        result: Vec<Vec<String>>,
+        stack: Vec<Symbol>,
+        on_stack: FxHashSet<Symbol>,
+        index: FxHashMap<Symbol, usize>,
+        lowlink: FxHashMap<Symbol, usize>,
+        result: Vec<Vec<Symbol>>,
     }
 
     fn strongconnect(
-        v: &str,
-        graph: &FxHashMap<String, Vec<(String, Span)>>,
+        v: Symbol,
+        graph: &FxHashMap<Symbol, Vec<(Symbol, Span)>>,
+        interner: &Interner,
         state: &mut TarjanState,
     ) {
         let idx = state.index_counter;
         state.index_counter += 1;
-        state.index.insert(v.to_string(), idx);
-        state.lowlink.insert(v.to_string(), idx);
-        state.stack.push(v.to_string());
-        state.on_stack.insert(v.to_string());
+        state.index.insert(v, idx);
+        state.lowlink.insert(v, idx);
+        state.stack.push(v);
+        state.on_stack.insert(v);
 
-        if let Some(edges) = graph.get(v) {
-            for (w, _) in edges {
-                if !state.index.contains_key(w) {
-                    strongconnect(w, graph, state);
-                    let w_low = state.lowlink[w];
-                    let v_low = state.lowlink[v];
+        if let Some(edges) = graph.get(&v) {
+            for &(w, _) in edges {
+                if !state.index.contains_key(&w) {
+                    strongconnect(w, graph, interner, state);
+                    let w_low = state.lowlink[&w];
+                    let v_low = state.lowlink[&v];
                     if w_low < v_low {
-                        state.lowlink.insert(v.to_string(), w_low);
+                        state.lowlink.insert(v, w_low);
                     }
-                } else if state.on_stack.contains(w) {
-                    let w_idx = state.index[w];
-                    let v_low = state.lowlink[v];
+                } else if state.on_stack.contains(&w) {
+                    let w_idx = state.index[&w];
+                    let v_low = state.lowlink[&v];
                     if w_idx < v_low {
-                        state.lowlink.insert(v.to_string(), w_idx);
+                        state.lowlink.insert(v, w_idx);
                     }
                 }
             }
         }
 
-        if state.lowlink[v] == state.index[v] {
+        if state.lowlink[&v] == state.index[&v] {
             let mut scc = Vec::new();
             loop {
                 let w = state.stack.pop().unwrap();
                 state.on_stack.remove(&w);
-                scc.push(w.clone());
+                scc.push(w);
                 if w == v {
                     break;
                 }
             }
-            scc.sort(); // deterministic ordering
+            scc.sort_by_cached_key(|s| interner.resolve(*s)); // deterministic ordering
             state.result.push(scc);
         }
     }
@@ -2300,13 +2453,13 @@ pub(crate) fn tarjan_scc(
         result: Vec::new(),
     };
 
-    // Process nodes in sorted order for determinism
-    let mut sorted_nodes: Vec<&String> = nodes.iter().collect();
-    sorted_nodes.sort();
+    // Process nodes in sorted (resolved-name) order for determinism
+    let mut sorted_nodes: Vec<Symbol> = nodes.iter().copied().collect();
+    sorted_nodes.sort_by_cached_key(|s| interner.resolve(*s));
 
     for node in sorted_nodes {
-        if !state.index.contains_key(node.as_str()) {
-            strongconnect(node, graph, &mut state);
+        if !state.index.contains_key(&node) {
+            strongconnect(node, graph, interner, &mut state);
         }
     }
 

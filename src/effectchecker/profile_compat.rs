@@ -18,6 +18,7 @@
 //! the active build profile.
 
 use crate::ast::*;
+use crate::intern::Symbol;
 use crate::manifest::CompileProfile;
 
 use super::{verb_name, EffectError, EffectErrorKind};
@@ -28,7 +29,8 @@ impl super::EffectChecker<'_> {
         for item in items {
             match item {
                 Item::Function(f) if !f.profile_compat.is_empty() => {
-                    self.check_one_profile_compat(&f.name, f);
+                    let key = self.interner.intern(&f.name);
+                    self.check_one_profile_compat(key, f);
                 }
                 Item::ImplBlock(imp) => {
                     let target = match &imp.target_type.kind {
@@ -38,8 +40,8 @@ impl super::EffectChecker<'_> {
                     for it in &imp.items {
                         if let ImplItem::Method(m) = it {
                             if !m.profile_compat.is_empty() {
-                                let key = format!("{}.{}", target, m.name);
-                                self.check_one_profile_compat(&key, m);
+                                let key = self.interner.dotted_str(&target, &m.name);
+                                self.check_one_profile_compat(key, m);
                             }
                         }
                     }
@@ -49,7 +51,7 @@ impl super::EffectChecker<'_> {
         }
     }
 
-    fn check_one_profile_compat(&mut self, key: &str, f: &Function) {
+    fn check_one_profile_compat(&mut self, key: Symbol, f: &Function) {
         // Dedup the declared profile list — `#[profile(a, a)]` or two
         // `#[profile]` attrs naming the same profile collapse to one
         // constraint contributor.
@@ -70,7 +72,7 @@ impl super::EffectChecker<'_> {
             }
         }
 
-        let effect_set = match self.inferred_effects.get(key) {
+        let effect_set = match self.inferred_effects.get(&key) {
             Some(s) => s.clone(),
             None => return,
         };

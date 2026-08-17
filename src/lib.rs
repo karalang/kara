@@ -59,6 +59,7 @@ pub mod index_disjoint;
 pub mod inline_hints;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod install_spec;
+pub mod intern;
 pub mod interpreter;
 pub mod iter_local;
 #[cfg(not(target_arch = "wasm32"))]

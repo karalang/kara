@@ -26,6 +26,8 @@
 
 use rustc_hash::FxHashMap;
 
+use crate::intern::{Interner, Symbol};
+
 use crate::ast::*;
 use crate::token::Span;
 
@@ -43,6 +45,11 @@ pub(crate) struct ModBindingInfo {
     /// programmer can see both the offending `par { }` and the
     /// declaration that bound the synthetic resource.
     pub(crate) decl_span: Span,
+    /// Pre-minted `__modbind_read.<NAME>` / `__modbind_write.<NAME>`
+    /// synthetic callee-key symbols, so the body walker pushes a
+    /// `Symbol` per site instead of `format!`-ing one.
+    pub(crate) read_key: Symbol,
+    pub(crate) write_key: Symbol,
     /// `true` when the binding's declared type is one of the
     /// explicit concurrency primitives — `Atomic[T]`, `Mutex[T]`,
     /// `RwLock[T]`, `Arc[T]` — per design.md §1328. Slice 7's
@@ -91,10 +98,16 @@ impl<'a> super::EffectChecker<'a> {
                     .map(type_is_concurrency_primitive)
                     .unwrap_or(false);
             self.modbind_let_mut.insert(
-                b.name.clone(),
+                self.interner.intern(&b.name),
                 ModBindingInfo {
                     resource_name,
                     decl_span: b.span,
+                    read_key: self
+                        .interner
+                        .intern(&format!("{}{}", MODBIND_READ_PREFIX, b.name)),
+                    write_key: self
+                        .interner
+                        .intern(&format!("{}{}", MODBIND_WRITE_PREFIX, b.name)),
                     is_concurrency_primitive,
                 },
             );
@@ -104,10 +117,10 @@ impl<'a> super::EffectChecker<'a> {
     /// Look up a binding name in the `let mut` table and return its
     /// metadata. Slice 7's par-block check uses this through the
     /// synthetic resource name carried on the offending effect.
-    pub(crate) fn lookup_modbind_by_resource(
+    pub(crate) fn lookup_modbind_by_resource<'r>(
         &self,
-        resource: &str,
-    ) -> Option<(&str, &ModBindingInfo)> {
+        resource: &'r str,
+    ) -> Option<(&'r str, &ModBindingInfo)> {
         // Resource names take one of two forms — `<NAME>_resource` for
         // bare bindings and `ThreadLocal[<NAME>_resource]` for
         // `#[thread_local]` ones. We strip either decoration and look
@@ -117,9 +130,8 @@ impl<'a> super::EffectChecker<'a> {
             .and_then(|s| s.strip_suffix(']'))
             .unwrap_or(resource);
         let name = inner.strip_suffix("_resource")?;
-        self.modbind_let_mut
-            .get_key_value(name)
-            .map(|(k, v)| (k.as_str(), v))
+        let sym = self.interner.get(name)?;
+        self.modbind_let_mut.get(&sym).map(|v| (name, v))
     }
 
     /// `true` when `resource` is the synthetic effect-resource name
@@ -421,14 +433,12 @@ impl<'a> super::EffectChecker<'a> {
     /// carries the synthetic effect through callers without any
     /// change to the propagation logic.
     pub(crate) fn seed_modbind_synth_effects(&mut self, builtin_span: &Span) {
-        let entries: Vec<(String, String)> = self
+        let entries: Vec<(Symbol, Symbol, String)> = self
             .modbind_let_mut
-            .iter()
-            .map(|(name, info)| (name.clone(), info.resource_name.clone()))
+            .values()
+            .map(|info| (info.read_key, info.write_key, info.resource_name.clone()))
             .collect();
-        for (name, resource) in entries {
-            let read_key = format!("{}{}", MODBIND_READ_PREFIX, name);
-            let write_key = format!("{}{}", MODBIND_WRITE_PREFIX, name);
+        for (read_key, write_key, resource) in entries {
             let mut read_set = EffectSet::new();
             read_set.add(
                 Effect {
@@ -462,11 +472,11 @@ impl<'a> super::EffectChecker<'a> {
         &self,
         block: &Block,
         param_names: &[String],
-    ) -> Vec<(String, Span)> {
+    ) -> Vec<(Symbol, Span)> {
         if self.modbind_let_mut.is_empty() {
             return Vec::new();
         }
-        let mut walker = ModBindingSynthWalker::new(&self.modbind_let_mut);
+        let mut walker = ModBindingSynthWalker::new(&self.modbind_let_mut, &self.interner);
         for p in param_names {
             walker.push_shadow(p.clone());
         }
@@ -494,14 +504,14 @@ impl<'a> super::EffectChecker<'a> {
         // analysis loop without re-borrowing the maps. Cloning is
         // cheap here: the walk produces few results, and this only
         // runs once per program.
-        let work: Vec<(String, std::rc::Rc<crate::ast::Function>)> = self
+        let work: Vec<(Symbol, std::rc::Rc<crate::ast::Function>)> = self
             .function_bodies
             .iter()
-            .map(|(n, f)| (n.clone(), std::rc::Rc::clone(f)))
+            .map(|(&n, f)| (n, std::rc::Rc::clone(f)))
             .chain(
                 self.method_bodies
                     .iter()
-                    .map(|(n, f)| (n.clone(), std::rc::Rc::clone(f))),
+                    .map(|(&n, f)| (n, std::rc::Rc::clone(f))),
             )
             .collect();
         for (_fn_name, f) in &work {
@@ -522,7 +532,7 @@ impl<'a> super::EffectChecker<'a> {
         let synth_calls = self.collect_modbind_synth_calls_in_block(block, &[]);
         let mut effects: Vec<Effect> = Vec::new();
         for (callee, _span) in direct_calls.into_iter().chain(synth_calls) {
-            for e in self.get_callee_effects(&callee) {
+            for e in self.get_callee_effects(callee) {
                 if !effects.contains(&e) {
                     effects.push(e);
                 }
@@ -668,17 +678,21 @@ impl<'a> super::EffectChecker<'a> {
         if self.modbind_let_mut.is_empty() {
             return;
         }
-        let fn_names: Vec<String> = self.function_bodies.keys().cloned().collect();
-        let method_names: Vec<String> = self.method_bodies.keys().cloned().collect();
-        for name in fn_names.iter().chain(method_names.iter()) {
-            let is_pub = self.function_visibility.get(name).copied().unwrap_or(false);
+        let fn_names: Vec<Symbol> = self.function_bodies.keys().copied().collect();
+        let method_names: Vec<Symbol> = self.method_bodies.keys().copied().collect();
+        for &name in fn_names.iter().chain(method_names.iter()) {
+            let is_pub = self
+                .function_visibility
+                .get(&name)
+                .copied()
+                .unwrap_or(false);
             if !is_pub {
                 continue;
             }
-            let Some(inferred) = self.inferred_effects.get(name).cloned() else {
+            let Some(inferred) = self.inferred_effects.get(&name).cloned() else {
                 continue;
             };
-            let span = self.function_spans.get(name).cloned().unwrap_or(Span {
+            let span = self.function_spans.get(&name).cloned().unwrap_or(Span {
                 line: 0,
                 column: 0,
                 offset: 0,
@@ -724,7 +738,11 @@ impl<'a> super::EffectChecker<'a> {
                          binding in Atomic[T], Mutex[T], RwLock[T], or Arc[shared struct S] \
                          and expose pub fn methods that declare effects on those well-known \
                          resources, or set public_effects = \"inferred\" in kara.toml",
-                        name, verb, te.effect.resource, binding_name, decl_line,
+                        self.interner.resolve(name),
+                        verb,
+                        te.effect.resource,
+                        binding_name,
+                        decl_line,
                     ),
                     span,
                     kind: super::EffectErrorKind::PubFnSyntheticResource,
@@ -1245,15 +1263,17 @@ fn collect_par_in_expr(expr: &Expr, out: &mut Vec<(Block, Span)>) {
 /// pattern, if-let / while-let / let-else pattern). `push_shadow` /
 /// `pop_shadow` form a stack so block exits restore the prior view.
 struct ModBindingSynthWalker<'a> {
-    bindings: &'a FxHashMap<String, ModBindingInfo>,
+    bindings: &'a FxHashMap<Symbol, ModBindingInfo>,
+    interner: &'a Interner,
     shadow: Vec<String>,
-    calls: Vec<(String, Span)>,
+    calls: Vec<(Symbol, Span)>,
 }
 
 impl<'a> ModBindingSynthWalker<'a> {
-    fn new(bindings: &'a FxHashMap<String, ModBindingInfo>) -> Self {
+    fn new(bindings: &'a FxHashMap<Symbol, ModBindingInfo>, interner: &'a Interner) -> Self {
         ModBindingSynthWalker {
             bindings,
+            interner,
             shadow: Vec::new(),
             calls: Vec::new(),
         }
@@ -1267,21 +1287,28 @@ impl<'a> ModBindingSynthWalker<'a> {
         self.shadow.iter().any(|n| n == name)
     }
 
-    fn is_let_mut_binding(&self, name: &str) -> bool {
-        self.bindings.contains_key(name)
+    /// Non-inserting probe: binding names were interned at
+    /// `collect_module_let_mut_bindings`, so an unknown name proves a
+    /// miss.
+    fn let_mut_binding(&self, name: &str) -> Option<&'a ModBindingInfo> {
+        self.interner.get(name).and_then(|s| self.bindings.get(&s))
     }
 
     fn record_read(&mut self, name: &str, span: &Span) {
-        if self.is_let_mut_binding(name) && !self.is_shadowed(name) {
-            self.calls
-                .push((format!("{}{}", MODBIND_READ_PREFIX, name), *span));
+        if self.is_shadowed(name) {
+            return;
+        }
+        if let Some(info) = self.let_mut_binding(name) {
+            self.calls.push((info.read_key, *span));
         }
     }
 
     fn record_write(&mut self, name: &str, span: &Span) {
-        if self.is_let_mut_binding(name) && !self.is_shadowed(name) {
-            self.calls
-                .push((format!("{}{}", MODBIND_WRITE_PREFIX, name), *span));
+        if self.is_shadowed(name) {
+            return;
+        }
+        if let Some(info) = self.let_mut_binding(name) {
+            self.calls.push((info.write_key, *span));
         }
     }
 

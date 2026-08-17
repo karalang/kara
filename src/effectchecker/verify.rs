@@ -15,6 +15,7 @@
 //! Lives in a sibling `impl<'a> super::EffectChecker<'a>` block.
 
 use crate::ast::*;
+use crate::intern::Symbol;
 use crate::token::Span;
 
 use super::{
@@ -25,16 +26,18 @@ impl<'a> super::EffectChecker<'a> {
     // ── Verification ────────────────────────────────────────────
 
     pub(crate) fn verify_declarations(&mut self) {
-        let fn_names: Vec<String> = self.function_bodies.keys().cloned().collect();
-        for name in &fn_names {
-            let is_pub = self.function_visibility.get(name).copied().unwrap_or(false);
+        let fn_names: Vec<Symbol> = self.function_bodies.keys().copied().collect();
+        for &sym in &fn_names {
+            let is_pub = self.function_visibility.get(&sym).copied().unwrap_or(false);
             if !is_pub {
                 continue;
             } // Private functions don't need declarations
 
-            let declared = self.declared_effects.get(name);
-            let inferred = self.inferred_effects.get(name);
-            let span = self.function_spans.get(name).cloned().unwrap_or(Span {
+            // Resolved once for the diagnostics below; lookups use `sym`.
+            let name = self.interner.resolve(sym);
+            let declared = self.declared_effects.get(&sym);
+            let inferred = self.inferred_effects.get(&sym);
+            let span = self.function_spans.get(&sym).cloned().unwrap_or(Span {
                 line: 0,
                 column: 0,
                 offset: 0,
@@ -52,7 +55,7 @@ impl<'a> super::EffectChecker<'a> {
                     // The single shared E across a polymorphic SCC means any
                     // concrete leak in one member propagates to all via the
                     // fixed-point and surfaces here for every leaking member.
-                    if self.fn_uses_with_underscore.contains(name) {
+                    if self.fn_uses_with_underscore.contains(&sym) {
                         continue;
                     }
                     if let Some(inferred_set) = inferred {
@@ -82,10 +85,10 @@ impl<'a> super::EffectChecker<'a> {
                             // `Processor.method` is `with _`) routes through
                             // this branch — the design.md `run[T: Processor,
                             // with E]` example would otherwise false-positive.
-                            if self.effect_came_via_polymorphic_callee(te, name) {
+                            if self.effect_came_via_polymorphic_callee(te, sym) {
                                 continue;
                             }
-                            let origin_msg = self.format_effect_origin(name, &te.effect);
+                            let origin_msg = self.format_effect_origin(sym, &te.effect);
                             self.errors.push(EffectError {
                                 message: format!(
                                     "public function '{}' is declared `with E` (purely \
@@ -114,7 +117,7 @@ impl<'a> super::EffectChecker<'a> {
                     // `with E + fixed`: body's concrete effects must be ⊆ fixed
                     // (E is symbolic and resolves at the call site; only the
                     // fixed part licenses concrete body effects).
-                    if self.fn_uses_with_underscore.contains(name) {
+                    if self.fn_uses_with_underscore.contains(&sym) {
                         continue;
                     }
                     let fixed_set = fixed.effect_set();
@@ -136,11 +139,11 @@ impl<'a> super::EffectChecker<'a> {
                             // arm above — effects propagated through a
                             // polymorphic callee belong to E, not to the
                             // fixed part of the declaration.
-                            if self.effect_came_via_polymorphic_callee(te, name) {
+                            if self.effect_came_via_polymorphic_callee(te, sym) {
                                 continue;
                             }
                             if !fixed_set.contains(&te.effect) {
-                                let origin_msg = self.format_effect_origin(name, &te.effect);
+                                let origin_msg = self.format_effect_origin(sym, &te.effect);
                                 self.errors.push(EffectError {
                                     message: format!(
                                         "public function '{}' performs {}({}){} but it is not \
@@ -184,7 +187,7 @@ impl<'a> super::EffectChecker<'a> {
                                 continue;
                             }
                             if !declared_effects.contains(effect) {
-                                let origin_msg = self.format_effect_origin(name, effect);
+                                let origin_msg = self.format_effect_origin(sym, effect);
                                 self.errors.push(EffectError {
                                     message: format!(
                                         "public function '{}' performs {}({}) but does not declare it{}",
@@ -313,7 +316,7 @@ impl<'a> super::EffectChecker<'a> {
             // For any public fn not already declaring `with _` (those arms `continue`d),
             // require `with _` if it calls a polymorphic callee — regardless of whether
             // it has explicit effects, no declaration, or is under Inferred policy.
-            if self.calls_polymorphic.contains(name) {
+            if self.calls_polymorphic.contains(&sym) {
                 self.errors.push(EffectError {
                     message: format!(
                         "public function '{}' calls a polymorphic (`with _`) function but does \
@@ -355,15 +358,15 @@ impl<'a> super::EffectChecker<'a> {
         // `function_bodies` / `inferred_effects` / group tables are
         // released before we mutate `self.errors`.
         let mut offenders: Vec<(String, Span)> = Vec::new();
-        let names: Vec<String> = self.function_bodies.keys().cloned().collect();
-        for name in &names {
-            let func = match self.function_bodies.get(name) {
+        let names: Vec<Symbol> = self.function_bodies.keys().copied().collect();
+        for &sym in &names {
+            let func = match self.function_bodies.get(&sym) {
                 Some(f) if f.abi.as_deref() == Some("C-unwind") => f.clone(),
                 _ => continue,
             };
 
             // The rule only bites when the body can actually panic.
-            let body_panics = self.inferred_effects.get(name).is_some_and(|set| {
+            let body_panics = self.inferred_effects.get(&sym).is_some_and(|set| {
                 set.effects
                     .iter()
                     .any(|te| matches!(te.effect.verb, EffectVerbKind::Panics))
@@ -388,7 +391,7 @@ impl<'a> super::EffectChecker<'a> {
                 continue;
             }
 
-            offenders.push((name.clone(), func.span));
+            offenders.push((self.interner.resolve(sym).to_string(), func.span));
         }
 
         for (name, span) in offenders {
@@ -487,22 +490,22 @@ impl<'a> super::EffectChecker<'a> {
     /// just a declared `with suspends`).
     pub(crate) fn verify_extern_export_no_suspends(&mut self) {
         let mut offenders: Vec<(String, Span)> = Vec::new();
-        let names: Vec<String> = self.function_bodies.keys().cloned().collect();
-        for name in &names {
-            let func = match self.function_bodies.get(name) {
+        let names: Vec<Symbol> = self.function_bodies.keys().copied().collect();
+        for &sym in &names {
+            let func = match self.function_bodies.get(&sym) {
                 // Any C-ABI export definition (a body callable from C),
                 // `"C"` or `"C-unwind"` — the codegen export treatment is
                 // keyed on `abi.is_some()`, so the boundary rule is too.
                 Some(f) if f.abi.is_some() => f.clone(),
                 _ => continue,
             };
-            let body_suspends = self.inferred_effects.get(name).is_some_and(|set| {
+            let body_suspends = self.inferred_effects.get(&sym).is_some_and(|set| {
                 set.effects
                     .iter()
                     .any(|te| matches!(te.effect.verb, EffectVerbKind::Suspends))
             });
             if body_suspends {
-                offenders.push((name.clone(), func.span));
+                offenders.push((self.interner.resolve(sym).to_string(), func.span));
             }
         }
 
@@ -571,8 +574,8 @@ impl<'a> super::EffectChecker<'a> {
                     ImplItem::AssocType(_) => continue,
                 };
 
-                let impl_key = format!("{}.{}", type_name, method.name);
-                let trait_key = format!("{}.{}", trait_name, method.name);
+                let impl_key = self.interner.dotted_str(&type_name, &method.name);
+                let trait_key = self.interner.dotted_str(&trait_name, &method.name);
 
                 // Look up the trait method's declared ceiling.
                 let ceiling_set = match self.declared_effects.get(&trait_key) {
@@ -653,7 +656,7 @@ impl<'a> super::EffectChecker<'a> {
                     continue;
                 }
 
-                let key = format!("{}.{}", t.name, m.name);
+                let key = self.interner.dotted_str(&t.name, &m.name);
 
                 let ceiling_set = match self.declared_effects.get(&key) {
                     Some(DeclaredEffects::Explicit(set)) => set.effect_set(),

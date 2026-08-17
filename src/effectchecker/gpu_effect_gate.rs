@@ -34,6 +34,7 @@ use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::EffectVerbKind;
+use crate::intern::{Interner, Symbol};
 use crate::token::Span;
 
 use super::{Effect, EffectError, EffectErrorKind, EffectOrigin};
@@ -44,17 +45,17 @@ impl<'a> super::EffectChecker<'a> {
     pub(crate) fn check_gpu_effect_gate(&mut self) {
         // `#[gpu]` roots, keyed identically to the call graph / inferred
         // effects (`name` for free fns, `Type.method` for methods).
-        let mut roots: Vec<String> = self
+        let mut roots: Vec<Symbol> = self
             .function_bodies
             .iter()
             .chain(self.method_bodies.iter())
             .filter(|(_, f)| f.is_gpu)
-            .map(|(k, _)| k.clone())
+            .map(|(&k, _)| k)
             .collect();
         if roots.is_empty() {
             return;
         }
-        roots.sort();
+        roots.sort_by_cached_key(|s| self.interner.resolve(*s));
         roots.dedup();
 
         let graph = self.build_call_graph();
@@ -62,8 +63,8 @@ impl<'a> super::EffectChecker<'a> {
         // Direct GPU-forbidden uses per function. A `Callee` origin whose
         // callee has a body node is examined at that node; a body-less
         // callee (host fn / extern / builtin) is charged at the call site.
-        let mut direct: HashMap<String, Vec<(String, Span)>> = HashMap::new();
-        for (fn_name, set) in &self.inferred_effects {
+        let mut direct: HashMap<Symbol, Vec<(String, Span)>> = HashMap::new();
+        for (&fn_name, set) in &self.inferred_effects {
             for te in &set.effects {
                 // FE-4b: a `panics` effect is forbidden only when it
                 // originates from an *explicit* emitter. Implicit bounds-check
@@ -81,7 +82,7 @@ impl<'a> super::EffectChecker<'a> {
                     {
                         if let Some(label) = explicit_panic_emitter_label(callee) {
                             direct
-                                .entry(fn_name.clone())
+                                .entry(fn_name)
                                 .or_default()
                                 .push((format!("an explicit panic (`{label}`)"), *span));
                         }
@@ -98,7 +99,13 @@ impl<'a> super::EffectChecker<'a> {
                         fn_name: callee,
                         span,
                     } => {
-                        if graph.contains_key(callee) {
+                        // Origins carry resolved names; probe back to a
+                        // symbol (non-inserting — graph keys are minted).
+                        let callee_in_graph = self
+                            .interner
+                            .get(callee)
+                            .is_some_and(|sym| graph.contains_key(&sym));
+                        if callee_in_graph {
                             None
                         } else {
                             Some(*span)
@@ -106,19 +113,24 @@ impl<'a> super::EffectChecker<'a> {
                     }
                 };
                 if let Some(span) = span_here {
-                    direct
-                        .entry(fn_name.clone())
-                        .or_default()
-                        .push((reason, span));
+                    direct.entry(fn_name).or_default().push((reason, span));
                 }
             }
         }
 
         let mut errors: Vec<EffectError> = Vec::new();
-        let mut visited: HashSet<String> = HashSet::new();
-        let mut path: Vec<String> = Vec::new();
-        for root in &roots {
-            gpu_gate_dfs(root, &graph, &direct, &mut path, &mut visited, &mut errors);
+        let mut visited: HashSet<Symbol> = HashSet::new();
+        let mut path: Vec<Symbol> = Vec::new();
+        for &root in &roots {
+            gpu_gate_dfs(
+                root,
+                &self.interner,
+                &graph,
+                &direct,
+                &mut path,
+                &mut visited,
+                &mut errors,
+            );
         }
         self.errors.extend(errors);
     }
@@ -127,21 +139,27 @@ impl<'a> super::EffectChecker<'a> {
 /// DFS from a `#[gpu]` root over the call graph. Global `visited` (each node's
 /// direct violations reported once, with the first root→…→node path found);
 /// `path` carries the chain for the diagnostic.
+#[allow(clippy::too_many_arguments)]
 fn gpu_gate_dfs(
-    fn_name: &str,
-    graph: &FxHashMap<String, Vec<(String, Span)>>,
-    direct: &HashMap<String, Vec<(String, Span)>>,
-    path: &mut Vec<String>,
-    visited: &mut HashSet<String>,
+    fn_name: Symbol,
+    interner: &Interner,
+    graph: &FxHashMap<Symbol, Vec<(Symbol, Span)>>,
+    direct: &HashMap<Symbol, Vec<(String, Span)>>,
+    path: &mut Vec<Symbol>,
+    visited: &mut HashSet<Symbol>,
     errors: &mut Vec<EffectError>,
 ) {
-    if !visited.insert(fn_name.to_string()) {
+    if !visited.insert(fn_name) {
         return;
     }
-    path.push(fn_name.to_string());
+    path.push(fn_name);
 
-    if let Some(violations) = direct.get(fn_name) {
-        let chain = path.join(" → ");
+    if let Some(violations) = direct.get(&fn_name) {
+        let chain = path
+            .iter()
+            .map(|s| interner.resolve(*s))
+            .collect::<Vec<_>>()
+            .join(" → ");
         for (reason, span) in violations {
             errors.push(EffectError {
                 message: format!(
@@ -158,11 +176,11 @@ fn gpu_gate_dfs(
         }
     }
 
-    if let Some(calls) = graph.get(fn_name) {
-        let mut seen: HashSet<&str> = HashSet::new();
-        for (callee, _) in calls {
-            if seen.insert(callee.as_str()) {
-                gpu_gate_dfs(callee, graph, direct, path, visited, errors);
+    if let Some(calls) = graph.get(&fn_name) {
+        let mut seen: HashSet<Symbol> = HashSet::new();
+        for &(callee, _) in calls {
+            if seen.insert(callee) {
+                gpu_gate_dfs(callee, interner, graph, direct, path, visited, errors);
             }
         }
     }

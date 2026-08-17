@@ -1,7 +1,8 @@
 # Name interning — front-end name-handling cost, measured
 
-**Status:** Stages 0–2¾ DONE (2026-08-17). Stage 3 (the `Symbol(u32)` interner
-proper) is scoped below with measured expectations, not started. Origin:
+**Status:** Stages 0–3a DONE (2026-08-17). Stage 3a is the first slice of the
+`Symbol(u32)` interner proper: the effectchecker's full key space. Remaining
+stage-3 phases (ownership, typechecker, AST identifiers) scoped below. Origin:
 `docs/spikes/structural-debt.md` § "Name interning (review item 9c)".
 
 ## The question
@@ -125,13 +126,12 @@ than the String-keyed swap it accompanied. Remaining SipHash: ~9.5%
 (Scope.names, the effectchecker's Effect sets, AST-side tables — all
 colder). Landed as `739eecb8`.
 
-## Stage 3 — the interner proper (NOT STARTED; scope before starting)
+## Stage 3 — the interner proper (3a landed; scope below)
 
-What the remaining profile says (post-stage-2¾ callgrind): ~33% allocator,
-~9.5% SipHash (Scope.names, Effect sets, AST tables — the cold tail), ~4%
-memcpy. The clone traffic FxHash cannot touch — 1.37M allocs, largely
-`String` key clones and `Type`/`Token` clones — is the interning target:
-hashing is now largely burned down, and the allocator is the wall.
+What the post-stage-2¾ profile said: ~33% allocator, ~9.5% SipHash
+(Scope.names, Effect sets, AST tables — the cold tail), ~4% memcpy. The
+clone traffic FxHash cannot touch — 1.37M allocs, largely `String` key
+clones and `Type`/`Token` clones — is the interning target.
 
 - **Ceiling:** eliminating all string hash+clone+compare overhead is worth
   roughly 30–40% of the *current* front end (diffuse; no single site).
@@ -142,13 +142,62 @@ hashing is now largely burned down, and the allocator is the wall.
   hundreds of sites; every one becomes an intern() or a Symbol-carrying AST.
   This is the "large, cross-phase change" the backlog predicted — multiple
   dedicated sessions, each ending green.
-- **Cheaper intermediates:** exhausted — stage 2¾ took the last one.
-  What remains is the Symbol conversion itself (the allocator share) and
-  the cold SipHash tail, which is not worth a slice on its own.
+
+### Stage 3a — effectchecker key space → `Symbol(u32)` (LANDED)
+
+`src/intern.rs`: `Symbol(u32)` + per-compilation `Interner` (`Rc<str>`
+backed, `RefCell` interior mutability so `&self` walkers can mint), with
+two design points that carried the slice: **`get` vs `intern`** (a
+non-inserting probe whose miss proves any symbol-keyed table misses — used
+for every "is this identifier a function?" check against arbitrary AST
+names) and a **dotted-pair cache** (`(Symbol, Symbol) → Symbol` for
+`"Type.method"` composites, so the `format!` allocation happens once per
+distinct pair instead of once per call-site probe; `get_dotted` is its
+non-inserting sibling, sound against tables whose keys are all
+dotted-minted). The whole checker key space converted: every
+function-name-keyed table in `EffectChecker` + all 10 submodules, the
+calls vectors, call graph, Tarjan (visit order sorts by *resolved* text —
+symbol order is mint order, and the alphabetical processing order was
+deliberate), `method_callee_types` values (interned once at the
+typechecker seam, killing a per-method-call-site `String` clone), modbind
+synthetic keys (pre-minted into `ModBindingInfo`), and the old
+`STDLIB_METHOD_MAP` 36-entry linear scan-with-string-compares per method
+call site (now one `Symbol` map probe). `infer_function_effects`
+additionally dedupes callees per pass — repeated calls to the same callee
+could only re-contribute the same effects and `EffectSet::add` keeps the
+first origin anyway — which drops the per-call-site `Vec<Effect>`
+clone-storm. Boundary: `EffectCheckResult` stays String-keyed; symbols
+resolve exactly once, at result construction. `Effect.resource` and
+`EffectOrigin` stay String this slice (they cross into the public result).
+
+Result (interleaved A/B, 3 rounds, synthetic): effectcheck
+**65–67 → 42–44 ms (−35%)**, its allocations **643k → 202k (−69%)**;
+front-end total **159–168 → 139–141 ms (−13–16%)**; instructions
+**0.862B → 0.671B (−22%)** — the largest single-slice instruction drop of
+the spike. Cumulus (real code, effectcheck small): effectcheck −13–16%,
+total ~−2%. Verified: fmt + clippy both legs; full non-LLVM suite
+8,969/0; codegen 3,002/0, par_codegen 258/0, memory_sanitizer 1,110/0,
+cli 590/0 (all under `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`).
+
+**Session net (synthetic): front end 240.8 → ~140 ms (−42%), instructions
+1.62B → 0.671B (−59%), allocations 3.14M → 0.93M (−70%).**
+
+### Remaining stage-3 phases (not started)
+
+Post-3a profile: allocator ~31% — now concentrated in ownership (365k
+allocs), typecheck (165k), parse (162k), with effectcheck's share
+collapsed; SipHash ~10% (Effect `HashSet`s, `Scope.names`); `Token`/
+`Type` clone tails ~3%. Next in line by the phase-at-a-time rule:
+**ownership** (its String-keyed binding/method tables were Fx'd in 2½ but
+still clone keys), then **typechecker** (`TypeEnv` string keys — though
+its allocs are dominated by `Type` clones, a different lever), AST
+identifiers last. Each is its own session-sized slice with this slice as
+the template.
 
 ## Lifecycle
 
-Stages 0–2 are landed; this doc stays as the measurement record and the
-stage-3 scoping. If stage 3 is taken up, measure per phase converted with
-`bench_frontend` and append; if it is declined, record the decision here and
-close the structural-debt entry with a pointer to these numbers.
+Stages 0–3a are landed; this doc stays as the measurement record and the
+remaining stage-3 scoping. Measure per phase converted with
+`bench_frontend` and append; if the remaining phases are declined, record
+the decision here and close the structural-debt entry with a pointer to
+these numbers.
