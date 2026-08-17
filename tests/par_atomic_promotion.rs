@@ -7,8 +7,30 @@
 //! `shared_struct_two_branch_use_still_fires_after_par_exemption` fail. A
 //! separate integration test is a separate process, so the opt-in cannot
 //! escape these cases.
+//!
+//! A SEPARATE BINARY IS NOT ENOUGH ON ITS OWN, which the note above missed: the
+//! two tests IN HERE are still parallel threads of ONE process sharing that same
+//! global. Each brackets its body with `set_var` … `remove_var`, so the sibling's
+//! trailing `remove_var` can land between this one's `set_var` and its
+//! `ownershipcheck`, and the check then runs with the promotion OFF. Only
+//! `immutable_shared_graph_is_admitted_across_branches` can lose that race — it
+//! is the one asserting the promotion HAPPENS, while its sibling asserts
+//! rejections that fire with the flag off too — and it does: measured 1/1500 runs
+//! at `--test-threads=2`, which is exactly the kind of ~0.07% flake that reads as
+//! an unrelated regression when a full-suite run trips it.
+//!
+//! So both tests take `ENV_GUARD` for their whole body. The lock is what makes
+//! the env var effectively test-local; nothing here may touch
+//! `KARAC_PAR_ATOMIC_PROMOTION` without holding it.
 
 use karac::ownership::OwnershipErrorKind;
+use std::sync::Mutex;
+
+/// Serializes every `KARAC_PAR_ATOMIC_PROMOTION` bracket in this binary.
+/// Poison-tolerant: a panicking test still leaves the env var in a defined
+/// state for the next one, and turning its failure into a second, misleading
+/// "poisoned lock" failure would only bury the real one.
+static ENV_GUARD: Mutex<()> = Mutex::new(());
 
 mod common_helpers {
     pub fn ownership_ok(src: &str) -> karac::ownership::OwnershipCheckResult {
@@ -43,6 +65,7 @@ fn ownership_errors(src: &str) -> Vec<karac::ownership::OwnershipError> {
 /// where a per-binding promotion could not.
 #[test]
 fn immutable_shared_graph_is_admitted_across_branches() {
+    let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     // Opt-in: the promotion changes a documented language rule, so it ships
     // inert. See `atomic_promotion_closure` for why the default is off.
     std::env::set_var("KARAC_PAR_ATOMIC_PROMOTION", "1");
@@ -79,6 +102,7 @@ fn immutable_shared_graph_is_admitted_across_branches() {
 /// its mutable fields. Both of these must keep firing.
 #[test]
 fn shared_struct_with_a_mut_field_is_still_rejected() {
+    let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("KARAC_PAR_ATOMIC_PROMOTION", "1");
     // (a) `mut` on the captured type itself.
     let direct = ownership_errors(
