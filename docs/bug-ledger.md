@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 257 | 3 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
-| run-vs-build | 126 | 3 |
+| run-vs-build | 127 | 4 |
 | codegen-gap | 114 | 0 |
 | missing-feature | 99 | 1 |
 | false-positive | 77 | 4 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 907 | 7 |
-| typecheck | 186 | 6 |
-| interp | 148 | 2 |
+| typecheck | 187 | 7 |
+| interp | 149 | 3 |
 | ownership | 57 | 0 |
 | other | 50 | 2 |
 | autopar | 48 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1283 surfaced · 16 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1284 surfaced · 17 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (16)
+### Open (17)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -145,7 +145,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1283 surfaced
 | B-2026-08-17-28 | 2026-08-17 | codegen+interp | high | Optional chaining `?.` ICEs the interpreter at one shape and silently returns the wrong answer at another, and is not lowered by codegen at all -- `karac check` says "All checks passed" for every case. design.md line 782: "`user.address?.city?.name` short-circuits to `None` if any level is absent." (1) INTERPRETER ICE: `match u.address?.city { Some(c) => println("L2 some: " + c.name), None => ... }` panics with `internal error: entered unreachable code: field access at 7:42: receiver was Value::EnumVariant not Struct/SharedStruct; either an interpreter codepath produced the wrong variant or the typechecker accepted field access on a non-struct` (src/interpreter.rs:2252) -- the Some-arm binding `c` holds an unstripped enum value rather than the `City` struct, the same wrapper-not-stripped shape as B-2026-08-17-27's `??` legs. (2) INTERPRETER SILENT WRONG ANSWER: the spec's own three-level example `u.address?.city?.name`, built with EVERY level `Some`, takes the `None` arm and prints "L3 none". (3) CODEGEN: not lowered -- both compiled backends refuse the same programs (`codegen failed: Undefined variable 's'`, and `no handler for method 'to_string' on variable 'z'` for the one-level form). | roadmap.md |
 | B-2026-08-17-29 | 2026-08-17 | codegen | high | A range bound to a `let` and then iterated compiles to a ZERO-ITERATION loop -- silent wrong answer under both compiled backends, `karac check` clean, interpreter correct. `let r = 0..5; let mut n = 0; for i in r { n = n + 1; } println(f"iterations={n}")` prints iterations=5 under `--interp` and iterations=0 under `karac run` (JIT) and `karac build` (AOT); the INLINE control in the same file (`for i in 0..5 { m = m + 1; }`) prints control=5 on all three, so the range itself and the loop lowering are both fine and only the binding indirection is lost. All three iterable range forms from design.md § Loops' range-literal table fail identically: exclusive `let r = 0..5` (0 instead of 5), inclusive `let r = 0..=4` (0 instead of 5), and variable endpoints `let a = 2; let b = 6; let r2 = a..b` (sum 0 instead of 14). design.md line 2616 types these as first-class library values (`Range[T]` / `RangeInclusive[T]`, "Iterable? Yes"), so binding one is ordinary use, not an exotic shape. | roadmap.md |
 | B-2026-08-17-30 | 2026-08-17 | typecheck+cli | low | E0218 TELLS YOU THE EXACT TEXT TO INSERT AND `karac fix` STILL DECLINES IT: the call-site `mut`-marker diagnostic ends with ``Write `mut <expr>`.`` but carries no `replacement`, while its EXACT INVERSE E0219 ("drop the `mut` marker") does carry one and is applied automatically. Same marker, opposite directions, adjacent codes, one fixable and one not. | E0218's diagnostic construction: it has no `replacement` field where E0219 emits `replacement: {offset, length, text}`. The repair is a single insertion at a known offset. |
-| B-2026-08-17-31 | 2026-08-17 | other | medium | 51 of design.md's 63 bodyless trait declarations omit the trailing `;` the grammar REQUIRES, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
+| B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
+| B-2026-08-17-32 | 2026-08-17 | typecheck+interp | medium | Calling a PLAIN REFINEMENT TYPE as a constructor -- `ValidPort(80)` where `type ValidPort = u16 where self >= 1 and self <= 65535;` -- is ACCEPTED by `karac check` even though the language has no such form, and the two backends then disagree with one of them silent. `karac run --interp` dies with `runtime error: internal: name 'ValidPort' resolved but has no binding at run time. This is a compiler bug (the resolver should have rejected or bound it) -- please report it with the source.` `karac run` (JIT) prints `q = 0`. `karac check` reports "All checks passed." The `T(value)` constructor belongs to `distinct type` (design.md § Distinct Types: "Wrap: `UserId(42)` -- constructor syntax"), NOT to a plain refinement, whose § Refinement Types construction paragraph offers only `Refined.try_from(value)`, `value as Refined`, and the const-eval binding-site elision. The two declaration forms differ by one keyword, so reaching for the wrong constructor is an easy and likely mistake -- and it compiles. | roadmap.md |
 
 ### Wontfix (5)
 
