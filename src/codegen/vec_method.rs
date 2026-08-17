@@ -11278,6 +11278,66 @@ impl<'ctx> super::Codegen<'ctx> {
         let sc_body = bb(self, "sc.body");
         let sc_chk_le = split_scatter.then(|| bb(self, "sc.chk.le"));
         let sc_body_le = split_scatter.then(|| bb(self, "sc.body.le"));
+        // ── the FUSED single pass (B-2026-08-16-9) ─────────────────────────
+        // Replaces count-then-scatter with ONE pass, on the unstructured arm
+        // only. DEFAULT ON; `KARAC_SORT_FUSED=0` restores count-then-scatter,
+        // and the blocks are not even created then.
+        //
+        // Worth 68.75 -> 66.58 cycles per element on shuffled `(i64,i64)` at
+        // n=150k, which moves the gap to driftsort from 1.297x to 1.256x. The
+        // win is IPC, not work: instructions go UP 2.2% (the reversal costs more
+        // than the count saved) while IPC goes 3.95 -> 4.10. Validated against
+        // layout rather than as a point estimate — five emission orders per arm,
+        // and the two distributions do not overlap (fused max 66.71 < count min
+        // 68.37), which matters because a same-day investigation found a 15.5%
+        // swing on kata 236 from emission order alone.
+        //
+        // WHY IT CAN BE ONE PASS. The count exists to place the right cursor,
+        // which cannot be known before the range is read. Writing the `>=` side
+        // BACKWARD from `hi` needs no such base: the two cursors meet exactly at
+        // `lo + nlt`. The right half comes out reversed, so a reversal pass
+        // restores stability — but a reversal is a dependency-free pair swap,
+        // where the count pass is a full read of the range whose result the
+        // scatter must wait for.
+        //
+        // WHY ONLY THE UNSTRUCTURED ARM. `gate == 0` marks a range admitted for
+        // being unstructured, and it is exactly there that the gate test below
+        // is skipped — so the count feeds nothing but cursor placement and can
+        // be deleted. On the low-cardinality arm the same count answers the tie
+        // gate, and deleting it would cost a routing decision worth far more
+        // than the pass.
+        //
+        // WHY A RETRY. Both halves must be non-empty or the recursion does not
+        // terminate. `nlt == 0` (the pivot is the range minimum) is the one case
+        // a `<` split cannot satisfy, and the count path handles it by splitting
+        // on `<=` instead — a choice that needs the count. The fused pass cannot
+        // know it in advance, so it re-runs the count path for that range. The
+        // source buffer is untouched by the fused pass (it writes only to
+        // `dead`), which is what makes the retry safe. On unstructured data a
+        // median-of-3 pivot is the range minimum with probability ~3/m², so this
+        // is a correctness backstop, not a cost.
+        //
+        // `KARAC_SORT_FUSED=2` is a TEST mode: it routes every range through the
+        // fused pass, gate or not. The retry is near-unreachable on the arm the
+        // fused path actually serves — a median-of-3 pivot is the range minimum
+        // with probability ~3/m² on unstructured data — so without this the
+        // retry would ship untested. Forcing it onto low-cardinality ranges,
+        // where the pivot IS frequently the minimum, exercises it hard.
+        let fused_mode = std::env::var("KARAC_SORT_FUSED")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(1);
+        let fused = fused_mode >= 1;
+        let fu = fused.then(|| {
+            (
+                bb(self, "fu.chk"),
+                bb(self, "fu.body"),
+                bb(self, "fu.done"),
+                bb(self, "fu.retry"),
+                bb(self, "fu.rev.chk"),
+                bb(self, "fu.rev.body"),
+            )
+        });
         let rec = bb(self, "rec");
         let l_eq = bb(self, "l.eq");
         let l_eq_cp = bb(self, "l.eq.cp");
@@ -11297,6 +11357,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let lc_a = self.create_entry_alloca(qpart_fn, "lcur", i64_t.into());
         let rc_a = self.create_entry_alloca(qpart_fn, "rcur", i64_t.into());
         let split_a = self.create_entry_alloca(qpart_fn, "split", i64_t.into());
+        // Only the fused path needs these. `no_lt` and `right_eq` are SSA values
+        // defined on the COUNT path, so a fused path reaching `rec` without
+        // passing through those blocks cannot see them; routing them through
+        // memory lets both paths converge and leaves mem2reg to rebuild the phi.
+        // `rv` is the reversal's descending cursor.
+        let bool_t = self.context.bool_type();
+        let fu_slots = fu.map(|_| {
+            (
+                self.create_entry_alloca(qpart_fn, "nolt", bool_t.into()),
+                self.create_entry_alloca(qpart_fn, "req", bool_t.into()),
+                self.create_entry_alloca(qpart_fn, "rv", i64_t.into()),
+            )
+        });
 
         let len = self.builder.build_int_sub(hi, lo, "q.len").unwrap();
         let elem_size = elem_ty.size_of().unwrap();
@@ -11573,7 +11646,29 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(nlt_a, zero).unwrap();
         self.builder.build_store(nle_a, zero).unwrap();
         self.builder.build_store(ii_a, lo).unwrap();
-        self.builder.build_unconditional_branch(cnt_chk).unwrap();
+        match fu {
+            // The fused pass seeds its cursors here; the count path overwrites
+            // both in `pick`, so these stores are dead on that route.
+            Some((fu_chk, ..)) => {
+                let hi_1 = self.builder.build_int_sub(hi, one, "q.hi.1").unwrap();
+                self.builder.build_store(lc_a, lo).unwrap();
+                self.builder.build_store(rc_a, hi_1).unwrap();
+                if fused_mode >= 2 {
+                    self.builder.build_unconditional_branch(fu_chk).unwrap();
+                } else {
+                    let unstructured = self
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::EQ, gate, zero, "q.unstr")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(unstructured, fu_chk, cnt_chk)
+                        .unwrap();
+                }
+            }
+            None => {
+                self.builder.build_unconditional_branch(cnt_chk).unwrap();
+            }
+        }
 
         // ── count: one pass tallies BOTH `< pivot` and `<= pivot` ──────────
         // Two tallies from one comparison is what lets the split predicate be
@@ -11731,6 +11826,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(lc_a, lo).unwrap();
         self.builder.build_store(rc_a, mid).unwrap();
         self.builder.build_store(ii_a, lo).unwrap();
+        if let Some((nolt_a, req_a, _)) = fu_slots {
+            self.builder.build_store(nolt_a, no_lt).unwrap();
+            self.builder.build_store(req_a, right_eq).unwrap();
+        }
         match sc_chk_le {
             Some(le) => self
                 .builder
@@ -11875,8 +11974,192 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_unconditional_branch(chk).unwrap();
         }
 
+        // ── fused: one in-order pass, cursors converging from both ends ────
+        if let (
+            Some((fu_chk, fu_body, fu_done, fu_retry, fu_rev_chk, fu_rev_body)),
+            Some((nolt_a, req_a, rv_a)),
+        ) = (fu, fu_slots)
+        {
+            self.builder.position_at_end(fu_chk);
+            let fi = self
+                .builder
+                .build_load(i64_t, ii_a, "q.fi")
+                .unwrap()
+                .into_int_value();
+            let f_go = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, fi, hi, "q.f.go")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(f_go, fu_body, fu_done)
+                .unwrap();
+
+            // Same shape as one arm of the split scatter — a single predicate
+            // consumed as flags, a `csel` for the destination — except the right
+            // cursor DESCENDS, which is what removes the need for a counted base.
+            self.builder.position_at_end(fu_body);
+            let fv_p = unsafe {
+                self.builder
+                    .build_in_bounds_gep(elem_ty, live, &[fi], "q.fv.p")
+                    .unwrap()
+            };
+            let fv = self.builder.build_load(elem_ty, fv_p, "q.fv").unwrap();
+            let fpv = self.builder.build_load(elem_ty, piv_a, "q.fpv").unwrap();
+            let fc =
+                self.emit_sort_by_inline_compare(qpart_fn, params, body, elem_type_name, fv, fpv)?;
+            let f_left = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, fc, zero, "q.f.lt")
+                .unwrap();
+            let flc = self
+                .builder
+                .build_load(i64_t, lc_a, "q.flc")
+                .unwrap()
+                .into_int_value();
+            let frc = self
+                .builder
+                .build_load(i64_t, rc_a, "q.frc")
+                .unwrap()
+                .into_int_value();
+            let f_dsti = self
+                .builder
+                .build_select(f_left, flc, frc, "q.f.dsti")
+                .unwrap()
+                .into_int_value();
+            let f_dstp = unsafe {
+                self.builder
+                    .build_in_bounds_gep(elem_ty, dead, &[f_dsti], "q.f.dst.p")
+                    .unwrap()
+            };
+            self.builder.build_store(f_dstp, fv).unwrap();
+            let f_linc = self
+                .builder
+                .build_int_z_extend(f_left, i64_t, "q.f.linc")
+                .unwrap();
+            let f_rbit = self.builder.build_not(f_left, "q.f.rbit").unwrap();
+            let f_rdec = self
+                .builder
+                .build_int_z_extend(f_rbit, i64_t, "q.f.rdec")
+                .unwrap();
+            let flc_n = self.builder.build_int_add(flc, f_linc, "q.flc.n").unwrap();
+            let frc_n = self.builder.build_int_sub(frc, f_rdec, "q.frc.n").unwrap();
+            self.builder.build_store(lc_a, flc_n).unwrap();
+            self.builder.build_store(rc_a, frc_n).unwrap();
+            let fi2 = self
+                .builder
+                .build_load(i64_t, ii_a, "q.fi2")
+                .unwrap()
+                .into_int_value();
+            let fi_n = self.builder.build_int_add(fi2, one, "q.fi.n").unwrap();
+            self.builder.build_store(ii_a, fi_n).unwrap();
+            self.builder.build_unconditional_branch(fu_chk).unwrap();
+
+            // The cursors met at `lo + nlt`, so the left cursor IS the split.
+            self.builder.position_at_end(fu_done);
+            let f_lend = self
+                .builder
+                .build_load(i64_t, lc_a, "q.f.lend")
+                .unwrap()
+                .into_int_value();
+            let f_nlt = self.builder.build_int_sub(f_lend, lo, "q.f.nlt").unwrap();
+            let f_empty = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::EQ, f_nlt, zero, "q.f.empty")
+                .unwrap();
+            self.builder.build_store(split_a, f_nlt).unwrap();
+            // The fused route always splits on `<` and never proves the right
+            // half all-equal, so both routing flags are false. The all-equal
+            // early exit is given up with them: on unstructured data a range
+            // whose every element ties the pivot is vanishingly rare, and the
+            // cost of missing it is one extra level, not a wrong answer.
+            let f_false = bool_t.const_zero();
+            self.builder.build_store(nolt_a, f_false).unwrap();
+            self.builder.build_store(req_a, f_false).unwrap();
+            self.builder.build_store(ii_a, f_lend).unwrap();
+            let f_hi1 = self.builder.build_int_sub(hi, one, "q.f.hi1").unwrap();
+            self.builder.build_store(rv_a, f_hi1).unwrap();
+            self.builder
+                .build_conditional_branch(f_empty, fu_retry, fu_rev_chk)
+                .unwrap();
+
+            // `dead` is scrap on this route — the count path rebuilds it from
+            // `live`, which the fused pass never wrote.
+            self.builder.position_at_end(fu_retry);
+            self.builder.build_store(nlt_a, zero).unwrap();
+            self.builder.build_store(nle_a, zero).unwrap();
+            self.builder.build_store(ii_a, lo).unwrap();
+            self.builder.build_unconditional_branch(cnt_chk).unwrap();
+
+            // Restore stability: the `>=` side was appended descending, so it
+            // holds the right elements in reverse of their original order.
+            self.builder.position_at_end(fu_rev_chk);
+            let ra = self
+                .builder
+                .build_load(i64_t, ii_a, "q.ra")
+                .unwrap()
+                .into_int_value();
+            let rb = self
+                .builder
+                .build_load(i64_t, rv_a, "q.rb")
+                .unwrap()
+                .into_int_value();
+            let r_go = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, ra, rb, "q.r.go")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(r_go, fu_rev_body, rec)
+                .unwrap();
+
+            self.builder.position_at_end(fu_rev_body);
+            let ra_p = unsafe {
+                self.builder
+                    .build_in_bounds_gep(elem_ty, dead, &[ra], "q.ra.p")
+                    .unwrap()
+            };
+            let rb_p = unsafe {
+                self.builder
+                    .build_in_bounds_gep(elem_ty, dead, &[rb], "q.rb.p")
+                    .unwrap()
+            };
+            let va = self.builder.build_load(elem_ty, ra_p, "q.va").unwrap();
+            let vb = self.builder.build_load(elem_ty, rb_p, "q.vb").unwrap();
+            self.builder.build_store(ra_p, vb).unwrap();
+            self.builder.build_store(rb_p, va).unwrap();
+            let ra_n = self.builder.build_int_add(ra, one, "q.ra.n").unwrap();
+            let rb_n = self.builder.build_int_sub(rb, one, "q.rb.n").unwrap();
+            self.builder.build_store(ii_a, ra_n).unwrap();
+            self.builder.build_store(rv_a, rb_n).unwrap();
+            // DELIBERATELY NOT VECTORISED. The count pass this replaces was
+            // 8-wide NEON, so widening the swap is the obvious way to pay for
+            // the +2.2% instructions the reversal costs — but the same
+            // `vectorize.enable` hint the count uses is INERT here and was
+            // removed rather than left in. A two-ended swap needs a reversing
+            // shuffle, which LLVM's loop vectoriser does not form, so the hint
+            // changed the instruction count by 0.1 per element (279.2 -> 279.1)
+            // while emitting a "loop not vectorized" warning for every sort in
+            // the program. Widening this loop needs an explicit shuffle in the
+            // emitter, not a request to the cost model.
+            self.builder.build_unconditional_branch(fu_rev_chk).unwrap();
+        }
+
         // ── recurse: the scatter moved both halves to the other buffer ─────
         self.builder.position_at_end(rec);
+        // Both routes converge here, so the routing flags come from memory when
+        // the fused path exists (see `fu_slots`).
+        let (no_lt, right_eq) = match fu_slots {
+            Some((nolt_a, req_a, _)) => (
+                self.builder
+                    .build_load(bool_t, nolt_a, "q.nolt.v")
+                    .unwrap()
+                    .into_int_value(),
+                self.builder
+                    .build_load(bool_t, req_a, "q.req.v")
+                    .unwrap()
+                    .into_int_value(),
+            ),
+            None => (no_lt, right_eq),
+        };
         let nin = self.builder.build_int_sub(one, in_a, "q.nin").unwrap();
         let dep_n = self.builder.build_int_add(depth, one, "q.dep.n").unwrap();
         let split_v = self
