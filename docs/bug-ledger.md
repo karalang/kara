@@ -97,12 +97,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 130 | 0 |
 | run-vs-build | 128 | 4 |
 | codegen-gap | 114 | 0 |
-| missing-feature | 102 | 4 |
+| missing-feature | 102 | 3 |
 | perf | 77 | 1 |
 | false-positive | 77 | 3 |
 | diagnostics | 71 | 5 |
+| soundness | 50 | 1 |
 | crash | 50 | 1 |
-| soundness | 49 | 0 |
 | other | 35 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 909 | 8 |
-| typecheck | 191 | 10 |
+| typecheck | 192 | 10 |
 | interp | 149 | 3 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1292 surfaced · 21 open · 1255 fixed · 6 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1293 surfaced · 21 open · 1256 fixed · 6 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (21)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort — layout-cleared, tree at its two-pass floor, levels at the median-of-3 limit; the residual is IPC, not work | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
-| B-2026-08-17-19 | 2026-08-17 | typecheck | medium | Default parameter values are INERT at every call site -- omitting a defaulted argument is an arity error, so the whole feature is unusable. design.md § Default Parameter Values' own example `create_server("0.0.0.0")` (3 defaulted params omitted) fails `karac check` with "expected 4 argument(s), found 1"; roadmap.md lines 111/199 mark the feature `[x]` done, but both checked boxes cover only the DECLARATION half (`param: Type = expr` syntax; trailing-only rule; const-expression validation) -- nothing ever consumes the stored default at a call. Minimal: `fn greet(name: String, greeting: String = "hello") -> String { greeting + ", " + name }` + `greet("world")` -> "expected 2 argument(s), found 1". Same error on all three backends (it is a check-phase gate, so no run-vs-build divergence). The label rules stack on top of the same hole: `create_server("0.0.0.0", max_connections: 100)` -- the spec's own "override one; requires label" line -- reports "label 'max_connections' does not match parameter 'port' at position 2", because labels are matched POSITIONALLY against the declaration list with no skip-the-defaulted-prefix step. So the spec's whole "labels allow skipping defaults without filling in placeholders" rule is unreachable too. | roadmap.md |
 | B-2026-08-17-20 | 2026-08-17 | typecheck | low | The default-parameter-value const validator rejects FOUR of the forms design.md explicitly lists as allowed, including the spec's own example literal. § Default Parameter Values says "The allowed forms are identical to those for Module-Level Bindings: literals (`42`, `"localhost"`, `true`), arithmetic on literals (`60 * 1000`), enum variants (`Direction.North`), struct/tuple/array literals built from constant expressions, and references to other module-level bindings", and separately calls `Option[T] = None` "idiomatic". Measured, one form per line: ACCEPTED -- `i64 = 42`, `bool = true`, `f64 = 1.5`, `char = 'z'`, `i64 = 60 * 1000`, `Direction = Direction.North`, `(i64,i64) = (1, 2)`. REJECTED -- (a) `String = "localhost"` -> "default parameter value must be a constant expression (no function calls, closures, or runtime-only values)", the spec's own quoted literal; (b) `i64 = LIMIT` where `let LIMIT: i64 = 7` is a module-level binding -> "const expression: 'LIMIT' is not a known const"; (c) `P = P { x: 1, y: 2 }` struct literal -> same not-a-constant-expression message (the TUPLE literal sibling is accepted, so it is the struct shape specifically); (d) `Option[i64] = None` -> "const expression: 'None' is not a known const", and `Option[i64] = Option.Some(42)` -> not-a-constant-expression. | roadmap.md |
 | B-2026-08-17-22 | 2026-08-17 | typecheck | medium | A string literal NESTED inside a module-level struct / tuple / array initializer types as `String` instead of `StringSlice`, and since `String` is forbidden at module scope this makes module-level constants carrying static string data unwritable. design.md § Module-Level Bindings states "String literals have type `StringSlice` at module scope" and separately lists "Struct and tuple literals built from constant expressions" and "Array literals" among the allowed initializers -- the intersection must work, and does not. `let DIRECT: StringSlice = "ok";` checks fine, but `let NESTED: Cfg = Cfg { name: "karac", retries: 3 };` -> "expected 'StringSlice', found 'String'", `let TUP: (StringSlice, i64) = ("karac", 3);` -> "expected '(StringSlice, i64)', found '(String, i64)'", and `let ARR: Array[StringSlice, 2] = ["a", "b"];` -> one such error per element. There is no spelling that works: declaring the field as `String` is rejected by the constant-initializer rule ("String is heap-allocated; use StringSlice for static string data"), so the module-scope literal rule reaching only the TOP LEVEL of the initializer leaves the composite forms with no legal form at all. | roadmap.md |
 | B-2026-08-17-23 | 2026-08-17 | codegen | medium | A destructuring pattern in FUNCTION-parameter position is never lowered by codegen -- `karac check` passes clean, `--interp` runs correctly, and BOTH compiled backends refuse with `codegen failed: Undefined variable '<binding>'`. design.md § Destructuring in Function and Closure Parameters opens with "Any irrefutable pattern may appear in parameter position" and roadmap.md line 112 marks it `[x]` done. Measured, every shape fails identically: `fn add((a, b): (i64, i64)) -> i64 { a + b }` -> "Undefined variable 'a'"; `fn y_only((_, y): (i64, i64))` -> "Undefined variable 'y'"; `fn only_a((a, _): (i64, i64))` -> "Undefined variable 'a'"; `fn nested(((a, b), c): ((i64,i64), i64))` -> "Undefined variable 'a'"; `fn px(Point { x, y }: Point)` -> "Undefined variable 'x'"; the spec's own two-parameter example `fn distance(Point { x: x1, y: y1 }: Point, Point { x: x2, y: y2 }: Point)` -> "Undefined variable 'x2'"; heap-carrying `fn take(H { s, n }: H) -> String` -> "Undefined variable 's'". Same error under `karac run` (JIT) and `karac build` (AOT) -- the codegen prologue binds the parameter slot but never walks the pattern to bind its leaves. | roadmap.md |
@@ -151,6 +150,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1292 surfaced
 | B-2026-08-17-37 | 2026-08-17 | cli | medium | The `must_use` lint NEVER RUNS under `karac check` or `karac build` -- it fires only under `karac run`, so the entire surface is invisible to `karac check --output=json` and therefore to the Mend loop. `fn main() { let mut m: Map[i64, i64] = Map.new(); m.insert(1, 10); m.get(1); }` -- a discarded `Option` from a LOOKUP, the exact case design.md § must_use exists to catch ("lookups, parses, fallible operations, where the `Option` IS the result") -- gets `warning[must_use]: discarded 'Option' value` under `karac run --interp` AND `karac run`, while `karac check` reports "All checks passed." and `karac build` reports only "Built: mu2.bin". `karac check --output=json` on the same file emits `"diagnostics":[]`. design.md describes must_use as a COMPILE warning ("silently dropping it is a compile warning"), and CLAUDE.md's Mend loop is built on `karac check --output=json` as its diagnostics feed -- so a lint the spec mandates across six stdlib categories reaches neither the compile path nor the AI-facing feed. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-17-39 | 2026-08-17 | typecheck | low | Five iterator-adaptor diagnostics print types with Rust's `{:?}` Debug formatter, leaking internal AST structs into user-facing messages -- and one of them spells a Kara generic with ANGLE BRACKETS. `v.iter().flat_map(|x| [x, x])` reports `Iterator.flat_map() closure must return Iterator[U], found Named { name: "Vec", args: [Int(I64)] }`; with a String element it reports `found Str`. Every other diagnostic in the compiler uses the display form -- the control one line away in the same probe reads `expected 'Set[i64]', found 'Vec[i64]'`. The five sites are all in src/typechecker/stdlib_iter.rs: line 149 (`filter_map`), 615 (`find_map`), 834 (`flat_map`), 1032 (`scan`), 1191 (`zip`), each formatting the offending type with `{:?}` instead of `type_display`. Line 1032 additionally writes the expected type as `Option<(A, U)>` -- Rust turbofish-style angle brackets in a language whose spec opens with "**Generics syntax:** `[T]` not `<T>` -- no turbofish". | roadmap.md |
+| B-2026-08-17-41 | 2026-08-17 | typecheck | high | A QUALIFIED payload-free variant pattern (`Dir.North`) lowers to a WILDCARD in the exhaustiveness engine, so it silently covers the whole scrutinee: a genuinely non-exhaustive `match d { Dir.North => 0 }` over `enum Dir { North, South }` passes `karac check` and then diverges three ways at runtime -- the interpreter raises "internal error: non-exhaustive match ... (the typechecker should have rejected this)", `karac run` (JIT) dies with a stack overflow, and `karac build` exits 48 with NO output and no diagnostic. The bare-variant spelling of the same match (`North => 0`) is correctly rejected with "non-exhaustive match: missing variants: South", which is the control that isolates the qualifier as the trigger. Same root cause makes every arm after a qualified payload-free arm read as `unreachable_arm` (a Deny-able lint), so the canonical spelling of an enum match is simultaneously under-checked for exhaustiveness and over-warned for reachability. | — |
 
 ### Wontfix (6)
 
@@ -167,9 +167,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1292 surfaced
 
 </details>
 
-### Fixed (1255)
+### Fixed (1256)
 
-<details><summary>1255 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1256 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10331,6 +10331,81 @@ now stands. If someone needs those classes, the pattern to follow is this
 fix plus vec_elem_agg_drop_for_type_expr at the registration site.
 
 Full llvm suite 105 binaries green, clippy --all-targets + fmt clean. |
+| B-2026-08-17-19 | typecheck | medium | Default parameter values are INERT at every call site -- omitting a defaulted argument is an arity error, so the whole feature is unusable | Call-site default-parameter fill, as a pre-resolve AST rewrite:
+`src/default_args.rs` (new) + one call from `desugar::desugar_program`.
+
+WHY A PRE-RESOLVE REWRITE RATHER THAN A CHECK-PHASE RULE. The feature has to
+hold on three surfaces (`--interp`, JIT, AOT) and the row's whole point is that
+the declaration half shipped with nothing consuming it. Filling the argument
+list before resolution means every later phase — resolver, typechecker, effect
+and ownership checkers, all three backends — sees an ORDINARY full-arity call,
+so run==build==auto-par holds by construction instead of by three hand-kept
+implementations. Cloning the default expression per call site is also exactly
+the spec's stated evaluation order ("Defaults are evaluated per call, not once
+at declaration time"). The pass runs LAST in `desugar_program`, after trait
+default-method bodies and `#[multiversion]` variants are synthesized, so calls
+inside synthesized bodies are filled too; it early-returns when no function in
+the program declares a default, which is every program in the current corpus.
+
+WHAT IT FILLS. A call whose callee is a bare identifier naming a top-level fn
+with defaults, not shadowed by any local binding at that call site:
+
+  * omitted trailing arguments  — `create_server("0.0.0.0")`
+  * label-skipped parameters    — `create_server("0.0.0.0", max_connections: 100)`,
+    the spec's own "override one; requires label" line, which needed the
+    skip-the-defaulted-prefix step that label matching never had.
+
+Spliced arguments carry their parameter's name as an argument LABEL, so a fill
+interleaved with the author's labeled arguments still satisfies the contiguity
+and declaration-order label rules rather than fighting them.
+
+WHAT IT DELIBERATELY LEAVES ALONE, so no existing diagnostic is weakened or
+replaced by a worse one — in every case below the call is left byte-identical
+and the typechecker reports exactly what it reported before:
+
+  * a shadowed callee (`let add = |x| x*2; add(5)`) — the closure's own arity
+    wins;
+  * a function VALUE (`let g = add; g(5)`) — defaults belong to the
+    declaration, not to the `Fn` type, so this stays an arity error;
+  * a missing REQUIRED argument (`add()`) — only the defaulted suffix is
+    fillable;
+  * out-of-order or unknown labels — the fill refuses rather than papering
+    over a reversed pair, so LabelMismatch still fires;
+  * unlabeled-after-labeled — left for the contiguity diagnostic to report on
+    the author's own shape;
+  * method / associated-function calls and module-qualified `Path` callees —
+    out of scope for this slice.
+
+DIAGNOSTIC. When a call cannot be completed the arity message now phrases the
+expectation as a range for a defaulted callee — "expected between 1 and 2
+argument(s), found 0 — 1 trailing parameter(s) have defaults and may be
+omitted" — instead of the flat "expected 2 argument(s), found 0" that reads as
+if the defaults did not exist. Backed by a new `TypeEnv::fn_default_arg_counts`
+sidecar map (fn name → defaulted-param count) rather than a `FunctionSig`
+field, which would have touched 31 construction sites for a value that is
+almost always zero.
+
+VERIFIED on all three backends and both auto-par modes for the spec's own
+example: `karac check`, `karac run --interp`, `karac run` (JIT),
+`karac build`, and `KARAC_AUTO_PAR=0 karac build` agree byte-for-byte.
+
+TESTS: 12 call-site cases in tests/typechecker.rs (fill, label-skip, and the
+six refusal shapes above), an interpreter oracle
+(`test_default_parameter_call_site_fill_oracle`) and its codegen E2E twin
+(`test_e2e_default_parameter_call_site_fill`) pinning identical output from
+the compiled backends. Roadmap gains an explicit call-site line: the two
+existing `[x]` boxes were accurately worded for the DECLARATION half, and the
+call-site half was simply never listed, which is how a half-built feature read
+as done.
+
+SCOPE NOTE — the sibling row is still live and now VISIBLE. B-2026-08-17-20
+(the declaration-side const validator rejecting four spec-allowed default
+forms, incl. the spec's own `"localhost"` string literal) is untouched here:
+different fix site (`validate_default_params`). Until this row landed, -20 was
+unobservable because no default could be exercised at all; it is now the
+binding constraint on which defaults an author can actually write. The
+type-flow test in this change uses a tuple default for exactly that reason,
+with a comment naming -20. |
 | B-2026-08-17-21 | parser+typecheck | medium | `UPPERCASE_BINDING.field.method()` is misresolved as a type path -- "type 'Point' is not callable" -- so a module-level struct constant's field can n… | Fixed in three places, because the row's false positive was hiding a second defect behind it and a third would have been introduced by the fix. (1) TYPECHECK, the row's own diagnosis: the uppercase-receiver disambiguation in `infer_call` (src/typechecker/expr_call.rs) was gated on `segments.len() == 2`; widened to `>= 2`, with the middle segments synthesized into a `FieldAccess` chain on the receiver — exactly the AST the working parenthesized spelling `(ORIGIN.x).to_string()` produces, so every downstream phase is already proven on it. `rewrite_path_call_to_method_call` (src/lowering.rs) gained the identical chain so the lowered node matches what the typechecker typed. Type-rooted paths are untouched: the value-binding guard rejects them, so `Vec.new()`, `module.Sub.fn()` and the enum-literal receiver `Dir.North.code()` (B-2026-07-13-4, a 3-segment path that would now be in range) keep their existing routes — pinned by a new regression test. (2) CODEGEN, a second layer the row could not see because check never got that far: with the false positive gone, `ORIGIN.x.to_string()` reached codegen and died on "field-receiver method 'to_string' — outer 'ORIGIN' has no slot". `lower_field_access_ptr` (src/codegen/calls.rs) resolves the field-GEP base by looking the outer name up in `self.variables`, and a MODULE-LEVEL binding has no entry there — its storage is a program-lifetime LLVM global, and `reseed_module_binding_side_tables` re-registers only its TYPE tables per function. Added the `mod_bindings.module_bindings` fallback: the global pointer IS the receiver pointer (module bindings are never `shared` handles or `ref` params, so neither deref case applies). This fixes every field-receiver path, method-call and index alike, not just the one shape. Measured end to end: the row's headline program now checks clean, builds, and AOT output matches the interpreter exactly. (3) LINT PLACEMENT, a run-vs-build gap the widening would otherwise have OPENED: `CFG.inner.v.to_string()` is a genuine chained field receiver (FR4, deferred), but it parses as a 4-segment `Call(Path)` and only becomes a chained `FieldAccess` receiver after `rewrite_path_call_to_method_call` runs — so `chained_field_receiver`, which ran in `typecheck()`, could not see it: check clean, build refused. Moved the lint to the end of `Pipeline::lower()` (beside `escaping_closure`, moved there for the same reason one row earlier): its predicate mirrors `lower_field_access_ptr`, which codegen reaches on the LOWERED AST, so post-lower is the placement that has parity and pre-lower is the one that can diverge. The shape now gets the correct diagnostic with its remedy at check time. TESTS: two typechecker tests (the widened dispatch across module-const / local-uppercase / deeper-chain shapes, plus the enum-variant guard), one codegen E2E asserting both the clean check and the actual run output, and a CLI test pinning the lowered-shape lint fire with its one-level sibling as an over-fire control. Full --features llvm suite green (13,901 tests), both clippy legs and fmt clean. NOT FIXED, and out of scope: the FR4 chained-field-receiver deferral itself (B-2026-08-13-12's subject) — `CONST.a.b.method()` still needs the documented temporary; it is now reported at check instead of at build. |
 
 </details>
