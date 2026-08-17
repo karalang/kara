@@ -40,6 +40,7 @@
 //! canonical name, not in the host set) are exempt by design — they
 //! exist wherever a provider exists.
 
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::Item;
@@ -122,7 +123,7 @@ impl<'a> super::EffectChecker<'a> {
         // `build_call_graph` filters the synthetic pseudo-calls out of
         // the graph it returns, so bindings are recovered from a raw
         // call collection per body.
-        let empty_bounds = HashMap::new();
+        let empty_bounds = FxHashMap::default();
         for (name, func) in self.function_bodies.iter().chain(self.method_bodies.iter()) {
             let bounds = self.fn_bounds_index.get(name).unwrap_or(&empty_bounds);
             for (callee, _) in self.collect_calls_in_block(&func.body, bounds) {
@@ -161,7 +162,7 @@ impl<'a> super::EffectChecker<'a> {
         fn_name: &str,
         discharged: &HashSet<String>,
         target: &str,
-        graph: &HashMap<String, Vec<(String, Span)>>,
+        graph: &FxHashMap<String, Vec<(String, Span)>>,
         bound_in: &HashMap<String, HashSet<String>>,
         direct: &HashMap<String, Vec<(String, Span)>>,
         path: &mut Vec<String>,

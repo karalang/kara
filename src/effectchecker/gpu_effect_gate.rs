@@ -30,6 +30,7 @@
 //! reports every reachable direct violation with the call chain from the root.
 //! No provider-discharge bookkeeping (providers are an SSR concern, not GPU).
 
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::EffectVerbKind;
@@ -128,7 +129,7 @@ impl<'a> super::EffectChecker<'a> {
 /// `path` carries the chain for the diagnostic.
 fn gpu_gate_dfs(
     fn_name: &str,
-    graph: &HashMap<String, Vec<(String, Span)>>,
+    graph: &FxHashMap<String, Vec<(String, Span)>>,
     direct: &HashMap<String, Vec<(String, Span)>>,
     path: &mut Vec<String>,
     visited: &mut HashSet<String>,

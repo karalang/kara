@@ -13,7 +13,8 @@
 //!
 //! Lives in a sibling `impl<'a> super::EffectChecker<'a>` block.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::HashSet;
 
 use crate::ast::*;
 use crate::token::Span;
@@ -103,7 +104,7 @@ impl<'a> super::EffectChecker<'a> {
             span: Span,
             effects: Option<EffectList>,
         }
-        let mut trait_methods: HashMap<String, Vec<SeedMethod>> = HashMap::new();
+        let mut trait_methods: FxHashMap<String, Vec<SeedMethod>> = FxHashMap::default();
         // Copy the `&'a Program` out of `self` so the walk below can
         // push onto `self.errors` without holding a `&self` borrow.
         let program = self.program;
@@ -242,7 +243,7 @@ impl<'a> super::EffectChecker<'a> {
         // roots last — so processing them in order propagates callee effects
         // into callers before callers are processed.
         let call_graph = self.build_call_graph();
-        let all_fn_names: HashSet<String> = self
+        let all_fn_names: FxHashSet<String> = self
             .function_bodies
             .keys()
             .chain(self.method_bodies.keys())
@@ -298,7 +299,7 @@ impl<'a> super::EffectChecker<'a> {
     /// left untouched — their declared ceilings are authoritative.
     pub(crate) fn infer_private_trait_ceilings(&mut self) {
         // Build (trait_name, method_name) → [impl_type_name] from all impl blocks.
-        let mut trait_impl_types: HashMap<(String, String), Vec<String>> = HashMap::new();
+        let mut trait_impl_types: FxHashMap<(String, String), Vec<String>> = FxHashMap::default();
         for item in &self.program.items {
             let imp = match item {
                 Item::ImplBlock(i) => i,
@@ -374,15 +375,15 @@ impl<'a> super::EffectChecker<'a> {
     /// Edges to builtins and external callees are omitted since they have no
     /// bodies to infer from (their effects are seeded directly into
     /// `inferred_effects` during initialization).
-    pub(crate) fn build_call_graph(&self) -> HashMap<String, Vec<(String, Span)>> {
-        let all_fn_names: HashSet<String> = self
+    pub(crate) fn build_call_graph(&self) -> FxHashMap<String, Vec<(String, Span)>> {
+        let all_fn_names: FxHashSet<String> = self
             .function_bodies
             .keys()
             .chain(self.method_bodies.keys())
             .cloned()
             .collect();
-        let mut graph: HashMap<String, Vec<(String, Span)>> = HashMap::new();
-        let empty_bounds: HashMap<String, Vec<TraitBound>> = HashMap::new();
+        let mut graph: FxHashMap<String, Vec<(String, Span)>> = FxHashMap::default();
+        let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
         for (name, func) in &self.function_bodies {
             let bounds = self.fn_bounds_index.get(name).unwrap_or(&empty_bounds);
             let relevant = self
@@ -424,7 +425,7 @@ impl<'a> super::EffectChecker<'a> {
     /// Walk a function body, find all calls, and add callee effects.
     /// Returns true if any new effects were added.
     pub(crate) fn infer_function_effects(&mut self, fn_name: &str, body: &Block) -> bool {
-        let empty_bounds: HashMap<String, Vec<TraitBound>> = HashMap::new();
+        let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
         let bounds = self
             .fn_bounds_index
             .get(fn_name)
@@ -523,7 +524,7 @@ impl<'a> super::EffectChecker<'a> {
             }
         }
 
-        let empty_bounds: HashMap<String, Vec<TraitBound>> = HashMap::new();
+        let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
         let mut violations: Vec<(Effect, Span, &'static str)> = Vec::new();
         for (expr, kind) in &clauses {
             let mut calls = Vec::new();
@@ -613,7 +614,7 @@ impl<'a> super::EffectChecker<'a> {
     pub(crate) fn collect_calls_in_block(
         &self,
         block: &Block,
-        bounds: &HashMap<String, Vec<TraitBound>>,
+        bounds: &FxHashMap<String, Vec<TraitBound>>,
     ) -> Vec<(String, Span)> {
         let mut calls = Vec::new();
         for stmt in &block.stmts {
@@ -629,7 +630,7 @@ impl<'a> super::EffectChecker<'a> {
         &self,
         stmt: &Stmt,
         calls: &mut Vec<(String, Span)>,
-        bounds: &HashMap<String, Vec<TraitBound>>,
+        bounds: &FxHashMap<String, Vec<TraitBound>>,
     ) {
         match &stmt.kind {
             StmtKind::MultiAssign { .. } => unreachable!(
@@ -686,7 +687,7 @@ impl<'a> super::EffectChecker<'a> {
         &self,
         expr: &Expr,
         calls: &mut Vec<(String, Span)>,
-        bounds: &HashMap<String, Vec<TraitBound>>,
+        bounds: &FxHashMap<String, Vec<TraitBound>>,
     ) {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
@@ -780,10 +781,12 @@ impl<'a> super::EffectChecker<'a> {
                     calls.push((precise_key, expr.span));
                 }
                 // For method calls without a recorded precise callee, we'd need
-                // type info to know the exact method. Fall back to searching all
-                // impl methods with matching name.
-                for key in self.method_bodies.keys() {
-                    if key.ends_with(&format!(".{}", method)) {
+                // type info to know the exact method. Fall back to every impl
+                // method with a matching bare name, via the index built in
+                // `collect_function_info` (scanning all `method_bodies` keys
+                // here, once per call site, was the front end's top hotspot).
+                if let Some(keys) = self.method_name_index.get(method) {
+                    for key in keys {
                         calls.push((key.clone(), expr.span));
                     }
                 }

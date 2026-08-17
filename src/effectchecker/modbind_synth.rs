@@ -24,7 +24,7 @@
 //! the `writes(BINDING_resource)`), keeping conflict analysis
 //! unchanged.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::ast::*;
 use crate::token::Span;
@@ -517,7 +517,7 @@ impl<'a> super::EffectChecker<'a> {
         // machinery `infer_function_effects` uses: direct calls +
         // synthetic modbind read/write entries → look up each
         // entry's seeded effect set.
-        let bounds: HashMap<String, Vec<TraitBound>> = HashMap::new();
+        let bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
         let direct_calls = self.collect_calls_in_block(block, &bounds);
         let synth_calls = self.collect_modbind_synth_calls_in_block(block, &[]);
         let mut effects: Vec<Effect> = Vec::new();
@@ -1245,13 +1245,13 @@ fn collect_par_in_expr(expr: &Expr, out: &mut Vec<(Block, Span)>) {
 /// pattern, if-let / while-let / let-else pattern). `push_shadow` /
 /// `pop_shadow` form a stack so block exits restore the prior view.
 struct ModBindingSynthWalker<'a> {
-    bindings: &'a HashMap<String, ModBindingInfo>,
+    bindings: &'a FxHashMap<String, ModBindingInfo>,
     shadow: Vec<String>,
     calls: Vec<(String, Span)>,
 }
 
 impl<'a> ModBindingSynthWalker<'a> {
-    fn new(bindings: &'a HashMap<String, ModBindingInfo>) -> Self {
+    fn new(bindings: &'a FxHashMap<String, ModBindingInfo>) -> Self {
         ModBindingSynthWalker {
             bindings,
             shadow: Vec::new(),

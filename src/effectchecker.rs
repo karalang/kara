@@ -10,6 +10,7 @@ use crate::ast::*;
 use crate::manifest::{CompileProfile, ProfileConfig};
 use crate::resolver::SpanKey;
 use crate::token::Span;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -389,42 +390,48 @@ pub struct EffectChecker<'a> {
     /// Public-function effect declaration policy (see `PublicEffectsPolicy`).
     pub(crate) public_effects_policy: PublicEffectsPolicy,
     /// Expanded effect groups: group name → EffectSet.
-    pub(crate) expanded_groups: HashMap<String, EffectSet>,
+    pub(crate) expanded_groups: FxHashMap<String, EffectSet>,
     /// Per-profile knob carrier — the active compile profile plus any
     /// `[profile]`-table knobs. Determines which effects are forbidden at
     /// extern sites (via the active profile) and carries the typed knobs
     /// downstream consumers read. Use [`Self::profile`] for the bare profile.
     pub(crate) profile_config: ProfileConfig,
     /// Transparent effect verb names.
-    pub(crate) transparent_effects: HashSet<String>,
+    pub(crate) transparent_effects: FxHashSet<String>,
     /// Declared effects per function name.
-    pub(crate) declared_effects: HashMap<String, DeclaredEffects>,
+    pub(crate) declared_effects: FxHashMap<String, DeclaredEffects>,
     /// Inferred effects per function name.
-    pub(crate) inferred_effects: HashMap<String, EffectSet>,
+    pub(crate) inferred_effects: FxHashMap<String, EffectSet>,
     /// Whether each function is public.
-    pub(crate) function_visibility: HashMap<String, bool>,
+    pub(crate) function_visibility: FxHashMap<String, bool>,
     /// Function spans for error reporting.
-    pub(crate) function_spans: HashMap<String, Span>,
+    pub(crate) function_spans: FxHashMap<String, Span>,
     /// Functions and their AST bodies (for inference). `Rc` so the SCC
     /// convergence loop and the whole-program walks can take a handle
     /// without deep-cloning every body per pass (review item 9b).
-    pub(crate) function_bodies: HashMap<String, Rc<Function>>,
+    pub(crate) function_bodies: FxHashMap<String, Rc<Function>>,
     /// Impl method bodies: "TypeName.method" → Function (same `Rc` rationale).
-    pub(crate) method_bodies: HashMap<String, Rc<Function>>,
+    pub(crate) method_bodies: FxHashMap<String, Rc<Function>>,
+    /// Bare method name → the `method_bodies` keys ending in `.name`, built
+    /// once at the end of `collect_function_info`. The name-only fallback in
+    /// `collect_calls_in_expr` consults this instead of scanning every key
+    /// per call site — that scan (with a `format!` per probe) was the single
+    /// largest front-end cost on call-graph-heavy programs.
+    pub(crate) method_name_index: FxHashMap<String, Vec<String>>,
     /// Functions that call polymorphic (`with _`) callees.
-    pub(crate) calls_polymorphic: HashSet<String>,
+    pub(crate) calls_polymorphic: FxHashSet<String>,
     /// Functions that explicitly declare `with _` (anonymous polymorphism)
     /// — distinct from `with E` (named) declarations. The viral rule fires
     /// only for `with _` callees: `with E` is resolved at the call site
     /// against concrete bindings, so it does not "leak" through callers
     /// that lack a `with _` of their own.
-    pub(crate) fn_uses_with_underscore: HashSet<String>,
+    pub(crate) fn_uses_with_underscore: FxHashSet<String>,
     /// Per-function generic-parameter bounds index: function key (e.g.
     /// `"sort"` or `"Wrapper.default"`) → param name → bounds. Populated
     /// once before inference; consulted by `extract_trait_assoc_fn_keys`
     /// to redirect `T.method()` and bare `method()` calls to the matching
     /// `Trait.method` ceiling key.
-    pub(crate) fn_bounds_index: HashMap<String, HashMap<String, Vec<TraitBound>>>,
+    pub(crate) fn_bounds_index: FxHashMap<String, FxHashMap<String, Vec<TraitBound>>>,
     /// Per-function effect-variable position index: function key → effect
     /// variable name → list of parameter indices whose `Fn(...) with E`
     /// type references that variable. Populated after `collect_function_info`;
@@ -434,7 +441,7 @@ pub struct EffectChecker<'a> {
     /// adds no constraint beyond the existing `with _` polymorphic behavior;
     /// a variable at 2+ positions requires every closure argument's effect
     /// set to agree, with a conflict diagnostic otherwise.
-    pub(crate) fn_effect_var_positions: HashMap<String, HashMap<String, Vec<usize>>>,
+    pub(crate) fn_effect_var_positions: FxHashMap<String, FxHashMap<String, Vec<usize>>>,
     /// Method-call → resolved `Type.method` key, populated by the typechecker
     /// (`TypeCheckResult.method_callee_types`). Used by `MethodCall` arms in
     /// `collect_calls_in_expr` (function-reference arg propagation), in
@@ -466,13 +473,13 @@ pub struct EffectChecker<'a> {
     /// `modbind_synth.rs` to emit `__modbind_read.<NAME>` /
     /// `__modbind_write.<NAME>` synthetic call entries at every
     /// read/write site (design.md §1322 + §1330).
-    pub(crate) modbind_let_mut: HashMap<String, ModBindingInfo>,
+    pub(crate) modbind_let_mut: FxHashMap<String, ModBindingInfo>,
     /// Names of refinement type aliases (`type Name = Base where <pred>`).
     /// Derived directly from the AST. Consulted by the `Cast` arm of
     /// `collect_calls_in_expr`: an `x as Refined` cast is a runtime
     /// predicate assertion that propagates `panics`, attributed to the
     /// synthetic `__builtin_refinement_assert` callee (phase-9 step 3).
-    pub(crate) refinement_type_names: HashSet<String>,
+    pub(crate) refinement_type_names: FxHashSet<String>,
     pub(crate) errors: Vec<EffectError>,
 }
 
@@ -505,22 +512,23 @@ impl<'a> EffectChecker<'a> {
             program,
             public_effects_policy: policy,
             profile_config,
-            expanded_groups: HashMap::new(),
-            transparent_effects: HashSet::new(),
-            declared_effects: HashMap::new(),
-            inferred_effects: HashMap::new(),
-            function_visibility: HashMap::new(),
-            function_spans: HashMap::new(),
-            function_bodies: HashMap::new(),
-            method_bodies: HashMap::new(),
-            calls_polymorphic: HashSet::new(),
-            fn_uses_with_underscore: HashSet::new(),
-            fn_bounds_index: HashMap::new(),
-            fn_effect_var_positions: HashMap::new(),
+            expanded_groups: FxHashMap::default(),
+            transparent_effects: FxHashSet::default(),
+            declared_effects: FxHashMap::default(),
+            inferred_effects: FxHashMap::default(),
+            function_visibility: FxHashMap::default(),
+            function_spans: FxHashMap::default(),
+            function_bodies: FxHashMap::default(),
+            method_bodies: FxHashMap::default(),
+            method_name_index: FxHashMap::default(),
+            calls_polymorphic: FxHashSet::default(),
+            fn_uses_with_underscore: FxHashSet::default(),
+            fn_bounds_index: FxHashMap::default(),
+            fn_effect_var_positions: FxHashMap::default(),
             method_callee_types: HashMap::new(),
             call_type_subs: HashMap::new(),
             call_effect_subs: HashMap::new(),
-            modbind_let_mut: HashMap::new(),
+            modbind_let_mut: FxHashMap::default(),
             refinement_type_names: program
                 .items
                 .iter()
@@ -1142,13 +1150,15 @@ impl<'a> EffectChecker<'a> {
         // Phase C: Detect mutual recursion groups and build resolution traces
         let mutual_recursion_groups = self.detect_mutual_recursion_groups();
 
+        // Internal working tables are FxHash-keyed (name-interning spike);
+        // the public result stays std HashMap, so re-collect once here.
         EffectCheckResult {
-            inferred_effects: self.inferred_effects,
-            declared_effects: self.declared_effects,
-            expanded_groups: self.expanded_groups,
-            transparent_effects: self.transparent_effects,
+            inferred_effects: self.inferred_effects.into_iter().collect(),
+            declared_effects: self.declared_effects.into_iter().collect(),
+            expanded_groups: self.expanded_groups.into_iter().collect(),
+            transparent_effects: self.transparent_effects.into_iter().collect(),
             mutual_recursion_groups,
-            function_visibility: self.function_visibility,
+            function_visibility: self.function_visibility.into_iter().collect(),
             public_effects_policy: self.public_effects_policy,
             errors: self.errors,
             queries: Vec::new(),
@@ -1576,6 +1586,19 @@ impl<'a> EffectChecker<'a> {
                 _ => {}
             }
         }
+        // `method_bodies` is complete from here on (nothing inserts after
+        // this pass) — build the bare-name index the call-collection
+        // fallback consults. A key's bare name is its last dot segment,
+        // matching the old `key.ends_with(".{method}")` test exactly
+        // (method names contain no dots).
+        for key in self.method_bodies.keys() {
+            if let Some(dot) = key.rfind('.') {
+                self.method_name_index
+                    .entry(key[dot + 1..].to_string())
+                    .or_default()
+                    .push(key.clone());
+            }
+        }
     }
 
     fn is_transparent_verb(&self, verb: &EffectVerbKind) -> bool {
@@ -1710,7 +1733,7 @@ impl<'a> EffectChecker<'a> {
             }
             ExprKind::Closure { body, .. } => {
                 let mut calls = Vec::new();
-                let empty_bounds: HashMap<String, Vec<TraitBound>> = HashMap::new();
+                let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
                 self.collect_calls_in_expr(body, &mut calls, &empty_bounds);
                 let mut result = EffectSet::new();
                 for (callee, span) in calls {
@@ -2207,21 +2230,21 @@ pub(crate) fn resolve_effect_list_for_render(
 /// Tarjan's algorithm for finding strongly connected components.
 /// Returns SCCs in reverse topological order; each SCC is a Vec of function names.
 pub(crate) fn tarjan_scc(
-    nodes: &HashSet<String>,
-    graph: &HashMap<String, Vec<(String, Span)>>,
+    nodes: &FxHashSet<String>,
+    graph: &FxHashMap<String, Vec<(String, Span)>>,
 ) -> Vec<Vec<String>> {
     struct TarjanState {
         index_counter: usize,
         stack: Vec<String>,
-        on_stack: HashSet<String>,
-        index: HashMap<String, usize>,
-        lowlink: HashMap<String, usize>,
+        on_stack: FxHashSet<String>,
+        index: FxHashMap<String, usize>,
+        lowlink: FxHashMap<String, usize>,
         result: Vec<Vec<String>>,
     }
 
     fn strongconnect(
         v: &str,
-        graph: &HashMap<String, Vec<(String, Span)>>,
+        graph: &FxHashMap<String, Vec<(String, Span)>>,
         state: &mut TarjanState,
     ) {
         let idx = state.index_counter;
@@ -2268,9 +2291,9 @@ pub(crate) fn tarjan_scc(
     let mut state = TarjanState {
         index_counter: 0,
         stack: Vec::new(),
-        on_stack: HashSet::new(),
-        index: HashMap::new(),
-        lowlink: HashMap::new(),
+        on_stack: FxHashSet::default(),
+        index: FxHashMap::default(),
+        lowlink: FxHashMap::default(),
         result: Vec::new(),
     };
 

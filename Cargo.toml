@@ -176,6 +176,13 @@ name = "asan_build"
 path = "examples/asan_build.rs"
 required-features = ["llvm"]
 
+# Front-end-only phase benchmark (name-interning spike,
+# docs/spikes/name-interning.md): per-phase wall time + allocation counts.
+# No llvm gate — it exercises parse..ownership only.
+[[example]]
+name = "bench_frontend"
+path = "examples/bench_frontend.rs"
+
 [dependencies]
 # LINKING PREFERENCE IS DELIBERATELY ABSENT from these dep lines
 # (release-pipeline step 2): llvm-sys permits exactly ONE of its four
@@ -290,6 +297,11 @@ pubgrub = "0.4"
 # cliffing. psm has no stack-switching support on wasm32, so the browser
 # playground build falls back to a plain call (cfg in the helper).
 stacker = "0.1"
+# FxHash for the checkers' internal name-keyed tables (name-interning spike,
+# docs/spikes/name-interning.md): SipHash on String keys was ~23% of all
+# front-end instructions. Internal working tables only — public result
+# structs and API signatures stay std HashMap. Zero transitive deps.
+rustc-hash = "2"
 
 [dev-dependencies]
 # Phase-7 L560 W3.1: pipe + dup2 + fork-safe fd dance for capturing

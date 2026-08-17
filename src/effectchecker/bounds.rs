@@ -23,7 +23,8 @@
 //!
 //! Lives in a sibling `impl<'a> super::EffectChecker<'a>` block.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::HashSet;
 
 use crate::ast::*;
 
@@ -59,7 +60,7 @@ impl<'a> super::EffectChecker<'a> {
     pub(crate) fn extract_trait_assoc_fn_keys(
         &self,
         callee: &Expr,
-        bounds: &HashMap<String, Vec<TraitBound>>,
+        bounds: &FxHashMap<String, Vec<TraitBound>>,
     ) -> Vec<String> {
         match &callee.kind {
             ExprKind::Path { segments, .. } if segments.len() == 2 => {
@@ -125,8 +126,8 @@ impl<'a> super::EffectChecker<'a> {
 
     /// Collect the inline + where-clause trait bounds for each generic
     /// parameter of `f`, keyed by the param's textual name.
-    pub(crate) fn fn_generic_bounds(f: &Function) -> HashMap<String, Vec<TraitBound>> {
-        let mut map: HashMap<String, Vec<TraitBound>> = HashMap::new();
+    pub(crate) fn fn_generic_bounds(f: &Function) -> FxHashMap<String, Vec<TraitBound>> {
+        let mut map: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
         if let Some(ref gp) = f.generic_params {
             for param in &gp.params {
                 if !param.bounds.is_empty() {
@@ -157,8 +158,8 @@ impl<'a> super::EffectChecker<'a> {
     pub(crate) fn impl_method_bounds(
         imp: &ImplBlock,
         method: &Function,
-    ) -> HashMap<String, Vec<TraitBound>> {
-        let mut map: HashMap<String, Vec<TraitBound>> = HashMap::new();
+    ) -> FxHashMap<String, Vec<TraitBound>> {
+        let mut map: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
         if let Some(ref gp) = imp.generic_params {
             for param in &gp.params {
                 if !param.bounds.is_empty() {
@@ -192,8 +193,8 @@ impl<'a> super::EffectChecker<'a> {
     pub(crate) fn trait_method_bounds(
         t: &TraitDef,
         method: &TraitMethod,
-    ) -> HashMap<String, Vec<TraitBound>> {
-        let mut map: HashMap<String, Vec<TraitBound>> = HashMap::new();
+    ) -> FxHashMap<String, Vec<TraitBound>> {
+        let mut map: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
         if !t.supertraits.is_empty() {
             map.entry("Self".to_string())
                 .or_default()
@@ -249,8 +250,8 @@ impl<'a> super::EffectChecker<'a> {
     /// inference.
     pub(crate) fn build_fn_bounds_index(
         &self,
-    ) -> HashMap<String, HashMap<String, Vec<TraitBound>>> {
-        let mut index: HashMap<String, HashMap<String, Vec<TraitBound>>> = HashMap::new();
+    ) -> FxHashMap<String, FxHashMap<String, Vec<TraitBound>>> {
+        let mut index: FxHashMap<String, FxHashMap<String, Vec<TraitBound>>> = FxHashMap::default();
         for item in &self.program.items {
             match item {
                 Item::Function(f) => {
@@ -304,18 +305,18 @@ impl<'a> super::EffectChecker<'a> {
     /// return-position slot likewise inherits from input bindings).
     pub(crate) fn build_fn_effect_var_positions(
         &self,
-    ) -> HashMap<String, HashMap<String, Vec<usize>>> {
-        let mut index: HashMap<String, HashMap<String, Vec<usize>>> = HashMap::new();
-        let scan = |f: &Function| -> HashMap<String, Vec<usize>> {
+    ) -> FxHashMap<String, FxHashMap<String, Vec<usize>>> {
+        let mut index: FxHashMap<String, FxHashMap<String, Vec<usize>>> = FxHashMap::default();
+        let scan = |f: &Function| -> FxHashMap<String, Vec<usize>> {
             let declared: HashSet<String> = f
                 .generic_params
                 .as_ref()
                 .map(|gp| gp.effect_params.iter().map(|ep| ep.name.clone()).collect())
                 .unwrap_or_default();
             if declared.is_empty() {
-                return HashMap::new();
+                return FxHashMap::default();
             }
-            let mut by_var: HashMap<String, Vec<usize>> = HashMap::new();
+            let mut by_var: FxHashMap<String, Vec<usize>> = FxHashMap::default();
             for (idx, p) in f.params.iter().enumerate() {
                 let names = effect_var_names_in_type(&p.ty);
                 for name in names {
@@ -407,7 +408,7 @@ impl<'a> super::EffectChecker<'a> {
     /// For each group, build a resolution trace showing how effects propagated.
     pub(crate) fn detect_mutual_recursion_groups(&self) -> Vec<MutualRecursionGroup> {
         let call_graph = self.build_call_graph();
-        let all_fn_names: HashSet<String> = self
+        let all_fn_names: FxHashSet<String> = self
             .function_bodies
             .keys()
             .chain(self.method_bodies.keys())
