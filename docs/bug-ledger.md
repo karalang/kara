@@ -97,9 +97,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 130 | 0 |
 | run-vs-build | 124 | 1 |
 | codegen-gap | 114 | 0 |
-| missing-feature | 98 | 0 |
+| missing-feature | 99 | 1 |
 | perf | 76 | 1 |
-| false-positive | 73 | 0 |
+| false-positive | 76 | 3 |
 | diagnostics | 66 | 0 |
 | soundness | 49 | 0 |
 | crash | 49 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 901 | 1 |
-| typecheck | 180 | 0 |
+| typecheck | 184 | 4 |
 | interp | 146 | 0 |
 | ownership | 57 | 0 |
 | other | 49 | 1 |
@@ -119,20 +119,24 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 35 | 1 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
-| parser | 17 | 0 |
+| parser | 18 | 1 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 3 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1274 surfaced · 7 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort; the residual is now a pure work-count gap at IPC parity | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
+| B-2026-08-17-19 | 2026-08-17 | typecheck | medium | Default parameter values are INERT at every call site -- omitting a defaulted argument is an arity error, so the whole feature is unusable. design.md § Default Parameter Values' own example `create_server("0.0.0.0")` (3 defaulted params omitted) fails `karac check` with "expected 4 argument(s), found 1"; roadmap.md lines 111/199 mark the feature `[x]` done, but both checked boxes cover only the DECLARATION half (`param: Type = expr` syntax; trailing-only rule; const-expression validation) -- nothing ever consumes the stored default at a call. Minimal: `fn greet(name: String, greeting: String = "hello") -> String { greeting + ", " + name }` + `greet("world")` -> "expected 2 argument(s), found 1". Same error on all three backends (it is a check-phase gate, so no run-vs-build divergence). The label rules stack on top of the same hole: `create_server("0.0.0.0", max_connections: 100)` -- the spec's own "override one; requires label" line -- reports "label 'max_connections' does not match parameter 'port' at position 2", because labels are matched POSITIONALLY against the declaration list with no skip-the-defaulted-prefix step. So the spec's whole "labels allow skipping defaults without filling in placeholders" rule is unreachable too. | roadmap.md |
+| B-2026-08-17-20 | 2026-08-17 | typecheck | low | The default-parameter-value const validator rejects FOUR of the forms design.md explicitly lists as allowed, including the spec's own example literal. § Default Parameter Values says "The allowed forms are identical to those for Module-Level Bindings: literals (`42`, `"localhost"`, `true`), arithmetic on literals (`60 * 1000`), enum variants (`Direction.North`), struct/tuple/array literals built from constant expressions, and references to other module-level bindings", and separately calls `Option[T] = None` "idiomatic". Measured, one form per line: ACCEPTED -- `i64 = 42`, `bool = true`, `f64 = 1.5`, `char = 'z'`, `i64 = 60 * 1000`, `Direction = Direction.North`, `(i64,i64) = (1, 2)`. REJECTED -- (a) `String = "localhost"` -> "default parameter value must be a constant expression (no function calls, closures, or runtime-only values)", the spec's own quoted literal; (b) `i64 = LIMIT` where `let LIMIT: i64 = 7` is a module-level binding -> "const expression: 'LIMIT' is not a known const"; (c) `P = P { x: 1, y: 2 }` struct literal -> same not-a-constant-expression message (the TUPLE literal sibling is accepted, so it is the struct shape specifically); (d) `Option[i64] = None` -> "const expression: 'None' is not a known const", and `Option[i64] = Option.Some(42)` -> not-a-constant-expression. | roadmap.md |
+| B-2026-08-17-21 | 2026-08-17 | parser+typecheck | medium | `UPPERCASE_BINDING.field.method()` is misresolved as a type path -- "type 'Point' is not callable" -- so a module-level struct constant's field can never be a method receiver. `struct Point { x: i64, y: i64 }` + `let ORIGIN: Point = Point { x: 5, y: 9 };` + `println(ORIGIN.x.to_string())` fails `karac check` with `type 'Point' is not callable`, naming the CONSTANT'S TYPE as the thing being called. This is forced, not avoidable: E_MODULE_BINDING_NAMING requires every module-level `let` to be Const-class (SCREAMING_SNAKE), so every module-level binding's name starts uppercase and every `CONST.field.method()` in the language hits it. Discriminated axis is the receiver name's FIRST LETTER, not its scope: a function-local `let Origin = Point { .. }; Origin.x.to_string()` fails identically, while `origin` / `or_igin` pass -- and `ORIGIN2` / `O_R` fail, so it is `starts_upper`, not the full case class. | phase-12-self-hosting.md |
+| B-2026-08-17-22 | 2026-08-17 | typecheck | medium | A string literal NESTED inside a module-level struct / tuple / array initializer types as `String` instead of `StringSlice`, and since `String` is forbidden at module scope this makes module-level constants carrying static string data unwritable. design.md § Module-Level Bindings states "String literals have type `StringSlice` at module scope" and separately lists "Struct and tuple literals built from constant expressions" and "Array literals" among the allowed initializers -- the intersection must work, and does not. `let DIRECT: StringSlice = "ok";` checks fine, but `let NESTED: Cfg = Cfg { name: "karac", retries: 3 };` -> "expected 'StringSlice', found 'String'", `let TUP: (StringSlice, i64) = ("karac", 3);` -> "expected '(StringSlice, i64)', found '(String, i64)'", and `let ARR: Array[StringSlice, 2] = ["a", "b"];` -> one such error per element. There is no spelling that works: declaring the field as `String` is rejected by the constant-initializer rule ("String is heap-allocated; use StringSlice for static string data"), so the module-scope literal rule reaching only the TOP LEVEL of the initializer leaves the composite forms with no legal form at all. | roadmap.md |
 
 ### Wontfix (5)
 
