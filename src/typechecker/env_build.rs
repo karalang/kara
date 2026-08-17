@@ -3002,7 +3002,9 @@ impl<'a> super::TypeChecker<'a> {
 
     fn env_add_distinct_type(&mut self, d: &crate::ast::DistinctTypeDef) {
         let derived = extract_derived_traits(&d.attributes);
-        self.env.distinct_types.insert(d.name.clone(), derived);
+        self.env
+            .distinct_types
+            .insert(d.name.clone(), derived.into_iter().collect());
         // Record the lowered base type so the `Name(value)` constructor,
         // `.raw()`, and the no-deref method rule can recover it (the distinct
         // type itself flows as a nominal `Type::Named { name }`). v1 handles

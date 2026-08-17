@@ -10,6 +10,7 @@ use crate::ast::*;
 use crate::edit_distance::suggest_similar;
 use crate::module::{self, ModuleId, ProgramTree};
 use crate::token::Span;
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 mod collect;
@@ -1060,7 +1061,7 @@ pub struct Resolver<'a> {
     /// hides the actual rule. `error_undefined_name` consults this map to
     /// emit the tailored cross-branch diagnostic instead. Empty outside
     /// `par` branch resolution; saved/merged/restored around nested `par`s.
-    pub(crate) par_sibling_bindings: HashMap<String, Span>,
+    pub(crate) par_sibling_bindings: FxHashMap<String, Span>,
     /// True iff the program being resolved is the synthetic stdlib package
     /// (baked into the compiler binary by CR-202 slice 3). When false,
     /// `#[compiler_builtin]` on any item is rejected with `E0115`. The flag
@@ -1091,7 +1092,7 @@ pub struct Resolver<'a> {
     /// instead of a bare undefined-name. Single-file mode threads the map
     /// via [`Resolver::with_target_tombstones`]; project mode adopts it
     /// off the `ProgramTree` in [`Resolver::with_tree`].
-    pub(crate) target_tombstones: HashMap<String, String>,
+    pub(crate) target_tombstones: FxHashMap<String, String>,
     /// See [`ResolveResult::error_fix_diffs`].
     pub(crate) error_fix_diffs: HashMap<SpanKey, Vec<TextEdit>>,
     /// Renames proposed by `E_MODULE_BINDING_NAMING` that still need their
@@ -1114,7 +1115,7 @@ pub struct Resolver<'a> {
     /// Populated only while a rename is pending, which is to say almost
     /// never; the map is otherwise pure overhead on the hottest path in the
     /// resolver.
-    pub(crate) ident_ref_offsets: HashMap<usize, SymbolId>,
+    pub(crate) ident_ref_offsets: FxHashMap<usize, SymbolId>,
     /// True when a `pub` item declared here may be referenced by source
     /// this resolve session cannot see — i.e. the module is part of a
     /// multi-module package. Set for project-mode resolves (each module
@@ -1167,14 +1168,14 @@ impl<'a> Resolver<'a> {
             errors: Vec::new(),
             current_impl_type: None,
             loop_labels: Vec::new(),
-            par_sibling_bindings: HashMap::new(),
+            par_sibling_bindings: FxHashMap::default(),
             is_stdlib_source: false,
             is_test_file: false,
             call_callee_span: None,
-            target_tombstones: HashMap::new(),
+            target_tombstones: FxHashMap::default(),
             error_fix_diffs: HashMap::new(),
             pending_binding_renames: Vec::new(),
-            ident_ref_offsets: HashMap::new(),
+            ident_ref_offsets: FxHashMap::default(),
             pub_refs_may_be_external: false,
         }
     }
@@ -1191,7 +1192,11 @@ impl<'a> Resolver<'a> {
         // none of their references to our `pub` items.
         self.pub_refs_may_be_external = true;
         if self.target_tombstones.is_empty() {
-            self.target_tombstones = tree.target_tombstones.clone();
+            self.target_tombstones = tree
+                .target_tombstones
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
         }
         self
     }
@@ -1210,7 +1215,7 @@ impl<'a> Resolver<'a> {
     /// Phase-10: provide name → rendered-target-spec tombstones for items
     /// removed by `target::filter_inactive_items` (single-file pipeline).
     pub fn with_target_tombstones(mut self, tombstones: HashMap<String, String>) -> Self {
-        self.target_tombstones = tombstones;
+        self.target_tombstones = tombstones.into_iter().collect();
         self
     }
 

@@ -16,6 +16,7 @@
 use crate::ast::*;
 use crate::resolver::{ResolveResult, SpanKey};
 use crate::token::{FloatSuffix, IntSuffix, Span};
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 mod alloc_rejection;
@@ -363,18 +364,18 @@ pub(super) enum CaptureWalkMode {
 }
 
 pub(super) struct LocalTypeScope {
-    pub(super) scopes: Vec<HashMap<String, Type>>,
+    pub(super) scopes: Vec<FxHashMap<String, Type>>,
 }
 
 impl LocalTypeScope {
     pub(super) fn new() -> Self {
         LocalTypeScope {
-            scopes: vec![HashMap::new()],
+            scopes: vec![FxHashMap::default()],
         }
     }
 
     pub(super) fn push(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(FxHashMap::default());
     }
 
     pub(super) fn pop(&mut self) {
@@ -1605,7 +1606,7 @@ pub struct TypeChecker<'a> {
     /// `("X" → (["a","b"], "X", ...))`, and an alias `import M.Y as Z` maps
     /// `"Z" → (["a","b"], "Y", ...)`. Populated during `build_type_env` when
     /// `tree` is set.
-    pub(super) type_origins: HashMap<String, (Vec<String>, String, Visibility)>,
+    pub(super) type_origins: FxHashMap<String, (Vec<String>, String, Visibility)>,
     pub(super) env: TypeEnv,
     pub(super) local_scope: LocalTypeScope,
     /// Stack of enclosing *consuming* `@`-binding outer names while
@@ -2083,7 +2084,7 @@ impl<'a> TypeChecker<'a> {
             resolve_result,
             tree: None,
             current_module: None,
-            type_origins: HashMap::new(),
+            type_origins: FxHashMap::default(),
             env: TypeEnv::new(),
             local_scope: LocalTypeScope::new(),
             owned_at_binding_outers: Vec::new(),
@@ -2306,18 +2307,31 @@ impl<'a> TypeChecker<'a> {
             .filter(|imp| imp.trait_name.as_deref() == Some("Drop"))
             .map(|imp| (imp.target_type.clone(), format!("{}.drop", imp.target_type)))
             .collect();
-        let distinct_type_traits = self.env.distinct_types.clone();
-        let compiler_builtins = self.env.compiler_builtins.clone();
-        let must_use_functions = self.env.must_use_functions.clone();
+        // Boundary collects: the env's internal tables are FxHash-keyed; the
+        // public TypeCheckResult stays std HashMap/HashSet. One collect per
+        // field, once per compile.
+        let distinct_type_traits = self
+            .env
+            .distinct_types
+            .iter()
+            .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
+            .collect();
+        let compiler_builtins = self.env.compiler_builtins.iter().cloned().collect();
+        let must_use_functions = self
+            .env
+            .must_use_functions
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         TypeCheckResult {
             errors: self.errors,
             warnings: self.warnings,
             expr_types: self.expr_types,
             vector_method_receivers: self.vector_method_receivers,
             pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
-            struct_info: self.env.structs,
-            enum_info: self.env.enums,
-            union_info: self.env.unions,
+            struct_info: self.env.structs.into_iter().collect(),
+            enum_info: self.env.enums.into_iter().collect(),
+            union_info: self.env.unions.into_iter().collect(),
             distinct_type_traits,
             question_conversions: self.question_conversions,
             question_ok_payload_types: self.question_ok_payload_types,

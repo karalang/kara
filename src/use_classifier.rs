@@ -48,6 +48,7 @@ use crate::ownership::{
 };
 use crate::resolver::SpanKey;
 use crate::typechecker::{Type, TypeCheckResult};
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 /// Whole-program inputs the use-classifier consults but never mutates:
@@ -61,9 +62,9 @@ use std::collections::{HashMap, HashSet};
 /// every per-function `classify_function_body_with` call, restoring an
 /// O(program) total over the whole module.
 pub struct ClassifierPrelude {
-    method_self_modes: HashMap<String, SelfParam>,
-    callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
-    method_param_modes: HashMap<String, Vec<OwnershipMode>>,
+    method_self_modes: FxHashMap<String, SelfParam>,
+    callee_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
+    method_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: HashSet<String>,
     /// Bare names bound by this unit's `import` declarations
     /// (B-2026-07-29-16). See the call-arg gate in `walk_expr`.
@@ -186,9 +187,9 @@ enum Mode {
 
 struct UseClassifier<'a> {
     tc: &'a TypeCheckResult,
-    method_self_modes: &'a HashMap<String, SelfParam>,
-    callee_param_modes: &'a HashMap<String, Vec<OwnershipMode>>,
-    method_param_modes: &'a HashMap<String, Vec<OwnershipMode>>,
+    method_self_modes: &'a FxHashMap<String, SelfParam>,
+    callee_param_modes: &'a FxHashMap<String, Vec<OwnershipMode>>,
+    method_param_modes: &'a FxHashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: &'a HashSet<String>,
     imported_names: &'a HashSet<String>,
     param_types: HashMap<String, Type>,

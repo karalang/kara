@@ -66,6 +66,7 @@ use crate::typechecker::env::{EnumInfo, StructInfo};
 use crate::typechecker::types::{type_display, Type};
 use crate::typechecker::TypeCheckResult;
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 
 /// Diagnostic-shaped path through the type tree from a root binding's
 /// type to the cross-task-unsafe leaf that's transitively reachable.
@@ -139,10 +140,10 @@ pub fn is_cross_task_safe(ty: &Type, types: &TypeCheckResult) -> Result<(), Cros
 /// which runs mid-typecheck — the canonical `TypeCheckResult` hasn't
 /// been materialised yet, but `TypeChecker.env.structs` / `env.enums`
 /// hold the same shape data.
-pub fn is_cross_task_safe_with(
+pub fn is_cross_task_safe_with<S1: BuildHasher, S2: BuildHasher>(
     ty: &Type,
-    struct_info: &HashMap<String, StructInfo>,
-    enum_info: &HashMap<String, EnumInfo>,
+    struct_info: &HashMap<String, StructInfo, S1>,
+    enum_info: &HashMap<String, EnumInfo, S2>,
 ) -> Result<(), CrossTaskUnsafePath> {
     let root = type_display(ty);
     let mut path: Vec<String> = Vec::new();
@@ -150,10 +151,10 @@ pub fn is_cross_task_safe_with(
     walk(ty, struct_info, enum_info, &mut path, &root, &mut seen)
 }
 
-fn walk(
+fn walk<S1: BuildHasher, S2: BuildHasher>(
     ty: &Type,
-    struct_info: &HashMap<String, StructInfo>,
-    enum_info: &HashMap<String, EnumInfo>,
+    struct_info: &HashMap<String, StructInfo, S1>,
+    enum_info: &HashMap<String, EnumInfo, S2>,
     path: &mut Vec<String>,
     root: &str,
     // Struct / enum names whose field / variant expansion has already run

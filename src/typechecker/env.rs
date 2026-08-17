@@ -11,6 +11,7 @@
 //! inference.
 
 use crate::ast::*;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 
 use super::types::{
@@ -310,19 +311,19 @@ pub struct RefinementPred {
 }
 
 pub struct TypeEnv {
-    pub structs: HashMap<String, StructInfo>,
-    pub enums: HashMap<String, EnumInfo>,
+    pub structs: FxHashMap<String, StructInfo>,
+    pub enums: FxHashMap<String, EnumInfo>,
     /// Which generic-param positions of a named type are Shape-kinded
     /// (declared `...S` on the struct/enum). Sparse — only types with at
     /// least one shape-variadic param have an entry; the Vec is
     /// positional, parallel to the item's `generic_params`. Consulted by
     /// `lower_generic_args` to accept a `GenericArg::Shape` at that
     /// position (Phase 11 Q1; design.md § Numerical Types > Shape kind).
-    pub shape_param_positions: HashMap<String, Vec<bool>>,
+    pub shape_param_positions: FxHashMap<String, Vec<bool>>,
     /// `union NAME { ... }` declarations. See [`UnionInfo`].
-    pub unions: HashMap<String, UnionInfo>,
+    pub unions: FxHashMap<String, UnionInfo>,
     /// Derived traits for each `distinct type` declaration.
-    pub distinct_types: HashMap<String, HashSet<String>>,
+    pub distinct_types: FxHashMap<String, FxHashSet<String>>,
     /// Underlying base `Type` for each `distinct type Name = Base [where …]`
     /// declaration, keyed by the distinct type's name. A distinct type flows
     /// through inference as a nominal `Type::Named { name }` (no implicit
@@ -332,7 +333,7 @@ pub struct TypeEnv {
     /// be the base), `.raw()` (returns the base), and the no-deref method
     /// rule (a distinct type does not inherit its base's methods). Populated
     /// by `env_add_distinct_type`. See design.md § Distinct Types (Newtypes).
-    pub distinct_bases: HashMap<String, Type>,
+    pub distinct_bases: FxHashMap<String, Type>,
     /// Names of opaque foreign types declared inside `unsafe extern "ABI" { ... }`
     /// blocks (`type Foo;`). Consulted by `lower_type_expr_inner` for
     /// `E_OPAQUE_TYPE_REQUIRES_INDIRECTION`, by `infer_field_access` for
@@ -340,17 +341,17 @@ pub struct TypeEnv {
     /// `E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS` (slice 1b). Slice 1
     /// (registration only) shipped 2026-05-14; slice 1b (use-site
     /// precision) shipped alongside.
-    pub opaque_foreign_types: HashSet<String>,
-    pub functions: HashMap<String, FunctionSig>,
-    pub constants: HashMap<String, Type>,
+    pub opaque_foreign_types: FxHashSet<String>,
+    pub functions: FxHashMap<String, FunctionSig>,
+    pub constants: FxHashMap<String, Type>,
     /// Resolved compile-time values of module-level consts, keyed by name.
     /// Populated after env build by evaluating each `const`'s initializer.
     /// Consumed by downstream passes that lack the `eval_const_expr`
     /// driver — notably exhaustiveness checking, which reads it to fold a
     /// const-named range-pattern bound (`MIN_AGE..=MAX_AGE`) into a
     /// concrete interval (design.md § Range Patterns; v60 item 51).
-    pub const_values: HashMap<String, crate::prelude::ConstValue>,
-    pub type_aliases: HashMap<String, Type>,
+    pub const_values: FxHashMap<String, crate::prelude::ConstValue>,
+    pub type_aliases: FxHashMap<String, Type>,
     /// Generic parameter lists for generic type aliases, keyed by alias
     /// name. Populated by `env_add_type_alias` whenever the alias declares
     /// `[T: Bound, ...]`. `lower_path_type` consults this at every alias
@@ -360,20 +361,20 @@ pub struct TypeEnv {
     /// each parameter's declared bounds (`E_TYPE_ALIAS_BOUND_NOT_SATISFIED`,
     /// design.md § Type Aliases / v60 item 50). Non-generic aliases never
     /// have an entry here and keep the transparent-resolution fast path.
-    pub type_alias_params: HashMap<String, GenericParams>,
+    pub type_alias_params: FxHashMap<String, GenericParams>,
     /// Validated refinement predicates, keyed by the refinement type's
     /// name. Populated by `env_add_type_alias` when a `type Name = Base
     /// where <pred>` alias passes grammar validation; the matching
     /// `type_aliases` entry holds the `Type::Refinement { name, base }`
     /// that carries the nominal identity. See [`RefinementPred`].
-    pub refinement_predicates: HashMap<String, RefinementPred>,
-    pub traits: HashMap<String, TraitInfo>,
+    pub refinement_predicates: FxHashMap<String, RefinementPred>,
+    pub traits: FxHashMap<String, TraitInfo>,
     /// Names of declared trait aliases (`trait NAME = bound1 + ...;`).
     /// Recognized at parse + resolver time; the typechecker emits
     /// `E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET` at every use site as a v1
     /// stub. Bound substitution lands in P1 (see `docs/deferred.md` §
     /// Trait Aliases — Expansion).
-    pub trait_aliases: HashSet<String>,
+    pub trait_aliases: FxHashSet<String>,
     /// Locally-bound trait name -> the trait's own (canonical) name, for
     /// ALIASED imports (`import doer.{Doer as D}` records `D -> Doer`).
     /// Empty for every other import form.
@@ -386,7 +387,7 @@ pub struct TypeEnv {
     /// canonicalization at the single point BOTH satisfaction paths funnel
     /// through — the where-clause discharge in `exprs.rs` and the impl-block
     /// bound gate in `env.rs::first_unsatisfied_bound`.
-    pub trait_alias_canonical: HashMap<String, String>,
+    pub trait_alias_canonical: FxHashMap<String, String>,
     /// Locally-bound TYPE name -> the type's own (canonical) name, for
     /// ALIASED imports (`import doer.{Impl as Widget}` records
     /// `Widget -> Impl`). The type-side twin of
@@ -397,17 +398,17 @@ pub struct TypeEnv {
     /// Only the BOTH-aliased shape needed it — with the type spelled
     /// canonically the trait retry alone sufficed, which is why
     /// B-2026-07-29-10 closed with just half the pair (B-2026-07-29-14).
-    pub type_alias_canonical: HashMap<String, String>,
+    pub type_alias_canonical: FxHashMap<String, String>,
     /// Names of declared marker traits (`marker trait NAME;`). Marker
     /// traits register in `traits` alongside ordinary traits so bound
     /// resolution and impl coherence work uniformly; this side-set
     /// records the marker-ness so impl-body checks (no methods allowed)
     /// can look it up. v60 item 55 / design.md § Marker Traits.
-    pub marker_traits: HashSet<String>,
+    pub marker_traits: FxHashSet<String>,
     pub impls: Vec<ImplInfo>,
     /// Indices into `impls` keyed by trait name. Trait-less inherent impls
     /// are not indexed here.
-    pub impls_by_trait: HashMap<String, Vec<usize>>,
+    pub impls_by_trait: FxHashMap<String, Vec<usize>>,
     /// Associated type bindings from impl blocks. Key is `(concrete_type_name,
     /// assoc_type_name)`; value is an entry carrying the template type plus
     /// the GAT parameter names (empty for non-generic bindings). E.g.
@@ -422,7 +423,7 @@ pub struct TypeEnv {
     /// zipped with the projection's `receiver_args`) and GAT-side params (via
     /// the entry's `gat_params` zipped with the projection's own `args`) are
     /// substituted in one pass. GAT slice 5.
-    pub impl_assoc_types: HashMap<(String, String), ImplAssocTypeEntry>,
+    pub impl_assoc_types: FxHashMap<(String, String), ImplAssocTypeEntry>,
     /// Names of functions declared with `#[compiler_builtin]` in stdlib
     /// source (CR-202 slice 2). The signature still lives in `functions`
     /// — the entry here marks the function as having its body replaced by
@@ -430,7 +431,7 @@ pub struct TypeEnv {
     /// interpreter knows not to evaluate the placeholder body. Slice 1's
     /// resolver gate (`E0115`) prevents user code from getting entries
     /// into this set.
-    pub compiler_builtins: HashSet<String>,
+    pub compiler_builtins: FxHashSet<String>,
     /// `#[must_use]` annotations on free functions and impl methods
     /// (slice 4 of the `#[must_use]` mandate). Keyed by the canonical
     /// name the discard-site lookup uses: `"name"` for free functions,
@@ -443,11 +444,11 @@ pub struct TypeEnv {
     /// attribute. Populated by `env_add_function` / `env_add_impl`;
     /// consumed by `must_use_lint`'s discard-site walker via the
     /// snapshot on `TypeCheckResult.must_use_functions`.
-    pub must_use_functions: HashMap<String, Option<String>>,
+    pub must_use_functions: FxHashMap<String, Option<String>>,
     #[allow(dead_code)]
     pub(super) next_type_var: u32,
     #[allow(dead_code)]
-    pub(super) substitutions: HashMap<TypeVarId, Type>,
+    pub(super) substitutions: FxHashMap<TypeVarId, Type>,
     /// Const-arg metavar counter, parallel to `next_type_var`. Bumped
     /// when `instantiate_signature_with_fresh_vars` mints a fresh
     /// `ConstVarId` per unique const-param name in a signature (const
@@ -459,39 +460,39 @@ pub struct TypeEnv {
     /// `resolve_type_vars` (Array arm) to substitute `ConstArg::ConstVar`
     /// with its bound value.
     #[allow(dead_code)]
-    pub(super) const_substitutions: HashMap<ConstVarId, ConstArg>,
+    pub(super) const_substitutions: FxHashMap<ConstVarId, ConstArg>,
 }
 
 impl TypeEnv {
     pub(super) fn new() -> Self {
         TypeEnv {
-            structs: HashMap::new(),
-            enums: HashMap::new(),
-            shape_param_positions: HashMap::new(),
-            unions: HashMap::new(),
-            distinct_types: HashMap::new(),
-            distinct_bases: HashMap::new(),
-            opaque_foreign_types: HashSet::new(),
-            functions: HashMap::new(),
-            constants: HashMap::new(),
-            type_aliases: HashMap::new(),
-            type_alias_params: HashMap::new(),
-            const_values: HashMap::new(),
-            refinement_predicates: HashMap::new(),
-            traits: HashMap::new(),
-            trait_aliases: HashSet::new(),
-            trait_alias_canonical: HashMap::new(),
-            type_alias_canonical: HashMap::new(),
-            marker_traits: HashSet::new(),
+            structs: FxHashMap::default(),
+            enums: FxHashMap::default(),
+            shape_param_positions: FxHashMap::default(),
+            unions: FxHashMap::default(),
+            distinct_types: FxHashMap::default(),
+            distinct_bases: FxHashMap::default(),
+            opaque_foreign_types: FxHashSet::default(),
+            functions: FxHashMap::default(),
+            constants: FxHashMap::default(),
+            type_aliases: FxHashMap::default(),
+            type_alias_params: FxHashMap::default(),
+            const_values: FxHashMap::default(),
+            refinement_predicates: FxHashMap::default(),
+            traits: FxHashMap::default(),
+            trait_aliases: FxHashSet::default(),
+            trait_alias_canonical: FxHashMap::default(),
+            type_alias_canonical: FxHashMap::default(),
+            marker_traits: FxHashSet::default(),
             impls: Vec::new(),
-            impls_by_trait: HashMap::new(),
-            impl_assoc_types: HashMap::new(),
-            compiler_builtins: HashSet::new(),
-            must_use_functions: HashMap::new(),
+            impls_by_trait: FxHashMap::default(),
+            impl_assoc_types: FxHashMap::default(),
+            compiler_builtins: FxHashSet::default(),
+            must_use_functions: FxHashMap::default(),
             next_type_var: 0,
-            substitutions: HashMap::new(),
+            substitutions: FxHashMap::default(),
             next_const_var: 0,
-            const_substitutions: HashMap::new(),
+            const_substitutions: FxHashMap::default(),
         }
     }
 

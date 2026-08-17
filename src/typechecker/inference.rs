@@ -10,6 +10,7 @@
 //! anywhere without a `&mut TypeChecker`.
 
 use crate::ast::*;
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 use super::const_eval::substitute_const_arg;
@@ -606,9 +607,9 @@ fn substitute_const_param_to_var(
 /// `?M0 → ?M1 → i32` collapses to `i32`.
 pub(super) fn resolve_type_vars(
     ty: &Type,
-    substitutions: &HashMap<TypeVarId, Type>,
+    substitutions: &FxHashMap<TypeVarId, Type>,
     id_to_name: &HashMap<TypeVarId, String>,
-    const_substitutions: &HashMap<ConstVarId, ConstArg>,
+    const_substitutions: &FxHashMap<ConstVarId, ConstArg>,
     const_id_to_name: &HashMap<ConstVarId, String>,
 ) -> Type {
     let recur = |t: &Type| {
@@ -710,7 +711,7 @@ pub(super) fn resolve_type_vars(
 /// `ConstParam` pass through unchanged.
 pub(super) fn resolve_const_arg(
     arg: &ConstArg,
-    const_substitutions: &HashMap<ConstVarId, ConstArg>,
+    const_substitutions: &FxHashMap<ConstVarId, ConstArg>,
     const_id_to_name: &HashMap<ConstVarId, String>,
 ) -> ConstArg {
     match arg {
@@ -730,7 +731,7 @@ pub(super) fn resolve_const_arg(
 /// Resolve only the top-level `Type::TypeVar(id)` chain — leaves
 /// nested TypeVars in compound types untouched. Used by `unify_types`
 /// to peel one level of indirection before structurally comparing.
-pub(super) fn resolve_type_var_top(ty: &Type, substitutions: &HashMap<TypeVarId, Type>) -> Type {
+pub(super) fn resolve_type_var_top(ty: &Type, substitutions: &FxHashMap<TypeVarId, Type>) -> Type {
     match ty {
         Type::TypeVar(id) => {
             if let Some(resolved) = substitutions.get(id) {
@@ -756,8 +757,8 @@ pub(super) fn resolve_type_var_top(ty: &Type, substitutions: &HashMap<TypeVarId,
 pub(super) fn unify_types(
     a: &Type,
     b: &Type,
-    substitutions: &mut HashMap<TypeVarId, Type>,
-    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+    substitutions: &mut FxHashMap<TypeVarId, Type>,
+    const_substitutions: &mut FxHashMap<ConstVarId, ConstArg>,
 ) -> bool {
     // Never-as-bottom, order-independent metavar binding. A metavar
     // tentatively bound to `Never` (a diverging argument — `panic()` /
@@ -973,8 +974,8 @@ pub(super) fn unify_types(
 fn unify_type_var(
     id: TypeVarId,
     other: &Type,
-    substitutions: &mut HashMap<TypeVarId, Type>,
-    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+    substitutions: &mut FxHashMap<TypeVarId, Type>,
+    const_substitutions: &mut FxHashMap<ConstVarId, ConstArg>,
 ) -> bool {
     let other = resolve_type_var_top(other, substitutions);
     match substitutions.get(&id).cloned() {
@@ -1015,8 +1016,8 @@ fn unify_type_var(
 fn unify_shapes(
     x: &[DimArg],
     y: &[DimArg],
-    substitutions: &mut HashMap<TypeVarId, Type>,
-    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+    substitutions: &mut FxHashMap<TypeVarId, Type>,
+    const_substitutions: &mut FxHashMap<ConstVarId, ConstArg>,
 ) -> bool {
     fn splice_pos(dims: &[DimArg]) -> Option<usize> {
         dims.iter()
@@ -1025,7 +1026,7 @@ fn unify_shapes(
     fn unify_dim(
         a: &DimArg,
         b: &DimArg,
-        const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+        const_substitutions: &mut FxHashMap<ConstVarId, ConstArg>,
     ) -> bool {
         let to_const = |d: &DimArg| -> ConstArg {
             match d {
@@ -1089,8 +1090,8 @@ fn unify_spliced(
     spliced: &[DimArg],
     pos: usize,
     concrete: &[DimArg],
-    substitutions: &mut HashMap<TypeVarId, Type>,
-    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+    substitutions: &mut FxHashMap<TypeVarId, Type>,
+    const_substitutions: &mut FxHashMap<ConstVarId, ConstArg>,
 ) -> bool {
     let pre = &spliced[..pos];
     let post = &spliced[pos + 1..];
@@ -1102,7 +1103,7 @@ fn unify_spliced(
     let (c_mid, c_post) = rest.split_at(mid_end - pre.len());
     let pairwise = |xs: &[DimArg],
                     ys: &[DimArg],
-                    const_substitutions: &mut HashMap<ConstVarId, ConstArg>|
+                    const_substitutions: &mut FxHashMap<ConstVarId, ConstArg>|
      -> bool {
         xs.iter().zip(ys.iter()).all(|(a, b)| {
             let to_const = |d: &DimArg| match d {
@@ -1135,7 +1136,7 @@ fn unify_spliced(
 pub(super) fn unify_const_args(
     a: &ConstArg,
     b: &ConstArg,
-    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+    const_substitutions: &mut FxHashMap<ConstVarId, ConstArg>,
 ) -> bool {
     // Phase 11 Q1: `DynamicDim` is a *weak* binding (the `?` dynamic
     // dim) — inspect raw top-level vars before chain resolution so a
@@ -1178,7 +1179,7 @@ pub(super) fn unify_const_args(
 fn unify_const_var(
     id: ConstVarId,
     other: &ConstArg,
-    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+    const_substitutions: &mut FxHashMap<ConstVarId, ConstArg>,
 ) -> bool {
     let other_resolved = resolve_const_var_top(other, const_substitutions);
     match const_substitutions.get(&id).cloned() {
@@ -1207,7 +1208,7 @@ fn unify_const_var(
 /// metavariable substrate.
 fn resolve_const_var_top(
     arg: &ConstArg,
-    const_substitutions: &HashMap<ConstVarId, ConstArg>,
+    const_substitutions: &FxHashMap<ConstVarId, ConstArg>,
 ) -> ConstArg {
     match arg {
         ConstArg::ConstVar(id) => match const_substitutions.get(id) {

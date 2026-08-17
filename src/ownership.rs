@@ -14,6 +14,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{FloatSize, IntSize, Type, TypeCheckResult, UIntSize};
 use crate::use_classifier::{classify_function_body_with, ClassifierPrelude};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 
 mod block_stmt;
@@ -102,7 +103,7 @@ impl std::fmt::Display for OwnershipMode {
 /// in the string-keyed map, the fallback can never turn a genuine move into a
 /// borrow; it only rescues the unambiguous all-borrow case.
 pub(crate) fn arg_is_borrow_by_method_name(
-    method_param_modes: &std::collections::HashMap<String, Vec<OwnershipMode>>,
+    method_param_modes: &FxHashMap<String, Vec<OwnershipMode>>,
     method: &str,
     arg_index: usize,
 ) -> bool {
@@ -1117,7 +1118,7 @@ pub struct OwnershipChecker<'a> {
     pub(crate) frozen_element_containers: HashSet<SpanKey>,
     /// Type name of each binding in scope for the current function.
     /// Used so RC trigger sites can look up `@no_rc` on the type.
-    pub(crate) binding_type_names: HashMap<String, String>,
+    pub(crate) binding_type_names: FxHashMap<String, String>,
     /// Full type of each binding in scope for the current function.
     /// Parallel to `binding_type_names` but stores the structured `Type`
     /// rather than just the head name. Populated at the param-scan and
@@ -1125,7 +1126,7 @@ pub struct OwnershipChecker<'a> {
     /// the LHS / chained-access spans the typechecker may overwrite).
     /// Consumed by `consume_named_binding` to look up Copy-ness without
     /// going through the unreliable `expr_types[span]` path.
-    pub(crate) binding_types: HashMap<String, Type>,
+    pub(crate) binding_types: FxHashMap<String, Type>,
     // Round 12.38 — once-callable closure tracking removed from the
     // ownership-side state machine. Detection now lives in
     // `use_classifier::UseClassifier::once_callable_closures` (round
@@ -1149,13 +1150,13 @@ pub struct OwnershipChecker<'a> {
     /// own first-assignment-is-initialization state machine in `ValueState::
     /// {Uninit, InitOnce}`, which predates this map and already reports the
     /// same `ReassignToImmutable` diagnostic on the second write.
-    pub(crate) immutable_lets: HashMap<String, Span>,
+    pub(crate) immutable_lets: FxHashMap<String, Span>,
     /// `Type.method` → declared receiver mode (`self` / `ref self` /
     /// `mut ref self`). Populated once at construction by walking the
     /// program's impl blocks and trait declarations. Consulted at every
     /// `MethodCall` to drive consume-vs-read classification of the receiver
     /// per design.md § Consume Predicate step 1.
-    pub(crate) method_self_modes: HashMap<String, SelfParam>,
+    pub(crate) method_self_modes: FxHashMap<String, SelfParam>,
     /// Callee name → per-position parameter ownership modes. Free functions
     /// are keyed by bare name (`"my_fn"`); static methods (impl methods
     /// with no `self_param`) are keyed by `"Type.method"`. The mode of
@@ -1163,14 +1164,14 @@ pub struct OwnershipChecker<'a> {
     /// → `Ref`, `mut ref T` / `mut Slice[T]` → `MutRef`, otherwise
     /// `Own`. Drives `Call`-arg consume-vs-read classification per
     /// design.md § Consume Predicate step 2.
-    pub(crate) callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
+    pub(crate) callee_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
     /// Bare names bound by this unit's `import` declarations, aliases
     /// included. Lets `arg_is_borrow_position` tell an IMPORTED free function
     /// — whose signature lives in another module, so it has no
     /// `callee_param_modes` entry under single-file `karac check` — from a
     /// function-typed local, whose absence from that table means something
     /// else. B-2026-07-29-16.
-    pub(crate) imported_names: std::collections::HashSet<String>,
+    pub(crate) imported_names: FxHashSet<String>,
     /// Instance-method key (`"Type.method"`) → per-position NON-self
     /// parameter ownership modes. Companion to `callee_param_modes` (which
     /// is static-only): instance methods dispatch as `MethodCall`, so their
@@ -1178,7 +1179,7 @@ pub struct OwnershipChecker<'a> {
     /// `i` (the receiver is `method_self_modes`). Lets a `ref`/`mut ref`/
     /// `mut Slice` method arg be a borrow (read), not a consume — without it
     /// a borrowed struct arg was spuriously RC-promoted (B-2026-06-12-8).
-    pub(crate) method_param_modes: HashMap<String, Vec<OwnershipMode>>,
+    pub(crate) method_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
     /// Callee name → per-position "is the formal a slice?" flag. `Some(true)`
     /// for `mut Slice[T]`, `Some(false)` for `Slice[T]`, `None` for
     /// non-slice formals. Drives the Slice 1 call-arg coercion site
@@ -1186,7 +1187,7 @@ pub struct OwnershipChecker<'a> {
     /// formal slot whose type is `Slice[T]` / `mut Slice[T]`, the
     /// implicit coercion creates a slice view that needs source
     /// attribution. Same key convention as `callee_param_modes`.
-    pub(crate) callee_param_slice_kind: HashMap<String, Vec<Option<bool>>>,
+    pub(crate) callee_param_slice_kind: FxHashMap<String, Vec<Option<bool>>>,
     /// `impl Trait` slice 4 — callee name → positional indices of
     /// parameters whose borrow regions are captured by the callee's
     /// return-position `impl Trait` existential. Derived from
@@ -1197,7 +1198,7 @@ pub struct OwnershipChecker<'a> {
     /// existing let-binding-propagation + drain pipeline flags drops of
     /// the captured source while the returned existential is still
     /// bound. Same key convention as `callee_param_modes`.
-    pub(crate) callee_existential_capture_indices: HashMap<String, Vec<usize>>,
+    pub(crate) callee_existential_capture_indices: FxHashMap<String, Vec<usize>>,
     /// Slice creation sites recorded by Slice 1. Surfaced via
     /// `OwnershipCheckResult::slice_borrow_sources`. Populated at
     /// `.as_slice()` / `.as_slice_mut()`, range-indexing, and call-arg
@@ -1356,12 +1357,14 @@ impl<'a> OwnershipChecker<'a> {
             atomic_promoted_types: std::collections::HashSet::new(),
             frozen_alias_bindings: HashSet::new(),
             frozen_element_containers: HashSet::new(),
-            binding_type_names: HashMap::new(),
-            binding_types: HashMap::new(),
-            immutable_lets: HashMap::new(),
+            binding_type_names: FxHashMap::default(),
+            binding_types: FxHashMap::default(),
+            immutable_lets: FxHashMap::default(),
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
-            imported_names: crate::use_classifier::collect_imported_names_pub(program),
+            imported_names: crate::use_classifier::collect_imported_names_pub(program)
+                .into_iter()
+                .collect(),
             method_param_modes: collect_method_param_modes(program),
             callee_param_slice_kind: collect_callee_param_slice_kind(program),
             callee_existential_capture_indices: collect_callee_existential_capture_indices(
@@ -2532,8 +2535,8 @@ pub(crate) enum ParamUsage {
 /// values (e.g. `"Container.compute"`, `"Iterator.next"`). Used by
 /// MethodCall handling to drive consume-vs-read classification per
 /// design.md § Consume Predicate step 1.
-pub(crate) fn collect_method_self_modes(program: &Program) -> HashMap<String, SelfParam> {
-    let mut map = HashMap::new();
+pub(crate) fn collect_method_self_modes(program: &Program) -> FxHashMap<String, SelfParam> {
+    let mut map = FxHashMap::default();
     for item in &program.items {
         match item {
             Item::ImplBlock(impl_block) => {
@@ -2615,8 +2618,10 @@ pub(crate) fn callee_param_modes_key(callee: &Expr) -> Option<String> {
 /// decide whether each argument is consumed (Owned) or read (Ref / MutRef)
 /// per design.md § Consume Predicate step 2. Keys: free fn name, or
 /// `"Type.method"` for static methods.
-pub(crate) fn collect_callee_param_modes(program: &Program) -> HashMap<String, Vec<OwnershipMode>> {
-    let mut map = HashMap::new();
+pub(crate) fn collect_callee_param_modes(
+    program: &Program,
+) -> FxHashMap<String, Vec<OwnershipMode>> {
+    let mut map = FxHashMap::default();
     // Compiler-intrinsic free functions FIRST (B-2026-07-02-21): the print
     // family and `with_provider` have no declared signature anywhere (not
     // in the user program, not in the baked stdlib — they are typechecker/
@@ -2656,7 +2661,7 @@ pub(crate) fn collect_callee_param_modes(program: &Program) -> HashMap<String, V
 
 fn collect_callee_param_modes_into(
     program: &Program,
-    map: &mut HashMap<String, Vec<OwnershipMode>>,
+    map: &mut FxHashMap<String, Vec<OwnershipMode>>,
 ) {
     for item in &program.items {
         match item {
@@ -2697,8 +2702,10 @@ fn collect_callee_param_modes_into(
 /// consumed) — the same rule `collect_callee_param_modes` gives the `Call`
 /// path. Without it, every non-`mut`-marked method arg was classified as a
 /// consume, spuriously RC-promoting a borrowed struct arg (B-2026-06-12-8).
-pub(crate) fn collect_method_param_modes(program: &Program) -> HashMap<String, Vec<OwnershipMode>> {
-    let mut map = HashMap::new();
+pub(crate) fn collect_method_param_modes(
+    program: &Program,
+) -> FxHashMap<String, Vec<OwnershipMode>> {
+    let mut map = FxHashMap::default();
     // B-2026-07-16-12: builtin collection LOOKUP methods have no syntactic
     // signature — their type is an empty builtin `struct Map[=K, =V] {}` etc.
     // registered via `register_builtin_types`, so the stdlib/user walk below
@@ -2791,7 +2798,7 @@ pub(crate) fn collect_method_param_modes(program: &Program) -> HashMap<String, V
 
 fn collect_method_param_modes_into(
     program: &Program,
-    map: &mut HashMap<String, Vec<OwnershipMode>>,
+    map: &mut FxHashMap<String, Vec<OwnershipMode>>,
 ) {
     for item in &program.items {
         match item {
@@ -2845,8 +2852,8 @@ fn collect_method_param_modes_into(
 pub(crate) fn collect_callee_existential_capture_indices(
     program: &Program,
     typecheck_result: &TypeCheckResult,
-) -> HashMap<String, Vec<usize>> {
-    let mut map: HashMap<String, Vec<usize>> = HashMap::new();
+) -> FxHashMap<String, Vec<usize>> {
+    let mut map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
     for item in &program.items {
         match item {
             Item::Function(f) => {
@@ -3172,8 +3179,8 @@ pub(crate) fn slice_conflict_message(shape: &SliceConflictShape, root: &str) -> 
 /// static methods keyed by `"Type.method"`.
 pub(crate) fn collect_callee_param_slice_kind(
     program: &Program,
-) -> HashMap<String, Vec<Option<bool>>> {
-    let mut map = HashMap::new();
+) -> FxHashMap<String, Vec<Option<bool>>> {
+    let mut map = FxHashMap::default();
     for item in &program.items {
         match item {
             Item::Function(f) => {

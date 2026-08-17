@@ -426,7 +426,7 @@ impl<'a> super::TypeChecker<'a> {
     /// (defaults to concrete for leaf scalars and unmodeled variants).
     fn wp_ret_is_fully_concrete(
         ty: &Type,
-        subs: &std::collections::HashMap<super::TypeVarId, Type>,
+        subs: &rustc_hash::FxHashMap<super::TypeVarId, Type>,
     ) -> bool {
         let t = resolve_type_var_top(ty, subs);
         match &t {

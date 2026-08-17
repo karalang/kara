@@ -48,6 +48,7 @@
 // code on wasm32 without weakening the native dead-code gate.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
@@ -72,7 +73,7 @@ type ClosureBindings = HashMap<String, Vec<String>>;
 /// L201b-shipped assign / compound-assign cases.
 struct MethodMutClassifier<'a> {
     method_callee_types: &'a HashMap<SpanKey, String>,
-    method_self_modes: &'a HashMap<String, SelfParam>,
+    method_self_modes: &'a FxHashMap<String, SelfParam>,
 }
 
 impl MethodMutClassifier<'_> {
@@ -2500,8 +2501,8 @@ pub(crate) struct ConsumerRewriteTypeCtx<'a> {
 /// items directly so the consumer-rewrite path doesn't need a `&Program`
 /// reference (it has only the program-items slice). Kept private —
 /// outside callers go through the `&Program` variant.
-fn collect_method_self_modes_in_items(items: &[Item]) -> HashMap<String, SelfParam> {
-    let mut map = HashMap::new();
+fn collect_method_self_modes_in_items(items: &[Item]) -> FxHashMap<String, SelfParam> {
+    let mut map = FxHashMap::default();
     for item in items {
         match item {
             Item::ImplBlock(impl_block) => {

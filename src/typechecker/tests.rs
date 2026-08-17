@@ -1594,7 +1594,6 @@ mod shape_kind_unit_probes {
         instantiate_signature_with_fresh_vars, resolve_type_vars, unify_types,
     };
     use super::super::types::{ConstArg, DimArg, FloatSize, Type};
-    use std::collections::HashMap;
 
     fn mat(dims: Vec<DimArg>) -> Type {
         Type::Named {
@@ -1626,8 +1625,8 @@ mod shape_kind_unit_probes {
             "dim 0 not instantiated: {dims:?}",
         );
         // Unify against a concrete [3, 4] and resolve the return.
-        let mut subs = HashMap::new();
-        let mut csubs = HashMap::new();
+        let mut subs = rustc_hash::FxHashMap::default();
+        let mut csubs = rustc_hash::FxHashMap::default();
         let actual = mat(vec![
             DimArg::Const(ConstArg::Literal(3)),
             DimArg::Const(ConstArg::Literal(4)),
