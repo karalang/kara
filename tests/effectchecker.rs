@@ -9325,3 +9325,95 @@ fn test_dataframe_read_csv_declared_reads_filesystem_ok() {
         result.errors,
     );
 }
+
+// ── B-2026-08-17-4: the default `Heap` permit is exactly one (verb, resource) pair ──
+//
+// design.md's effect-verb section says `allocates(Heap)` is default-permitted
+// (a public function need not declare it under the default profile), and two
+// other passages used to overstate the opposite — "omitting `allocates` is the
+// commitment that the function does not allocate". The spec is now qualified;
+// this test is the compiler-side pin that keeps the qualifier true, in BOTH
+// directions: the pair is permitted, and NOTHING ADJACENT leaks into the
+// permit. The row measured all ten combinations by hand; a fix that widened
+// the permit by verb (any allocates) or by resource (anything touching Heap)
+// would pass the permitted half and fail its neighbour here.
+
+#[test]
+fn default_heap_permit_is_exactly_the_allocates_heap_pair() {
+    // The permitted pair: a public fn allocating via a callee, declaring
+    // nothing, passes under the default profile.
+    effectcheck_ok(
+        "fn helper() -> i64 { let mut v: Vec[i64] = Vec.new(); v.push(1); v.len() }\n\
+         pub fn api() -> i64 { helper() }",
+    );
+
+    // The VERB alone is not exempt: `allocates` on a user resource must still
+    // be declared.
+    let errors = effectcheck_errors(
+        "effect resource MyPool;\n\
+         pub fn helper() allocates(MyPool) { }\n\
+         pub fn api() { helper() }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("MyPool")),
+        "allocates(MyPool) must not ride the Heap permit; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+
+    // The RESOURCE alone is not exempt: a different verb on `Heap` must still
+    // be declared.
+    let errors = effectcheck_errors(
+        "pub fn helper() reads(Heap) { }\n\
+         pub fn api() { helper() }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("Heap")),
+        "reads(Heap) must not ride the permit; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}
+
+// The spec's real-time-guarantee passage (aligned in 2e53d69) states the
+// allocation-free guarantee under its real preconditions and names
+// `#[no_effect(allocates(Heap))]` as the per-function boundary — which is spec
+// vocabulary with NO implementation yet (it fails at parse; filed as its own
+// missing-feature row). The SHIPPED per-function mechanism is the
+// `#[profile(...)]` compatibility attribute, and this test pins that it
+// delivers exactly the guarantee the spec describes: direct allocation
+// rejected, TRANSITIVE allocation rejected (the compositionality claim), an
+// allocation-free body accepted. When `#[no_effect]` lands it gets a twin of
+// this test; until then this is the proof the guarantee is real today.
+
+#[test]
+fn profile_attribute_delivers_the_allocation_free_guarantee() {
+    let errors = effectcheck_errors(
+        "#[profile(embedded)]\n\
+         pub fn frame() -> i64 { let mut v: Vec[i64] = Vec.new(); v.push(1); v.len() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ProfileIncompatibleEffect),
+        "a directly-allocating #[profile(embedded)] fn must be rejected; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+
+    let errors = effectcheck_errors(
+        "fn helper() -> i64 { let mut v: Vec[i64] = Vec.new(); v.push(1); v.len() }\n\
+         #[profile(embedded)]\n\
+         pub fn frame() -> i64 { helper() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ProfileIncompatibleEffect),
+        "a TRANSITIVELY-allocating #[profile(embedded)] fn must be rejected — \
+         the guarantee is compositional; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+
+    effectcheck_ok(
+        "#[profile(embedded)]\n\
+         pub fn frame(x: i64) -> i64 { x * 2 }",
+    );
+}
