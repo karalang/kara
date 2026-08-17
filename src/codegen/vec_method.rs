@@ -11265,8 +11265,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let alleq = bb(self, "alleq");
         let alleq_cp = bb(self, "alleq.cp");
         let pick = bb(self, "pick");
+        // The scatter is emitted once per split predicate — see the block
+        // comment on `split_scatter` below. `KARAC_SORT_SCATTER_SPLIT=0` keeps
+        // the single fused loop, in which case only the `lt` pair is created.
+        let split_scatter = std::env::var("KARAC_SORT_SCATTER_SPLIT").as_deref() != Ok("0");
         let sc_chk = bb(self, "sc.chk");
         let sc_body = bb(self, "sc.body");
+        let sc_chk_le = split_scatter.then(|| bb(self, "sc.chk.le"));
+        let sc_body_le = split_scatter.then(|| bb(self, "sc.body.le"));
         let rec = bb(self, "rec");
         let l_eq = bb(self, "l.eq");
         let l_eq_cp = bb(self, "l.eq.cp");
@@ -11720,92 +11726,143 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(lc_a, lo).unwrap();
         self.builder.build_store(rc_a, mid).unwrap();
         self.builder.build_store(ii_a, lo).unwrap();
-        self.builder.build_unconditional_branch(sc_chk).unwrap();
+        match sc_chk_le {
+            Some(le) => self
+                .builder
+                .build_conditional_branch(no_lt, le, sc_chk)
+                .unwrap(),
+            None => self.builder.build_unconditional_branch(sc_chk).unwrap(),
+        };
 
         // ── scatter: one in-order pass, two advancing cursors ──────────────
         // This is the whole stability argument: elements are visited in
         // original order and appended to their side, so relative order is
         // preserved within each half. Branchless — the destination index is a
         // select and both cursors advance by a bool.
-        self.builder.position_at_end(sc_chk);
-        let si = self
-            .builder
-            .build_load(i64_t, ii_a, "q.si")
-            .unwrap()
-            .into_int_value();
-        let s_go = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SLT, si, hi, "q.s.go")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(s_go, sc_body, rec)
-            .unwrap();
+        //
+        // EMITTED ONCE PER SPLIT PREDICATE (B-2026-08-16-9). Which of `<` and
+        // `<=` decides the side is fixed for the whole range — it is `no_lt`,
+        // computed before the loop — but writing that as an in-loop
+        // `select(no_lt, sc <= 0, sc < 0)` costs six instructions per element on
+        // arm64, because the select needs its operands as VALUES and so forces
+        // the comparator's three-way result to be materialised:
+        //
+        //   cmp x16, x10 / cset w16, lt / cset w17, le      <- both predicates
+        //   cmp x12, #0  / csel w16, w17, w16, eq           <- invariant, in-loop
+        //   cmp w16, #0  / csel x17, x15, x14, ne
+        //
+        // The counting pass above is the control: same comparator, same two
+        // predicates, but consumed directly as condition codes rather than
+        // through a select, and it compiles to `cmp / cinc lt / cinc le`. With
+        // one predicate per arm the scatter reaches the same form — `cmp / csel
+        // / cinc / cinc` — for 9 instructions per element against 15.
+        //
+        // LLVM will not do this itself: SimpleLoopUnswitch unswitches invariant
+        // BRANCHES, and this is a select. Nor is folding the two predicates into
+        // one comparison against a precomputed threshold an option — `sc < thr`
+        // for a runtime `thr` would materialise `sc`, which is the cost being
+        // removed. Duplicating the loop is what keeps the comparison in flags.
+        //
+        // `KARAC_SORT_SCATTER_SPLIT=0` restores the single fused loop for A/B.
+        let arms: Vec<(BasicBlock<'ctx>, BasicBlock<'ctx>, Option<bool>)> =
+            match (sc_chk_le, sc_body_le) {
+                (Some(c), Some(b)) => vec![(sc_chk, sc_body, Some(false)), (c, b, Some(true))],
+                _ => vec![(sc_chk, sc_body, None)],
+            };
+        for (chk, body_bb, pred) in arms {
+            self.builder.position_at_end(chk);
+            let si = self
+                .builder
+                .build_load(i64_t, ii_a, "q.si")
+                .unwrap()
+                .into_int_value();
+            let s_go = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, si, hi, "q.s.go")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(s_go, body_bb, rec)
+                .unwrap();
 
-        self.builder.position_at_end(sc_body);
-        let sv_p = unsafe {
-            self.builder
-                .build_in_bounds_gep(elem_ty, live, &[si], "q.sv.p")
+            self.builder.position_at_end(body_bb);
+            let sv_p = unsafe {
+                self.builder
+                    .build_in_bounds_gep(elem_ty, live, &[si], "q.sv.p")
+                    .unwrap()
+            };
+            let sv = self.builder.build_load(elem_ty, sv_p, "q.sv").unwrap();
+            let pv_v2 = self.builder.build_load(elem_ty, piv_a, "q.pv.v2").unwrap();
+            let sc = self
+                .emit_sort_by_inline_compare(qpart_fn, params, body, elem_type_name, sv, pv_v2)?;
+            let goes_left = match pred {
+                // `nlt == 0`: the pivot is the range minimum, so the left half
+                // is the block equal to it and the split is on `<=`.
+                Some(true) => self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLE, sc, zero, "q.s.le")
+                    .unwrap(),
+                Some(false) => self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, sc, zero, "q.s.lt")
+                    .unwrap(),
+                None => {
+                    let s_lt = self
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::SLT, sc, zero, "q.s.lt")
+                        .unwrap();
+                    let s_le = self
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::SLE, sc, zero, "q.s.le")
+                        .unwrap();
+                    self.builder
+                        .build_select(no_lt, s_le, s_lt, "q.left")
+                        .unwrap()
+                        .into_int_value()
+                }
+            };
+            let lcur = self
+                .builder
+                .build_load(i64_t, lc_a, "q.lc")
                 .unwrap()
-        };
-        let sv = self.builder.build_load(elem_ty, sv_p, "q.sv").unwrap();
-        let pv_v2 = self.builder.build_load(elem_ty, piv_a, "q.pv.v2").unwrap();
-        let sc =
-            self.emit_sort_by_inline_compare(qpart_fn, params, body, elem_type_name, sv, pv_v2)?;
-        let s_lt = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SLT, sc, zero, "q.s.lt")
-            .unwrap();
-        let s_le = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SLE, sc, zero, "q.s.le")
-            .unwrap();
-        let goes_left = self
-            .builder
-            .build_select(no_lt, s_le, s_lt, "q.left")
-            .unwrap()
-            .into_int_value();
-        let lcur = self
-            .builder
-            .build_load(i64_t, lc_a, "q.lc")
-            .unwrap()
-            .into_int_value();
-        let rcur = self
-            .builder
-            .build_load(i64_t, rc_a, "q.rc")
-            .unwrap()
-            .into_int_value();
-        let dst_i = self
-            .builder
-            .build_select(goes_left, lcur, rcur, "q.dsti")
-            .unwrap()
-            .into_int_value();
-        let dst_p = unsafe {
-            self.builder
-                .build_in_bounds_gep(elem_ty, dead, &[dst_i], "q.dst.p")
+                .into_int_value();
+            let rcur = self
+                .builder
+                .build_load(i64_t, rc_a, "q.rc")
                 .unwrap()
-        };
-        self.builder.build_store(dst_p, sv).unwrap();
-        let l_inc = self
-            .builder
-            .build_int_z_extend(goes_left, i64_t, "q.linc")
-            .unwrap();
-        let r_bit = self.builder.build_not(goes_left, "q.rbit").unwrap();
-        let r_inc = self
-            .builder
-            .build_int_z_extend(r_bit, i64_t, "q.rinc")
-            .unwrap();
-        let l_n = self.builder.build_int_add(lcur, l_inc, "q.lc.n").unwrap();
-        let r_n = self.builder.build_int_add(rcur, r_inc, "q.rc.n").unwrap();
-        self.builder.build_store(lc_a, l_n).unwrap();
-        self.builder.build_store(rc_a, r_n).unwrap();
-        let si2 = self
-            .builder
-            .build_load(i64_t, ii_a, "q.si2")
-            .unwrap()
-            .into_int_value();
-        let si_n = self.builder.build_int_add(si2, one, "q.si.n").unwrap();
-        self.builder.build_store(ii_a, si_n).unwrap();
-        self.builder.build_unconditional_branch(sc_chk).unwrap();
+                .into_int_value();
+            let dst_i = self
+                .builder
+                .build_select(goes_left, lcur, rcur, "q.dsti")
+                .unwrap()
+                .into_int_value();
+            let dst_p = unsafe {
+                self.builder
+                    .build_in_bounds_gep(elem_ty, dead, &[dst_i], "q.dst.p")
+                    .unwrap()
+            };
+            self.builder.build_store(dst_p, sv).unwrap();
+            let l_inc = self
+                .builder
+                .build_int_z_extend(goes_left, i64_t, "q.linc")
+                .unwrap();
+            let r_bit = self.builder.build_not(goes_left, "q.rbit").unwrap();
+            let r_inc = self
+                .builder
+                .build_int_z_extend(r_bit, i64_t, "q.rinc")
+                .unwrap();
+            let l_n = self.builder.build_int_add(lcur, l_inc, "q.lc.n").unwrap();
+            let r_n = self.builder.build_int_add(rcur, r_inc, "q.rc.n").unwrap();
+            self.builder.build_store(lc_a, l_n).unwrap();
+            self.builder.build_store(rc_a, r_n).unwrap();
+            let si2 = self
+                .builder
+                .build_load(i64_t, ii_a, "q.si2")
+                .unwrap()
+                .into_int_value();
+            let si_n = self.builder.build_int_add(si2, one, "q.si.n").unwrap();
+            self.builder.build_store(ii_a, si_n).unwrap();
+            self.builder.build_unconditional_branch(chk).unwrap();
+        }
 
         // ── recurse: the scatter moved both halves to the other buffer ─────
         self.builder.position_at_end(rec);
