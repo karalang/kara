@@ -8031,6 +8031,47 @@ fn test_fix_applies_did_you_mean_correction() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// B-2026-08-17-11 — E0200's widening repair is machine-applicable: the
+/// mixed-int diagnostic carries an ` as <wide>` insertion at the narrow
+/// operand, and `karac fix` applies it. The fixed program computes the
+/// value the widening direction preserves (the narrowing cast the old text
+/// suggested would instead trap at runtime for this program's inputs).
+#[test]
+fn test_fix_widens_mixed_int_operand() {
+    let path = fix_scratch_file(
+        "widen-int",
+        "fn main() {\n    let n: i64 = 100;\n    let w: i32 = 3;\n    println(f\"{n + w}\");\n}\n",
+    );
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("applied 1 fix"), "got: {stdout}");
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("n + w as i64"),
+        "expected the narrow operand widened in place, got: {rewritten}"
+    );
+    // The fix-it contract: the applied edit yields a program that no longer
+    // triggers the diagnostic (and here, one that runs).
+    let check = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "fixed file must check cleanly, stderr={}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn test_fix_dry_run_does_not_modify_file() {
     let original = "fn helper() -> i64 { 42 }\nfn main() { println(helpr()); }\n";

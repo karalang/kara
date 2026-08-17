@@ -31,9 +31,9 @@ use super::inference::{resolve_type_var_top, resolve_type_vars};
 use super::types::{
     float_width_rank, is_integer, is_numeric, is_prelude_type_or_module_name,
     is_string_concat_operand, strip_refinement, type_display, types_compatible, ConstArg, DimArg,
-    Type, UIntSize, VariantTypeInfo,
+    IntSize, Type, UIntSize, VariantTypeInfo,
 };
-use super::TypeErrorKind;
+use super::{FixIt, TypeErrorKind};
 
 /// Auto-deref reference operands for comparison operators (`==`, `!=`,
 /// `<`, `<=`, `>`, `>=`): comparing a value against a borrow of the same
@@ -44,6 +44,92 @@ fn strip_refs_for_compare(ty: &Type) -> &Type {
     match ty {
         Type::Ref(inner) | Type::MutRef(inner) => strip_refs_for_compare(inner),
         _ => ty,
+    }
+}
+
+/// The `(min, max)` bit-width an integer type can occupy across supported
+/// targets (B-2026-08-17-11). Concrete widths are a point; `usize` spans
+/// `[32, 64]` because wasm32 is a first-class target (`--target=wasm_wasi`),
+/// so any repair the compiler names must preserve values on BOTH widths.
+fn int_width_range(ty: &Type) -> Option<(u32, u32)> {
+    match ty {
+        Type::Int(s) => {
+            let b = match s {
+                IntSize::I8 => 8,
+                IntSize::I16 => 16,
+                IntSize::I32 => 32,
+                IntSize::I64 => 64,
+                IntSize::I128 => 128,
+            };
+            Some((b, b))
+        }
+        Type::UInt(s) => {
+            let b = match s {
+                UIntSize::U8 => 8,
+                UIntSize::U16 => 16,
+                UIntSize::U32 => 32,
+                UIntSize::U64 => 64,
+                UIntSize::U128 => 128,
+                UIntSize::Usize => return Some((32, 64)),
+            };
+            Some((b, b))
+        }
+        _ => None,
+    }
+}
+
+/// `true` when `src as dst` is value-preserving for EVERY value of `src` on
+/// EVERY supported target: same signedness needs `dst` at least as wide;
+/// unsigned → signed needs `dst` strictly wider (the sign bit costs a value
+/// bit, so `u64 as i64` loses the top half); signed → unsigned is never
+/// value-preserving (negatives). This is the direction test behind E0200's
+/// repair (B-2026-08-17-11): the widening cast is the one the diagnostic may
+/// name and apply, because the narrowing one turns a caught compile-time
+/// error into an uncaught-until-runtime overflow trap.
+fn int_cast_preserves_all_values(src: &Type, dst: &Type) -> bool {
+    let (Some((_, src_max)), Some((dst_min, _))) = (int_width_range(src), int_width_range(dst))
+    else {
+        return false;
+    };
+    match (matches!(src, Type::UInt(_)), matches!(dst, Type::UInt(_))) {
+        (true, false) => src_max < dst_min,
+        (false, true) => false,
+        _ => src_max <= dst_min,
+    }
+}
+
+/// The byte offset just past `expr`'s full source text, when that extent is
+/// exactly recoverable from the AST — the gate on emitting E0200's fix-it as
+/// an ` as <wide>` insertion (B-2026-08-17-11). Two constraints select the
+/// shapes below, and both are load-bearing:
+///
+/// TEXTUAL — the postfix parser aliases most postfix shapes' spans to the
+/// RECEIVER's span (`MethodCall.span = receiver.span`, same for `Index` /
+/// `Call` / `FieldAccess` / `Cast` / `Question`), so `span.offset + length`
+/// is the true end only for atoms, for `MethodCall` (whose `args_close_span`
+/// records the closing paren — the end of the whole chain), and for prefix
+/// unary (built with `span_from`, covering every consumed token, parens
+/// included). Extending this to `Index` (`b[i] as i64`, the kata-278 shape)
+/// means recording the `]` span in the AST first — ~293 construction/match
+/// sites at last count — so that shape stays prose-only for now.
+///
+/// SEMANTIC — appending must cast the WHOLE operand. `as` binds at bp 23,
+/// tighter than every binary arithmetic op and looser than unary (24) and
+/// postfix, so every shape here rebinds correctly (`-x as i64` casts `-x`;
+/// `s.len() as i64` casts the call). A `Binary` operand can never qualify
+/// even with a known extent: its parens are span-transparent, so the
+/// insertion would land INSIDE them and cast only the last term.
+fn appended_cast_end_offset(expr: &Expr) -> Option<usize> {
+    match &expr.kind {
+        ExprKind::Identifier(_)
+        | ExprKind::SelfValue
+        | ExprKind::Integer(..)
+        | ExprKind::ByteLit(_) => Some(expr.span.offset + expr.span.length),
+        ExprKind::MethodCall {
+            args_close_span, ..
+        } => Some(args_close_span.offset + args_close_span.length),
+        ExprKind::Unary { .. } => Some(expr.span.offset + expr.span.length),
+        _ => None,
     }
 }
 
@@ -1870,17 +1956,79 @@ impl<'a> super::TypeChecker<'a> {
                     let both_ints = left_is_int && right_is_int;
                     if both_ints {
                         if left_ty != right_ty {
-                            self.type_error(
-                                format!(
-                                    "cannot mix integer types '{}' and '{}' in arithmetic — they \
-                                     must match; cast explicitly with `as` (e.g. the operand as '{}')",
-                                    type_display(&left_ty),
-                                    type_display(&right_ty),
-                                    type_display(&left_ty)
+                            // B-2026-08-17-11 — the repair this message names
+                            // must be the WIDENING one. The old text's example
+                            // always named the LEFT type ("the operand as
+                            // 'u8'" for `u8 - i64`), i.e. the narrowing
+                            // direction half the time — and both repairs
+                            // compile, but only widening preserves every
+                            // value; the narrowing cast converts this caught
+                            // compile-time error into a runtime overflow trap
+                            // on exactly the inputs the subtraction was
+                            // written for. When one direction is value-
+                            // preserving, name it — and when the narrow
+                            // operand's source extent is exactly recoverable
+                            // (see `appended_cast_end_offset`), emit it as a
+                            // machine-applicable ` as <wide>` insertion so
+                            // `karac fix` can apply it. A signed/unsigned
+                            // pair of equal width has NO value-preserving
+                            // direction, so it stays advisory: naming either
+                            // side would be the same wrong steer this row
+                            // fixed.
+                            let l_disp = type_display(&left_ty);
+                            let r_disp = type_display(&right_ty);
+                            let narrow_side = if int_cast_preserves_all_values(&left_ty, &right_ty)
+                            {
+                                Some((left, &left_ty, &right_ty))
+                            } else if int_cast_preserves_all_values(&right_ty, &left_ty) {
+                                Some((right, &right_ty, &left_ty))
+                            } else {
+                                None
+                            };
+                            match narrow_side {
+                                Some((narrow_expr, narrow_ty, wide_ty)) => {
+                                    let narrow_disp = type_display(narrow_ty);
+                                    let wide_disp = type_display(wide_ty);
+                                    let message = format!(
+                                        "cannot mix integer types '{l_disp}' and '{r_disp}' in \
+                                         arithmetic — they must match; cast the '{narrow_disp}' \
+                                         operand up to '{wide_disp}' with `as` — widening \
+                                         preserves every value, while the cast down to \
+                                         '{narrow_disp}' can overflow at runtime"
+                                    );
+                                    match appended_cast_end_offset(narrow_expr) {
+                                        Some(end) => self.type_error_with_fix_it(
+                                            message,
+                                            right.span,
+                                            TypeErrorKind::TypeMismatch,
+                                            FixIt {
+                                                span: Span {
+                                                    line: narrow_expr.span.line,
+                                                    column: narrow_expr.span.column,
+                                                    offset: end,
+                                                    length: 0,
+                                                },
+                                                replacement: format!(" as {wide_disp}"),
+                                            },
+                                        ),
+                                        None => self.type_error(
+                                            message,
+                                            right.span,
+                                            TypeErrorKind::TypeMismatch,
+                                        ),
+                                    }
+                                }
+                                None => self.type_error(
+                                    format!(
+                                        "cannot mix integer types '{l_disp}' and '{r_disp}' in \
+                                         arithmetic — they must match; cast explicitly with \
+                                         `as`, choosing the direction deliberately: neither \
+                                         type can represent every value of the other"
+                                    ),
+                                    right.span,
+                                    TypeErrorKind::TypeMismatch,
                                 ),
-                                right.span,
-                                TypeErrorKind::TypeMismatch,
-                            );
+                            }
                         }
                     } else if (left_is_int && matches!(right_ty, Type::Float(_)))
                         || (right_is_int && matches!(left_ty, Type::Float(_)))

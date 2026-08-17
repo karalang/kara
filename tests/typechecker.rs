@@ -33832,6 +33832,146 @@ fn test_mixed_signedness_int_arithmetic_rejected() {
     );
 }
 
+// ── E0200 names the WIDENING repair (B-2026-08-17-11) ───────────
+
+#[test]
+fn test_mixed_int_diagnostic_steers_widening() {
+    // The repair E0200 names must be the value-preserving one. The old text
+    // always exampled the LEFT operand's type — for `u8 - i64` that is the
+    // NARROWING cast, which also compiles but overflows at runtime on
+    // exactly the inputs the subtraction was written for (the ledger row
+    // measured it: `65u8` widened to i64 gives -32; `97i64 as u8` traps).
+    for (src, steer) in [
+        (
+            "fn main() { let a: u8 = 1; let b: i64 = 2; let _ = a - b; }",
+            "cast the 'u8' operand up to 'i64'",
+        ),
+        // Operand ORDER must not flip the direction.
+        (
+            "fn main() { let a: u8 = 1; let b: i64 = 2; let _ = b - a; }",
+            "cast the 'u8' operand up to 'i64'",
+        ),
+        (
+            "fn main() { let a: i32 = 1; let b: i64 = 2; let _ = a + b; }",
+            "cast the 'i32' operand up to 'i64'",
+        ),
+        // Unsigned → wider signed is value-preserving, so it widens too.
+        (
+            "fn main() { let a: u32 = 1; let b: i64 = 2; let _ = a * b; }",
+            "cast the 'u32' operand up to 'i64'",
+        ),
+        // `usize` is 32-bit on wasm32 and 64-bit native, so `u32` widens
+        // into it on every supported target...
+        (
+            "fn main() { let a: u32 = 1; let b: usize = 2; let _ = a + b; }",
+            "cast the 'u32' operand up to 'usize'",
+        ),
+        // ...and `usize` itself widens into `u64` on every target (its max
+        // width), so that pair has a safe direction too.
+        (
+            "fn main() { let a: u64 = 1; let b: usize = 2; let _ = a + b; }",
+            "cast the 'usize' operand up to 'u64'",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(steer)),
+            "expected widening steer {steer:?} for {src}, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+        // The old example phrasing pointed at a concrete type with no
+        // direction argument; its shape must be gone entirely.
+        assert!(
+            !errors
+                .iter()
+                .any(|e| e.message.contains("e.g. the operand as")),
+            "the direction-blind example must be gone for {src}, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_mixed_int_without_value_preserving_direction_stays_advisory() {
+    // A signed/unsigned pair of equal width has NO value-preserving cast in
+    // either direction (`u64 as i64` loses the top half; `i64 as u64` loses
+    // negatives), so the diagnostic must not name a repair — naming either
+    // side is the same wrong steer the row fixed — and must not carry a
+    // machine edit. `i64` vs `usize` is in this class too: `usize as i64`
+    // can lose the top half on 64-bit targets and `i64 as usize` loses
+    // negatives everywhere.
+    for src in [
+        "fn main() { let a: i64 = 1; let b: u64 = 2; let _ = a + b; }",
+        "fn main() { let a: i8 = 1; let b: u8 = 2; let _ = a * b; }",
+        "fn main() { let a: i64 = 1; let b: usize = 2; let _ = a + b; }",
+    ] {
+        let errors = typecheck_errors(src);
+        let e = errors
+            .iter()
+            .find(|e| e.message.contains("cannot mix integer types"))
+            .unwrap_or_else(|| panic!("no mixed-int diagnostic for {src}"));
+        assert!(
+            e.message
+                .contains("neither type can represent every value of the other"),
+            "expected the advisory form for {src}, got: {}",
+            e.message
+        );
+        assert!(
+            e.fix_it.is_none(),
+            "no direction is safe, so no machine edit may be attached for {src}"
+        );
+    }
+}
+
+#[test]
+fn test_mixed_int_fix_it_widens_the_narrow_operand() {
+    // Identifier narrow operand: its span is its exact source extent, so the
+    // widening repair is machine-applicable — an ` as <wide>` insertion just
+    // past the operand (`karac fix` applies it; the CLI twin asserts that).
+    let src = "fn main() { let n: i64 = 1; let w: i32 = 2; let _ = n + w; }";
+    let errors = typecheck_errors(src);
+    let e = errors
+        .iter()
+        .find(|e| e.message.contains("cannot mix integer types"))
+        .expect("mixed-int diagnostic");
+    let fix = e
+        .fix_it
+        .as_ref()
+        .expect("identifier operand must carry the machine edit");
+    assert_eq!(fix.replacement, " as i64");
+    assert_eq!(fix.span.length, 0, "an insertion, not a rewrite");
+    assert_eq!(
+        fix.span.offset,
+        src.find("n + w").unwrap() + "n + w".len(),
+        "insertion point must sit just past the narrow operand"
+    );
+
+    // Index-shaped narrow operand (`b[0i64] - 97i64`, the kata-278 shape):
+    // the parser aliases postfix spans to the RECEIVER (`Index.span =
+    // object.span`), so the operand's true extent is unrecoverable and a
+    // span-end insertion would land mid-expression (`b as i64[0i64]`). The
+    // steer stays prose-only — still the widening direction — rather than
+    // shipping an edit that rewrites the wrong place. Lifting this needs
+    // the `]` span recorded in the AST (see `appended_cast_end_offset`).
+    let errors = typecheck_errors(
+        "fn main() { let s = \"Ab\"; let b = s.bytes(); let _ = b[0i64] - 97i64; }",
+    );
+    let e = errors
+        .iter()
+        .find(|e| e.message.contains("cannot mix integer types"))
+        .expect("mixed-int diagnostic");
+    assert!(
+        e.message.contains("cast the 'u8' operand up to 'i64'"),
+        "prose must still steer widening, got: {}",
+        e.message
+    );
+    assert!(
+        e.fix_it.is_none(),
+        "an Index operand's extent is not exactly recoverable — no edit may \
+         be attached (a wrong-place insertion is worse than prose)"
+    );
+}
+
 #[test]
 fn test_same_width_int_arithmetic_accepted() {
     typecheck_ok(
