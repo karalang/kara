@@ -12072,15 +12072,28 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // while j > 0 && cmp(data[j-1], hold) > 0 — the bound is checked in its
         // own block so `data[j-1]` is never loaded at j == 0.
+        //
+        // The bound is spelled `j != 0`, not `j > 0`. They are the same test
+        // here — `j` starts at `i >= 1` and is only decremented under this very
+        // guard, so it can never go negative — but the signed form costs two
+        // extra instructions per shift step on arm64. LLVM rewrites the
+        // induction variable to `j-1` and then re-derives the old `j` just to
+        // run the comparison, emitting `add x13, x10, #1 / cmp x13, #1 / b.gt`
+        // where `cbnz x10` would do. An equality test against zero has no such
+        // reassociation to get wrong. `KARAC_SORT_ISORT_NE=0` restores `> 0`.
         self.builder.position_at_end(j_chk);
         let j_v = self
             .builder
             .build_load(i64_t, j_a, "is.j")
             .unwrap()
             .into_int_value();
+        let j_pred = match std::env::var("KARAC_SORT_ISORT_NE").as_deref() {
+            Ok("0") => inkwell::IntPredicate::SGT,
+            _ => inkwell::IntPredicate::NE,
+        };
         let j_go = self
             .builder
-            .build_int_compare(inkwell::IntPredicate::SGT, j_v, zero, "is.j.go")
+            .build_int_compare(j_pred, j_v, zero, "is.j.go")
             .unwrap();
         self.builder
             .build_conditional_branch(j_go, j_cmp, j_done)
