@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 62 | 1 |
 | soundness | 48 | 0 |
 | crash | 48 | 0 |
-| other | 33 | 1 |
+| other | 34 | 2 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -114,8 +114,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 175 | 0 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
+| other | 47 | 2 |
 | autopar | 47 | 0 |
-| other | 46 | 1 |
 | cli | 34 | 2 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1255 surfaced · 4 open · 1236 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1256 surfaced · 5 open · 1236 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1255 surfaced
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-2 | 2026-08-17 | cli | low | The `map_value_clone_reinsert` advisory lint shares the partial-walk idiom B-2026-08-16-12 removed from its sibling: its traversal carries `_ => {}` catch-alls at three sites, so the quadratic clone-reinsert idiom inside an unvisited position (a closure body being the most plausible) is silently unreported. Advisory-only consequence — a missed perf hint, not a check-vs-build gap. | src/map_entry_lint.rs — the walk_stmt/walk_expr traversal (`_ => {}` at three sites) |
+| B-2026-08-17-4 | 2026-08-17 | other | low | design.md line 4299 states a rule the spec CONTRADICTS 1,500 lines later: "omitting `allocates` from a public function's declaration is the commitment that the function does not allocate, and the effect checker verifies it statically against the body". The dedicated effects section (5778 / 5784 / 5792) says `allocates(Heap)` is DEFAULT-PERMITTED and need not be declared, which is what the compiler implements. One sentence needs a qualifier; the implementation is correct. | docs/design.md:4299 (§ Contracts do not constrain effects) vs 5778 / 5784 / 5792 (§ effect verbs). Implementation: `is_default_permitted_effect`, src/effectchecker.rs:1764. |
 
 ### Wontfix (5)
 
