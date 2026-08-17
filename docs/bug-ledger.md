@@ -97,13 +97,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 130 | 0 |
 | run-vs-build | 124 | 1 |
 | codegen-gap | 113 | 0 |
-| missing-feature | 96 | 0 |
+| missing-feature | 97 | 1 |
 | perf | 75 | 1 |
 | false-positive | 70 | 0 |
-| diagnostics | 62 | 1 |
+| diagnostics | 63 | 1 |
 | soundness | 48 | 0 |
 | crash | 48 | 0 |
-| other | 34 | 2 |
+| other | 35 | 2 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -111,10 +111,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 898 | 1 |
-| typecheck | 175 | 0 |
+| typecheck | 177 | 1 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
-| other | 47 | 2 |
+| other | 48 | 2 |
 | autopar | 47 | 0 |
 | cli | 34 | 2 |
 | runtime | 22 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1256 surfaced · 5 open · 1236 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1259 surfaced · 6 open · 1238 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1256 surfaced
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-2 | 2026-08-17 | cli | low | The `map_value_clone_reinsert` advisory lint shares the partial-walk idiom B-2026-08-16-12 removed from its sibling: its traversal carries `_ => {}` catch-alls at three sites, so the quadratic clone-reinsert idiom inside an unvisited position (a closure body being the most plausible) is silently unreported. Advisory-only consequence — a missed perf hint, not a check-vs-build gap. | src/map_entry_lint.rs — the walk_stmt/walk_expr traversal (`_ => {}` at three sites) |
 | B-2026-08-17-4 | 2026-08-17 | other | low | design.md line 4299 states a rule the spec CONTRADICTS 1,500 lines later: "omitting `allocates` from a public function's declaration is the commitment that the function does not allocate, and the effect checker verifies it statically against the body". The dedicated effects section (5778 / 5784 / 5792) says `allocates(Heap)` is DEFAULT-PERMITTED and need not be declared, which is what the compiler implements. One sentence needs a qualifier; the implementation is correct. | docs/design.md:4299 (§ Contracts do not constrain effects) vs 5778 / 5784 / 5792 (§ effect verbs). Implementation: `is_default_permitted_effect`, src/effectchecker.rs:1764. |
+| B-2026-08-17-7 | 2026-08-17 | typecheck | low | DESIGN CALL, not a defect report: should a bare `Span(...)` resolve to the USER's enum variant when the colliding prelude name has no bare-callable form? The same bare name already binds that variant in PATTERN position, so the two positions disagree today. Its sibling row fixed only the diagnostic; the resolution rule is untouched and wants an owner's decision. | resolve_identifier_type (src/typechecker/expr_ops.rs) — the `if is_prelude_type_or_module_name(name) { continue; }` in the variant fallback; decide whether the skip should be narrowed, and to what |
 
 ### Wontfix (5)
 
@@ -150,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1256 surfaced
 
 </details>
 
-### Fixed (1236)
+### Fixed (1238)
 
-<details><summary>1236 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1238 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9730,6 +9731,113 @@ unchanged (a warning is not an error, and the `All checks passed.` verdict
 still prints, matching the ownership-warning convention). Pinned by
 `test_typed_warnings_render_in_text_mode` (tests/cli.rs): warning present in
 stderr, lint name in the bracket, exit 0, verdict line intact. |
+| B-2026-08-17-5 | typecheck | medium | A user enum variant whose name collides with a scope-0 prelude type cannot be constructed BARE -- correct by design -- but the diagnostic advises `Sp… | FIXED by ae4a01b5, in `type_name_in_value_position_message` (src/typechecker/expr_ops.rs), by
+adding a user-declared-variant arm AHEAD of the per-family arms.
+
+THE RESOLUTION IS DELIBERATE; THE DIAGNOSTIC WAS NOT. `resolve_identifier_type`'s
+variant fallback carries an explicit `if is_prelude_type_or_module_name(name) {
+continue; }` — the built-in wins the bare name, and the user's variant stays
+reachable QUALIFIED. That rule is sound and is NOT what this row changes: bare
+`Span(…)` still resolves to the `std.tracing` type, and `Shape.Span(…)` is still
+the way in. What was broken is that nothing SAID so. The message fell through to
+the generic prelude arm and advised "construct one with an associated function
+such as `Span.new(…)`" — naming the shadowing stdlib struct, which has no `new`
+either. Following the compiler's own advice produced a SECOND error
+("no associated function 'new' on type 'Span'") and no reachable third step.
+
+MEASURED THE DEAD END RATHER THAN INFERRING IT. `Span("bar", 12)` -> rejected;
+`Span.new("bar", 12)` (the advice, verbatim) -> rejected differently;
+`Shape.Span("bar", 12)` -> compiles AND runs (`sp:bar:12` on the interpreter).
+The one edit that works was the one edit never mentioned.
+
+THE COLLISION SURFACE IS ORDINARY VOCABULARY, not exotica. Sweeping bare
+construction of a user enum variant named after each of 18 scope-0 prelude types,
+all 18 are shadowed: Entry Match Request Response Command File Server Client Stats
+Ordering Hex Url Args Child Stdio Span LogEvent Base64. `Entry`, `Match`,
+`Request`, `Response` and `File` are names a person picks for an enum variant
+without a second thought, and PRELUDE_TYPES has ~150 entries.
+
+THE PATTERN SIDE ALREADY DISAGREED, which is what made the old message actively
+misleading rather than merely unhelpful: in the SAME program, `match s { Span(n, w)
+=> … }` binds the user's variant and compiles. So the compiler resolves the bare
+name to the variant in pattern position and to the type in constructor position,
+and then explained the constructor half by describing a type the author never
+mentioned.
+
+THE FIX IS MESSAGE-ONLY AND CANNOT CHANGE WHAT COMPILES. The function is used as
+its own gate ("`None` for anything legal, so callers can use it as the gate as
+well as the message"), and every path past the early return already returned
+`Some`. The new arm returns `Some` in a case that returned `Some` before, so
+acceptance is bit-identical; only the string differs. That is also why no ASAN
+leg is owed here — a program reaching this arm fails to typecheck and never
+reaches codegen.
+
+GATED ON A USER-DECLARED VARIANT, NOT ON "THE NAME COLLIDES". Stdlib-owned enums
+are excluded (`defining_stdlib_origin`, plus prelude-named enums like `IoError`),
+because the point is to name the enum the AUTHOR wrote; pointing someone at a
+seeded `IoError.Other` for their own `Other(…)` would be a new wrong answer. The
+owner lookup is sorted, so two user enums declaring the same variant name always
+produce the same suggestion — the determinism the variant fallback already
+establishes one function over. Unit variants render `Mode.File`, tuple variants
+`Shape.Span(…)`, so the remedy never grows a call form the variant cannot take.
+
+TESTS. `prelude_colliding_variant_remedy_names_the_qualified_form`
+(tests/typechecker.rs) is the detector, verified FAILING on the parent; it pins
+the qualified form, the owning enum, the unit/tuple split, and the ABSENCE of the
+old `.new(` advice. `a_prelude_type_with_no_user_variant_keeps_its_family_remedy`
+is the counterweight and PASSES on the parent, which is its job: it pins the three
+family remedies the new arm sits in front of (`F64.from(x)`, `String.from(x)`, the
+struct literal) plus the no-false-positive direction — a non-colliding variant
+still constructs bare with no diagnostic at all.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
+suite.
+
+NOT FIXED HERE, and deliberately: whether bare `Span(…)` SHOULD resolve to the
+user's variant. The pattern-side asymmetry above is a real argument that it
+should, and the "overwhelmingly the built-in meaning" rationale is much weaker for
+`Match`/`Entry`/`Request` than for `String`/`Vec`/`Option`. But that is a
+language-design call with a blast radius across resolution, not a diagnostics fix,
+and it wants the owner's decision rather than a drive-by. Filed as B-2026-08-17-7. |
+| B-2026-08-17-6 | other | low | `tests/par_atomic_promotion.rs`'s two tests race on the process-global `KARAC_PAR_ATOMIC_PROMOTION` each one set-then-removes: 1/1500 runs at --test-… | FIXED by 3f1570f0, in tests/par_atomic_promotion.rs by putting both tests behind one
+`ENV_GUARD` mutex held for the whole `set_var` … `remove_var` bracket.
+
+THE FILE'S OWN HEADER GOT THE HAZARD RIGHT AND THE SCOPE WRONG. It explains that
+`KARAC_PAR_ATOMIC_PROMOTION` is PROCESS-global while cargo runs tests in parallel
+threads, and that this is why the capability got its own test binary — the opt-in
+had previously leaked out of `tests/ownership.rs` into a sibling there. True, and
+insufficient: a separate binary isolates it from OTHER FILES, but the two tests
+INSIDE this one are still parallel threads of a single process sharing that same
+global. Each brackets its body `set_var` … `remove_var`, so the sibling's trailing
+`remove_var` can land between this test's `set_var` and its `ownershipcheck`.
+
+ASYMMETRIC, WHICH IS WHY IT SURVIVED. Only
+`immutable_shared_graph_is_admitted_across_branches` can lose the race: it asserts
+the promotion HAPPENS (`atomic_promoted_types` contains `Node`, no
+`ConcurrentSharedStruct` error), so losing the flag fails it. Its sibling asserts
+REJECTIONS that fire with the flag off too, so it is insensitive to the same
+interleaving and never reported anything.
+
+MEASURED, not argued. Hammering the test binary at `--test-threads=2`: 1/300 and
+1/1500 failures BEFORE, 0/1500 AFTER. ~0.07% is rare enough to pass every
+targeted re-run — it survived 10/10 in isolation while failing a whole-suite run
+minutes earlier — and that is exactly the profile that reads as an unrelated
+regression: a full-suite run under load trips it, the next single-test run is
+green, and the failure gets attributed to whatever change happened to be in the
+tree.
+
+FOUND THAT WAY. It surfaced during the full-suite gate for the diagnostics fix
+this row is filed alongside, and was NOT caused by it — verified by hammering the
+UNMODIFIED parent (1/1500), and by the causal argument: that change adds an arm on
+a typecheck ERROR path, while these fixtures typecheck cleanly and never reach it.
+Recording the misattribution risk explicitly, since the next person to trip this
+will be mid-gate on something unrelated too.
+
+The lock is poison-tolerant (`unwrap_or_else(|e| e.into_inner())`): a panicking
+test still leaves the env var in a defined state for the next one, and converting
+its failure into a second "poisoned lock" failure would only bury the real one.
+The header now states the invariant — nothing in this binary may touch
+`KARAC_PAR_ATOMIC_PROMOTION` without holding `ENV_GUARD`. |
 
 </details>
 
