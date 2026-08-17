@@ -9998,9 +9998,62 @@ impl<'ctx> super::Codegen<'ctx> {
                 else_block,
                 ..
             } => self.compile_let_else(pattern, value, else_block),
-            // `LetUninit` falls through the catch-all below — its slot is
-            // materialized lazily on first assignment, so a no-op is correct
-            // there.
+            // B-2026-08-17-13 — deferred initialization (`let x: T;`). The
+            // comment that stood here claimed the slot was "materialized
+            // lazily on first assignment"; nothing did that — the generic
+            // identifier-assign store is `if let Some(slot) = variables.get`
+            // with NO else, so the first assignment was SILENTLY DROPPED and
+            // the first read failed with a cryptic `Undefined variable`.
+            // Scalars now get their slot at the declaration, zero-initialized
+            // (belt-and-braces: the ownership phase's definite-assignment
+            // analysis rejects any read that could precede a store, so the
+            // zero is never observable from a checked program). Non-scalar
+            // declared types remain a deferral, but a LOUD one with the
+            // remedy in hand instead of the silent store-drop.
+            StmtKind::LetUninit { name, ty, .. } => {
+                let is_scalar = matches!(&ty.kind, TypeKind::Path(p)
+                if p.segments.len() == 1
+                    && matches!(
+                        p.segments[0].as_str(),
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "i128"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "u128"
+                            | "usize"
+                            | "f16"
+                            | "bf16"
+                            | "f32"
+                            | "f64"
+                            | "bool"
+                            | "char"
+                    ));
+                if !is_scalar {
+                    return Err(format!(
+                        "deferred initialization of a non-scalar type (`let {name}: …;`) is \
+                         not yet lowered — initialize at the declaration (`let {name}: T = \
+                         …;`). Scalar deferred initialization (i64, f64, bool, …) is supported."
+                    ));
+                }
+                let llvm_ty = self.llvm_type_for_type_expr(ty);
+                let fn_val = self.current_fn.expect("let inside a function");
+                let alloca = self.create_entry_alloca(fn_val, name, llvm_ty);
+                self.builder
+                    .build_store(alloca, llvm_ty.const_zero())
+                    .unwrap();
+                self.variables.insert(
+                    name.clone(),
+                    VarSlot {
+                        ptr: alloca,
+                        ty: llvm_ty,
+                    },
+                );
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

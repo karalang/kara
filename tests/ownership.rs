@@ -8499,6 +8499,53 @@ fn par_primitive_used_in_both_branches_accepted() {
 // reachable from 2+ sibling `par {}` branches is NOT an E_CONCURRENT_*
 // error, in contrast to plain / `shared` structs.
 
+// ── B-2026-08-17-13: definite-assignment reads inside f-string holes ──
+// The DA read check was wired at bare-identifier reads since the start, but
+// `check_expr_reading` treated `InterpolatedStringLit` as a leaf literal, so
+// a read inside an f-string hole was the ONE position definite-assignment
+// never saw — `println(f"{x}")` accepted what `println(x)` rejected, and
+// every probe routed through an f-string reported the whole analysis absent.
+
+#[test]
+fn uninit_read_inside_fstring_hole_rejected() {
+    let errors = ownership_errors("fn main() { let x: i64; println(f\"{x}\"); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::UseOfUninitialized)),
+        "an f-string hole is a read; got: {errors:?}",
+    );
+}
+
+#[test]
+fn uninit_partial_branch_read_via_fstring_rejected() {
+    // Flow-sensitivity through the same hole: assigned on one path only.
+    let errors = ownership_errors(
+        "fn main() { let c = true; let x: i64; if c { x = 5; } println(f\"{x}\"); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::UseOfUninitialized)),
+        "partially-assigned read through an f-string hole must reject; got: {errors:?}",
+    );
+}
+
+#[test]
+fn initialized_fstring_hole_read_accepted() {
+    let result = ownership_ok(
+        "fn main() { let c = true; let x: i64; if c { x = 5; } else { x = 6; } println(f\"{x}\"); }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::UseOfUninitialized)),
+        "both branches assign — the read is definite; got: {:?}",
+        result.errors,
+    );
+}
+
 // ── B-2026-08-17-12: read-only multi-branch admission for PLAIN bindings ──
 // design.md § Structured Concurrency Lifetime Guarantees, edge case 1 — the
 // first slice of the target model ("multiple sibling tasks may simultaneously

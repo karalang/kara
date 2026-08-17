@@ -1382,6 +1382,24 @@ impl<'a> super::OwnershipChecker<'a> {
                 }
                 self.check_block(body, states, param_types, param_usage);
             }
+            // B-2026-08-17-13 — an f-string's interpolation holes are READS
+            // and must flow through the state machine like any other
+            // expression position. This arm sat in the leaf-literal group
+            // below since the walk was written, which made `println(f"{x}")`
+            // the one read position definite-assignment never saw: every
+            // "reads an uninitialized binding" probe routed through an
+            // f-string reported ACCEPT while the same read written bare was
+            // correctly rejected — the whole of the row's apparent
+            // "DA is unenforced" was this arm. (Third occurrence of the
+            // unvisited-position class after B-2026-08-16-12 / B-2026-08-17-2,
+            // and the first where the masked diagnostic is a soundness one.)
+            ExprKind::InterpolatedStringLit(parts) => {
+                for part in parts {
+                    if let ParsedInterpolationPart::Expr(inner, _) = part {
+                        self.check_expr_reading(inner, states, param_types, param_usage);
+                    }
+                }
+            }
             ExprKind::Path { .. }
             | ExprKind::SelfType
             | ExprKind::Integer(_, _)
@@ -1390,7 +1408,6 @@ impl<'a> super::OwnershipChecker<'a> {
             | ExprKind::ByteLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
-            | ExprKind::InterpolatedStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Continue { .. }

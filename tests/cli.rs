@@ -1213,6 +1213,45 @@ fn test_typed_warnings_render_in_text_mode() {
     );
 }
 
+/// B-2026-08-17-13 — `karac run --interp` must not EXECUTE a program the
+/// ownership phase rejects. The interpreter lane deliberately skipped
+/// `ownershipcheck` (codegen was its only consumer), so a definite-assignment
+/// failure ran and printed `()` — the Unit value in an i64 slot — with exit 0,
+/// while `karac build` refused the same program. Both run lanes now gate on
+/// the same fatal-ownership classifier as build.
+#[test]
+fn test_run_interp_gates_on_fatal_ownership() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-interp-own-gate-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("uninit.kara");
+    std::fs::write(&path, "fn main() { let x: i64; println(f\"{x}\"); }\n").unwrap();
+    let out = karac_bin()
+        .args(["run", "--interp", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "run --interp must refuse an ownership-rejected program; stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[ownership]") && stderr.contains("uninitialized"),
+        "the refusal must be the ownership diagnostic, not a downstream symptom; stderr={stderr}",
+    );
+    assert!(
+        !stdout.contains("()"),
+        "the program must not have executed; stdout={stdout}",
+    );
+}
+
 // ── JSON Output Snapshots ───────────────────────────────────────
 
 #[test]

@@ -12760,6 +12760,36 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    /// B-2026-08-17-13 — deferred initialization (`let x: T;` + later
+    /// assignment) of SCALAR locals lowers for real. The old "arm" was a
+    /// no-op whose comment claimed lazy materialization; in fact the first
+    /// assignment was silently dropped (the generic identifier store has no
+    /// else) and the first read died with `Undefined variable`. Straight-line,
+    /// branch-init, and read-back-through-f-string shapes, each an
+    /// interpreter-parity check.
+    #[test]
+    fn scalar_deferred_initialization_lowers() {
+        assert_eq!(
+            run_program("fn main() { let x: i64; x = 7; println(x); }"),
+            Some("7\n".to_string()),
+            "straight-line deferred init"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() { let c = true; let x: i64; if c { x = 1; } else { x = 2; } println(x); }"
+            ),
+            Some("1\n".to_string()),
+            "branch-init deferred init (the spec's canonical shape)"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() { let f: f64; f = 2.5; let b: bool; b = f > 2.0; println(f\"{f} {b}\"); }"
+            ),
+            Some("2.5 true\n".to_string()),
+            "f64/bool deferred init read through f-string holes"
+        );
+    }
+
     /// B-2026-07-26-2: the bucket control byte carries a 7-bit hash tag, and
     /// `src/codegen/mono.rs` emits its own probe loops against that encoding —
     /// so the runtime and the emitted code have to agree. They cannot be

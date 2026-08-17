@@ -936,10 +936,37 @@ pub(super) fn cmd_run(
         && !program_uses_arrow_ipc
         && std::env::var("KARAC_RUN_JIT").as_deref() != Ok("0")
     {
-        // Codegen consumes ownership + concurrency (the interpreter path skips
-        // both); run them now so the emitted IR matches `karac build`'s.
+        // Codegen consumes ownership + concurrency; run them now so the
+        // emitted IR matches `karac build`'s.
         pipeline.ownershipcheck();
         pipeline.concurrencycheck();
+        // B-2026-08-17-13 — consult the ownership VERDICT, not just the
+        // result. This lane used to hand `pipeline.ownership` to codegen as
+        // data while never reading its errors, so an ownership-rejected
+        // program (e.g. a definite-assignment failure) surfaced as a cryptic
+        // `codegen failed: Undefined variable` instead of the ownership
+        // diagnostic `karac check`/`build` print. Same fatal/advisory
+        // classifier as the build gate (B-2026-07-31-29's one-classifier
+        // discipline).
+        if let Some(ref o) = pipeline.ownership {
+            let fatal: Vec<_> = o
+                .errors
+                .iter()
+                .filter(|e| Pipeline::is_fatal_ownership_kind(&e.kind))
+                .collect();
+            if !fatal.is_empty() {
+                for err in &fatal {
+                    eprintln!(
+                        "error[ownership]: {}:{}:{}: {}",
+                        filename, err.span.line, err.span.column, err.message
+                    );
+                    if let Some(sug) = &err.suggestion {
+                        eprintln!("  help: {sug}");
+                    }
+                }
+                process::exit(1);
+            }
+        }
         match crate::codegen::compile_to_ir_with_options(
             &pipeline.parsed.program,
             pipeline.ownership.as_ref(),
@@ -985,6 +1012,57 @@ pub(super) fn cmd_run(
                 process::exit(1);
             }
         }
+    }
+
+    // B-2026-08-17-13 — the interpreter lane must not execute programs the
+    // ownership phase rejects. It deliberately skipped `ownershipcheck`
+    // (codegen was the only consumer), which meant a definite-assignment
+    // failure like `let x: i64; println(f"{x}")` RAN here and printed `()`
+    // — the Unit value in an i64 slot — while `karac build` refused the
+    // same program. Run the check and gate on the same fatal classifier as
+    // build; advisory kinds (RcFallbackNote, UseAfterMove) stay lenient.
+    if pipeline.ownership.is_none() {
+        pipeline.ownershipcheck();
+    }
+    let fatal_ownership: Vec<crate::ownership::OwnershipError> = pipeline
+        .ownership
+        .as_ref()
+        .map(|o| {
+            o.errors
+                .iter()
+                .filter(|e| Pipeline::is_fatal_ownership_kind(&e.kind))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if !fatal_ownership.is_empty() {
+        match output {
+            OutputMode::Text => {
+                for err in &fatal_ownership {
+                    eprintln!(
+                        "error[ownership]: {}:{}:{}: {}",
+                        filename, err.span.line, err.span.column, err.message
+                    );
+                    if let Some(sug) = &err.suggestion {
+                        eprintln!("  help: {sug}");
+                    }
+                }
+            }
+            OutputMode::Json => emit_json_output(&pipeline),
+            OutputMode::Jsonl => {
+                for err in &fatal_ownership {
+                    emit_jsonl_event(
+                        "diagnostic",
+                        &format!(
+                            "\"severity\":\"error\",\"phase\":\"ownership\",{},\"message\":{}",
+                            span_to_json(&err.span, filename),
+                            json_string(&err.message),
+                        ),
+                    );
+                }
+            }
+        }
+        process::exit(1);
     }
 
     // Run
