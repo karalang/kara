@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 1 |
 | false-positive | 77 | 3 |
 | diagnostics | 71 | 5 |
-| soundness | 50 | 1 |
+| soundness | 50 | 0 |
 | crash | 50 | 1 |
 | other | 35 | 0 |
 | use-after-free | 20 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 911 | 8 |
-| typecheck | 193 | 11 |
+| typecheck | 193 | 10 |
 | interp | 149 | 2 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1296 surfaced · 22 open · 1258 fixed · 6 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1296 surfaced · 21 open · 1259 fixed · 6 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (22)
+### Open (21)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -148,7 +148,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1296 surfaced
 | B-2026-08-17-37 | 2026-08-17 | cli | medium | The `must_use` lint NEVER RUNS under `karac check` or `karac build` -- it fires only under `karac run`, so the entire surface is invisible to `karac check --output=json` and therefore to the Mend loop. `fn main() { let mut m: Map[i64, i64] = Map.new(); m.insert(1, 10); m.get(1); }` -- a discarded `Option` from a LOOKUP, the exact case design.md § must_use exists to catch ("lookups, parses, fallible operations, where the `Option` IS the result") -- gets `warning[must_use]: discarded 'Option' value` under `karac run --interp` AND `karac run`, while `karac check` reports "All checks passed." and `karac build` reports only "Built: mu2.bin". `karac check --output=json` on the same file emits `"diagnostics":[]`. design.md describes must_use as a COMPILE warning ("silently dropping it is a compile warning"), and CLAUDE.md's Mend loop is built on `karac check --output=json` as its diagnostics feed -- so a lint the spec mandates across six stdlib categories reaches neither the compile path nor the AI-facing feed. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-17-39 | 2026-08-17 | typecheck | low | Five iterator-adaptor diagnostics print types with Rust's `{:?}` Debug formatter, leaking internal AST structs into user-facing messages -- and one of them spells a Kara generic with ANGLE BRACKETS. `v.iter().flat_map(|x| [x, x])` reports `Iterator.flat_map() closure must return Iterator[U], found Named { name: "Vec", args: [Int(I64)] }`; with a String element it reports `found Str`. Every other diagnostic in the compiler uses the display form -- the control one line away in the same probe reads `expected 'Set[i64]', found 'Vec[i64]'`. The five sites are all in src/typechecker/stdlib_iter.rs: line 149 (`filter_map`), 615 (`find_map`), 834 (`flat_map`), 1032 (`scan`), 1191 (`zip`), each formatting the offending type with `{:?}` instead of `type_display`. Line 1032 additionally writes the expected type as `Option<(A, U)>` -- Rust turbofish-style angle brackets in a language whose spec opens with "**Generics syntax:** `[T]` not `<T>` -- no turbofish". | roadmap.md |
-| B-2026-08-17-41 | 2026-08-17 | typecheck | high | A QUALIFIED payload-free variant pattern (`Dir.North`) lowers to a WILDCARD in the exhaustiveness engine, so it silently covers the whole scrutinee: a genuinely non-exhaustive `match d { Dir.North => 0 }` over `enum Dir { North, South }` passes `karac check` and then diverges three ways at runtime -- the interpreter raises "internal error: non-exhaustive match ... (the typechecker should have rejected this)", `karac run` (JIT) dies with a stack overflow, and `karac build` exits 48 with NO output and no diagnostic. The bare-variant spelling of the same match (`North => 0`) is correctly rejected with "non-exhaustive match: missing variants: South", which is the control that isolates the qualifier as the trigger. Same root cause makes every arm after a qualified payload-free arm read as `unreachable_arm` (a Deny-able lint), so the canonical spelling of an enum match is simultaneously under-checked for exhaustiveness and over-warned for reachability. | — |
 | B-2026-08-17-42 | 2026-08-17 | codegen | medium | A RANGE bound to a variable has no codegen. `let r = 0..4; for i in r { println(i); }` prints 0 1 2 3 under `--interp` and NOTHING under `karac run` (JIT) and `karac build` (AOT), exiting 0 either way, with `karac check` clean. The inline spelling (`for i in 0..4`) is correct on all three -- only the binding form is dead. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::Range` arm. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure; implementing this should flip that case, which is a deliberate edit to that test. |
 | B-2026-08-17-43 | 2026-08-17 | codegen | high | `?.` OPTIONAL CHAINING has no codegen and produced a SILENT WRONG ANSWER. `let v = get(1)?.x; println(v);` where `get -> Option[P]` printed `Some(5)` under `--interp` and `0` under both `karac run` (JIT) and `karac build` (AOT), with `karac check` clean. roadmap.md line 241 carries a CHECKED box claiming `?.` optional chaining is done. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::OptionalChain` arm; roadmap.md line 241. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure. |
 | B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
@@ -168,9 +167,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1296 surfaced
 
 </details>
 
-### Fixed (1258)
+### Fixed (1259)
 
-<details><summary>1258 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1259 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10509,6 +10508,80 @@ defect (4) itself. Pinning the stripped type therefore goes through a use a
 real `T` would reject: each payload is also bound to the WRONG annotation, and
 the mismatch is what proves `??` produced a type at all. Caught by running the
 new tests against the pre-fix source, where three of four passed. |
+| B-2026-08-17-41 | typecheck | high | A QUALIFIED payload-free variant pattern (`Dir.North`) lowers to a WILDCARD in the exhaustiveness engine, so it silently covers the whole scrutinee:… | One-line lowering fix in `exhaustive::lower_pattern`'s `Binding` arm: take the
+LAST dotted segment of the binding name before testing it against the
+scrutinee enum's variant names, and use that segment as the ctor name.
+
+WHY THAT IS THE WHOLE FIX. The parser has no `Path` pattern kind, so a
+QUALIFIED payload-free variant pattern is stored as the whole dotted string --
+`Binding("Dir.North")` (src/parser/patterns.rs, "Just a binding with a
+qualified name (unit variant)"). The `Binding` arm compared that string to the
+enum's BARE variant names, never matched, and fell through to `Pat::Wildcard`.
+The sibling arms never had the bug because `TupleVariant` and `Struct` already
+call `path.last()`; this makes the unit-variant arm do the same, so the two
+spellings lower to the SAME ctor and unify in the matrix. An undotted name is
+its own last segment, so a genuine binding pattern (`match d { x => ... }`)
+still produces the wildcard it always did -- the fix cannot turn a catch-all
+into a non-catch-all.
+
+WHAT THE WILDCARD FALLTHROUGH COST, in both directions at once:
+
+  * EXHAUSTIVENESS (the soundness half). `match d { Dir.North => 0 }` over
+    `enum Dir { North, South }` was reported EXHAUSTIVE and passed
+    `karac check`, then failed differently on each backend: the interpreter
+    raised its own "internal error: non-exhaustive match ... (the typechecker
+    should have rejected this)", `karac run` (JIT) died with a stack overflow,
+    and `karac build` exited 48 with no output and no diagnostic. Now
+    rejected at check with the same message the bare spelling always got
+    ("non-exhaustive match: missing variants: South").
+  * REACHABILITY (the noise half). Because the first qualified arm covered
+    everything, EVERY later arm read as `unreachable_arm` -- including payload
+    arms in a mixed enum (`Mix.A => 0, Mix.B(x) => x` flagged the `B` arm) and
+    the stdlib spelling (`Option.None` / `Option.Some(v)`).
+
+MEASURED ON THE CORPUS (400 files across examples/ + kara-katas):
+
+  * `unreachable_arm` warnings 11 -> 1, i.e. TEN OF ELEVEN were false
+    positives from this bug. The survivor is not a regression and not
+    genuine either: it is a module file checked STANDALONE, where the
+    imported enum type is not in scope, so the unknown-type conservatism
+    (correctly) produces a wildcard. Checked through its own entry module
+    (`karac check src/main.kara`) that project reports zero.
+  * The set of files failing `karac check` is BYTE-IDENTICAL before and
+    after (15 files, all pre-existing failures unrelated to matches). A fix
+    that can only ADD errors needed that check, and it came back clean: no
+    corpus program was relying on the hole.
+
+THE BOOK HAD ALREADY DOCUMENTED THE MISSING ERROR, and the doc-test harness
+was certifying its absence. `docs/book/src/ch06-pattern-matching.md` §
+Exhaustiveness carries a snippet whose own comment reads "compile error:
+non-exhaustive match -- Color.Blue not covered", in a plain ```kara fence that
+`tests/book_snippets.rs` compiles EXPECTING SUCCESS. It passed only because
+this bug accepted it: the chapter that teaches exhaustiveness shipped a
+counter-example the compiler certified as valid Kāra. With the fix the
+compiler emits exactly the promised diagnostic, so the fence is annotated
+```kara,ignore` (the book's established convention for deliberate compile
+errors, 73 other uses) with a comment recording why. That the suite caught
+this is the point: it is a third symptom, and a better one than any synthetic
+repro, because the defect had quietly invalidated the documentation for the
+feature it broke.
+
+NOT A LOWERING BUG, which is why no runtime behaviour changed. Both compiled
+backends and the interpreter always SELECTED the right arm for a qualified
+match (verified before the fix: a complete 4-variant qualified match printed
+identical output under `--interp`, `karac build`, and the JIT). The defect was
+confined to the analysis, so the fix removes false diagnostics and adds true
+ones without touching codegen.
+
+TESTS: six typechecker cases -- the accepted-non-exhaustive shape and its bare
+control (pinned together so the two spellings can never diverge again), the
+absent false warning on a complete qualified match and on a qualified-before-
+payload match, a nested `Option[Dir]` witness, plus two REGRESSION GUARDS that
+must pass both before and after: a duplicated arm is still flagged (with a
+bare arm now correctly covering a later qualified one), and an undotted
+binding still binds. Four of the six are baseline-red (verified by reverting
+the fix alone: 4 failed, the two guards passed). An interpreter oracle and its
+codegen E2E twin pin that arm selection stayed correct on all three backends. |
 
 </details>
 
