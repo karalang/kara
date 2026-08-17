@@ -16960,6 +16960,50 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_module_const_nested_string_slice_initializers() {
+        // B-2026-08-17-22 — a string literal nested in a module-level
+        // struct / tuple / array initializer now types as `StringSlice`
+        // (§1284's rule, applied at every depth instead of only the
+        // outermost expression). Codegen already lowered these shapes
+        // correctly; the typechecker was the whole blocker — so this pins
+        // that the emitted constants carry the right BYTES, not merely that
+        // the program passes check.
+        let src = "struct Cfg { name: StringSlice, retries: i64 }\n\
+                   struct Inner { label: StringSlice }\n\
+                   struct Outer { inner: Inner, n: i64 }\n\
+                   let CONFIG: Cfg = Cfg { name: \"karac\", retries: 3 };\n\
+                   let TUP: (StringSlice, i64) = (\"tup\", 7);\n\
+                   let ARR: Array[StringSlice, 2] = [\"a\", \"b\"];\n\
+                   let DEEP: Outer = Outer { inner: Inner { label: \"deep\" }, n: 1 };\n\
+                   fn main() {\n\
+                       println(CONFIG.name);\n\
+                       println(CONFIG.retries);\n\
+                       let t = TUP;\n\
+                       println(t.0);\n\
+                       println(ARR[0]);\n\
+                       println(ARR[1]);\n\
+                       let d = DEEP;\n\
+                       println(d.inner.label);\n\
+                   }";
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "nested module-scope string literals must typecheck clean, got: {:?}",
+            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "karac\n3\ntup\na\nb\ndeep\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_module_const_field_then_method_receiver() {
         // B-2026-08-17-21 — `let ORIGIN: Point = …; ORIGIN.x.to_string()`,
         // the shape E_MODULE_BINDING_NAMING forces every module constant

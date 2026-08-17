@@ -3028,20 +3028,21 @@ impl<'a> super::TypeChecker<'a> {
             // `StringSlice`-typed expected does not coerce a
             // `StringLit` (which always infers as `String`), so a
             // bare `let X: StringSlice = "lit";` would falsely
-            // mismatch. The literal-coercion carve-out is contained
-            // here: when the declared type is `StringSlice` and the
-            // init is structurally a bare string literal, accept
-            // without invoking the generic check. Composite forms
-            // (e.g. `[("a", "b"); 4]`) are slice-5-out-of-scope and
-            // continue to go through `check_expr` — the kata-level
-            // need is the bare-literal case.
-            if Self::module_binding_is_string_slice_named(&declared)
-                && matches!(b.value.kind, ExprKind::StringLit(_))
-            {
-                // Skip the check_expr — the literal coerces by §1284.
-            } else {
-                self.check_expr(&b.value, &declared);
-            }
+            // mismatch.
+            //
+            // B-2026-08-17-22: the coercion follows the declared type into
+            // COMPOSITE initializers, not just the top level. §1284 states
+            // the rule for "string literals at module scope" without a
+            // depth qualifier, and § Module-Level Bindings separately
+            // admits struct / tuple / array literals built from constant
+            // expressions — the intersection has to work. When the rule
+            // reached only the outermost expression, `let CFG: Cfg = Cfg {
+            // name: "karac", retries: 3 }` failed with "expected
+            // 'StringSlice', found 'String'", and there was no other
+            // spelling: declaring the field `String` is refused by
+            // E_MODULE_BINDING_HEAP_TYPE, so a module constant carrying a
+            // name, path, or message was unrepresentable.
+            self.check_module_binding_value(&b.value, &declared);
         } else {
             // No annotation — infer from the initializer. The const-init
             // walker above has already verified the value's shape, so any
@@ -3117,6 +3118,106 @@ impl<'a> super::TypeChecker<'a> {
     /// by the §1284 literal-coercion carve-out in `check_module_binding`.
     fn module_binding_is_string_slice_named(ty: &Type) -> bool {
         matches!(ty, Type::Named { name, args } if name == "StringSlice" && args.is_empty())
+    }
+
+    /// Check a module binding's initializer against its declared type,
+    /// applying the §1284 string-literal → `StringSlice` coercion at EVERY
+    /// depth rather than only the outermost expression (B-2026-08-17-22).
+    ///
+    /// Structure-directed: it recurses only where the declared type and the
+    /// initializer agree on shape (tuple/tuple, array/array-or-repeat,
+    /// struct/struct-literal), and hands anything else — including every
+    /// mismatch — straight to `check_expr`, so all existing diagnostics are
+    /// produced by the same code as before, at the same spans. The recursion
+    /// exists purely to carry the expected type inward far enough for the
+    /// literal carve-out to apply; it deliberately does NOT re-implement
+    /// assignability.
+    ///
+    /// Note this is about the module-scope literal DEFAULT, not a general
+    /// `String`→`StringSlice` conversion: only a syntactic `StringLit` is
+    /// accepted, exactly as the top-level carve-out did.
+    fn check_module_binding_value(&mut self, value: &Expr, declared: &Type) {
+        if Self::module_binding_is_string_slice_named(declared)
+            && matches!(value.kind, ExprKind::StringLit(_))
+        {
+            // The literal coerces by §1284 — record the declared type so
+            // downstream consumers (codegen's module-binding initializer
+            // lowering) see `StringSlice`, not the `String` the literal
+            // would otherwise infer.
+            self.record_expr_type(&value.span, declared);
+            return;
+        }
+        match (declared, &value.kind) {
+            (Type::Tuple(elem_tys), ExprKind::Tuple(elems)) if elem_tys.len() == elems.len() => {
+                for (elem, ty) in elems.iter().zip(elem_tys) {
+                    self.check_module_binding_value(elem, ty);
+                }
+                self.record_expr_type(&value.span, declared);
+            }
+            (
+                Type::Array {
+                    element,
+                    size: crate::typechecker::types::ConstArg::Literal(n),
+                    ..
+                },
+                ExprKind::ArrayLiteral(elems),
+            ) if *n >= 0 && *n as usize == elems.len() => {
+                // Guarded on the length MATCHING: `check_expr` owns the
+                // array-length rule ("array literal has 2 element(s),
+                // expected 3"), and recursing past it would swallow that
+                // diagnostic — the recursion must never be the reason an
+                // error stops being reported. A non-literal size (a const
+                // param) likewise stays on the general path.
+                for elem in elems {
+                    self.check_module_binding_value(elem, element);
+                }
+                self.record_expr_type(&value.span, declared);
+            }
+            (Type::Array { element, .. }, ExprKind::RepeatLiteral { value: elem, .. }) => {
+                self.check_module_binding_value(elem, element);
+                self.record_expr_type(&value.span, declared);
+            }
+            (Type::Named { name, args }, ExprKind::StructLiteral { fields, .. })
+                if args.is_empty() =>
+            {
+                // Only the non-generic case: a generic struct's field types
+                // need instantiation against `args`, which `check_expr`
+                // already does correctly. A `StringSlice` field on a generic
+                // struct at module scope stays on the old path.
+                let Some(field_tys) = self.env.structs.get(name).map(|info| {
+                    info.fields
+                        .iter()
+                        .map(|(fname, fty, _)| (fname.clone(), fty.clone()))
+                        .collect::<Vec<_>>()
+                }) else {
+                    self.check_expr(value, declared);
+                    return;
+                };
+                // Any unknown / missing / duplicated field is a real error
+                // that `check_expr` reports with its own diagnostics — bail
+                // to it rather than silently accepting a malformed literal.
+                let shapes_match = fields.len() == field_tys.len()
+                    && fields
+                        .iter()
+                        .all(|f| field_tys.iter().any(|(fname, _)| *fname == f.name));
+                if !shapes_match {
+                    self.check_expr(value, declared);
+                    return;
+                }
+                for f in fields {
+                    let ty = field_tys
+                        .iter()
+                        .find(|(fname, _)| *fname == f.name)
+                        .map(|(_, fty)| fty.clone())
+                        .expect("field presence verified above");
+                    self.check_module_binding_value(&f.value, &ty);
+                }
+                self.record_expr_type(&value.span, declared);
+            }
+            _ => {
+                self.check_expr(value, declared);
+            }
+        }
     }
 
     /// Slice 5 of design.md § Module-Level Bindings. The assignment-LHS

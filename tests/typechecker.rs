@@ -26283,6 +26283,98 @@ fn test_module_binding_tuple_literal_ok() {
 }
 
 #[test]
+fn test_module_binding_nested_string_literal_coerces_to_string_slice() {
+    // B-2026-08-17-22 — §1284's "string literals have type `StringSlice` at
+    // module scope" reached only the OUTERMOST expression, so every
+    // composite initializer carrying a string was unwritable: the literal
+    // typed as `String` inside, and declaring the field/element `String`
+    // instead is refused by E_MODULE_BINDING_HEAP_TYPE. `let CONFIG: Cfg =
+    // Cfg { name: "karac", … }` — the ordinary module-level config
+    // constant, and the shape design.md's own example gallery uses — had no
+    // legal spelling at all.
+    typecheck_ok(
+        "struct Cfg { name: StringSlice, retries: i64 }\n\
+         let CONFIG: Cfg = Cfg { name: \"karac\", retries: 3 };",
+    );
+    typecheck_ok("let TUP: (StringSlice, i64) = (\"karac\", 3);");
+    typecheck_ok("let ARR: Array[StringSlice, 2] = [\"a\", \"b\"];");
+    typecheck_ok("let REP: Array[StringSlice, 4] = [\"x\"; 4];");
+    // Nested two deep — the coercion follows the declared type all the way
+    // down, not just one level.
+    typecheck_ok(
+        "struct Inner { label: StringSlice }\n\
+         struct Outer { inner: Inner, n: i64 }\n\
+         let DEEP: Outer = Outer { inner: Inner { label: \"deep\" }, n: 1 };",
+    );
+    typecheck_ok(
+        "struct Pair { a: StringSlice, b: StringSlice }\n\
+         let PAIRS: Array[Pair, 2] = [Pair { a: \"1\", b: \"2\" }, Pair { a: \"3\", b: \"4\" }];",
+    );
+}
+
+#[test]
+fn test_module_binding_nested_coercion_keeps_real_errors() {
+    // The coercion must never be the reason a diagnostic stops firing: it
+    // recurses only where the declared type and the initializer agree on
+    // shape, and hands every mismatch to `check_expr` unchanged. Each of
+    // these was verified to report BEFORE the recursion was added.
+    let type_err = typecheck_errors(
+        "struct Cfg { name: StringSlice, retries: i64 }\n\
+         let CONFIG: Cfg = Cfg { name: 5, retries: 3 };",
+    );
+    assert!(
+        type_err.iter().any(|e| e.message.contains("StringSlice")),
+        "a non-string in a StringSlice field must still mismatch: {:?}",
+        type_err.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    let missing = typecheck_errors(
+        "struct Cfg { name: StringSlice, retries: i64 }\n\
+         let CONFIG: Cfg = Cfg { name: \"a\" };",
+    );
+    assert!(
+        missing.iter().any(|e| e.message.contains("missing field")),
+        "missing field must still report: {:?}",
+        missing.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    let unknown = typecheck_errors(
+        "struct Cfg { name: StringSlice, retries: i64 }\n\
+         let CONFIG: Cfg = Cfg { name: \"a\", retries: 3, extra: 1 };",
+    );
+    assert!(
+        unknown.iter().any(|e| e.message.contains("unknown field")),
+        "unknown field must still report: {:?}",
+        unknown.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    // Array LENGTH is `check_expr`'s rule — the per-element recursion is
+    // gated on the count matching so it can never swallow this.
+    let len_err = typecheck_errors("let ARR: Array[StringSlice, 3] = [\"a\", \"b\"];");
+    assert!(
+        len_err
+            .iter()
+            .any(|e| e.message.contains("array literal has 2 element(s)")),
+        "array length mismatch must still report: {:?}",
+        len_err.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    let arity = typecheck_errors("let TUP: (StringSlice, i64) = (\"a\", 3, 4);");
+    assert!(
+        !arity.is_empty(),
+        "tuple arity mismatch must still report a type error",
+    );
+    let elem = typecheck_errors("let ARR: Array[StringSlice, 2] = [\"a\", 7];");
+    assert!(
+        elem.iter().any(|e| e.message.contains("StringSlice")),
+        "a non-string array element must still mismatch: {:?}",
+        elem.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    // The top-level rule is unchanged: only a syntactic literal coerces.
+    let non_lit = typecheck_errors("let NUM: StringSlice = 42;");
+    assert!(
+        !non_lit.is_empty(),
+        "a non-literal must still mismatch StringSlice",
+    );
+}
+
+#[test]
 fn test_module_binding_array_literal_ok() {
     typecheck_ok("let LANES: Array[i64, 3] = [1, 2, 3];");
 }
