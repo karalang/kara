@@ -1192,12 +1192,20 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn compile_function(&mut self, func: &Function) -> Result<(), String> {
-        // Heap-closure-env epic Slice 0 (B-2026-06-22-2): refuse to emit a
-        // function that RETURNS a closure capturing one of its locals — the
-        // captured env is a stack alloca that dangles once the frame exits, a
-        // silent miscompile. Honest compile error until heap envs land. Pure
-        // pre-check; no IR emitted yet.
-        self.reject_escaping_capturing_closure(func)?;
+        // Heap-closure-env epic (B-2026-06-22-2): refuse to emit a function
+        // whose closures escape in a shape the epic has not yet lowered — a
+        // returned stack-env capture would read a freed frame, and a heap-env
+        // misuse would double-free or leak the RC env box. One call runs both
+        // validators AND rebuilds this function's owner tables
+        // (`curry_closure_vars`, `heap_env_{aggregate,tuple,array,vec}_owners`)
+        // in `closure_state.escape`, which emission reads for `FreeClosureEnv`
+        // wiring. The analysis lives in `crate::closure_escape`, shared with
+        // the `escaping_closure` check lint (B-2026-08-16-13). Pure pre-check;
+        // no IR emitted yet.
+        self.closure_state
+            .escape
+            .check_function(func)
+            .map_err(|v| v.message)?;
         // Slice 1: a capturing-closure literal that is this function's direct
         // tail escapes via the return → it gets a reference-counted HEAP env
         // (so its captures outlive the frame). Record its span for
@@ -1219,22 +1227,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // transferred +1 (see the field doc + `track_rc_result_var`).
         self.result_shared_nonescaping_param_names =
             crate::result_escape::nonescaping_param_names(func);
+        // (The per-function owner-table resets, the currying scan, and the
+        // misuse guard all run inside `EscapeAnalysis::check_function` above —
+        // only the emission-side per-function state is reset here.)
         self.closure_state.heap_env_closure_vars.clear();
         self.closure_state.heap_env_owner_fields.clear();
-        self.closure_state.heap_env_tuple_owners.clear();
-        self.closure_state.heap_env_array_owners.clear();
-        self.closure_state.heap_env_vec_owners.clear();
-        // Currying (B-2026-07-12-12): the local closure-value bindings in this
-        // function whose call returns a heap env (`let make = |n| |x| x + n`).
-        // Populated before the misuse guard so a `make(..)` call is recognized
-        // as heap-env-producing by the same machinery as a named heap-env fn.
-        self.closure_state.curry_closure_vars = self.compute_curry_closure_vars(func);
-        // Slice 1 misuse guard (B-2026-06-22-2): a heap-env closure binding may
-        // only be CALLED in its owning function. Reject returning / copying /
-        // storing / passing it, or an unbound `make(..)`, with an honest error
-        // — otherwise the RC env would be double-freed, leaked, or used after
-        // free. Runs after `fns_returning_heap_env` is populated (in `compile`).
-        self.reject_heap_env_misuse(func)?;
         // Slice c-repl.B.4: `func.name == "main"` may have been
         // registered under a different LLVM symbol via
         // `main_symbol_override` (e.g. `cell_main_<id>` for REPL

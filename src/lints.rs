@@ -271,6 +271,18 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              Deny by default because the program cannot compile; `-A` it for interp-only code.",
     },
     LintInfo {
+        name: "escaping_closure",
+        default_level: LintLevel::Deny,
+        description:
+            "A capturing closure escapes in a shape codegen's heap-closure-environment epic \
+             (B-2026-06-22-2) has not yet lowered (stored into an escaping struct/collection, \
+             an unbound `make(..)` use, a branch return, …) — the program checks clean and \
+             fails `karac build` with E_ESCAPING_CLOSURE_NOT_YET. The predicate is codegen's \
+             own escape analysis (`crate::closure_escape`), so check and build can never \
+             disagree. Deny by default because the program cannot compile; `-A` it for \
+             interp-only code.",
+    },
+    LintInfo {
         name: "ffi_float_eq",
         default_level: LintLevel::Warn,
         description:

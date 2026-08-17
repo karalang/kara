@@ -15,6 +15,7 @@ pub mod cheader;
 // needs — see `pub fn run_playground` at the bottom of this file.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
+pub mod closure_escape;
 #[cfg(feature = "llvm")]
 pub mod codegen;
 pub mod codegen_queries;
@@ -43,6 +44,7 @@ pub mod edit_distance;
 pub mod effect_graph;
 pub mod effect_render;
 pub mod effectchecker;
+pub mod escaping_closure_lint;
 pub mod exhaustive;
 pub mod fallible_alloc;
 pub mod ffi_lint;

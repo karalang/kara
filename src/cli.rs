@@ -1217,6 +1217,29 @@ impl Pipeline {
                 .get_or_insert_with(Vec::new)
                 .extend(fold_errors);
         }
+        // B-2026-08-16-13 — surface codegen's E_ESCAPING_CLOSURE_NOT_YET
+        // deferral at CHECK time by running codegen's OWN escape analysis
+        // (`crate::closure_escape` — one predicate shared with the build gate,
+        // zero drift). Runs HERE, after operator lowering + comptime folding,
+        // not in `typecheck()` with the chained-receiver lint: the escape
+        // analysis is not lowering-invariant (measured: a bare `[make(..)]`
+        // literal is an `ArrayLiteral` pre-lower — array-owner sanctioned —
+        // but lowers to a Vec `PrefixCollectionLiteral`, whose element store
+        // the guard rejects), so parity with `karac build` requires the SAME
+        // post-lower AST codegen compiles. `codegen_bound` gates it exactly
+        // like the chained lint: the interpreter supports these shapes, so an
+        // interp-bound pipeline stays quiet.
+        if let (true, Some(typed)) = (self.codegen_bound, self.typed.as_mut()) {
+            let (extra, deny) = crate::escaping_closure_lint::check_escaping_closures(
+                &self.parsed.program,
+                &self.lint_overrides,
+            );
+            if deny {
+                typed.errors.extend(extra);
+            } else {
+                typed.warnings.extend(extra);
+            }
+        }
     }
 
     fn effectcheck(&mut self) {

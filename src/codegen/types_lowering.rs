@@ -2250,12 +2250,9 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn is_vec_new_call(&self, expr: &Expr) -> bool {
-        if let ExprKind::Call { callee, .. } = &expr.kind {
-            if let ExprKind::Path { segments, .. } = &callee.kind {
-                return segments.len() == 2 && segments[0] == "Vec" && segments[1] == "new";
-            }
-        }
-        false
+        // Delegates to the shared plain-AST recognizer (also used by the
+        // escape analysis, B-2026-08-16-13) — one predicate, no drift.
+        crate::closure_escape::is_vec_new_call(expr)
     }
 
     /// Recognise `Vec.with_capacity(n)` — the capacity-presized form of
@@ -2270,14 +2267,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `{ptr,len,cap}` path while its declared/inferred layout was the 4-field
     /// SoA struct — an LLVM return-type / use-site mismatch.
     pub(super) fn is_vec_with_capacity_call(&self, expr: &Expr) -> bool {
-        if let ExprKind::Call { callee, .. } = &expr.kind {
-            if let ExprKind::Path { segments, .. } = &callee.kind {
-                return segments.len() == 2
-                    && segments[0] == "Vec"
-                    && segments[1] == "with_capacity";
-            }
-        }
-        false
+        // Delegates to the shared plain-AST recognizer (also used by the
+        // escape analysis, B-2026-08-16-13) — one predicate, no drift.
+        crate::closure_escape::is_vec_with_capacity_call(expr)
     }
 
     /// Recognise `Atomic.new(v)` — the constructor for the transparent

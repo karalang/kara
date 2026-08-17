@@ -1326,6 +1326,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te));
                                 let is_heap_env_vec = self
                                     .closure_state
+                                    .escape
                                     .heap_env_vec_owners
                                     .contains(slot.binding_name.as_str());
                                 // B-2026-08-14-27 — a BORROW-ELIDED slot owns
@@ -1789,7 +1790,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // that actually define an escaping closure so a closure-free
                 // program with a coincidental `{ptr, ptr}`-typed slot (e.g. a
                 // two-pointer tuple) is never de-parallelized.
-                if !self.closure_state.fns_returning_heap_env.is_empty()
+                if !self.closure_state.escape.fns_returning_heap_env.is_empty()
                     && llvm_ty == self.closure_value_type().into()
                 {
                     return None;
@@ -6362,6 +6363,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // heap-env (or null-env) closure this Vec owns.
                                 let is_heap_env_vec = self
                                     .closure_state
+                                    .escape
                                     .heap_env_vec_owners
                                     .contains(var_name.as_str());
                                 // B-2026-08-01-33 stage 3c — a FROZEN-ELEMENT

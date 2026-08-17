@@ -129,19 +129,9 @@ pub(super) fn const_value_to_mangle_str(cv: &crate::prelude::ConstValue) -> Stri
 /// Pull the element `TypeExpr` out of `Vec[T]` — returns `None` for
 /// non-Vec shapes or when generic args aren't a single type.
 pub(super) fn vec_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
-    if let TypeKind::Path(path) = &te.kind {
-        let name = path.segments.first().map(|s| s.as_str());
-        // Same `Vec[T]` / `VecDeque[T]` codegen alias as
-        // `extract_vec_elem_type`: VecDeque rides on Vec's struct shape.
-        if name == Some("Vec") || name == Some("VecDeque") {
-            if let Some(args) = &path.generic_args {
-                if let Some(GenericArg::Type(elem)) = args.first() {
-                    return Some(elem.clone());
-                }
-            }
-        }
-    }
-    None
+    // Delegates to the shared plain-AST recognizer (also used by the escape
+    // analysis, B-2026-08-16-13) — one predicate, no drift.
+    crate::closure_escape::vec_inner_type_expr(te)
 }
 
 /// Pull the element `TypeExpr` out of `Array[T, N]` — the FIRST generic arg
@@ -343,89 +333,12 @@ pub(super) fn method_is_compiler_builtin(method: &Function) -> bool {
 /// (`ref_params`, `get_data_ptr`, `load_variable` deref) handles each
 /// case from there; ref-self mutations write back to the caller's
 /// storage via the pointer-typed self param.
-/// Rewrite every bare `Self` path in `te` to the concrete impl-target type
-/// `type_name`, recursing through the compound type forms. Applied to a
-/// synthesized impl-method's `-> Self` return type so its prototype's LLVM
-/// return type matches the concrete aggregate the body actually returns —
-/// otherwise `llvm_return_type` hits the unknown-name `i64` fall-through for
-/// `Self` and the module verifier rejects the mismatched `ret` (e.g.
-/// `ret { i64 } %field` against an `i64` fn type). Mirrors the typechecker's
-/// `resolve_self_in_type`.
-pub(super) fn rewrite_self_in_type_expr(te: &TypeExpr, type_name: &str) -> TypeExpr {
-    let kind = match &te.kind {
-        TypeKind::Path(p) => {
-            if p.segments.len() == 1 && p.segments[0] == "Self" && p.generic_args.is_none() {
-                TypeKind::Path(PathExpr {
-                    segments: vec![type_name.to_string()],
-                    generic_args: None,
-                    span: p.span,
-                })
-            } else {
-                TypeKind::Path(PathExpr {
-                    segments: p.segments.clone(),
-                    generic_args: p.generic_args.as_ref().map(|args| {
-                        args.iter()
-                            .map(|a| match a {
-                                GenericArg::Type(t) => {
-                                    GenericArg::Type(rewrite_self_in_type_expr(t, type_name))
-                                }
-                                other => other.clone(),
-                            })
-                            .collect()
-                    }),
-                    span: p.span,
-                })
-            }
-        }
-        TypeKind::Tuple(elems) => TypeKind::Tuple(
-            elems
-                .iter()
-                .map(|e| rewrite_self_in_type_expr(e, type_name))
-                .collect(),
-        ),
-        TypeKind::Array { element, size } => TypeKind::Array {
-            element: Box::new(rewrite_self_in_type_expr(element, type_name)),
-            size: size.clone(),
-        },
-        TypeKind::Pointer { is_mut, inner } => TypeKind::Pointer {
-            is_mut: *is_mut,
-            inner: Box::new(rewrite_self_in_type_expr(inner, type_name)),
-        },
-        TypeKind::Ref(inner) => {
-            TypeKind::Ref(Box::new(rewrite_self_in_type_expr(inner, type_name)))
-        }
-        TypeKind::MutRef(inner) => {
-            TypeKind::MutRef(Box::new(rewrite_self_in_type_expr(inner, type_name)))
-        }
-        TypeKind::MutSlice(inner) => {
-            TypeKind::MutSlice(Box::new(rewrite_self_in_type_expr(inner, type_name)))
-        }
-        TypeKind::Weak(inner) => {
-            TypeKind::Weak(Box::new(rewrite_self_in_type_expr(inner, type_name)))
-        }
-        TypeKind::FnType {
-            params,
-            return_type,
-            effect_spec,
-            is_once,
-        } => TypeKind::FnType {
-            params: params
-                .iter()
-                .map(|p| rewrite_self_in_type_expr(p, type_name))
-                .collect(),
-            return_type: return_type
-                .as_ref()
-                .map(|r| Box::new(rewrite_self_in_type_expr(r, type_name))),
-            effect_spec: effect_spec.clone(),
-            is_once: *is_once,
-        },
-        _ => te.kind.clone(),
-    };
-    TypeExpr {
-        kind,
-        span: te.span,
-    }
-}
+// `rewrite_self_in_type_expr` and `make_impl_method_function` moved to
+// `crate::closure_escape` (B-2026-08-16-13): the escaping-closure check lint
+// synthesizes impl-method `Function`s exactly the way the compile loop does,
+// so the synthesis must live in the shared plain-AST module. Re-exported here
+// so codegen callers keep their `helpers::` paths.
+pub(super) use crate::closure_escape::{make_impl_method_function, rewrite_self_in_type_expr};
 
 /// Map-keyed twin of [`rewrite_self_in_type_expr`]: replace every bare
 /// single-segment type-param reference (`T`) whose name is a key in `subst`
@@ -507,82 +420,6 @@ pub(super) fn subst_type_params_in_type_expr(
         kind,
         span: te.span,
     }
-}
-
-pub(super) fn make_impl_method_function(
-    type_name: &str,
-    method: &Function,
-    target_type: &TypeExpr,
-) -> Function {
-    let mut f = method.clone();
-    f.name = format!("{}.{}", type_name, method.name);
-    // Resolve `Self` in the return type to the concrete target so the
-    // prototype's LLVM return type matches the body's actual return value.
-    if let Some(rt) = f.return_type.as_ref() {
-        f.return_type = Some(rewrite_self_in_type_expr(rt, type_name));
-    }
-    if let Some(self_kind) = method.self_param.as_ref() {
-        let span = method.span;
-        // S6c-12: for a CONCRETE handle-backed container target
-        // (`impl Trait for Column[i64]` / `Tensor[i64, [n]]`), keep the
-        // element args on `self` so the container-typed-param registration
-        // path populates `column_var_infos`/`tensor_var_infos["self"]` with
-        // the concrete element kind — otherwise `self.sum()` in the body has
-        // no element and can't pick the concrete kernel. Struct/enum targets
-        // keep the bare-name `self` they relied on (element inference runs off
-        // the receiver's instantiation elsewhere), so only Column/Tensor is
-        // threaded here. Mirrors `make_generic_impl_method_function`, which
-        // does the same via the full target expr for the generic case.
-        let self_generic_args = if type_name == "Column"
-            || type_name == "Tensor"
-            || type_name == "Vec"
-            || type_name == "VecDeque"
-        {
-            match &target_type.kind {
-                TypeKind::Path(p) => p.generic_args.clone(),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let base = TypeExpr {
-            kind: TypeKind::Path(PathExpr {
-                segments: vec![type_name.to_string()],
-                generic_args: self_generic_args,
-                span,
-            }),
-            span,
-        };
-        let ty = match self_kind {
-            SelfParam::Owned => base,
-            SelfParam::Ref => TypeExpr {
-                kind: TypeKind::Ref(Box::new(base)),
-                span,
-            },
-            SelfParam::MutRef => TypeExpr {
-                kind: TypeKind::MutRef(Box::new(base)),
-                span,
-            },
-        };
-        let self_param = Param {
-            span,
-            pattern: Pattern {
-                kind: PatternKind::Binding("self".to_string()),
-                span,
-            },
-            ty,
-            default_value: None,
-            doc_comment: None,
-            is_comptime: false,
-            // A desugared `self` receiver. `frozen self` is not a stage-1
-            // form — the mode is only accepted by `parse_param`, and self
-            // params never go through it.
-            is_frozen: false,
-        };
-        f.params.insert(0, self_param);
-    }
-    f.self_param = None;
-    f
 }
 
 /// Build a synthetic `Function` for a method on a GENERIC-struct impl

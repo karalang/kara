@@ -5313,6 +5313,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let Some(owned_fields) = self
             .closure_state
+            .escape
             .fns_returning_heap_env_aggregate
             .get(&callee_name)
             .cloned()
@@ -5429,7 +5430,13 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let fat_ty = self.closure_value_type();
-        if let Some(idxs) = self.closure_state.heap_env_tuple_owners.get(src).cloned() {
+        if let Some(idxs) = self
+            .closure_state
+            .escape
+            .heap_env_tuple_owners
+            .get(src)
+            .cloned()
+        {
             let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
                 return;
             };
@@ -5453,7 +5460,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     });
                 }
             }
-        } else if let Some(idxs) = self.closure_state.heap_env_array_owners.get(src).cloned() {
+        } else if let Some(idxs) = self
+            .closure_state
+            .escape
+            .heap_env_array_owners
+            .get(src)
+            .cloned()
+        {
             let inkwell::types::BasicTypeEnum::ArrayType(arr_ty) = slot.ty else {
                 return;
             };
@@ -5651,7 +5664,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let fat_ty = self.closure_value_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let null = ptr_ty.const_null();
-        if let Some(idxs) = self.closure_state.heap_env_tuple_owners.get(name).cloned() {
+        if let Some(idxs) = self
+            .closure_state
+            .escape
+            .heap_env_tuple_owners
+            .get(name)
+            .cloned()
+        {
             let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
                 return;
             };
@@ -5666,7 +5685,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder.build_store(env_gep, null).unwrap();
             }
-        } else if let Some(idxs) = self.closure_state.heap_env_array_owners.get(name).cloned() {
+        } else if let Some(idxs) = self
+            .closure_state
+            .escape
+            .heap_env_array_owners
+            .get(name)
+            .cloned()
+        {
             let inkwell::types::BasicTypeEnum::ArrayType(arr_ty) = slot.ty else {
                 return;
             };
@@ -5720,6 +5745,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if let Some(idxs) = self
             .closure_state
+            .escape
             .fns_returning_heap_env_tuple
             .get(&callee_name)
             .cloned()
@@ -5742,6 +5768,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         } else if let Some(idxs) = self
             .closure_state
+            .escape
             .fns_returning_heap_env_array
             .get(&callee_name)
             .cloned()

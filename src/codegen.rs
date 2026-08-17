@@ -5432,18 +5432,9 @@ impl<'ctx> Codegen<'ctx> {
             closure_state: ClosureState {
                 closure_counter: 0,
                 closure_fn_types: HashMap::new(),
-                fns_returning_heap_env: std::collections::HashSet::new(),
+                escape: crate::closure_escape::EscapeAnalysis::default(),
                 heap_env_closure_vars: std::collections::HashSet::new(),
-                curry_closure_vars: std::collections::HashSet::new(),
-                heap_env_aggregate_owners: std::collections::HashMap::new(),
-                fns_returning_heap_env_aggregate: std::collections::HashMap::new(),
-                fns_returning_heap_env_tuple: std::collections::HashMap::new(),
-                fns_returning_heap_env_array: std::collections::HashMap::new(),
-                fns_returning_heap_env_vec: std::collections::HashSet::new(),
                 heap_env_owner_fields: std::collections::HashMap::new(),
-                heap_env_tuple_owners: std::collections::HashMap::new(),
-                heap_env_array_owners: std::collections::HashMap::new(),
-                heap_env_vec_owners: std::collections::HashSet::new(),
                 pending_closure_fn_type: None,
                 pending_closure_param_hints: None,
                 closure_capture_paths: FxHashMap::default(),
@@ -7394,30 +7385,18 @@ impl<'ctx> Codegen<'ctx> {
         // leaving it body-less lets the JIT linker resolve the symbol
         // against an earlier-installed module in the same JITDylib. Used
         // by the REPL JIT path so cell N+1 doesn't re-emit cell N's items.
-        // Heap-closure-env epic Slice 1 (B-2026-06-22-2): identify functions
-        // that return a heap-env closure, so a `let f = <call to such a fn>`
-        // binding is given a `FreeClosureEnv` cleanup. `fn_asts` is fully
-        // populated by now.
-        self.compute_fns_returning_heap_env();
-        // Aggregate-escape slice (B-2026-06-22-2): identify functions that return
-        // a struct OWNING a heap-env closure field, so a `let r = <call to such a
-        // fn>` binding registers an instance `FreeClosureEnv` on each owned field.
-        // Runs AFTER `compute_fns_returning_heap_env` (an owner can be built from a
-        // fresh heap-env call) and is itself a fixpoint (relay-of-aggregate).
-        self.compute_fns_returning_heap_env_aggregate();
-        // Container-escape slice (B-2026-06-22-2): identify functions that return a
-        // TUPLE / ARRAY owning a heap-env closure element, so a `let r = <call to
-        // such a fn>` binding registers a per-element `FreeClosureEnv` (the caller
-        // adopts the moved-out env boxes). The tuple/array twin of the aggregate
-        // fixpoint; runs after it (a relay can chain through a struct builder) and is
-        // itself a fixpoint (relay-of-container).
-        self.compute_fns_returning_heap_env_tuple_array();
-        // Vec-escape slice (B-2026-06-22-2): identify functions that return a
-        // closure-owning `Vec[Fn]`, so a `let r = <call to such a fn>` binding adopts
-        // the dynamic per-element drop loop (the callee moved the buffer out by
-        // value, its cap-zero suppressing its own loop). A fixpoint (relay-of-Vec),
-        // after the tuple/array fixpoint.
-        self.compute_fns_returning_heap_env_vec();
+        // Heap-closure-env epic (B-2026-06-22-2): identify the functions whose
+        // return value IS or OWNS a heap-env closure (directly / in a struct /
+        // tuple / array / `Vec[Fn]`), so a `let r = <call to such a fn>`
+        // binding registers the matching `FreeClosureEnv` cleanup(s). The four
+        // producer-set fixpoints (base, then relay-of-aggregate, then
+        // relay-of-container, then relay-of-Vec — order documented in
+        // `EscapeAnalysis::compute`) live in `crate::closure_escape`, the
+        // plain-AST module the `escaping_closure` check lint shares
+        // (B-2026-08-16-13). `fn_asts` is fully populated by now — both
+        // insert sites precede this snapshot.
+        self.closure_state.escape =
+            crate::closure_escape::EscapeAnalysis::compute(&self.fn_sig.fn_asts);
         for item in &program.items {
             if let Item::Function(f) = item {
                 // Comptime-only fn — never emitted (B-2026-07-08-15 Layer 3);

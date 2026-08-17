@@ -1155,6 +1155,106 @@ fn takeu(n: usize) -> usize { return n; }
     }
 }
 
+/// B-2026-08-16-13 — codegen's `E_ESCAPING_CLOSURE_NOT_YET` deferral surfaces
+/// at CHECK time, via codegen's OWN escape analysis (`crate::closure_escape` —
+/// one predicate shared with the build gate, so the two can never drift; the
+/// hand-mirrored-lint alternative was built, validated, and discarded by the
+/// row). The four surfaces mirror the chained-receiver precedent: text check
+/// reports it, JSON names the lint for the Mend loop, `-A escaping_closure`
+/// opts an interp-only program out, and `run --interp` keeps executing — the
+/// interpreter supports the shape, and the gate is about codegen.
+#[test]
+fn test_escaping_closure_surfaces_at_check_time() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-escaping-closure-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("rules.kara");
+    // The ledger row's own dogfood shape: a returned capturing closure stored
+    // into a struct pushed into a `Vec` — checks clean before this lint, runs
+    // under the interpreter, refused by `karac build`.
+    let src = r#"
+struct Rule { name: String, check: Fn(ref String) -> bool }
+
+fn min_len(n: i64) -> Fn(ref String) -> bool {
+    |s| (s.len() as i64) >= n
+}
+
+fn main() {
+    let mut rules: Vec[Rule] = Vec.new();
+    rules.push(Rule { name: "min8", check: min_len(8) });
+    let w: String = "password1";
+    let r = rules[0];
+    println((r.check)(w));
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+    let file = path.to_str().unwrap();
+
+    // 1. Text check REPORTS it, where it used to say "All checks passed."
+    let out = karac_bin().args(["check", file]).output().unwrap();
+    assert!(
+        !out.status.success(),
+        "check must fail on a program `build` refuses; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("heap-closure-environment epic B-2026-06-22-2"),
+        "check must carry codegen's own boundary prose; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("-A escaping_closure"),
+        "check must advertise the interp-only opt-out; stderr={stderr}",
+    );
+
+    // 2. JSON carries it with the lint name, which is what the Mend loop reads.
+    let out = karac_bin()
+        .args(["check", file, "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("\"diagnostics\":[]"),
+        "the empty diagnostics array IS the bug; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("escaping_closure"),
+        "the JSON diagnostic must name the lint so `-A` is discoverable; stdout={stdout}",
+    );
+
+    // 3. `-A` opts out of the CHECK gate (codegen's own gate stays the
+    //    backstop for an actual `build`).
+    let out = karac_bin()
+        .args(["check", file, "-A", "escaping_closure"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "-A escaping_closure must suppress; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    // 4. `--interp` still RUNS it — the interpreter supports the shape, and
+    //    taking away a working execution path would be a worse trade than the
+    //    silence this lint replaced.
+    let out = karac_bin()
+        .args(["run", "--interp", file])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "`run --interp` must still execute the program; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "true");
+}
+
 /// Typed WARNINGS reach the text renderer. `TypeCheckResult::warnings` — the
 /// channel every `type_lint_warning` lint rides (`deprecated`, `unstable_api`,
 /// `map_value_clone_reinsert`, …) — was rendered by the JSON emitter and

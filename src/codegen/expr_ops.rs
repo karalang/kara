@@ -1374,6 +1374,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // fields — the same predicate the misuse guard sanctions.
         let is_closure_field = self
             .closure_state
+            .escape
             .heap_env_aggregate_owners
             .get(rname)
             .is_some_and(|fs| fs.contains(field));
@@ -1447,7 +1448,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(vname) = &object.kind else {
             return Ok(false);
         };
-        if !self.closure_state.heap_env_vec_owners.contains(vname) {
+        if !self
+            .closure_state
+            .escape
+            .heap_env_vec_owners
+            .contains(vname)
+        {
             return Ok(false);
         }
         let vname = vname.clone();

@@ -2698,7 +2698,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Vec's per-element drop loop both decrement it, so bump the
                 // refcount here. A fresh `v.push(make(k))` element is already rc 1
                 // (no inc). Mirrors the array/tuple binding-source store inc.
-                if self.closure_state.heap_env_vec_owners.contains(var_name) {
+                if self
+                    .closure_state
+                    .escape
+                    .heap_env_vec_owners
+                    .contains(var_name)
+                {
                     if let ExprKind::Identifier(src) = &args[0].value.kind {
                         if self.closure_state.heap_env_closure_vars.contains(src) {
                             self.emit_heap_closure_env_inc(elem_val);
