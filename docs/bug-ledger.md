@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 255 | 1 |
+| miscompile | 256 | 2 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 126 | 3 |
@@ -101,8 +101,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 77 | 4 |
 | perf | 76 | 1 |
 | diagnostics | 66 | 0 |
+| crash | 50 | 1 |
 | soundness | 49 | 0 |
-| crash | 49 | 0 |
 | other | 35 | 1 |
 | use-after-free | 20 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 904 | 4 |
+| codegen | 906 | 6 |
 | typecheck | 185 | 5 |
-| interp | 146 | 0 |
+| interp | 148 | 2 |
 | ownership | 57 | 0 |
 | other | 49 | 1 |
 | autopar | 48 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1278 surfaced · 11 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1280 surfaced · 13 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,6 +141,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1278 surfaced
 | B-2026-08-17-24 | 2026-08-17 | codegen | low | The STRUCT-pattern sibling of B-2026-07-14-21's tuple fix: a struct destructuring pattern as an iterator-adaptor closure parameter still bails out of the codegen chain peel, and the fallthrough MISATTRIBUTES the failure to the terminal method. `v.iter().map(|P { x, y }| x + y).collect()` -> `codegen: no handler for method 'collect' on non-identifier receiver (method dispatch fell through; this is a codegen bug -- add a dispatcher arm in compile_method_call ...)`; the same closure under `fold` -> the identical message naming 'fold'. The interpreter runs both correctly and `karac check` is clean. B-2026-07-14-21 fixed exactly this class for the TUPLE form (`ps.iter().map(|(a, b)| a + b)`) -- the tuple form now lowers on all three backends, so the peel handles destructuring closure params in principle and only the struct pattern is unrecognized. | roadmap.md |
 | B-2026-08-17-25 | 2026-08-17 | codegen | high | The pipe operator `|>` produces a SILENT WRONG ANSWER under both compiled backends -- every pipe expression evaluates to 0 -- and a String-typed pipe SEGFAULTS the AOT binary. Minimal: `fn dbl(n: i64) -> i64 { n * 2 }` + `let a = 5 |> dbl; println(a.to_string())` prints 10 under `--interp` and 0 under `karac run` (JIT) and `karac build` (AOT). `karac check` reports "All checks passed." The direct-call control in the same file (`println(dbl(5).to_string())`) prints 10 on all three, so only the pipe form is wrong. Expression position and let position both fail (`println((5 |> dbl).to_string())` -> 0). Every pipe shape measured is affected: single stage, chained stages (`"x" |> tag |> tag`), and the `_` pipe-hole placeholder (`7 |> takes_two("v", _)`). When the pipe's type is String the 0 is consumed as a String header pointer and the binary dies: `fn tag(s: String) -> String { "[" + s + "]" }` + `let a = "x" |> tag; println(a)` -> SIGSEGV, exit 139. | roadmap.md |
 | B-2026-08-17-26 | 2026-08-17 | typecheck | low | A closure literal as the pipe RHS is rejected -- "right-hand side of pipe must be a function name or function call" -- even though design.md prescribes exactly that form as the workaround for its own `_` restrictions. § Pipe Operator's `_` rule says: "The correct form is `let d = data |> g; d |> |d| f(d, extra)` or `data |> |d| f(g(d), extra)`", and the multi-use rule adds "Workaround for multi-use: wrap in a closure -- `data |> |d| f(d, d)`". Both prescribed forms fail `karac check` verbatim, each with the not-a-function-name error plus a cascaded `expected 'i64', found '?T0'` on the closure's own parameter (the closure body is typed against an uninstantiated var once the pipe arm bails). So the spec's escape hatch for the at-most-one-`_`-per-stage and no-`_`-in-a-nested-subexpression rules does not exist, leaving those two restrictions with no documented way out. | roadmap.md |
+| B-2026-08-17-27 | 2026-08-17 | codegen+interp | high | The `??` operator is wrong on BOTH backends, in three different ways, with `karac check` clean throughout. design.md line 782: "`??` provides a default: `expr ?? fallback` -- short-circuits to `fallback` if `expr` is `None` (for `Option`) or `Err(_)` (for `Result`). The result type of `expr ?? fallback` is the inner `T` -- the wrapper (`Option`/`Result`) is stripped." (1) CODEGEN, silent wrong answer: every `??` expression evaluates to 0 under JIT and AOT alike -- `let a: i64 = find(v, 7) ?? -1; println(a.to_string())` prints 0 where the fallback path alone should print -1 and the success path 7; the Result form prints 0 0 the same way. (2) INTERPRETER, wrapper not stripped on the SUCCESS path: `find(v, 7) ?? -1` yields `Some(7)`, not 7, so `let a: i64 = find(v, 7) ?? -1; a + 1` dies at runtime with "operator 'Add' is not defined for operands of type 'EnumVariant' and 'Int'" -- and that message's own parenthetical ("this is a type error the typechecker reports as a hard error; it reached the interpreter only because `karac run` executes despite typecheck errors") is FALSE here: `karac check` reports "All checks passed." (3) INTERPRETER, fallback NOT APPLIED on the `Err` path: `parse("xx") ?? -1` where `parse` returns `Err("bad")` yields `Err(bad)`, printing the error instead of -1. The one leg that is correct is Option/`None`, which does return the fallback. | roadmap.md |
+| B-2026-08-17-28 | 2026-08-17 | codegen+interp | high | Optional chaining `?.` ICEs the interpreter at one shape and silently returns the wrong answer at another, and is not lowered by codegen at all -- `karac check` says "All checks passed" for every case. design.md line 782: "`user.address?.city?.name` short-circuits to `None` if any level is absent." (1) INTERPRETER ICE: `match u.address?.city { Some(c) => println("L2 some: " + c.name), None => ... }` panics with `internal error: entered unreachable code: field access at 7:42: receiver was Value::EnumVariant not Struct/SharedStruct; either an interpreter codepath produced the wrong variant or the typechecker accepted field access on a non-struct` (src/interpreter.rs:2252) -- the Some-arm binding `c` holds an unstripped enum value rather than the `City` struct, the same wrapper-not-stripped shape as B-2026-08-17-27's `??` legs. (2) INTERPRETER SILENT WRONG ANSWER: the spec's own three-level example `u.address?.city?.name`, built with EVERY level `Some`, takes the `None` arm and prints "L3 none". (3) CODEGEN: not lowered -- both compiled backends refuse the same programs (`codegen failed: Undefined variable 's'`, and `no handler for method 'to_string' on variable 'z'` for the one-level form). | roadmap.md |
 
 ### Wontfix (5)
 
