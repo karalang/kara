@@ -123,7 +123,7 @@ instructions **0.863B (−3.9%)**. Roughly double the stage-2½ win, i.e. the
 original "span-keyed maps stay std" rule was leaving more on the table
 than the String-keyed swap it accompanied. Remaining SipHash: ~9.5%
 (Scope.names, the effectchecker's Effect sets, AST-side tables — all
-colder). Landed as `e02d28f6`.
+colder). Landed as `739eecb8`.
 
 ## Stage 3 — the interner proper (NOT STARTED; scope before starting)
 
