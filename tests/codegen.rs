@@ -82,6 +82,43 @@ mod codegen_tests {
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
+    /// B-2026-08-16-13 (message half) — the two sides of the argument-passing
+    /// distinction the refusal message used to conflate. It listed "passing it
+    /// as a call argument" as unsupported while its own workaround sentence
+    /// recommended the `Fn(..)`-param hand-off; measured, the BINDING form
+    /// builds and runs, and only the UNBOUND-call form is refused. One test
+    /// per side so a future epic slice that widens either moves exactly one
+    /// assertion, and the message's lists move with it (see the comment at the
+    /// refusal site).
+    #[test]
+    fn heap_env_binding_passed_to_fn_param_builds_and_runs() {
+        assert_eq!(
+            run_program(
+                "fn min_len(n: i64) -> Fn(ref String) -> bool { |s| (s.len() as i64) >= n }\n\
+                 fn use_it(f: Fn(ref String) -> bool) -> bool { let s = \"abcd\"; return f(s); }\n\
+                 fn main() { let f = min_len(2); println(f\"{use_it(f)}\"); }\n",
+            ),
+            Some("true\n".to_string())
+        );
+    }
+
+    #[test]
+    fn unbound_heap_env_call_as_argument_is_rejected() {
+        let err = ir_result(
+            "fn min_len(n: i64) -> Fn(ref String) -> bool { |s| (s.len() as i64) >= n }\n\
+             fn use_it(f: Fn(ref String) -> bool) -> bool { let s = \"abcd\"; return f(s); }\n\
+             fn main() { println(f\"{use_it(min_len(3))}\"); }\n",
+        )
+        .expect_err("an unbound producing call as an argument must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+        // The message must not re-grow the stale claim: the binding form it
+        // used to forbid is the workaround it recommends.
+        assert!(
+            !err.contains("passing it as a call argument"),
+            "the refusal list must not contradict the Fn-param workaround; got: {err}"
+        );
+    }
+
     #[test]
     fn escaping_capturing_closure_in_struct_literal_is_rejected() {
         let err = ir_result(

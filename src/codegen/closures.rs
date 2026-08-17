@@ -650,17 +650,28 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         if bad {
+            // B-2026-08-16-13 (message half): keep the two lists in step with
+            // the epic's landed slices. "Passing it as a call argument" and
+            // "capturing it in a nested closure" sat in the refusal list after
+            // both had become supported — while the workaround sentence
+            // recommended the Fn-param hand-off the refusal list forbade. An
+            // author steering by the message avoided a working shape; each
+            // future slice should move its phrase from one list to the other.
             return Err(
                 "error[E_ESCAPING_CLOSURE_NOT_YET]: a returned capturing closure can currently \
                  be CALLED in the function that binds it (`let f = make(..); f(x)`), COPIED to \
-                 another binding (`let g = f`), or RETURNED as a bare tail / top-level `return f`. \
-                 Storing it (struct / collection / index / field), passing it as a call argument, \
-                 capturing it in a nested closure, returning it from inside a branch, or leaving a \
-                 `make(..)` result unbound is not yet supported — the reference-counted closure \
-                 environment would outlive or be double-freed by its owner set \
-                 (heap-closure-environment epic B-2026-06-22-2). Workaround: call, copy, or \
-                 directly return the closure where it is bound, or pass it down by a `Fn(..)` \
-                 parameter."
+                 another binding (`let g = f`), RETURNED as a bare tail / top-level `return f`, \
+                 passed down by a `Fn(..)` parameter (`use_it(f)`), captured by a nested \
+                 closure, or OWNED by a `let`-bound struct/tuple/array literal or `Vec[Fn]` \
+                 push and called through the owner's field or index. Storing it into a struct \
+                 literal anywhere but a `let` RHS, passing the owner on, copying the closure \
+                 back out of an owner (`let g = r.f;`), returning it from inside a branch, or \
+                 leaving a `make(..)` result unbound (any non-`let` use of the call — \
+                 `make(..);`, `make(..)(x)`, `use_it(make(..))`) is not yet supported — the \
+                 reference-counted closure environment would outlive or be double-freed by its \
+                 owner set (heap-closure-environment epic B-2026-06-22-2). Workaround: bind the \
+                 closure with a `let` first, or store the closure's data and dispatch with a \
+                 plain fn."
                     .to_string(),
             );
         }
