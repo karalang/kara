@@ -1107,6 +1107,94 @@ fn test_string_slice_result_concatenates_as_string() {
 }
 
 #[test]
+fn iterator_index_rejected_with_a_remedy_that_compiles() {
+    // B-2026-08-17-10 — `w.chars()[0]` and `v.iter()[0]` passed `karac check`
+    // and then each backend improvised: the interpreter hit the `unreachable!`
+    // in eval_expr.rs, while codegen COMPILED a let-bound `chars()` index and
+    // FAILED the build on the inline form — a working feature by accident,
+    // reachable only through a temporary binding. `Iterator[T]` is a
+    // `Type::Named` that matched no arm of the element match and fell to a
+    // silent `_ => Type::Error`.
+    for src in [
+        // let-bound, inline, and a non-String iterator: all three shapes from
+        // the row, since codegen treated them differently from each other.
+        "fn main() { let w: String = \"abc\"; let c = w.chars(); let _ = c[0]; }",
+        "fn main() { let w: String = \"abc\"; let _ = w.chars()[0]; }",
+        "fn main() { let mut v: Vec[i64] = Vec.new(); v.push(7); \
+                     let it = v.iter(); let _ = it[0]; }",
+    ] {
+        let errors = typecheck_errors(src);
+        let msg = &errors[0].message;
+        assert!(
+            msg.contains("Iterator does not support indexing with []"),
+            "unexpected message for {src:?}: {msg}"
+        );
+        // Both remedies are named, and both were verified to compile and run
+        // on check / --interp / build before being put in the message — the
+        // failure mode this whole row is about is advice that does not work.
+        assert!(
+            msg.contains(".collect()") && msg.contains(".nth(i)"),
+            "missing a working remedy for {src:?}: {msg}"
+        );
+    }
+    // Run-fatal, like its `String` sibling: if this downgraded, `karac run`
+    // would proceed to evaluate and hit the very `unreachable!` the rejection
+    // exists to prevent.
+    let errors = typecheck_errors("fn main() { let w: String = \"abc\"; let _ = w.chars()[0]; }");
+    assert!(
+        errors[0].kind.is_run_fatal(),
+        "must be run-fatal or --interp still panics: {:?}",
+        errors[0].kind
+    );
+    // `bytes()` is a `Slice[u8]` and stays indexable — the corpus idiom the
+    // row notes is correct on every surface.
+    typecheck_ok("fn main() { let w: String = \"abc\"; let b = w.bytes(); let _ = b[0]; }");
+}
+
+#[test]
+fn unindexable_operands_are_diagnosed_rather_than_left_to_the_backend() {
+    // The `Iterator` case above is one instance of a CLASS. Probed on the
+    // parent, every one of these printed "All checks passed" and then tripped
+    // the same interpreter `unreachable!`, because the element match ended in
+    // a silent `_ => Type::Error`. Per the coding standard, the phase that
+    // owns the rejection diagnoses it with a span instead of leaving a backend
+    // to panic.
+    for (src, ty) in [
+        (
+            "struct S { a: i64 }\nfn main() { let s = S { a: 1 }; let _ = s[0]; }",
+            "S",
+        ),
+        ("fn main() { let b = true; let _ = b[0]; }", "bool"),
+        ("fn main() { let n = 5i64; let _ = n[0]; }", "i64"),
+        (
+            "fn main() { let o: Option[i64] = Some(1); let _ = o[0]; }",
+            "Option",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        let msg = &errors[0].message;
+        assert!(
+            msg.contains("does not support indexing with []") && msg.contains(ty),
+            "expected an indexing rejection naming `{ty}`: {msg}"
+        );
+        assert!(
+            errors[0].kind.is_run_fatal(),
+            "must be run-fatal or --interp still panics: {:?}",
+            errors[0].kind
+        );
+    }
+    // The indexable types keep working, including through a generic body where
+    // the operand is still a metavariable when the index is checked — that one
+    // must stay SILENT, or correct generic code starts failing.
+    typecheck_ok("fn first[T](xs: Vec[T]) -> T { xs[0] }");
+    typecheck_ok("fn main() { let a: Array[i64, 3] = [1, 2, 3]; let _ = a[0]; }");
+    typecheck_ok(
+        "fn main() { let mut m: Map[String, i64] = Map.new(); m.insert(\"a\", 1); \
+                     let _ = m[\"a\"]; }",
+    );
+}
+
+#[test]
 fn test_string_scalar_index_rejected_with_newcomer_diagnostic() {
     // `s[i]` (scalar integer index) on a String is a compile error
     // (design.md § Character type): UTF-8 is variable-width, so `[]`

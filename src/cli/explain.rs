@@ -445,6 +445,14 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0268",
         ty("StringNotIndexable", Some(DiagnosticClass::TypeMismatch)),
     ),
+    (
+        "E0274",
+        ty("IteratorNotIndexable", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E0275",
+        ty("TypeNotIndexable", Some(DiagnosticClass::TypeMismatch)),
+    ),
     ("E0269", ty("SharedFieldNotMut", None)),
     (
         "E0270",
@@ -1196,6 +1204,8 @@ mod tests {
             ("E0261", K::AtBindingDoubleConsume),
             ("E0262", K::TypeAliasBoundNotSatisfied),
             ("E0268", K::StringNotIndexable),
+            ("E0274", K::IteratorNotIndexable),
+            ("E0275", K::TypeNotIndexable),
             ("E0270", K::AtomicMissingOrdering),
             ("E0271", K::ImplTraitMultipleWitnesses),
             ("E0272", K::AtomicInvalidInnerType),

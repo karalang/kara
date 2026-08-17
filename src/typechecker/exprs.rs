@@ -4275,6 +4275,50 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
+                // B-2026-08-17-10 — the same hole as the String rejection
+                // directly above, one type over, and it stayed open because
+                // `Iterator[T]` is a `Type::Named` that simply matches no arm
+                // of `elem_result` and falls to `_ => Type::Error` WITHOUT a
+                // diagnostic. `karac check` then printed "All checks passed"
+                // for `w.chars()[0]`, and each backend improvised: the
+                // interpreter hit the `unreachable!` in `eval_expr.rs`
+                // (obj=Value::Iterator), while codegen compiled a LET-BOUND
+                // `chars()` index correctly but failed the build on the inline
+                // form and on `.iter()`. A working feature by accident,
+                // reachable only through a temporary binding.
+                //
+                // Rejection is the answer rather than making the backends
+                // agree: an iterator is a lazy cursor with no positional
+                // storage, and design.md specs no indexable `Iterator`.
+                // `.collect()` (materialize, then index) and `.nth(i)` (one
+                // element) are the shipped ways to get an element — both
+                // verified on check / --interp / build before being named
+                // here.
+                let iterator_arg = match &obj_ty {
+                    Type::Named { name, args } if name == "Iterator" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                };
+                if let Some(elem) = iterator_arg {
+                    let elem_str =
+                        type_display(&resolve_type_var_top(&elem, &self.env.substitutions));
+                    self.type_error(
+                        format!(
+                            "Iterator does not support indexing with []\n  \
+                             an iterator is a lazy cursor over a sequence, not a container — \
+                             it has no\n  \
+                             positional storage to index, and it can only be walked forward.\n  \
+                             help: it.collect() materializes a Vec[{elem_str}] you can \
+                             index (O(n) once),\n        \
+                             or it.nth(i) reads the i-th element directly \
+                             — it returns Option[{elem_str}]"
+                        ),
+                        expr.span,
+                        TypeErrorKind::IteratorNotIndexable,
+                    );
+                    return Type::Error;
+                }
                 let elem_result = match &obj_ty {
                     Type::Array { element, .. } => *element.clone(),
                     Type::Slice { element, .. } => *element.clone(),
@@ -4345,7 +4389,40 @@ impl<'a> super::TypeChecker<'a> {
                         _ => Type::Error,
                     },
                     Type::Error => Type::Error,
-                    _ => Type::Error,
+                    // B-2026-08-17-10 — this arm used to be a SILENT
+                    // `Type::Error`, and that silence is the root defect the
+                    // row is about. Probed on the parent, `s[0]` on a struct,
+                    // a bool, an `i64`, an `Option` and a closure ALL printed
+                    // "All checks passed" and then tripped the same
+                    // `unreachable!` in the interpreter — the `Iterator` case
+                    // the row was filed for is one instance of a class, not a
+                    // one-off. Emitting here rejects the whole class at the
+                    // phase that owns it, per the coding standard that every
+                    // phase diagnoses with a span rather than leaving a
+                    // backend to panic.
+                    //
+                    // An UNRESOLVED type stays silent: mid-inference the
+                    // operand can still be a metavariable (a generic body
+                    // typechecked before instantiation), and erroring there
+                    // would reject correct programs. `Type::Error` keeps its
+                    // own arm above so an upstream failure does not cascade
+                    // into a second diagnostic.
+                    other => {
+                        if !contains_type_var(other) {
+                            self.type_error(
+                                format!(
+                                    "'{}' does not support indexing with []\n  \
+                                     help: indexable types are Array[T, N], Slice[T], \
+                                     Vec[T], VecDeque[T],\n        \
+                                     Map[K, V] (by key), and Vector[T, N] (lane read)",
+                                    type_display(other)
+                                ),
+                                expr.span,
+                                TypeErrorKind::TypeNotIndexable,
+                            );
+                        }
+                        Type::Error
+                    }
                 };
                 // B-2026-08-08-4 gap B (read-back) — a `weak T` ELEMENT read is
                 // an UPGRADE, exactly as a `weak T` FIELD read is

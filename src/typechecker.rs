@@ -486,6 +486,22 @@ pub enum TypeErrorKind {
     /// `Value::String[Value::Int]` lowering, so a downgrade-and-run
     /// would hit an `unreachable!` rather than emit a clean diagnostic.
     StringNotIndexable,
+    /// `it[i]` applied to an `Iterator[T]` — the value `.chars()`,
+    /// `.iter()`, `.map(...)` and friends return. An iterator is a lazy
+    /// cursor, not a container: it has no positional storage to index, and
+    /// design.md specs no indexable `Iterator`. Run-fatal for exactly the
+    /// reason `StringNotIndexable` is: the interpreter has no
+    /// `Value::Iterator[Value::Int]` lowering, so downgrading it would trip
+    /// the `unreachable!` in `eval_expr.rs` instead of printing the
+    /// diagnostic (B-2026-08-17-10).
+    IteratorNotIndexable,
+    /// `x[i]` where `x` is any other type with no index lowering — a
+    /// struct, a bool, an integer, an `Option`, a closure. The index rule
+    /// used to fall through to `Type::Error` SILENTLY for all of these, so
+    /// `karac check` passed and the interpreter's `unreachable!` fired
+    /// instead of a diagnostic. Run-fatal for the same reason as its two
+    /// siblings above (B-2026-08-17-10).
+    TypeNotIndexable,
     /// An `Atomic[T]` operation (`load` / `store` / `fetch_add` /
     /// `fetch_sub` / `fetch_and` / `fetch_or` / `fetch_xor` / `swap`) was
     /// called without its required explicit `MemoryOrdering` argument.
@@ -905,6 +921,9 @@ impl TypeErrorKind {
     /// `TypeErrorKind::StringNotIndexable`: `s[i]` on a `String` has no
     /// `Value::String[Value::Int]` interpreter lowering, so downgrading it
     /// would trip an `unreachable!` instead of printing the diagnostic.
+    /// `TypeErrorKind::IteratorNotIndexable` is the same case one type over:
+    /// no `Value::Iterator[Value::Int]` lowering either, and it reaches the
+    /// very same `unreachable!`.
     /// And `TypeErrorKind::SharedFieldNotMut`: reassigning a non-`mut` field
     /// of a `shared`/`par struct` is a statically-decidable write-permission
     /// violation the interpreter only catches via a defense-in-depth *runtime*
@@ -936,6 +955,8 @@ impl TypeErrorKind {
             self,
             TypeErrorKind::InvalidCast
                 | TypeErrorKind::StringNotIndexable
+                | TypeErrorKind::IteratorNotIndexable
+                | TypeErrorKind::TypeNotIndexable
                 | TypeErrorKind::SharedFieldNotMut
                 | TypeErrorKind::AtomicMissingOrdering
                 | TypeErrorKind::AtomicInvalidInnerType
@@ -970,6 +991,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::AtomicInvalidInnerType
         | TypeErrorKind::InvalidTupleIndex
         | TypeErrorKind::StringNotIndexable
+        | TypeErrorKind::IteratorNotIndexable
+        | TypeErrorKind::TypeNotIndexable
         | TypeErrorKind::LabelMismatch
         | TypeErrorKind::NonContiguousLabels
         | TypeErrorKind::PatternScrutineeMismatch

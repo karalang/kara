@@ -1751,6 +1751,8 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // variable-width, so `[]` is rejected in favour of
                 // `s.char_at(i)` / `s.bytes()[i]` (design.md § Character type).
                 crate::typechecker::TypeErrorKind::StringNotIndexable => "E0268",
+                crate::typechecker::TypeErrorKind::IteratorNotIndexable => "E0274",
+                crate::typechecker::TypeErrorKind::TypeNotIndexable => "E0275",
                 // B-2026-06-30-3 — reassignment of a non-`mut` field on a
                 // `shared struct` / `par struct` (design.md § Shared Types).
                 crate::typechecker::TypeErrorKind::SharedFieldNotMut => "E0269",
