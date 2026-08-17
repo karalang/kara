@@ -284,20 +284,27 @@ Effectcheck allocations are now down **97%** from the spike's start
 
 ### Remaining stage-3 phases (not started)
 
-Post-3d: session net front end **240.8 → ~130 ms (−46%), instructions
-1.62B → 0.588B (−64%), allocations 3.14M → 0.73M (−77%)**. What
-remains, per DHAT: parse (token/`Expr` allocs, ~18% of bytes — the "AST
-identifiers" leg), typecheck (`infer_expr`/`infer_binary`/`Type`
-clones), ownership's residual (`check_function` binding tables — the
-String-keyed maps Fx'd in 2½ but still cloning keys; its module tree is
-~29k lines across 13 submodules — 3–4× the effectchecker conversion
-surface, so plan a full session for the Symbol conversion), and the
-~9% SipHash tail (`Scope.names`, remaining std maps). Each is its own
-session-sized slice with 3a as the template. Post-3e the remaining
-allocation profile by blocks: `Pattern::collect_bindings` (~50k,
-Vec<String> per call across four phases), `Expr::clone` (~40k,
-contract-clause and typechecker clones), lexer token payloads (~37k,
-inherent until AST interning), `Type::clone` (~36k).
+Post-3f spike net: **instructions 1.62B → 0.520B (−68%), allocations
+3.14M → 0.605M (−81%)** on the synthetic corpus (wall-clock net is
+~−45–50% but the cloud container's load varied across the sessions —
+the instruction and allocation counts are the honest cumulative
+metric). Effectcheck allocations: 2.44M → 64k (−97%).
+
+What remains, by DHAT block count: `Pattern::collect_bindings` (~50k —
+spread over ~12 callers, most of which need the owned Strings anyway;
+measured yield of a borrowed variant is ~2%, weak ROI as a slice),
+lexer token payloads (~37k, inherent until AST identifiers intern),
+`Type::clone` (~36k — wants `Rc<Type>`/type interning, a design
+decision not a mechanical swap), parser working Vecs (~30k),
+rc_predicate/cfg construction (~45k). The three big conversions stay:
+**ownership key space** (~29k lines across 13 submodules — 3–4× the
+effectchecker surface, plan a full session), **typechecker**
+(`TypeEnv` keys, and separately the `Type` clone question), **AST
+identifiers** last. Each is its own session-sized slice with 3a as the
+template; 3e/3f showed the DHAT-first method also finds one-line
+structural wins (the cloning peek, the whole-AST clone) that beat
+mechanical conversion on ROI — run the attribution before starting
+any of them.
 
 ## Lifecycle
 

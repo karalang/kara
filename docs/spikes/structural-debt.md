@@ -34,7 +34,7 @@ the `expr_method_call.rs` region (~1,490), `contextual_scalar_collection_type`
 forced the parser recursion ceiling (B-2026-08-16-4) down to 128 — shrinking
 them buys both readability and nesting headroom.
 
-## Name interning (review item 9c) — spike RUNNING, stages 0–3d landed
+## Name interning (review item 9c) — spike RUNNING, stages 0–3f landed
 
 Measured and progressively burned down in
 [`name-interning.md`](name-interning.md) (2026-08-17): a front-end phase
@@ -44,14 +44,17 @@ of front-end instructions in string-identity overhead. Stages 1–2¾ (the
 tables, the seam through the result structs) took wall −36% / instructions
 1.62B → 0.863B. Stage 3a then landed the first slice of the `Symbol(u32)`
 interner proper (`src/intern.rs` + the effectchecker's full key space):
-effectcheck **−35% wall / −69% allocations**. Stages 3b–3d followed the
-post-3a DHAT attribution: borrow-based callee effect sets, one shared
+effectcheck **−35% wall / −69% allocations**. Stages 3b–3f followed
+DHAT attribution: borrow-based callee effect sets, one shared
 rc_predicate use-sites build per CFG, FxHash on the remaining internal
-working sets. Session net on the 10.9k-line synthetic corpus: front end
-**240.8 → ~130 ms (−46%), instructions 1.62B → 0.588B (−64%),
-allocations 3.14M → 0.73M (−77%)**. Remaining: the ownership /
-typechecker / AST-identifier key spaces, one session-sized slice each —
-scope in the spike doc.
+working sets, the parser's borrowed token peeks (kind-probes had cloned
+payload tokens — 17% of ALL front-end allocations), and `FnHandle`
+(the effectchecker had deep-cloned every function body in the program).
+Spike net on the 10.9k-line synthetic corpus: **instructions
+1.62B → 0.520B (−68%), allocations 3.14M → 0.605M (−81%)**; effectcheck
+allocations −97%. Remaining: the ownership / typechecker /
+AST-identifier key spaces, one session-sized slice each — scope in the
+spike doc.
 
 ## Smaller residuals
 
