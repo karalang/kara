@@ -35,7 +35,7 @@ impl super::Parser {
             }));
         }
 
-        match self.peek_token() {
+        match self.peek_token_ref() {
             Token::Resource => {
                 self.advance();
                 let name = self.expect_identifier()?;
@@ -102,7 +102,7 @@ impl super::Parser {
         loop {
             if let Some(verb) = self.try_parse_effect_verb() {
                 terms.push(EffectGroupTerm::Verb(verb));
-            } else if let Token::Identifier { .. } = self.peek_token() {
+            } else if let Token::Identifier { .. } = self.peek_token_ref() {
                 let name = self.expect_identifier()?;
                 terms.push(EffectGroupTerm::GroupRef(name));
             } else {
@@ -169,7 +169,7 @@ impl super::Parser {
                 // Try verb first (reads, writes, blocks, user-defined, etc.)
                 if let Some(verb) = self.try_parse_effect_verb() {
                     items.push(EffectItem::Verb(verb));
-                } else if let Token::Identifier { .. } = self.peek_token() {
+                } else if let Token::Identifier { .. } = self.peek_token_ref() {
                     let name = self.expect_identifier()?;
                     // Named effect variable declared in the function's [with E] params
                     // takes precedence over effect group lookup.
@@ -237,7 +237,7 @@ impl super::Parser {
     /// from drifting.
     pub(crate) fn try_parse_effect_verb(&mut self) -> Option<EffectVerb> {
         let start = self.current_span();
-        let kind = match self.peek_token() {
+        let kind = match self.peek_token_ref() {
             Token::Reads => {
                 self.advance();
                 EffectVerbKind::Reads

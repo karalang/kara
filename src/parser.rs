@@ -607,7 +607,7 @@ impl Parser {
     fn parse_path_segments(&mut self) -> Option<Vec<String>> {
         let mut segments = Vec::new();
 
-        match self.peek_token() {
+        match self.peek_token_ref() {
             Token::Identifier { .. } => segments.push(self.expect_identifier()?),
             Token::SelfType => {
                 self.advance();
@@ -628,19 +628,36 @@ impl Parser {
     // ── Token Helpers ────────────────────────────────────────────
 
     fn peek_token(&self) -> Token {
+        self.peek_token_ref().clone()
+    }
+
+    /// Borrowed view of the current token — the no-clone peek. Kind-only
+    /// probes (`check` / `eat` / `expect`, `==` comparisons, `matches!`)
+    /// go through this; the cloning `peek_token` stays for match arms
+    /// that move a payload out. The distinction is load-bearing: cloning
+    /// a payload token (identifier / string literal) allocates, and the
+    /// kind-only probes were ~17% of ALL front-end allocations
+    /// (name-interning spike, DHAT).
+    fn peek_token_ref(&self) -> &Token {
         if self.pos < self.tokens.len() {
-            self.tokens[self.pos].token.clone()
+            &self.tokens[self.pos].token
         } else {
-            Token::EOF
+            &Token::EOF
         }
     }
 
     fn peek_token_at(&self, offset: usize) -> Token {
+        self.peek_token_ref_at(offset).clone()
+    }
+
+    /// Borrowed sibling of [`Self::peek_token_at`] — same no-clone
+    /// rationale as [`Self::peek_token_ref`].
+    fn peek_token_ref_at(&self, offset: usize) -> &Token {
         let idx = self.pos + offset;
         if idx < self.tokens.len() {
-            self.tokens[idx].token.clone()
+            &self.tokens[idx].token
         } else {
-            Token::EOF
+            &Token::EOF
         }
     }
 
@@ -702,7 +719,7 @@ impl Parser {
     }
 
     fn check(&self, expected: &Token) -> bool {
-        std::mem::discriminant(&self.peek_token()) == std::mem::discriminant(expected)
+        std::mem::discriminant(self.peek_token_ref()) == std::mem::discriminant(expected)
     }
 
     fn eat(&mut self, expected: &Token) -> bool {
@@ -728,8 +745,9 @@ impl Parser {
     }
 
     fn expect_identifier(&mut self) -> Option<String> {
-        match self.peek_token() {
+        match self.peek_token_ref() {
             Token::Identifier { name, .. } => {
+                let name = name.clone();
                 self.advance();
                 Some(name)
             }
@@ -756,8 +774,9 @@ impl Parser {
     /// targeted post-parse escape is the cleanest fix. Mirrors
     /// `expect_attr_arg_name`'s treatment of `requires` / `ensures`.
     fn expect_method_name(&mut self) -> Option<String> {
-        match self.peek_token() {
+        match self.peek_token_ref() {
             Token::Identifier { name, .. } => {
+                let name = name.clone();
                 self.advance();
                 Some(name)
             }
@@ -784,8 +803,9 @@ impl Parser {
     }
 
     fn expect_attr_arg_name(&mut self) -> Option<String> {
-        match self.peek_token() {
+        match self.peek_token_ref() {
             Token::Identifier { name, .. } => {
+                let name = name.clone();
                 self.advance();
                 Some(name)
             }
@@ -808,7 +828,7 @@ impl Parser {
     }
 
     fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len() || self.peek_token() == Token::EOF
+        self.pos >= self.tokens.len() || self.peek_token_ref() == &Token::EOF
     }
 
     /// Lookahead used by `parse_attribute` to decide whether the current
@@ -1008,7 +1028,7 @@ impl Parser {
 
     fn synchronize_to_item(&mut self) {
         while !self.is_at_end() {
-            match self.peek_token() {
+            match self.peek_token_ref() {
                 Token::Fn
                 | Token::Struct
                 | Token::Union
@@ -1039,7 +1059,7 @@ impl Parser {
 
     fn synchronize_to_stmt(&mut self) {
         while !self.is_at_end() {
-            match self.peek_token() {
+            match self.peek_token_ref() {
                 Token::Semicolon => {
                     self.advance();
                     return;

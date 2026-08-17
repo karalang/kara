@@ -58,7 +58,7 @@ impl super::Parser {
             // on a const / shape-variadic / effect param gets a focused
             // rejection below instead of a generic parse error; the
             // grammar attaches markers to type parameters only.
-            let (variance, variance_span) = match self.peek_token() {
+            let (variance, variance_span) = match self.peek_token_ref() {
                 Token::Plus => {
                     let s = self.current_span();
                     self.advance();
@@ -383,9 +383,9 @@ impl super::Parser {
             //     parens are just grouping a bare-bool predicate before the
             //     function body block).
             //   `ensures |result| <postcond>` — closure-style pipes.
-            let param = if self.peek_token() == Token::LeftParen
-                && matches!(self.peek_token_at(1), Token::Identifier { .. })
-                && self.peek_token_at(2) == Token::RightParen
+            let param = if self.peek_token_ref() == &Token::LeftParen
+                && matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
+                && self.peek_token_ref_at(2) == &Token::RightParen
                 && self.peek_token_at(3) != Token::LeftBrace
             {
                 self.eat(&Token::LeftParen);
@@ -420,7 +420,7 @@ impl super::Parser {
             // `impl invariant <expr>` — checked at *every* method exit (pub
             // and private), unlike the plain `invariant` form below
             // (design.md § Contracts — `impl invariant`).
-            if self.check(&Token::Impl) && self.peek_token_at(1) == Token::Invariant {
+            if self.check(&Token::Impl) && self.peek_token_ref_at(1) == &Token::Invariant {
                 self.advance(); // impl
                 self.advance(); // invariant
                 let _ = self.take_pending_doc();
@@ -458,7 +458,7 @@ impl super::Parser {
             // both legal; the modifier wraps the parsed field type in
             // `TypeKind::Weak`. This is sugar — the type-position form
             // `field: weak T` is also accepted via `parse_type`.
-            let weak_modifier_span = if matches!(self.peek_token(), Token::Weak) {
+            let weak_modifier_span = if matches!(self.peek_token_ref(), Token::Weak) {
                 let span = self.current_span();
                 self.advance();
                 Some(span)
@@ -530,7 +530,7 @@ impl super::Parser {
             // expression from a type-arg. Plain `Identifier` (no trailing op)
             // continues to parse as a type — `Vec[Map[K, V]]` and similar
             // type-position shapes are preserved.
-            let is_const_arg_expr = match self.peek_token() {
+            let is_const_arg_expr = match self.peek_token_ref() {
                 Token::Integer(_, _)
                 | Token::True
                 | Token::False
@@ -599,7 +599,7 @@ impl super::Parser {
             if self.check(&Token::RightBracket) {
                 break;
             }
-            match self.peek_token() {
+            match self.peek_token_ref() {
                 // `?` — dynamic dim. Inside a shape literal the token is a
                 // dim marker, not the expression-level try operator
                 // (context disambiguates; syntax.md §5.21 is unaffected).
@@ -612,7 +612,7 @@ impl super::Parser {
                 Token::DotDotDot => {
                     let splice_start = self.current_span();
                     self.advance();
-                    match self.peek_token() {
+                    match self.peek_token_ref() {
                         Token::Identifier { name, .. } => {
                             let name = name.clone();
                             self.advance();

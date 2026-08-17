@@ -245,7 +245,7 @@ impl super::Parser {
         self.expect(&Token::LeftParen)?;
 
         let mut field_path: Vec<String> = Vec::new();
-        match self.peek_token() {
+        match self.peek_token_ref() {
             Token::Identifier { .. } => {
                 field_path.push(self.expect_identifier()?);
             }
@@ -259,10 +259,10 @@ impl super::Parser {
             }
         }
         loop {
-            match self.peek_token() {
+            match self.peek_token_ref() {
                 Token::Dot => {
                     self.advance();
-                    match self.peek_token() {
+                    match self.peek_token_ref() {
                         Token::Identifier { .. } => {
                             field_path.push(self.expect_identifier()?);
                         }
@@ -317,8 +317,8 @@ impl super::Parser {
             return false;
         };
         name == "test"
-            && matches!(self.peek_token_at(1), Token::StringLiteral(_))
-            && matches!(self.peek_token_at(2), Token::LeftBrace)
+            && matches!(self.peek_token_ref_at(1), Token::StringLiteral(_))
+            && matches!(self.peek_token_ref_at(2), Token::LeftBrace)
     }
 
     /// Emit `E_TEST_BLOCK_NOT_TOP_LEVEL` for a misplaced
@@ -338,7 +338,7 @@ impl super::Parser {
         // Skip through to the matching `}` while balancing braces.
         let mut depth: usize = 1;
         while depth > 0 && !self.is_at_end() {
-            match self.peek_token() {
+            match self.peek_token_ref() {
                 Token::LeftBrace => {
                     depth += 1;
                     self.advance();
@@ -410,7 +410,7 @@ impl super::Parser {
     // ── Statements ───────────────────────────────────────────────
 
     pub(crate) fn parse_statement(&mut self) -> Option<Stmt> {
-        match self.peek_token() {
+        match self.peek_token_ref() {
             Token::Let => self.parse_let_statement(),
             Token::Defer => {
                 let start = self.current_span();
@@ -607,7 +607,7 @@ impl super::Parser {
         // initializer), so `freeze` stays a legal identifier and an existing
         // program using the name cannot break. Only when the NEXT token can
         // begin a place, mirroring the `frozen T` guard.
-        let freeze_kw = matches!(self.peek_token(), Token::Identifier { name, .. } if name == "freeze")
+        let freeze_kw = matches!(self.peek_token_ref(), Token::Identifier { name, .. } if name == "freeze")
             && matches!(
                 self.peek_token_at(1),
                 Token::Identifier { .. } | Token::SelfValue

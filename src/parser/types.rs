@@ -80,8 +80,8 @@ impl super::Parser {
         // `elidable_ref_params` hint channel, per the codegen-containment
         // invariant. The variant stays for stage 2, when widening `frozen`
         // past parameter position will genuinely need a type-level mode.
-        if let Token::Identifier { name, .. } = self.peek_token() {
-            if name == "frozen" && Self::token_begins_type(&self.peek_token_at(1)) {
+        if let Token::Identifier { name, .. } = self.peek_token_ref() {
+            if name == "frozen" && Self::token_begins_type(self.peek_token_ref_at(1)) {
                 let kw_span = self.current_span();
                 self.advance();
                 if frozen_ok {
@@ -138,7 +138,7 @@ impl super::Parser {
             }
         }
 
-        match self.peek_token() {
+        match self.peek_token_ref() {
             // ref Type
             Token::Ref => {
                 self.advance();
@@ -152,7 +152,7 @@ impl super::Parser {
             Token::Mut => {
                 self.advance();
                 // `mut Slice[T]` — mutable slice view (no `ref` keyword).
-                if let Token::Identifier { name, .. } = self.peek_token() {
+                if let Token::Identifier { name, .. } = self.peek_token_ref() {
                     if name == "Slice" {
                         // Parse the Slice path as a normal type, then strip
                         // down to its element and re-wrap as MutSlice.
@@ -214,7 +214,7 @@ impl super::Parser {
                     true
                 } else {
                     // expect "const" as identifier
-                    match self.peek_token() {
+                    match self.peek_token_ref() {
                         Token::Const => {
                             self.advance();
                             false

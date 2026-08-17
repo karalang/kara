@@ -217,7 +217,7 @@ impl super::Parser {
                 // `unsafe` followed by anything other than `fn` here is
                 // rejected with the same focused diagnostic.
                 let is_unsafe = if self.check(&Token::Unsafe) {
-                    if self.peek_token_at(1) == Token::Fn {
+                    if self.peek_token_ref_at(1) == &Token::Fn {
                         self.advance(); // consume `unsafe`
                         true
                     } else {
@@ -446,7 +446,7 @@ impl super::Parser {
         let where_clause = self.parse_optional_where_clause();
 
         // Default method body or required method (semicolon)
-        let body = if self.peek_token() == Token::LeftBrace {
+        let body = if self.peek_token_ref() == &Token::LeftBrace {
             Some(self.parse_block()?)
         } else {
             self.expect(&Token::Semicolon)?;
@@ -549,7 +549,7 @@ impl super::Parser {
                 let is_comptime = if self.check(&Token::Comptime) {
                     let nxt = self.peek_token_at(1);
                     if nxt == Token::Fn
-                        || (nxt == Token::Unsafe && self.peek_token_at(2) == Token::Fn)
+                        || (nxt == Token::Unsafe && self.peek_token_ref_at(2) == &Token::Fn)
                     {
                         self.advance(); // consume `comptime`
                         true
@@ -571,7 +571,7 @@ impl super::Parser {
                 // is rejected with the same focused diagnostic. There is no
                 // `unsafe impl` syntax at v1.
                 let is_unsafe = if self.check(&Token::Unsafe) {
-                    if self.peek_token_at(1) == Token::Fn {
+                    if self.peek_token_ref_at(1) == &Token::Fn {
                         self.advance(); // consume `unsafe`
                         true
                     } else {

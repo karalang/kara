@@ -53,7 +53,7 @@ impl super::Parser {
             self.advance();
         }
 
-        match self.peek_token() {
+        match self.peek_token_ref() {
             Token::Fn => Some(Item::Function(
                 self.parse_function(attributes, is_pub, is_private, false, false)?,
             )),
@@ -68,7 +68,7 @@ impl super::Parser {
                         attributes, is_pub, is_private, false, true,
                     )?))
                 }
-                Token::Unsafe if self.peek_token_at(2) == Token::Fn => {
+                Token::Unsafe if self.peek_token_ref_at(2) == &Token::Fn => {
                     self.advance(); // consume `comptime`
                     self.advance(); // consume `unsafe`
                     Some(Item::Function(self.parse_function(
@@ -97,7 +97,7 @@ impl super::Parser {
             Token::Shared => {
                 let shared_kw_span = self.current_span();
                 self.advance();
-                match self.peek_token() {
+                match self.peek_token_ref() {
                     Token::Struct => Some(Item::StructDef(self.parse_struct_def(
                         attributes,
                         is_pub,
@@ -128,7 +128,7 @@ impl super::Parser {
             Token::Par => {
                 let par_kw_span = self.current_span();
                 self.advance(); // consume `par`
-                match self.peek_token() {
+                match self.peek_token_ref() {
                     Token::Struct => Some(Item::StructDef(self.parse_struct_def(
                         attributes,
                         is_pub,
@@ -272,8 +272,8 @@ impl super::Parser {
                 //     module scope; imports must live inside an
                 //     `unsafe extern "ABI" { ... }` block (the trust
                 //     boundary the programmer asserts at).
-                if matches!(self.peek_token_at(1), Token::StringLiteral(_))
-                    && matches!(self.peek_token_at(2), Token::Fn)
+                if matches!(self.peek_token_ref_at(1), Token::StringLiteral(_))
+                    && matches!(self.peek_token_ref_at(2), Token::Fn)
                     && self.extern_fn_has_body()
                 {
                     self.parse_extern_export_fn(attributes, is_pub, is_private)
@@ -301,7 +301,7 @@ impl super::Parser {
             // port: u16)`), and Kāra's v1 is backend-first; hard-reserving
             // it would wound exactly the programs the language targets.
             Token::Identifier { ref name, .. }
-                if name == "host" && matches!(self.peek_token_at(1), Token::Fn) =>
+                if name == "host" && matches!(self.peek_token_ref_at(1), Token::Fn) =>
             {
                 let decl = self.parse_host_function(attributes, is_pub, is_private)?;
                 Some(Item::ExternFunction(decl))
@@ -329,7 +329,7 @@ impl super::Parser {
                 // `let` (no attributes / visibility — those unambiguously
                 // mean a module binding was intended).
                 if attributes.is_empty() && !is_pub && !is_private {
-                    let name_tok = if matches!(self.peek_token_at(1), Token::Mut) {
+                    let name_tok = if matches!(self.peek_token_ref_at(1), Token::Mut) {
                         self.peek_token_at(2)
                     } else {
                         self.peek_token_at(1)
@@ -358,8 +358,8 @@ impl super::Parser {
             // keyword token. See `Item::TestCase`.
             Token::Identifier { ref name, .. }
                 if name == "test"
-                    && matches!(self.peek_token_at(1), Token::StringLiteral(_))
-                    && matches!(self.peek_token_at(2), Token::LeftBrace) =>
+                    && matches!(self.peek_token_ref_at(1), Token::StringLiteral(_))
+                    && matches!(self.peek_token_ref_at(2), Token::LeftBrace) =>
             {
                 if is_pub || is_private {
                     self.error(
@@ -531,7 +531,7 @@ impl super::Parser {
     ) -> Option<Function> {
         self.expect(&Token::Extern)?;
         let abi_span = self.current_span();
-        let abi = match self.peek_token() {
+        let abi = match self.peek_token_ref() {
             Token::StringLiteral(s) => {
                 let s = s.clone();
                 self.advance();
@@ -1444,8 +1444,8 @@ impl super::Parser {
         // arrives as an identifier and only counts as a receiver mode when the
         // very next token is `self` — a method named `frozen` or a parameter
         // called `frozen` still parses as it always did.
-        let frozen_self = matches!(self.peek_token(), Token::Identifier { name, .. } if name == "frozen")
-            && matches!(self.peek_token_at(1), Token::SelfValue);
+        let frozen_self = matches!(self.peek_token_ref(), Token::Identifier { name, .. } if name == "frozen")
+            && matches!(self.peek_token_ref_at(1), Token::SelfValue);
         if frozen_self
             || self.check(&Token::SelfValue)
             || self.check(&Token::Own)
@@ -1498,8 +1498,8 @@ impl super::Parser {
         //
         // Recorded on `Function::self_is_frozen` rather than as a fourth
         // `SelfParam` variant; see that field's comment for why.
-        if matches!(self.peek_token(), Token::Identifier { name, .. } if name == "frozen")
-            && matches!(self.peek_token_at(1), Token::SelfValue)
+        if matches!(self.peek_token_ref(), Token::Identifier { name, .. } if name == "frozen")
+            && matches!(self.peek_token_ref_at(1), Token::SelfValue)
         {
             self.advance();
             self.advance();
@@ -1643,7 +1643,7 @@ impl super::Parser {
     /// position was something else).
     fn try_parse_anonymous_param_type(&mut self) -> Option<TypeExpr> {
         // Cheap rule-out: positions that start a normal name-bound parameter.
-        match self.peek_token() {
+        match self.peek_token_ref() {
             // `_: TY` — the wildcard pattern path; treat as a normal param.
             Token::Underscore => return None,
             // `name: TY` and `name { … }` (struct destructure) and
@@ -1706,7 +1706,7 @@ impl super::Parser {
     /// Supports: identifier, `_`, tuple `(a, b)`, and struct `Name { x, y }`.
     pub(crate) fn parse_param_pattern(&mut self) -> Option<Pattern> {
         let start = self.current_span();
-        match self.peek_token() {
+        match self.peek_token_ref() {
             // Wildcard
             Token::Underscore => {
                 self.advance();
@@ -2169,12 +2169,12 @@ impl super::Parser {
                 let fields = self.parse_layout_field_list()?;
                 self.expect(&Token::RightBrace)?;
                 // Optional `align(N)` modifier after the closing brace.
-                let align = if matches!(self.peek_token(), Token::Identifier { ref name, .. } if name == "align")
+                let align = if matches!(self.peek_token_ref(), Token::Identifier { ref name, .. } if name == "align")
                 {
                     self.advance(); // consume `align`
                     self.expect(&Token::LeftParen)?;
-                    let n = match self.peek_token() {
-                        Token::Integer(n, _) => {
+                    let n = match self.peek_token_ref() {
+                        &Token::Integer(n, _) => {
                             let v = n as u32;
                             self.advance();
                             v
@@ -2196,7 +2196,7 @@ impl super::Parser {
                     span: self.span_from(&gs),
                 });
             } else {
-                match self.peek_token() {
+                match self.peek_token_ref() {
                     Token::Identifier { ref name, .. } if name == "cold" => {
                         let cs = self.current_span();
                         self.advance(); // consume `cold`
@@ -2328,8 +2328,9 @@ impl super::Parser {
         self.advance();
         // Capture the case-name string literal + its span.
         let name_span = self.current_span();
-        let name = match self.peek_token() {
+        let name = match self.peek_token_ref() {
             Token::StringLiteral(s) => {
+                let s = s.clone();
                 self.advance();
                 s
             }
@@ -2363,7 +2364,7 @@ impl super::Parser {
                         // canonical `name ;` form (e.g. `mod foo { ... }`), the resync below
                         // will stop at the next item-starting token via the outer
                         // `synchronize_to_item` pass.
-        if let Token::Identifier { .. } = self.peek_token() {
+        if let Token::Identifier { .. } = self.peek_token_ref() {
             self.advance();
         }
         let _ = self.eat(&Token::Semicolon);

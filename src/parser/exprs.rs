@@ -110,7 +110,7 @@ impl super::Parser {
 
         loop {
             // Check for postfix operators first
-            match self.peek_token() {
+            match self.peek_token_ref() {
                 Token::Question => {
                     self.advance();
                     lhs = Expr {
@@ -159,8 +159,8 @@ impl super::Parser {
                 Token::Dot => {
                     self.advance();
                     // Field access, tuple index, or method call
-                    match self.peek_token() {
-                        Token::Integer(idx, _) => {
+                    match self.peek_token_ref() {
+                        &Token::Integer(idx, _) => {
                             self.advance();
                             lhs = Expr {
                                 span: lhs.span,
@@ -392,7 +392,7 @@ impl super::Parser {
             }
 
             // Check for infix (binary) operators
-            let (op, l_bp, r_bp) = match self.peek_token() {
+            let (op, l_bp, r_bp) = match self.peek_token_ref() {
                 Token::Or => (BinOp::Or, 6, 7),
                 Token::And => (BinOp::And, 8, 9),
                 // `||` / `&&` diagnose at the CONSUME site below, not here: this
@@ -433,7 +433,7 @@ impl super::Parser {
             // `!` → `not` prefix sibling below. A word operator needs spaces
             // the symbol did not: `a&&b` must become `a and b`, so each side
             // that abuts a neighboring token gains one.
-            let rust_habit_op = match self.peek_token() {
+            let rust_habit_op = match self.peek_token_ref() {
                 Token::PipePipe => Some(("||", "or")),
                 Token::AmpAmp => Some(("&&", "and")),
                 _ => None,
@@ -499,7 +499,7 @@ impl super::Parser {
     fn parse_prefix(&mut self) -> Option<Expr> {
         let start = self.current_span();
 
-        match self.peek_token() {
+        match self.peek_token_ref() {
             // Unary operators
             Token::Minus => {
                 self.advance();
@@ -511,7 +511,7 @@ impl super::Parser {
                 // (typechecker range-validation, codegen's constant fold, the
                 // interpreter's Neg arm) sees a plain literal and needs no
                 // special case. B-2026-08-06-13.
-                if let Token::IntegerOutOfRange(m, sfx) = self.peek_token() {
+                if let &Token::IntegerOutOfRange(m, sfx) = self.peek_token_ref() {
                     if m == (i64::MAX as u64) + 1 {
                         self.advance();
                         return Some(Expr {
@@ -646,7 +646,7 @@ impl super::Parser {
             }
 
             // Literals
-            Token::Integer(n, sfx) => {
+            &Token::Integer(n, sfx) => {
                 self.advance();
                 Some(Expr {
                     span: self.span_from(&start),
@@ -671,7 +671,7 @@ impl super::Parser {
             // parse error. Only an unsigned suffix reaches this arm's fast
             // path — an i64-suffixed or unsuffixed magnitude still errors,
             // because nothing can represent it.
-            Token::IntegerOutOfRange(m, sfx) => {
+            &Token::IntegerOutOfRange(m, sfx) => {
                 self.advance();
                 if matches!(
                     sfx,
@@ -698,21 +698,21 @@ impl super::Parser {
                 );
                 None
             }
-            Token::Float(n, sfx) => {
+            &Token::Float(n, sfx) => {
                 self.advance();
                 Some(Expr {
                     span: self.span_from(&start),
                     kind: ExprKind::Float(n, sfx),
                 })
             }
-            Token::CharLiteral(c) => {
+            &Token::CharLiteral(c) => {
                 self.advance();
                 Some(Expr {
                     span: self.span_from(&start),
                     kind: ExprKind::CharLit(c),
                 })
             }
-            Token::ByteLiteral(b) => {
+            &Token::ByteLiteral(b) => {
                 self.advance();
                 Some(Expr {
                     span: self.span_from(&start),
@@ -735,7 +735,10 @@ impl super::Parser {
                     kind: ExprKind::MultiStringLit(s),
                 })
             }
-            Token::CStringLiteral { bytes, source_len } => {
+            &Token::CStringLiteral {
+                ref bytes,
+                source_len,
+            } => {
                 // `c"..."` C-string literal — bytes come from the lexer
                 // without the trailing NUL; codegen appends it at the
                 // global-constant emission site. Spec: design.md §
@@ -1070,7 +1073,7 @@ impl super::Parser {
                     // parse the closure expression that follows.
                     return self.parse_prefix();
                 }
-                match self.peek_token() {
+                match self.peek_token_ref() {
                     Token::While => self.parse_while_expr_with_label_and_attrs(None, attributes),
                     Token::For => self.parse_for_expr_with_label_and_attrs(None, attributes),
                     Token::Loop => {
@@ -1282,7 +1285,7 @@ impl super::Parser {
             // `own |...|` — explicit capture-by-value prefix (Rule 2½). Same
             // lookahead rule as the borrow prefixes: only consume `own` when a
             // closure follows, since `own` may appear elsewhere in v2+.
-            Token::Own if matches!(self.peek_token_at(1), Token::Pipe | Token::PipePipe) => {
+            Token::Own if matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe) => {
                 let prefix_start = self.current_span();
                 self.advance();
                 let prefix_span = self.span_from(&prefix_start);
@@ -1293,7 +1296,7 @@ impl super::Parser {
             // is closure-only; in any non-closure position the `ref` keyword
             // retains its existing meaning and is not consumed here. We peek
             // for a following `|` / `||` before committing.
-            Token::Ref if matches!(self.peek_token_at(1), Token::Pipe | Token::PipePipe) => {
+            Token::Ref if matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe) => {
                 let prefix_start = self.current_span();
                 self.advance();
                 let prefix_span = self.span_from(&prefix_start);
@@ -1304,8 +1307,8 @@ impl super::Parser {
             // Same lookahead rule as `ref`: only consume the `mut` token when
             // the full `mut ref |` / `mut ref ||` shape is visible.
             Token::Mut
-                if matches!(self.peek_token_at(1), Token::Ref)
-                    && matches!(self.peek_token_at(2), Token::Pipe | Token::PipePipe) =>
+                if matches!(self.peek_token_ref_at(1), Token::Ref)
+                    && matches!(self.peek_token_ref_at(2), Token::Pipe | Token::PipePipe) =>
             {
                 let prefix_start = self.current_span();
                 self.advance(); // mut
@@ -1317,7 +1320,7 @@ impl super::Parser {
             // `move |...|` is reserved against Rust's idiom but not active in
             // Kāra — the same role is played by `own |...|`. Emit a focused
             // redirect diagnostic and parse the rest as `own` for recovery.
-            Token::Move if matches!(self.peek_token_at(1), Token::Pipe | Token::PipePipe) => {
+            Token::Move if matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe) => {
                 self.error("the `move` keyword is not used in Kāra; use `own |...|` for closure capture-by-value");
                 let prefix_start = self.current_span();
                 self.advance();
@@ -1560,14 +1563,14 @@ impl super::Parser {
     /// front of a closure the focused `E_CODEGEN_HINT_ON_CLOSURE`
     /// diagnostic instead of the generic loop-attribute error.
     fn peeks_closure_start(&self) -> bool {
-        match self.peek_token() {
+        match self.peek_token_ref() {
             Token::Pipe | Token::PipePipe => true,
             Token::Own | Token::Ref | Token::Move => {
-                matches!(self.peek_token_at(1), Token::Pipe | Token::PipePipe)
+                matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe)
             }
             Token::Mut => {
-                matches!(self.peek_token_at(1), Token::Ref)
-                    && matches!(self.peek_token_at(2), Token::Pipe | Token::PipePipe)
+                matches!(self.peek_token_ref_at(1), Token::Ref)
+                    && matches!(self.peek_token_ref_at(2), Token::Pipe | Token::PipePipe)
             }
             _ => false,
         }
@@ -1762,7 +1765,7 @@ impl super::Parser {
         // through to the bare-identifier path and the `!` errors as before.
         if name == "vec"
             && self.check(&Token::Bang)
-            && matches!(self.peek_token_at(1), Token::LeftBracket)
+            && matches!(self.peek_token_ref_at(1), Token::LeftBracket)
         {
             self.advance(); // consume !
             return self.parse_prefix_collection_literal("Vec".to_string(), &start);
@@ -1772,7 +1775,7 @@ impl super::Parser {
         // or `label: { ... }`. `is_loop_label` accepts both shapes.
         if self.check(&Token::Colon) && self.is_loop_label() {
             self.advance(); // consume ':'
-            match self.peek_token() {
+            match self.peek_token_ref() {
                 Token::While => return self.parse_while_expr_with_label(Some(name)),
                 Token::For => return self.parse_for_expr_with_label(Some(name)),
                 Token::Loop => {
@@ -1824,12 +1827,12 @@ impl super::Parser {
         // lowercase-rooted `.` forms (`v.field`, `m.func()`, `m.Type(..)`) stay
         // in the postfix loop.
         let module_qualified_struct_lit = !starts_upper(&name)
-            && matches!(self.peek_token_at(1), Token::Identifier { name: ref seg, .. } if starts_upper(seg))
-            && matches!(self.peek_token_at(2), Token::LeftBrace);
+            && matches!(self.peek_token_ref_at(1), Token::Identifier { name: ref seg, .. } if starts_upper(seg))
+            && matches!(self.peek_token_ref_at(2), Token::LeftBrace);
         if self.check(&Token::Dot) && (starts_upper(&name) || module_qualified_struct_lit) {
             let mut path = vec![name];
             while self.eat(&Token::Dot) {
-                match self.peek_token() {
+                match self.peek_token_ref() {
                     Token::Identifier { .. } => {
                         path.push(self.expect_identifier()?);
                     }
@@ -2347,7 +2350,7 @@ impl super::Parser {
         {
             return (None, None);
         }
-        if let Token::Identifier { ref name, .. } = self.peek_token() {
+        if let Token::Identifier { name, .. } = self.peek_token_ref() {
             let name = name.clone();
             let is_known_label = self.loop_labels.iter().any(|(n, _)| n == &name);
             if self.pos + 1 < self.tokens.len() {
@@ -2382,7 +2385,8 @@ impl super::Parser {
         if self.check(&Token::Semicolon) || self.check(&Token::RightBrace) {
             return (None, None);
         }
-        if let Token::Identifier { name, .. } = self.peek_token() {
+        if let Token::Identifier { name, .. } = self.peek_token_ref() {
+            let name = name.clone();
             let span = self.current_span();
             self.advance();
             (Some(name), Some(span))
@@ -2506,7 +2510,7 @@ impl super::Parser {
     // ── Compound Assignment Helper ────────────────────────────────
 
     pub(crate) fn try_compound_op(&mut self) -> Option<CompoundOp> {
-        let op = match self.peek_token() {
+        let op = match self.peek_token_ref() {
             Token::PlusEqual => CompoundOp::Add,
             Token::MinusEqual => CompoundOp::Sub,
             Token::StarEqual => CompoundOp::Mul,

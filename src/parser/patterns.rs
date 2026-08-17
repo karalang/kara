@@ -56,7 +56,7 @@ impl super::Parser {
     pub(crate) fn parse_single_pattern(&mut self) -> Option<Pattern> {
         let start = self.current_span();
 
-        match self.peek_token() {
+        match self.peek_token_ref() {
             Token::Underscore => {
                 self.advance();
                 Some(Pattern {
@@ -136,7 +136,7 @@ impl super::Parser {
                     span: self.span_from(&start),
                 })
             }
-            Token::Integer(n, sfx) => {
+            &Token::Integer(n, sfx) => {
                 self.advance();
                 let lit = LiteralPattern::Integer(n, sfx);
                 // Check for range pattern: `1..=10` or `1..`
@@ -154,7 +154,7 @@ impl super::Parser {
                 if self.eat(&Token::DotDot) {
                     // `lo..hi` (bounded exclusive) when the next token is
                     // a literal or const path; `lo..` (half-open) otherwise.
-                    let end = if Self::starts_range_bound(&self.peek_token()) {
+                    let end = if Self::starts_range_bound(self.peek_token_ref()) {
                         Some(self.parse_range_bound()?)
                     } else {
                         None
@@ -178,7 +178,7 @@ impl super::Parser {
             // pattern pipeline (typecheck / codegen / exhaustiveness /
             // ranges) handles them with no new LiteralPattern variant.
             // `b'I'` and `73u8` are then identical in pattern position.
-            Token::ByteLiteral(b) => {
+            &Token::ByteLiteral(b) => {
                 self.advance();
                 let lit = LiteralPattern::Integer(b as i64, Some(IntSuffix::U8));
                 // Range pattern: `b'a'..=b'z'` or `b'a'..`
@@ -194,7 +194,7 @@ impl super::Parser {
                     });
                 }
                 if self.eat(&Token::DotDot) {
-                    let end = if Self::starts_range_bound(&self.peek_token()) {
+                    let end = if Self::starts_range_bound(self.peek_token_ref()) {
                         Some(self.parse_range_bound()?)
                     } else {
                         None
@@ -213,7 +213,7 @@ impl super::Parser {
                     span: self.span_from(&start),
                 })
             }
-            Token::Float(n, sfx) => {
+            &Token::Float(n, sfx) => {
                 self.advance();
                 Some(Pattern {
                     kind: PatternKind::Literal(LiteralPattern::Float(n, sfx)),
@@ -228,7 +228,7 @@ impl super::Parser {
                     span: self.span_from(&start),
                 })
             }
-            Token::CharLiteral(c) => {
+            &Token::CharLiteral(c) => {
                 self.advance();
                 let lit = LiteralPattern::Char(c);
                 // Check for range pattern: `'a'..='z'` or `'a'..`
@@ -246,7 +246,7 @@ impl super::Parser {
                 if self.eat(&Token::DotDot) {
                     // `'a'..'z'` (bounded exclusive) when the next token
                     // is a literal or const path; `'a'..` (half-open) otherwise.
-                    let end = if Self::starts_range_bound(&self.peek_token()) {
+                    let end = if Self::starts_range_bound(self.peek_token_ref()) {
                         Some(self.parse_range_bound()?)
                     } else {
                         None
@@ -313,7 +313,7 @@ impl super::Parser {
                     if self.check(&Token::DotDot) {
                         let rest_span = self.current_span();
                         self.advance();
-                        let new_rest = if let Token::Identifier { .. } = self.peek_token() {
+                        let new_rest = if let Token::Identifier { .. } = self.peek_token_ref() {
                             let name = self.expect_identifier()?;
                             self.check_ident_class(&name, IdentClass::Value, "binding", rest_span);
                             RestPattern::Bound(name)
@@ -376,16 +376,16 @@ impl super::Parser {
                 // Range pattern with a const-path START bound:
                 // `MAX_AGE..`, `MIN..=MAX`, `LO..hi`. A bare identifier
                 // followed by `..`/`..=` is only ever a range start.
-                if matches!(self.peek_token(), Token::DotDot | Token::DotDotEq) {
+                if matches!(self.peek_token_ref(), Token::DotDot | Token::DotDotEq) {
                     let name_span = self.span_from(&start);
-                    let inclusive = matches!(self.peek_token(), Token::DotDotEq);
+                    let inclusive = matches!(self.peek_token_ref(), Token::DotDotEq);
                     self.advance();
                     let start_bound = RangeBound::Path {
                         segments: vec![name],
                         span: name_span,
                     };
                     // `..=` requires an end; `..` accepts an optional end.
-                    let end = if inclusive || Self::starts_range_bound(&self.peek_token()) {
+                    let end = if inclusive || Self::starts_range_bound(self.peek_token_ref()) {
                         Some(self.parse_range_bound()?)
                     } else {
                         None
@@ -443,15 +443,15 @@ impl super::Parser {
                     }
                     // Range pattern with a qualified const-path START bound:
                     // `Limits.HIGH..=other`.
-                    if matches!(self.peek_token(), Token::DotDot | Token::DotDotEq) {
+                    if matches!(self.peek_token_ref(), Token::DotDot | Token::DotDotEq) {
                         let path_span = self.span_from(&start);
-                        let inclusive = matches!(self.peek_token(), Token::DotDotEq);
+                        let inclusive = matches!(self.peek_token_ref(), Token::DotDotEq);
                         self.advance();
                         let start_bound = RangeBound::Path {
                             segments: path,
                             span: path_span,
                         };
-                        let end = if inclusive || Self::starts_range_bound(&self.peek_token()) {
+                        let end = if inclusive || Self::starts_range_bound(self.peek_token_ref()) {
                             Some(self.parse_range_bound()?)
                         } else {
                             None
@@ -546,7 +546,7 @@ impl super::Parser {
     /// `E_RANGE_PATTERN_BOUND_NOT_CONST` at typecheck.
     fn parse_range_bound(&mut self) -> Option<RangeBound> {
         let bound_start = self.current_span();
-        if let Token::Identifier { .. } = self.peek_token() {
+        if let Token::Identifier { .. } = self.peek_token_ref() {
             let name = self.expect_identifier()?;
             let mut segments = vec![name];
             while self.eat(&Token::Dot) {
@@ -557,7 +557,7 @@ impl super::Parser {
                 span: self.span_from(&bound_start),
             });
         }
-        if Self::starts_literal_pattern(&self.peek_token()) {
+        if Self::starts_literal_pattern(self.peek_token_ref()) {
             return Some(RangeBound::Literal(self.parse_literal_pattern()?));
         }
         self.errors.push(ParseError {
@@ -644,7 +644,7 @@ impl super::Parser {
     }
 
     pub(crate) fn parse_literal_pattern(&mut self) -> Option<LiteralPattern> {
-        match self.peek_token() {
+        match *self.peek_token_ref() {
             Token::Integer(n, sfx) => {
                 self.advance();
                 Some(LiteralPattern::Integer(n, sfx))

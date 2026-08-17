@@ -58,8 +58,8 @@ impl super::Parser {
     pub(crate) fn parse_inner_attributes(&mut self) -> Vec<Attribute> {
         let mut attrs = Vec::new();
         while self.check(&Token::Pound)
-            && matches!(self.peek_token_at(1), Token::Bang)
-            && matches!(self.peek_token_at(2), Token::LeftBracket)
+            && matches!(self.peek_token_ref_at(1), Token::Bang)
+            && matches!(self.peek_token_ref_at(2), Token::LeftBracket)
         {
             if let Some(attr) = self.parse_attribute(true) {
                 attrs.push(attr);
@@ -147,7 +147,7 @@ impl super::Parser {
 
         // #[name = "string"] form
         let (args, string_value) = if self.eat(&Token::Equal) {
-            match self.peek_token() {
+            match self.peek_token_ref() {
                 Token::StringLiteral(s) => {
                     let s = s.clone();
                     self.advance();
@@ -428,7 +428,7 @@ impl super::Parser {
             }
             "link_section" => {
                 self.expect(&Token::LeftParen)?;
-                let s = match self.peek_token() {
+                let s = match self.peek_token_ref() {
                     Token::StringLiteral(s) => {
                         let s = s.clone();
                         self.advance();

@@ -58,7 +58,7 @@ impl super::Parser {
         self.expect(&Token::Extern)?;
 
         let abi_span = self.current_span();
-        let abi = match self.peek_token() {
+        let abi = match self.peek_token_ref() {
             Token::StringLiteral(s) => {
                 let s = s.clone();
                 self.advance();
@@ -116,7 +116,7 @@ impl super::Parser {
             // Dispatch on the next significant token: `fn` for a foreign
             // function declaration, `type` for an opaque foreign type
             // declaration. Anything else is a focused diagnostic.
-            match self.peek_token() {
+            match self.peek_token_ref() {
                 Token::Fn => {
                     let item = self.parse_extern_block_item_fn(
                         &abi,
@@ -250,7 +250,7 @@ impl super::Parser {
         // consume both. (No Token::Host exists; `host` stays usable as an
         // ordinary identifier everywhere else.)
         debug_assert!(
-            matches!(self.peek_token(), Token::Identifier { name, .. } if name == "host"),
+            matches!(self.peek_token_ref(), Token::Identifier { name, .. } if name == "host"),
             "parse_host_function called without `host` lookahead",
         );
         self.advance(); // `host`
@@ -411,7 +411,7 @@ impl super::Parser {
         self.advance(); // consume `extern`
         let mut brace_depth = 0_i32;
         while !self.is_at_end() {
-            match self.peek_token() {
+            match self.peek_token_ref() {
                 Token::LeftBrace => {
                     brace_depth += 1;
                     self.advance();

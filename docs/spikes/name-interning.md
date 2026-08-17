@@ -1,6 +1,6 @@
 # Name interning — front-end name-handling cost, measured
 
-**Status:** Stages 0–3d DONE (2026-08-17). Stage 3a is the first slice of the
+**Status:** Stages 0–3e DONE (2026-08-17). Stage 3a is the first slice of the
 `Symbol(u32)` interner proper (the effectchecker's full key space); 3b–3d are
 the DHAT-guided allocation/hashing tails that followed it. Remaining stage-3
 phases (ownership, typechecker, AST identifiers) scoped below. Origin:
@@ -236,6 +236,31 @@ stage-2 seam rule; public witness-map signatures unchanged.
 Instructions **0.593B → 0.588B (−0.75%)**, wall within noise; the
 module's last per-process-random iteration order is now deterministic.
 
+### Stage 3e — the parser's cloning peek (LANDED)
+
+Fresh DHAT by BLOCK COUNT (mallocs, not bytes) put `Token::clone` at
+**16.7% of ALL front-end allocations** — 130k of 785k blocks. Cause:
+`peek_token()` returns the current token BY CLONE, and `check()` (the
+`eat`/`expect` backbone) called it just to compare discriminants — so
+every kind-probe while sitting on an identifier/string token cloned its
+String payload and threw it away. Several literal match arms even
+cloned twice (payload out of the already-cloned scrutinee).
+
+Fix: `peek_token_ref` / `peek_token_ref_at` (borrowed peeks; the
+kind-only probes, `==` comparisons, `matches!`, and all 40
+`match self.peek_token()` scrutinees now go through them), with payload
+arms cloning only what they keep, before `advance`. The cloning
+`peek_token` remains for the handful of sites that genuinely move a
+token out.
+
+Result (interleaved A/B, 3 rounds, synthetic): parse **21–22 →
+15–17 ms (−25%)**, parse allocations **162k → 90k (−44%)**;
+instructions **0.590B → 0.548B (−7.1%)** (same-tree A/B; sibling
+features had moved the baseline from 3d's 0.588B). Verified on fresh
+runtime archives after a sibling runtime symbol (`karac_par_run_auto`)
+staled all four — the loud undefined-symbol failure mode working as
+designed (B-2026-07-28-1).
+
 ### Remaining stage-3 phases (not started)
 
 Post-3d: session net front end **240.8 → ~130 ms (−46%), instructions
@@ -247,7 +272,11 @@ String-keyed maps Fx'd in 2½ but still cloning keys; its module tree is
 ~29k lines across 13 submodules — 3–4× the effectchecker conversion
 surface, so plan a full session for the Symbol conversion), and the
 ~9% SipHash tail (`Scope.names`, remaining std maps). Each is its own
-session-sized slice with 3a as the template.
+session-sized slice with 3a as the template. Post-3e the remaining
+allocation profile by blocks: `Pattern::collect_bindings` (~50k,
+Vec<String> per call across four phases), `Expr::clone` (~40k,
+contract-clause and typechecker clones), lexer token payloads (~37k,
+inherent until AST interning), `Type::clone` (~36k).
 
 ## Lifecycle
 
