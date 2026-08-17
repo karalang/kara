@@ -101,8 +101,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 75 | 1 |
 | false-positive | 70 | 0 |
 | diagnostics | 64 | 0 |
+| crash | 49 | 1 |
 | soundness | 48 | 0 |
-| crash | 48 | 0 |
 | other | 35 | 1 |
 | use-after-free | 20 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 898 | 1 |
-| typecheck | 177 | 0 |
-| interp | 145 | 0 |
+| codegen | 899 | 2 |
+| typecheck | 178 | 1 |
+| interp | 146 | 1 |
 | ownership | 53 | 0 |
 | other | 49 | 1 |
 | autopar | 47 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1261 surfaced · 3 open · 1243 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1262 surfaced · 4 open · 1243 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort; the residual is now a pure work-count gap at IPC parity | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
+| B-2026-08-17-10 | 2026-08-17 | typecheck+interp+codegen | medium | INDEXING AN ITERATOR TYPECHECKS, THEN EVERY BACKEND IMPROVISES DIFFERENTLY: `karac check` passes `w.chars()[0]` and `v.iter()[0]`; the interpreter dies on an `unreachable!()` INTERNAL ERROR, while codegen either compiles it correctly (let-bound `chars`) or fails the build (`iter`, or `chars` indexed inline). The typechecker should reject the index. | The typechecker's index-expression rule admits an `Iterator` operand. `src/interpreter/eval_expr.rs:747` then hits `unreachable!()` — and its own panic text names the two candidate causes, the second of which is the right one: "the typechecker accepted an unindexable operand pair". |
 
 ### Wontfix (5)
 
