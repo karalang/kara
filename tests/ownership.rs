@@ -8499,6 +8499,139 @@ fn par_primitive_used_in_both_branches_accepted() {
 // reachable from 2+ sibling `par {}` branches is NOT an E_CONCURRENT_*
 // error, in contrast to plain / `shared` structs.
 
+// ── B-2026-08-17-12: read-only multi-branch admission for PLAIN bindings ──
+// design.md § Structured Concurrency Lifetime Guarantees, edge case 1 — the
+// first slice of the target model ("multiple sibling tasks may simultaneously
+// hold `ref T`") for non-`par` types. The proven shape is narrow on purpose:
+// a bare unmarked identifier argument to a declared-`ref` parameter of a
+// program function, the argument's type transitively cross-task-safe. The
+// negatives below pin the fail-closed boundary of that proof.
+
+#[test]
+fn plain_vec_two_readonly_ref_branches_accepted() {
+    // The spec's own case 1, reduced: both branches pass `data` to a
+    // `ref Vec[i64]` parameter, nothing writes, nothing moves.
+    let result = ownership_ok(
+        "fn sum_a(data: ref Vec[i64]) -> i64 { data.len() as i64 }\n\
+         fn sum_b(data: ref Vec[i64]) -> i64 { data.len() as i64 }\n\
+         fn main() {\n\
+             let data: Vec[i64] = Vec.new();\n\
+             let pair = par {\n\
+                 let a = sum_a(data);\n\
+                 let b = sum_b(data);\n\
+                 (a, b)\n\
+             };\n\
+             println(pair.0 + pair.1);\n\
+         }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentPlainStruct { .. })),
+        "two read-only `ref` branches over a plain Vec are the spec's ALLOWED case 1; got: {:?}",
+        result.errors,
+    );
+}
+
+#[test]
+fn plain_vec_readonly_admission_rejects_owned_move_branch() {
+    // One branch's callee takes the Vec OWNED — that branch's header copy
+    // adopts ownership and frees, so admission must not apply.
+    let errors = ownership_errors(
+        "fn sum_a(data: ref Vec[i64]) -> i64 { data.len() as i64 }\n\
+         fn take(data: Vec[i64]) -> i64 { data.len() as i64 }\n\
+         fn main() {\n\
+             let data: Vec[i64] = Vec.new();\n\
+             par {\n\
+                 let a = sum_a(data);\n\
+                 let b = take(data);\n\
+                 (a, b)\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentPlainStruct { .. })),
+        "an owned-param branch must stay rejected; got: {errors:?}",
+    );
+}
+
+#[test]
+fn plain_vec_readonly_admission_rejects_direct_method_receiver() {
+    // `data.len()` directly in a branch is NOT the proven shape (v1 admits
+    // only the ref-param call argument); it must stay material and rejected.
+    let errors = ownership_errors(
+        "fn sum_a(data: ref Vec[i64]) -> i64 { data.len() as i64 }\n\
+         fn main() {\n\
+             let data: Vec[i64] = Vec.new();\n\
+             par {\n\
+                 let a = sum_a(data);\n\
+                 let b = data.len();\n\
+                 (a, b)\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentPlainStruct { .. })),
+        "a direct method receiver is outside the v1 proof and must stay rejected; got: {errors:?}",
+    );
+}
+
+#[test]
+fn plain_vec_of_shared_elements_stays_rejected_even_readonly() {
+    // The element type is a `shared struct`: read-only traversal from two
+    // branches still materializes RC handles whose non-atomic inc/dec race
+    // (the B-2026-07-28-13 class). The transitive cross-task-safe walk must
+    // refuse the admission.
+    let errors = ownership_errors(
+        "shared struct Node { label: String }\n\
+         fn count(v: ref Vec[Node]) -> i64 { v.len() as i64 }\n\
+         fn main() {\n\
+             let v: Vec[Node] = Vec.new();\n\
+             par {\n\
+                 let a = count(v);\n\
+                 let b = count(v);\n\
+                 (a, b)\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentPlainStruct { .. })),
+        "shared-element containers must stay rejected regardless of borrow mode; got: {errors:?}",
+    );
+}
+
+#[test]
+fn plain_struct_with_shared_field_stays_rejected_even_readonly() {
+    // Transitivity through a plain struct's FIELD: the struct itself is
+    // plain, but a field is `shared`, so the deep walk must refuse.
+    let errors = ownership_errors(
+        "shared struct Cache { label: String }\n\
+         struct Doc { cache: Cache, words: i64 }\n\
+         fn scan(d: ref Doc) -> i64 { d.words }\n\
+         fn main() {\n\
+             let d = Doc { cache: Cache { label: \"x\" }, words: 1 };\n\
+             par {\n\
+                 let a = scan(d);\n\
+                 let b = scan(d);\n\
+                 (a, b)\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentPlainStruct { .. })),
+        "a shared field at any depth must refuse the read-only admission; got: {errors:?}",
+    );
+}
+
 #[test]
 fn par_struct_multiple_sibling_ref_readers_accepted() {
     // Phase 6 `par struct` slice D — design.md § 9476: "multiple sibling

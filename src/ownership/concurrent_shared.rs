@@ -3,6 +3,19 @@
 //! Detects struct/enum bindings that are referenced from two or more
 //! top-level statements (branches) of the same `par {}` block.
 //!
+//! The detection is a reference count with four admission mechanisms
+//! carved out, not a full conflict analysis: frozen bindings
+//! (B-2026-08-01-33 mechanism 3), env-gated atomic promotion
+//! (mechanism 2), non-material scalar projections (mechanism 1), and —
+//! for PLAIN bindings only — the B-2026-08-17-12 read-only admission,
+//! which accepts a multi-branch capture when every use in every branch
+//! is a proven read-only shape (a bare unmarked identifier argument to
+//! a declared-`ref` parameter, transitively cross-task-safe type).
+//! That last one is the first live slice of design.md's target model
+//! ("multiple sibling tasks may simultaneously hold `ref T`") for
+//! non-`par` types; see the admission comment in
+//! `detect_par_block_conflicts` for the runtime-soundness argument.
+//!
 //! Two related diagnostics, one detection pass:
 //!
 //! - **`E_CONCURRENT_SHARED_STRUCT`** — `shared struct` / `shared enum`
@@ -197,6 +210,15 @@ struct TrackedBinding {
 struct BranchUse {
     span: Span,
     material: bool,
+    /// B-2026-08-17-12 — every reference to this binding in the branch is a
+    /// PROVEN read-only use: a bare unmarked identifier argument in a call
+    /// whose callee's parameter at that position is declared `ref`, with the
+    /// argument's full type transitively cross-task-safe. AND-merged (one
+    /// unproven use poisons the binding), and the default at every recording
+    /// site is `false` — the same fail-closed polarity as `material`, in the
+    /// opposite direction: an `ExprKind` this pass does not special-case
+    /// costs a spurious error, never an admitted race.
+    readonly: bool,
 }
 
 /// Record a branch's reference to `name`, keeping the strongest classification
@@ -204,7 +226,7 @@ struct BranchUse {
 /// material, and the reported span moves to that reference (the diagnostic
 /// should point at the use that actually races, not at a benign projection
 /// earlier in the same branch).
-fn record_use(out: &mut BranchUses<'_>, name: String, span: Span, material: bool) {
+fn record_use(out: &mut BranchUses<'_>, name: String, span: Span, material: bool, readonly: bool) {
     // B-2026-08-08-1 — a use that resolves to a binding introduced INSIDE this
     // par body is not a capture of the outer binding of the same name, so it
     // must not count toward the cross-branch conflict.
@@ -217,9 +239,19 @@ fn record_use(out: &mut BranchUses<'_>, name: String, span: Span, material: bool
                 existing.material = true;
                 existing.span = span;
             }
+            // One unproven use poisons the binding's read-only claim for the
+            // whole branch — AND, never OR.
+            existing.readonly &= readonly;
         }
         None => {
-            out.uses.insert(name, BranchUse { span, material });
+            out.uses.insert(
+                name,
+                BranchUse {
+                    span,
+                    material,
+                    readonly,
+                },
+            );
         }
     }
 }
@@ -247,16 +279,144 @@ struct ShadowRegion {
 /// collector being exhaustive. It is not: it ends in a `_ => {}`, so an
 /// expression form it does not model contributes no uses. A filter that hooked
 /// the walk instead of the sink would inherit that hole.
+///
+/// `cx` rides the sink for the same reason (B-2026-08-17-12): the read-only
+/// classification in the `Call` arm needs the typechecker's expression types
+/// and struct/enum tables plus the program items, and the sink already
+/// reaches that arm.
 struct BranchUses<'s> {
     uses: HashMap<String, BranchUse>,
     shadows: &'s [ShadowRegion],
+    cx: &'s ReadonlyCx<'s>,
+}
+
+/// B-2026-08-17-12 — everything the read-only use classifier consults.
+struct ReadonlyCx<'a> {
+    expr_types: &'a FxHashMap<SpanKey, crate::typechecker::Type>,
+    struct_info: &'a FxHashMap<String, crate::typechecker::StructInfo>,
+    enum_info: &'a FxHashMap<String, crate::typechecker::EnumInfo>,
+    items: &'a [Item],
+}
+
+impl ReadonlyCx<'_> {
+    /// Whether the callee of a direct `name(args)` call is a program free
+    /// function whose parameter at `idx` is declared `ref T` (not `mut ref`,
+    /// not owned). Purely syntactic off the AST signature — parameter modes
+    /// are always declared at Kāra signatures (design.md § ownership tiers),
+    /// so the declaration is authoritative and needs no inferred-mode map.
+    /// A callee that is not a bare identifier (a path, a closure value), or
+    /// that matches no program function, answers `false` — fail-closed.
+    fn callee_param_is_ref(&self, callee: &Expr, idx: usize) -> bool {
+        let ExprKind::Identifier(fn_name) = &callee.kind else {
+            return false;
+        };
+        for item in self.items {
+            if let Item::Function(f) = item {
+                if &f.name == fn_name {
+                    return f
+                        .params
+                        .get(idx)
+                        .is_some_and(|p| matches!(p.ty.kind, TypeKind::Ref(_)));
+                }
+            }
+        }
+        false
+    }
+
+    /// The B-2026-08-17-12 admission's type-side condition: the argument's
+    /// full inferred type, borrow-stripped, contains no cross-task-unsafe
+    /// type at any depth. `shared struct` / `shared enum` / `Rc` / `Weak` /
+    /// `OnceCell` / raw pointers anywhere in the tree — including as a plain
+    /// struct's field or an enum variant's payload — disqualify: a read-only
+    /// traversal from two branches still materializes interior handles, and
+    /// a non-atomic refcount inc/dec pair from sibling threads is the
+    /// B-2026-07-28-13 race regardless of who "writes". Everything this walk
+    /// cannot positively resolve (unknown names, generic params, closures,
+    /// associated projections) also answers `false` — fail-closed.
+    fn expr_type_cross_task_safe(&self, span: &Span) -> bool {
+        let Some(ty) = self.expr_types.get(&SpanKey::from_span(span)) else {
+            return false;
+        };
+        let mut seen: HashSet<&str> = HashSet::new();
+        self.type_cross_task_safe(ty, &mut seen)
+    }
+
+    fn type_cross_task_safe<'t>(
+        &'t self,
+        ty: &'t crate::typechecker::Type,
+        seen: &mut HashSet<&'t str>,
+    ) -> bool {
+        use crate::typechecker::Type as T;
+        match ty {
+            T::Int(_)
+            | T::UInt(_)
+            | T::Float(_)
+            | T::Bool
+            | T::Char
+            | T::Str
+            | T::Unit
+            | T::Never => true,
+            T::Ref(inner) | T::MutRef(inner) | T::Arc(inner) => {
+                self.type_cross_task_safe(inner, seen)
+            }
+            T::Tuple(ts) => ts.iter().all(|t| self.type_cross_task_safe(t, seen)),
+            T::Array { element, .. } | T::Vector { element, .. } | T::Slice { element, .. } => {
+                self.type_cross_task_safe(element, seen)
+            }
+            // A Shape generic argument is a compile-time dim list, not data.
+            T::Shape(_) => true,
+            T::Named { name, args } => {
+                if name == "Rc" || name == "OnceCell" {
+                    return false;
+                }
+                if !args.iter().all(|t| self.type_cross_task_safe(t, seen)) {
+                    return false;
+                }
+                // Cycle guard: a name already on the walk stack is being
+                // vouched for by its first visit.
+                if !seen.insert(name.as_str()) {
+                    return true;
+                }
+                if let Some(info) = self.struct_info.get(name) {
+                    if info.is_shared {
+                        return false;
+                    }
+                    return info
+                        .fields
+                        .iter()
+                        .all(|(_, fty, _)| self.type_cross_task_safe(fty, seen));
+                }
+                if let Some(info) = self.enum_info.get(name) {
+                    if info.is_shared {
+                        return false;
+                    }
+                    return info.variants.iter().all(|(_, vt)| match vt {
+                        crate::typechecker::VariantTypeInfo::Unit => true,
+                        crate::typechecker::VariantTypeInfo::Tuple(ts) => {
+                            ts.iter().all(|t| self.type_cross_task_safe(t, seen))
+                        }
+                        crate::typechecker::VariantTypeInfo::Struct(fs) => {
+                            fs.iter().all(|(_, t)| self.type_cross_task_safe(t, seen))
+                        }
+                    });
+                }
+                // A name neither table resolves — fail closed.
+                false
+            }
+            // Everything else — shared handles, Rc/Weak, raw pointers,
+            // closures (whose captures this walk cannot see), generic
+            // params, inference vars, projections — fails closed.
+            _ => false,
+        }
+    }
 }
 
 impl BranchUses<'_> {
-    fn new(shadows: &[ShadowRegion]) -> BranchUses<'_> {
+    fn new<'s>(shadows: &'s [ShadowRegion], cx: &'s ReadonlyCx<'s>) -> BranchUses<'s> {
         BranchUses {
             uses: HashMap::new(),
             shadows,
+            cx,
         }
     }
 
@@ -543,6 +703,13 @@ impl<'a> super::OwnershipChecker<'a> {
             method_callee_types: &self.typecheck_result.method_callee_types,
             method_self_modes: &self.method_self_modes,
         };
+        // B-2026-08-17-12 — context for the read-only use classifier.
+        let cx = ReadonlyCx {
+            expr_types: &self.typecheck_result.expr_types,
+            struct_info: &self.typecheck_result.struct_info,
+            enum_info: &self.typecheck_result.enum_info,
+            items,
+        };
         for item in items {
             match item {
                 Item::Function(f) => {
@@ -557,6 +724,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             closure_captures,
                             &closure_bindings,
                             &classifier,
+                            &cx,
                             &mut errors,
                             &mut fix_diffs,
                             &mut promoted,
@@ -581,6 +749,7 @@ impl<'a> super::OwnershipChecker<'a> {
                                     closure_captures,
                                     &closure_bindings,
                                     &classifier,
+                                    &cx,
                                     &mut errors,
                                     &mut fix_diffs,
                                     &mut promoted,
@@ -892,6 +1061,7 @@ fn scan_block_for_par_conflicts(
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
     classifier: &MethodMutClassifier,
+    cx: &ReadonlyCx,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut FxHashMap<SpanKey, Vec<TextEdit>>,
     promoted: &mut HashSet<String>,
@@ -904,6 +1074,7 @@ fn scan_block_for_par_conflicts(
             closure_captures,
             closure_bindings,
             classifier,
+            cx,
             errors,
             fix_diffs,
             promoted,
@@ -917,6 +1088,7 @@ fn scan_block_for_par_conflicts(
             closure_captures,
             closure_bindings,
             classifier,
+            cx,
             errors,
             fix_diffs,
             promoted,
@@ -1192,6 +1364,7 @@ fn scan_stmt_for_par_conflicts(
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
     classifier: &MethodMutClassifier,
+    cx: &ReadonlyCx,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut FxHashMap<SpanKey, Vec<TextEdit>>,
     promoted: &mut HashSet<String>,
@@ -1208,6 +1381,7 @@ fn scan_stmt_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1223,6 +1397,7 @@ fn scan_stmt_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1235,6 +1410,7 @@ fn scan_stmt_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1248,6 +1424,7 @@ fn scan_stmt_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1264,6 +1441,7 @@ fn scan_stmt_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1277,6 +1455,7 @@ fn scan_stmt_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1291,6 +1470,7 @@ fn scan_stmt_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1302,6 +1482,7 @@ fn scan_stmt_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1315,6 +1496,7 @@ fn scan_stmt_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1326,6 +1508,7 @@ fn scan_stmt_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1339,6 +1522,7 @@ fn scan_stmt_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1355,6 +1539,7 @@ fn scan_expr_for_par_conflicts(
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
     classifier: &MethodMutClassifier,
+    cx: &ReadonlyCx,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut FxHashMap<SpanKey, Vec<TextEdit>>,
     promoted: &mut HashSet<String>,
@@ -1368,6 +1553,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1380,6 +1566,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1393,6 +1580,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1414,6 +1602,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1427,6 +1616,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1445,6 +1635,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1457,6 +1648,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1470,6 +1662,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1483,6 +1676,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1499,6 +1693,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1511,6 +1706,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1524,6 +1720,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1538,6 +1735,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1550,6 +1748,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1563,6 +1762,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1577,6 +1777,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1590,6 +1791,7 @@ fn scan_expr_for_par_conflicts(
                         closure_captures,
                         closure_bindings,
                         classifier,
+                        cx,
                         errors,
                         fix_diffs,
                         promoted,
@@ -1602,6 +1804,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1616,6 +1819,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1628,6 +1832,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1642,6 +1847,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1654,6 +1860,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1668,6 +1875,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1681,6 +1889,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1692,6 +1901,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1705,6 +1915,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1716,6 +1927,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1729,6 +1941,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1743,6 +1956,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1758,6 +1972,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1773,6 +1988,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1787,6 +2003,7 @@ fn scan_expr_for_par_conflicts(
                 closure_captures,
                 closure_bindings,
                 classifier,
+                cx,
                 errors,
                 fix_diffs,
                 promoted,
@@ -1801,6 +2018,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1814,6 +2032,7 @@ fn scan_expr_for_par_conflicts(
                     closure_captures,
                     closure_bindings,
                     classifier,
+                    cx,
                     errors,
                     fix_diffs,
                     promoted,
@@ -1837,6 +2056,7 @@ fn detect_par_block_conflicts(
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
     classifier: &MethodMutClassifier,
+    cx: &ReadonlyCx,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut FxHashMap<SpanKey, Vec<TextEdit>>,
     promoted: &mut HashSet<String>,
@@ -1860,7 +2080,7 @@ fn detect_par_block_conflicts(
         .stmts
         .iter()
         .map(|stmt| {
-            let mut uses = BranchUses::new(&shadows);
+            let mut uses = BranchUses::new(&shadows, cx);
             collect_identifier_uses_in_stmt(
                 stmt,
                 tracked,
@@ -1889,6 +2109,20 @@ fn detect_par_block_conflicts(
             uses.uses
                 .iter()
                 .filter(|(_, u)| u.material)
+                .map(|(n, _)| n.as_str())
+        })
+        .collect();
+
+    // B-2026-08-17-12 — bindings with at least one use the read-only
+    // classifier could NOT prove. The admission below requires the complement
+    // over EVERY branch: one unproven use anywhere disqualifies the binding,
+    // matching the quantifier discipline of the material set above.
+    let nonreadonly_anywhere: HashSet<&str> = per_branch
+        .iter()
+        .flat_map(|uses| {
+            uses.uses
+                .iter()
+                .filter(|(_, u)| !u.readonly)
                 .map(|(n, _)| n.as_str())
         })
         .collect();
@@ -1955,6 +2189,36 @@ fn detect_par_block_conflicts(
                             reported.insert(name);
                             continue;
                         }
+                    }
+                    // B-2026-08-17-12 — READ-ONLY MULTI-BRANCH ADMISSION,
+                    // the first slice of design.md's target model ("multiple
+                    // sibling tasks may simultaneously hold `ref T`") for
+                    // non-`par` types. PLAIN bindings only, and only when
+                    // every use in every branch is the proven read-only
+                    // shape (see the `Call` arm of the use collector): a
+                    // bare unmarked identifier argument to a declared-`ref`
+                    // parameter of a program function, its full type
+                    // transitively cross-task-safe.
+                    //
+                    // Why this is sound at runtime: a plain-struct capture
+                    // lowers as a bitwise header copy through the branch env
+                    // with NO branch-side cleanup (`ParCaptureMode::Copy`),
+                    // so sibling branches alias the parent's buffer. Reads
+                    // through a `ref` param neither write, free, nor escape
+                    // that copy, and the parent — still the sole owner —
+                    // frees after the join barrier. Measured under
+                    // ASAN+LSan: `tests/memory_sanitizer.rs::
+                    // asan_par_readonly_two_branch_*`.
+                    //
+                    // Why `Plain` only: a `shared` binding's refcount header
+                    // races on any cross-branch materialization regardless
+                    // of read/write (B-2026-07-28-13); its admissions are
+                    // the frozen / atomic-promotion arms above.
+                    if matches!(binding.kind, BindingKind::Plain)
+                        && !nonreadonly_anywhere.contains(name.as_str())
+                    {
+                        reported.insert(name);
+                        continue;
                     }
                     let err = build_concurrent_struct_error(
                         &name,
@@ -4471,7 +4735,7 @@ fn collect_identifier_uses_in_expr(
         ExprKind::Identifier(name) => {
             // Direct tracked-binding reference.
             if tracked.contains_key(name) {
-                record_use(out, name.clone(), expr.span, true);
+                record_use(out, name.clone(), expr.span, true, false);
             }
             // Indirect reference via a let-bound closure that captures
             // tracked bindings — `let f = || use(c);` followed by a
@@ -4482,7 +4746,7 @@ fn collect_identifier_uses_in_expr(
             // the per-branch identifier walk.
             for cap in expand_through_closure_bindings(name, closure_bindings) {
                 if tracked.contains_key(&cap) {
-                    record_use(out, cap, expr.span, true);
+                    record_use(out, cap, expr.span, true, false);
                 }
             }
         }
@@ -4499,11 +4763,11 @@ fn collect_identifier_uses_in_expr(
             if let Some(captures) = closure_captures.get(&key) {
                 for (cap_name, _) in captures {
                     if tracked.contains_key(cap_name) {
-                        record_use(out, cap_name.clone(), expr.span, true);
+                        record_use(out, cap_name.clone(), expr.span, true, false);
                     }
                     for chained in expand_through_closure_bindings(cap_name, closure_bindings) {
                         if tracked.contains_key(&chained) {
-                            record_use(out, chained, expr.span, true);
+                            record_use(out, chained, expr.span, true, false);
                         }
                     }
                 }
@@ -4679,7 +4943,30 @@ fn collect_identifier_uses_in_expr(
                 closure_bindings,
                 out,
             );
-            for a in args {
+            // B-2026-08-17-12 — the one shape that records a READ-ONLY use:
+            // a bare, unmarked tracked identifier passed where the callee's
+            // parameter is declared `ref`, with the argument's full type
+            // transitively cross-task-safe. Labeled arguments bail to the
+            // generic walk (labels can reorder against the positional
+            // signature), as does an identifier that doubles as a closure
+            // binding. Every other argument shape falls through to the
+            // generic walk below and records material + non-readonly.
+            let any_labeled = args.iter().any(|a| a.label.is_some());
+            for (idx, a) in args.iter().enumerate() {
+                if !any_labeled {
+                    if let ExprKind::Identifier(arg_name) = &a.value.kind {
+                        if !a.mut_marker
+                            && tracked.contains_key(arg_name)
+                            && expand_through_closure_bindings(arg_name, closure_bindings)
+                                .is_empty()
+                            && out.cx.callee_param_is_ref(callee, idx)
+                            && out.cx.expr_type_cross_task_safe(&a.value.span)
+                        {
+                            record_use(out, arg_name.clone(), a.value.span, true, true);
+                            continue;
+                        }
+                    }
+                }
                 collect_identifier_uses_in_expr(
                     &a.value,
                     tracked,
@@ -4732,7 +5019,7 @@ fn collect_identifier_uses_in_expr(
                     .get(base)
                     .is_some_and(|b| b.readonly_scalar_fields.contains(field))
                 {
-                    record_use(out, base.clone(), expr.span, false);
+                    record_use(out, base.clone(), expr.span, false, true);
                     return;
                 }
             }

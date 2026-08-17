@@ -50394,4 +50394,110 @@ fn main() {
             "field_store_through_mut_slice_param_frees_displaced",
         );
     }
+
+    // B-2026-08-17-12 — READ-ONLY MULTI-BRANCH PAR SHARING of a plain
+    // container. Plain-struct par captures lower as a bitwise header copy
+    // through the branch env with NO branch-side cleanup (ParCaptureMode::Copy
+    // — see its doc), so admitting two read-only branches is sound iff no
+    // branch writes through, drops, or escapes its copy. These fixtures are
+    // the permanent ASAN gate for that admission: same buffer read from two
+    // concurrent branches via `ref` params, parent frees after join. A
+    // double-free (a branch adopting ownership of its header copy) or a leak
+    // (the parent's cleanup suppressed by the multi-branch capture) fails
+    // here.
+
+    #[test]
+    fn asan_par_readonly_two_branch_vec_i64() {
+        assert_clean_asan_run(
+            r#"
+fn sum_first_half(data: ref Vec[i64]) -> i64 {
+    let mut total = 0i64;
+    let mut i = 0;
+    while i < data.len() / 2 {
+        total = total + data[i];
+        i = i + 1;
+    }
+    total
+}
+fn sum_second_half(data: ref Vec[i64]) -> i64 {
+    let mut total = 0i64;
+    let mut i = data.len() / 2;
+    while i < data.len() {
+        total = total + data[i];
+        i = i + 1;
+    }
+    total
+}
+fn process_in_parallel(data: Vec[i64]) -> (i64, i64) {
+    par {
+        let a = sum_first_half(data);
+        let b = sum_second_half(data);
+        (a, b)
+    }
+}
+fn main() {
+    let mut data: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < 1000i64 {
+        data.push(i);
+        i = i + 1i64;
+    }
+    let (a, b) = process_in_parallel(data);
+    println(a);
+    println(b);
+}
+"#,
+            &["124750", "374750"],
+            "asan_par_readonly_two_branch_vec_i64",
+        );
+    }
+
+    #[test]
+    fn asan_par_readonly_two_branch_vec_of_heap_structs() {
+        // Heap-payload elements (String fields) — the branches traverse the
+        // same element blocks concurrently through `ref` params; the parent
+        // remains the sole owner of buffer AND elements after the join.
+        assert_clean_asan_run(
+            r#"
+struct Doc { title: String, words: i64 }
+fn count_long(docs: ref Vec[Doc], lo: i64, hi: i64) -> i64 {
+    let mut n = 0i64;
+    let mut i = lo;
+    while i < hi {
+        if docs[i as usize].title.len() > 4 {
+            n = n + 1i64;
+        }
+        i = i + 1i64;
+    }
+    n
+}
+fn scan(docs: ref Vec[Doc]) -> (i64, i64) {
+    let half = (docs.len() as i64) / 2i64;
+    let total = docs.len() as i64;
+    par {
+        let a = count_long(docs, 0i64, half);
+        let b = count_long(docs, half, total);
+        (a, b)
+    }
+}
+fn main() {
+    let mut docs: Vec[Doc] = Vec.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        if i % 2i64 == 0i64 {
+            docs.push(Doc { title: "longtitle", words: i });
+        } else {
+            docs.push(Doc { title: "abc", words: i });
+        }
+        i = i + 1i64;
+    }
+    let (a, b) = scan(docs);
+    println(a);
+    println(b);
+}
+"#,
+            &["10", "10"],
+            "asan_par_readonly_two_branch_vec_of_heap_structs",
+        );
+    }
 }
