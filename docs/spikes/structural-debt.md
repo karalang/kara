@@ -34,13 +34,18 @@ the `expr_method_call.rs` region (~1,490), `contextual_scalar_collection_type`
 forced the parser recursion ceiling (B-2026-08-16-4) down to 128 — shrinking
 them buys both readability and nesting headroom.
 
-## Name interning (review item 9c)
+## Name interning (review item 9c) — spike RUNNING, stages 0–2 landed
 
-All type/function tables are `HashMap<String, …>`; the typechecker alone has
-~700 `.to_string()` calls with lookup-then-clone-then-relookup patterns
-(`src/typechecker/expr_ops.rs`, `expr_call.rs`). An interner (u32 symbol ids)
-is a large, cross-phase change — do it as its own spike with before/after
-compile-time measurements, not opportunistically.
+Measured and partially burned down in
+[`name-interning.md`](name-interning.md) (2026-08-17): a front-end phase
+benchmark (`examples/bench_frontend.rs`) + callgrind attribution found ~60%
+of front-end instructions in string-identity overhead; fixing the
+`collect_calls_in_expr` key-scan quadratic (B-2026-08-17-1) plus FxHash on
+the effectchecker's internal tables cut the front end **−30% wall / −57%
+allocations** on the 10.9k-line synthetic corpus. Remaining: extend the
+FxHash seam to typechecker/ownership/resolver internals (~1 session, same
+recipe), then decide the `Symbol(u32)` conversion proper — scope and
+expected ceiling are in the spike doc.
 
 ## Smaller residuals
 

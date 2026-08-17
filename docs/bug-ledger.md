@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 122 | 0 |
 | codegen-gap | 113 | 0 |
 | missing-feature | 96 | 0 |
-| perf | 74 | 2 |
+| perf | 75 | 2 |
 | false-positive | 70 | 0 |
 | diagnostics | 60 | 0 |
 | soundness | 48 | 0 |
@@ -120,11 +120,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 17 | 0 |
-| effect | 5 | 0 |
+| effect | 6 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1249 surfaced · 2 open · 1233 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1250 surfaced · 2 open · 1234 fixed · 4 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
@@ -146,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1249 surfaced
 
 </details>
 
-### Fixed (1233)
+### Fixed (1234)
 
-<details><summary>1233 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1234 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9690,6 +9690,7 @@ Gates: full `--features llvm` sweep of all 100 targets, 12591 tests, 0
 failures; clippy `--all --all-targets` and fmt clean. |
 | B-2026-08-16-8 | other | medium | memory_sanitizer's four link-skip sites bypassed `link_or_skip` — the B-2026-07-28-1 stale-archive panic never protected the ASan/LSan suite | FIXED by 220070be. All four hand-rolled link-skip sites in tests/memory_sanitizer.rs now route the linker result through `common::link_or_skip`, picking up both discriminations: undefined-symbol (stale archive) panics with the rebuild recipe, and `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` (added in the same commit, set by CI's seven archive-building jobs) forbids the remaining soft-skip outright. Verified empirically with archives hidden: default mode green-skips, gated mode fails with the actionable message; smoke test green with archives restored. |
 | B-2026-08-16-10 | other | medium | CI never built the regex/arrow opt-in archives, so the 8 Regex / Arrow-IPC codegen E2E tests (and memory_sanitizer's regex fixtures) green-skipped in… | FIXED by c92476aa. The six gated jobs (codegen-e2e ×3, memory-sanitizer ×3) now build lean → regex → arrow → full in the CLAUDE.md archive order; bench-gate stays lean → full (no regex/arrow fixtures). Verified locally with all four archives present: full codegen E2E 2,999 passed / 0 failed under KARAC_REQUIRE_RUNTIME_ARCHIVE=1 — the first run anywhere in which the 8 regex/arrow E2E tests provably executed under the gate. |
+| B-2026-08-17-1 | effect | medium | collect_calls_in_expr name-only method fallback scans all method_bodies keys per call site, allocating a format! probe per key — O(call sites x impl… | FIXED by 3d466756. A method_name_index (bare method name -> the method_bodies keys ending in .name), built once at the end of collect_function_info, replaces the per-call-site scan; the same commit moves the effectchecker's internal String-keyed working tables to FxHashMap/FxHashSet (public result structs and signatures stay std HashMap). Measured on bench/compile_speed/synthetic.kara via examples/bench_frontend.rs: effectcheck 136.6 -> ~67 ms median, allocations 2.44M -> 0.64M, whole front end 241 -> ~168 ms (-30%). Verified: full non-LLVM suite 8,959/0; codegen E2E 3,000/0, par_codegen 258/0, memory_sanitizer 1,109/0 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1. |
 
 </details>
 
