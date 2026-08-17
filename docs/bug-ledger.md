@@ -95,12 +95,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 254 | 0 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
-| run-vs-build | 124 | 2 |
+| run-vs-build | 124 | 1 |
 | codegen-gap | 113 | 0 |
 | missing-feature | 96 | 0 |
 | perf | 75 | 1 |
 | false-positive | 70 | 0 |
-| diagnostics | 60 | 0 |
+| diagnostics | 61 | 1 |
 | soundness | 48 | 0 |
 | crash | 48 | 0 |
 | other | 32 | 0 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 53 | 0 |
 | autopar | 47 | 0 |
 | other | 45 | 0 |
-| cli | 32 | 2 |
+| cli | 33 | 2 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 17 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1252 surfaced · 3 open · 1234 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1253 surfaced · 3 open · 1235 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.61x driftsort after the insertion leaf; the partition TREE is now the larger half and the leaf split needs re-measuring | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
-| B-2026-08-16-12 | 2026-08-16 | cli | medium | The `chained_field_receiver` lint that closed B-2026-08-13-12 only walks SOME expression positions: it catches `let n = e.doc.lines.len();` and an `if` condition, and MISSES the same expression inside an f-string hole, behind an `as` cast, in a `for` range bound, and as an INDEX chain. All of them are still refused by `karac build`, so the check-vs-build gap that row was filed to close is only half closed. | src/chained_receiver_lint.rs -- the AST traversal that looks for `is_chained_field_receiver`. Two unvisited positions are named below; the pattern is that the walk covers statement-level and condition positions and not general sub-expressions. |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | the `E_ESCAPING_CLOSURE_NOT_YET` codegen refusal; the pattern to copy is `src/chained_receiver_lint.rs` (a check-phase Deny lint with `-A` opt-out and an `--interp` exemption via `Pipeline::codegen_bound`). |
+| B-2026-08-17-2 | 2026-08-17 | cli | low | The `map_value_clone_reinsert` advisory lint shares the partial-walk idiom B-2026-08-16-12 removed from its sibling: its traversal carries `_ => {}` catch-alls at three sites, so the quadratic clone-reinsert idiom inside an unvisited position (a closure body being the most plausible) is silently unreported. Advisory-only consequence — a missed perf hint, not a check-vs-build gap. | src/map_entry_lint.rs — the walk_stmt/walk_expr traversal (`_ => {}` at three sites) |
 
 ### Wontfix (5)
 
@@ -148,9 +148,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1252 surfaced
 
 </details>
 
-### Fixed (1234)
+### Fixed (1235)
 
-<details><summary>1234 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1235 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9692,6 +9692,33 @@ Gates: full `--features llvm` sweep of all 100 targets, 12591 tests, 0
 failures; clippy `--all --all-targets` and fmt clean. |
 | B-2026-08-16-8 | other | medium | memory_sanitizer's four link-skip sites bypassed `link_or_skip` — the B-2026-07-28-1 stale-archive panic never protected the ASan/LSan suite | FIXED by 220070be. All four hand-rolled link-skip sites in tests/memory_sanitizer.rs now route the linker result through `common::link_or_skip`, picking up both discriminations: undefined-symbol (stale archive) panics with the rebuild recipe, and `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` (added in the same commit, set by CI's seven archive-building jobs) forbids the remaining soft-skip outright. Verified empirically with archives hidden: default mode green-skips, gated mode fails with the actionable message; smoke test green with archives restored. |
 | B-2026-08-16-10 | other | medium | CI never built the regex/arrow opt-in archives, so the 8 Regex / Arrow-IPC codegen E2E tests (and memory_sanitizer's regex fixtures) green-skipped in… | FIXED by c92476aa. The six gated jobs (codegen-e2e ×3, memory-sanitizer ×3) now build lean → regex → arrow → full in the CLAUDE.md archive order; bench-gate stays lean → full (no regex/arrow fixtures). Verified locally with all four archives present: full codegen E2E 2,999 passed / 0 failed under KARAC_REQUIRE_RUNTIME_ARCHIVE=1 — the first run anywhere in which the 8 regex/arrow E2E tests provably executed under the gate. |
+| B-2026-08-16-12 | cli | medium | The `chained_field_receiver` lint that closed B-2026-08-13-12 only walks SOME expression positions: it catches `let n = e.doc.lines.len();` and an `i… | FIXED by 2683735. The predicate and diagnostic were correct as the row
+measured; only the traversal was short. Rather than adding the named missing
+arms, both walks (`walk_stmt`, `walk_expr`) are now EXHAUSTIVE with no
+catch-all, arm inventory mirrored from `span_visitor::visit_expr` — the
+complete in-tree walk the row pointed at. That converts this drift class
+(second occurrence after B-2026-08-11-5) into a compile error: the next
+`ExprKind`/`StmtKind` addition fails the lint's own build instead of opening a
+new unvisited position.
+
+All eleven table positions verified against the real CLI: the six caught
+controls still fire, the five missed positions now fire, and each is
+symmetrically refused by `karac build`. A TWELFTH missed position surfaced
+while widening — a chained receiver inside a CLOSURE BODY (`let f = ||
+e.doc.lines.len();`), also refused by build, also unvisited by the old walk —
+caught by the same rewrite and pinned with the rest. Negative controls (the
+hoisted form, a plain depth-2 field read) stay clean.
+
+Fixture: test_chained_field_receiver_walks_all_expression_positions
+(tests/cli.rs), non-vacuous (fails with the fix stashed). Full --features llvm
+suite green (105 binaries), clippy --all-targets + fmt clean.
+
+REMAINDER SPLIT OUT, per ledger discipline: the sibling `map_entry_lint`
+shares the same partial-walk idiom (`_ => {}` at three sites) — the old
+chained walk's comment even cited it as "the maintained sibling". Its
+consequence class is different (an advisory perf hint missed, not a
+check-vs-build gap), so it is filed as its own low row rather than bundled
+here. |
 | B-2026-08-17-1 | effect | medium | collect_calls_in_expr name-only method fallback scans all method_bodies keys per call site, allocating a format! probe per key — O(call sites x impl… | FIXED by 3d466756. A method_name_index (bare method name -> the method_bodies keys ending in .name), built once at the end of collect_function_info, replaces the per-call-site scan; the same commit moves the effectchecker's internal String-keyed working tables to FxHashMap/FxHashSet (public result structs and signatures stay std HashMap). Measured on bench/compile_speed/synthetic.kara via examples/bench_frontend.rs: effectcheck 136.6 -> ~67 ms median, allocations 2.44M -> 0.64M, whole front end 241 -> ~168 ms (-30%). Verified: full non-LLVM suite 8,959/0; codegen E2E 3,000/0, par_codegen 258/0, memory_sanitizer 1,109/0 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1. |
 
 </details>
