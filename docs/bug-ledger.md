@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 114 | 0 |
 | missing-feature | 98 | 0 |
 | perf | 76 | 1 |
-| false-positive | 73 | 1 |
+| false-positive | 73 | 0 |
 | diagnostics | 66 | 0 |
 | soundness | 49 | 0 |
 | crash | 49 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 901 | 1 |
 | typecheck | 180 | 0 |
 | interp | 146 | 0 |
-| ownership | 57 | 1 |
+| ownership | 57 | 0 |
 | other | 49 | 1 |
 | autopar | 48 | 0 |
 | cli | 35 | 1 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 4 open · 1251 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 3 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort; the residual is now a pure work-count gap at IPC parity | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
-| B-2026-08-17-17 | 2026-08-17 | ownership | low | `let x: i64; loop { x = 1; break; } println(x);` is REJECTED with use-of-uninitialized, but design.md's DA table lists the shape as OK — an infinite `loop`'s body runs at least once, so an assignment that dominates every `break` initializes. The restore-after-loop is applied uniformly to `loop` as if the body could run zero times. Masked until now by the f-string hole (the spec-transcription probes printed via f-strings, so the row that produced B-2026-08-17-13 recorded this shape as accepted-correct). | restore_uninit_after_loop — an infinite `loop` runs its body at least once, but the post-loop restore treats it like a zero-iteration-capable while/for |
 
 ### Wontfix (5)
 
@@ -149,9 +148,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced
 
 </details>
 
-### Fixed (1251)
+### Fixed (1252)
 
-<details><summary>1251 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1252 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10279,6 +10278,13 @@ THE GATE: the RHS's recorded type discriminates what the span cannot. `expr_type
 VERIFIED: the row's repro accepts and runs identically on all three backends (interp / AOT / auto-par); the genuine-conflict controls still fire (live mut-slice binding vs new slice -> SliceBorrowConflict; ref-carrying chain -> still errors). The grandfathered harness entry for test_e2e_string_bytes_round_trip_and_slice_to_vec (tests/common/mod.rs OWNERSHIP_GATE_GRANDFATHERED) is REMOVED per this row -- the list is empty again on that side -- and that E2E passes under the strict gate; it and the new ownership tests (slice_chain_copied_out_does_not_borrow_the_source, slice_binding_and_ref_carrying_chain_still_conflict) are red at baseline.
 
 DELIBERATELY LEFT: the `.first()` shape's rejection is arguably over-strict in ITS OWN way (the error fires at creation, before any conflicting use), but it is sound conservatism over a genuinely borrow-carrying value, pre-existing, and out of this row's copy-out scope. |
+| B-2026-08-17-17 | ownership | low | `let x: i64; loop { x = 1; break; } println(x);` is REJECTED with use-of-uninitialized, but design.md's DA table lists the shape as OK — an infinite… | FIXED with the break-dominance analysis the row called for. A bare `loop` runs its body at least once, and its post-loop code is reachable ONLY through `break`s that target that loop -- so the blanket `restore_uninit_after_loop` (correct for `while` / `while let` / `for`, whose bodies can run zero times) is replaced, for `ExprKind::Loop` alone, by a join over break-site states.
+
+MECHANISM (src/ownership.rs + src/ownership/expr_check.rs): a `loop_da_stack` of `LoopDaFrame`s is pushed for every loop form -- the non-`loop` forms push NON-collecting frames purely so an unlabeled `break` inside a nested `while` resolves to the `while`, never to the enclosing `loop` under analysis. The `Break` arm (split out of its shared leaf groups) resolves its target -- innermost loop frame when unlabeled, label match when labeled -- and, when the target is a collecting bare-`loop` frame, snapshots the states of the bindings that were `Uninit` at loop entry. `apply_loop_break_dominance` then decides per binding: initialized (with the JOIN of the break-site states, preserving `InitOnce` so a later reassign of a non-`mut` binding still errors) iff EVERY self-targeting break saw it assigned; restored to `Uninit` otherwise. Zero self-targeting breaks means post-loop code is unreachable, so the body-end states stand -- a restore there would reject unreachable reads the spec accepts. A `break 'blk` to a labeled BLOCK needs no frame: it can never land in the code immediately after a `loop`, so a label lookup that misses the stack is exactly the right answer. Only DA is decided; body-end `Moved` stands untouched, mirroring the old restore's discipline.
+
+MEASURED, both directions: the row's spec shape plus the both-paths-assigned, nested-while-break, and labeled-break-all-exits-assigned shapes now accept AND run identically on all three backends (interp / AOT / auto-par: 1 / 2 / 3 / 9); the soundness family stays rejected -- conditional break before the assignment (the row's own hazard example), a labeled exit path that skips the assignment, and the same body under `while` (zero-iteration restore kept). Tests: ownership accept + reject families (accept family and the codegen E2E red at baseline; reject family green at baseline, pinning the direction the fix could have broken), codegen E2E `test_e2e_loop_break_dominated_deferred_init` + interpreter oracle twin riding on B-2026-08-17-13's scalar deferred-init lowering.
+
+PROBE NOTE: the labeled fixtures use `let mut` deliberately -- on the plain-break path they execute `y = 1; break;` and then `y = 4`, a genuine double assignment, and the checker's non-`mut` reassign rejection of that spelling was verified CORRECT (a plain if/else both-arms assignment of a non-mut deferred binding is accepted, so there is no path-insensitivity issue hiding there). |
 | B-2026-08-17-18 | codegen | low | Deferred initialization of NON-SCALAR locals (`let s: String; if c { s = .. | FIXED by f52a7f9 for the String and Vec classes — the row's headline shape
 (`let s: String; if c { s = ... } else { s = ... }`) now builds and runs
 with interpreter parity, as do `Vec[i64]`-family and `Vec[String]` deferred
