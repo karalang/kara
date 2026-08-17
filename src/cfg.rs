@@ -26,7 +26,7 @@ use crate::ast::{
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub type BlockId = usize;
 
@@ -242,7 +242,7 @@ pub struct Cfg {
     /// B-2026-07-11-9: blocks that belong to a closure BODY (deferred execution).
     /// A use recorded in one of these can occur at the closure's unknown future
     /// invocation, so the terminal-return RC suppression excludes it.
-    pub closure_body_blocks: HashSet<BlockId>,
+    pub closure_body_blocks: FxHashSet<BlockId>,
 }
 
 impl Cfg {
@@ -403,7 +403,7 @@ struct DeferFrame<'a> {
 #[derive(Default)]
 struct CleanupRenameFrame {
     suffix: String,
-    bindings: HashSet<String>,
+    bindings: FxHashSet<String>,
 }
 
 struct CfgBuilder<'a> {
@@ -435,14 +435,14 @@ struct CfgBuilder<'a> {
     /// only splits binding identities the same way real shadowing does,
     /// which is sound for every predicate consumer (see the shadow-frame
     /// doc for the pairing argument).
-    seen_names: HashSet<String>,
+    seen_names: FxHashSet<String>,
     /// B-2026-07-11-9: blocks lowered inside a closure BODY (round 12.11 forks
     /// the body into a sink block). A closure body executes at an unknown future
     /// time, so a use recorded here can happen after an outer consume even when
     /// that consume terminates the function — the terminal-return RC suppression
     /// must NOT fire for such uses. `closure_depth` counts active closure-body
     /// lowerings; every block minted while it is non-zero is recorded.
-    closure_body_blocks: HashSet<BlockId>,
+    closure_body_blocks: FxHashSet<BlockId>,
     closure_depth: usize,
 }
 
@@ -454,8 +454,8 @@ impl<'a> CfgBuilder<'a> {
             defer_stack: Vec::new(),
             cleanup_rename_stack: Vec::new(),
             next_cleanup_id: 0,
-            seen_names: HashSet::new(),
-            closure_body_blocks: HashSet::new(),
+            seen_names: FxHashSet::default(),
+            closure_body_blocks: FxHashSet::default(),
             closure_depth: 0,
         }
     }
@@ -465,7 +465,7 @@ impl<'a> CfgBuilder<'a> {
         self.next_cleanup_id += 1;
         self.cleanup_rename_stack.push(CleanupRenameFrame {
             suffix: format!("@cu{id}"),
-            bindings: HashSet::new(),
+            bindings: FxHashSet::default(),
         });
     }
 
@@ -484,7 +484,7 @@ impl<'a> CfgBuilder<'a> {
         self.next_cleanup_id += 1;
         self.cleanup_rename_stack.push(CleanupRenameFrame {
             suffix: format!("@arm{id}"),
-            bindings: HashSet::new(),
+            bindings: FxHashSet::default(),
         });
     }
 
@@ -502,7 +502,7 @@ impl<'a> CfgBuilder<'a> {
         self.next_cleanup_id += 1;
         self.cleanup_rename_stack.push(CleanupRenameFrame {
             suffix: format!("@for{id}"),
-            bindings: HashSet::new(),
+            bindings: FxHashSet::default(),
         });
     }
 
@@ -527,7 +527,7 @@ impl<'a> CfgBuilder<'a> {
         self.next_cleanup_id += 1;
         self.cleanup_rename_stack.push(CleanupRenameFrame {
             suffix: format!("@sh{id}"),
-            bindings: HashSet::new(),
+            bindings: FxHashSet::default(),
         });
     }
 
@@ -2147,7 +2147,7 @@ mod tests {
              }",
         );
         let mut local_bare = 0;
-        let mut local_mangled: HashSet<String> = HashSet::new();
+        let mut local_mangled: std::collections::HashSet<String> = Default::default();
         for block in &cfg.blocks {
             for u in &block.uses {
                 if u.binding == "local" {

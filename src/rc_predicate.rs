@@ -36,7 +36,8 @@ use crate::typechecker::TypeCheckResult;
 use crate::use_classifier::{
     classify_function_body_with, param_types_for_function, ClassifierPrelude,
 };
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::HashMap;
 
 /// Witness pair for a binding that satisfies the formal RC condition.
 /// `consume_span` is the Consume use-site C; `other_use_span` is some
@@ -76,10 +77,10 @@ pub fn rc_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<String, RcWitnes
 /// by the candidate passes — the four per-pass builds this replaces
 /// each cloned every binding String and every `UseSite` (DHAT: ~6.5%
 /// of all front-end allocation bytes).
-pub(crate) type UseSitesByBinding<'a> = HashMap<&'a str, Vec<(BlockId, usize, &'a UseSite)>>;
+pub(crate) type UseSitesByBinding<'a> = FxHashMap<&'a str, Vec<(BlockId, usize, &'a UseSite)>>;
 
 pub(crate) fn collect_use_sites(cfg: &Cfg) -> UseSitesByBinding<'_> {
-    let mut sites: UseSitesByBinding<'_> = HashMap::new();
+    let mut sites: UseSitesByBinding<'_> = FxHashMap::default();
     for block in &cfg.blocks {
         for (idx, u) in block.uses.iter().enumerate() {
             sites
@@ -218,7 +219,7 @@ fn reassign_kills_by_reachability(
         return true;
     }
     // Any OTHER block that rebinds the binding kills every path threading it.
-    let forbidden: HashSet<BlockId> = uses
+    let forbidden: FxHashSet<BlockId> = uses
         .iter()
         .filter(|(rb, _, r)| is_rebind(r) && *rb != cb && *rb != ub)
         .map(|(rb, _, _)| *rb)
@@ -237,8 +238,8 @@ fn reassign_kills_by_reachability(
     // If U is not forward-reachable from C even with every block present
     // (mutually-exclusive branches — the genuine two-arm RC shape), the
     // reassigns are irrelevant and we must not suppress.
-    let reach = |blocked: &HashSet<BlockId>| -> bool {
-        let mut seen: HashSet<BlockId> = HashSet::new();
+    let reach = |blocked: &FxHashSet<BlockId>| -> bool {
+        let mut seen: FxHashSet<BlockId> = FxHashSet::default();
         let mut stack: Vec<BlockId> = cfg.block(cb).successors.clone();
         while let Some(n) = stack.pop() {
             if n == ub {
@@ -251,7 +252,7 @@ fn reassign_kills_by_reachability(
         }
         false
     };
-    let empty = HashSet::new();
+    let empty = FxHashSet::default();
     // reachable-in-full ∧ ¬reachable-without-reassigns ⇒ every C→U path
     // threads a reassign ⇒ the consumed value is dead before U.
     reach(&empty) && !reach(&forbidden)
@@ -268,7 +269,7 @@ fn reassign_kills_by_reachability(
 /// is also what keeps a consume INSIDE a loop firing against a use earlier in
 /// the same body, which the next iteration reaches.
 fn cfg_reaches(cfg: &Cfg, from: BlockId, to: BlockId) -> bool {
-    let mut seen: HashSet<BlockId> = HashSet::new();
+    let mut seen: FxHashSet<BlockId> = FxHashSet::default();
     let mut stack: Vec<BlockId> = cfg.block(from).successors.clone();
     while let Some(n) = stack.pop() {
         if n == to {
@@ -494,7 +495,7 @@ pub fn run_predicate_for_function_with(
     let (mut witnesses, uam_keys, loop_witnesses) = {
         let sites = collect_use_sites(&cfg);
         let witnesses = rc_candidates_from_sites(&sites, &cfg, &dom);
-        let uam_keys: HashSet<String> = direct_uam_candidates_from_sites(&sites, &dom)
+        let uam_keys: FxHashSet<String> = direct_uam_candidates_from_sites(&sites, &dom)
             .into_keys()
             .collect();
         let loop_witnesses = loop_of_consume_candidates_from_sites(&sites, &cfg, &dom);
@@ -759,8 +760,8 @@ pub(crate) fn direct_uam_all_consume_sites_from_sites(
 /// reaches `b` along predecessor edges without crossing `v`. One
 /// entry per back-edge; nested loops appear as separate entries
 /// (the inner loop's set is a subset of its enclosing loop's set).
-fn natural_loops(cfg: &Cfg, dom: &DominatorTree) -> Vec<HashSet<BlockId>> {
-    let mut loops: Vec<HashSet<BlockId>> = Vec::new();
+fn natural_loops(cfg: &Cfg, dom: &DominatorTree) -> Vec<FxHashSet<BlockId>> {
+    let mut loops: Vec<FxHashSet<BlockId>> = Vec::new();
     for b in 0..cfg.num_blocks() {
         for &v in &cfg.block(b).successors {
             if !dom.dominates(v, b) {
@@ -772,7 +773,7 @@ fn natural_loops(cfg: &Cfg, dom: &DominatorTree) -> Vec<HashSet<BlockId>> {
             // (only possible when `b == v`, the self-loop case),
             // do not walk its predecessors — they sit outside the
             // loop and would be wrongly absorbed.
-            let mut visited: HashSet<BlockId> = HashSet::new();
+            let mut visited: FxHashSet<BlockId> = FxHashSet::default();
             visited.insert(v);
             visited.insert(b);
             let mut stack = vec![b];
