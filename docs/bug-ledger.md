@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 257 | 3 |
+| miscompile | 258 | 2 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 128 | 4 |
-| codegen-gap | 114 | 0 |
-| missing-feature | 102 | 3 |
+| codegen-gap | 115 | 1 |
+| missing-feature | 103 | 4 |
 | perf | 77 | 1 |
 | false-positive | 77 | 3 |
 | diagnostics | 71 | 5 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 909 | 8 |
-| typecheck | 192 | 10 |
-| interp | 149 | 3 |
+| codegen | 911 | 8 |
+| typecheck | 193 | 11 |
+| interp | 149 | 2 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1293 surfaced · 21 open · 1256 fixed · 6 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1296 surfaced · 22 open · 1258 fixed · 6 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (21)
+### Open (22)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,9 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1293 surfaced
 | B-2026-08-17-22 | 2026-08-17 | typecheck | medium | A string literal NESTED inside a module-level struct / tuple / array initializer types as `String` instead of `StringSlice`, and since `String` is forbidden at module scope this makes module-level constants carrying static string data unwritable. design.md § Module-Level Bindings states "String literals have type `StringSlice` at module scope" and separately lists "Struct and tuple literals built from constant expressions" and "Array literals" among the allowed initializers -- the intersection must work, and does not. `let DIRECT: StringSlice = "ok";` checks fine, but `let NESTED: Cfg = Cfg { name: "karac", retries: 3 };` -> "expected 'StringSlice', found 'String'", `let TUP: (StringSlice, i64) = ("karac", 3);` -> "expected '(StringSlice, i64)', found '(String, i64)'", and `let ARR: Array[StringSlice, 2] = ["a", "b"];` -> one such error per element. There is no spelling that works: declaring the field as `String` is rejected by the constant-initializer rule ("String is heap-allocated; use StringSlice for static string data"), so the module-scope literal rule reaching only the TOP LEVEL of the initializer leaves the composite forms with no legal form at all. | roadmap.md |
 | B-2026-08-17-23 | 2026-08-17 | codegen | medium | A destructuring pattern in FUNCTION-parameter position is never lowered by codegen -- `karac check` passes clean, `--interp` runs correctly, and BOTH compiled backends refuse with `codegen failed: Undefined variable '<binding>'`. design.md § Destructuring in Function and Closure Parameters opens with "Any irrefutable pattern may appear in parameter position" and roadmap.md line 112 marks it `[x]` done. Measured, every shape fails identically: `fn add((a, b): (i64, i64)) -> i64 { a + b }` -> "Undefined variable 'a'"; `fn y_only((_, y): (i64, i64))` -> "Undefined variable 'y'"; `fn only_a((a, _): (i64, i64))` -> "Undefined variable 'a'"; `fn nested(((a, b), c): ((i64,i64), i64))` -> "Undefined variable 'a'"; `fn px(Point { x, y }: Point)` -> "Undefined variable 'x'"; the spec's own two-parameter example `fn distance(Point { x: x1, y: y1 }: Point, Point { x: x2, y: y2 }: Point)` -> "Undefined variable 'x2'"; heap-carrying `fn take(H { s, n }: H) -> String` -> "Undefined variable 's'". Same error under `karac run` (JIT) and `karac build` (AOT) -- the codegen prologue binds the parameter slot but never walks the pattern to bind its leaves. | roadmap.md |
 | B-2026-08-17-24 | 2026-08-17 | codegen | low | The STRUCT-pattern sibling of B-2026-07-14-21's tuple fix: a struct destructuring pattern as an iterator-adaptor closure parameter still bails out of the codegen chain peel, and the fallthrough MISATTRIBUTES the failure to the terminal method. `v.iter().map(|P { x, y }| x + y).collect()` -> `codegen: no handler for method 'collect' on non-identifier receiver (method dispatch fell through; this is a codegen bug -- add a dispatcher arm in compile_method_call ...)`; the same closure under `fold` -> the identical message naming 'fold'. The interpreter runs both correctly and `karac check` is clean. B-2026-07-14-21 fixed exactly this class for the TUPLE form (`ps.iter().map(|(a, b)| a + b)`) -- the tuple form now lowers on all three backends, so the peel handles destructuring closure params in principle and only the struct pattern is unrecognized. | roadmap.md |
-| B-2026-08-17-25 | 2026-08-17 | codegen | high | The pipe operator `|>` produces a SILENT WRONG ANSWER under both compiled backends -- every pipe expression evaluates to 0 -- and a String-typed pipe SEGFAULTS the AOT binary. Minimal: `fn dbl(n: i64) -> i64 { n * 2 }` + `let a = 5 |> dbl; println(a.to_string())` prints 10 under `--interp` and 0 under `karac run` (JIT) and `karac build` (AOT). `karac check` reports "All checks passed." The direct-call control in the same file (`println(dbl(5).to_string())`) prints 10 on all three, so only the pipe form is wrong. Expression position and let position both fail (`println((5 |> dbl).to_string())` -> 0). Every pipe shape measured is affected: single stage, chained stages (`"x" |> tag |> tag`), and the `_` pipe-hole placeholder (`7 |> takes_two("v", _)`). When the pipe's type is String the 0 is consumed as a String header pointer and the binary dies: `fn tag(s: String) -> String { "[" + s + "]" }` + `let a = "x" |> tag; println(a)` -> SIGSEGV, exit 139. | roadmap.md |
 | B-2026-08-17-26 | 2026-08-17 | typecheck | low | A closure literal as the pipe RHS is rejected -- "right-hand side of pipe must be a function name or function call" -- even though design.md prescribes exactly that form as the workaround for its own `_` restrictions. § Pipe Operator's `_` rule says: "The correct form is `let d = data |> g; d |> |d| f(d, extra)` or `data |> |d| f(g(d), extra)`", and the multi-use rule adds "Workaround for multi-use: wrap in a closure -- `data |> |d| f(d, d)`". Both prescribed forms fail `karac check` verbatim, each with the not-a-function-name error plus a cascaded `expected 'i64', found '?T0'` on the closure's own parameter (the closure body is typed against an uninstantiated var once the pipe arm bails). So the spec's escape hatch for the at-most-one-`_`-per-stage and no-`_`-in-a-nested-subexpression rules does not exist, leaving those two restrictions with no documented way out. | roadmap.md |
-| B-2026-08-17-27 | 2026-08-17 | codegen+interp | high | The `??` operator is wrong on BOTH backends, in three different ways, with `karac check` clean throughout. design.md line 782: "`??` provides a default: `expr ?? fallback` -- short-circuits to `fallback` if `expr` is `None` (for `Option`) or `Err(_)` (for `Result`). The result type of `expr ?? fallback` is the inner `T` -- the wrapper (`Option`/`Result`) is stripped." (1) CODEGEN, silent wrong answer: every `??` expression evaluates to 0 under JIT and AOT alike -- `let a: i64 = find(v, 7) ?? -1; println(a.to_string())` prints 0 where the fallback path alone should print -1 and the success path 7; the Result form prints 0 0 the same way. (2) INTERPRETER, wrapper not stripped on the SUCCESS path: `find(v, 7) ?? -1` yields `Some(7)`, not 7, so `let a: i64 = find(v, 7) ?? -1; a + 1` dies at runtime with "operator 'Add' is not defined for operands of type 'EnumVariant' and 'Int'" -- and that message's own parenthetical ("this is a type error the typechecker reports as a hard error; it reached the interpreter only because `karac run` executes despite typecheck errors") is FALSE here: `karac check` reports "All checks passed." (3) INTERPRETER, fallback NOT APPLIED on the `Err` path: `parse("xx") ?? -1` where `parse` returns `Err("bad")` yields `Err(bad)`, printing the error instead of -1. The one leg that is correct is Option/`None`, which does return the fallback. | roadmap.md |
 | B-2026-08-17-28 | 2026-08-17 | codegen+interp | high | Optional chaining `?.` ICEs the interpreter at one shape and silently returns the wrong answer at another, and is not lowered by codegen at all -- `karac check` says "All checks passed" for every case. design.md line 782: "`user.address?.city?.name` short-circuits to `None` if any level is absent." (1) INTERPRETER ICE: `match u.address?.city { Some(c) => println("L2 some: " + c.name), None => ... }` panics with `internal error: entered unreachable code: field access at 7:42: receiver was Value::EnumVariant not Struct/SharedStruct; either an interpreter codepath produced the wrong variant or the typechecker accepted field access on a non-struct` (src/interpreter.rs:2252) -- the Some-arm binding `c` holds an unstripped enum value rather than the `City` struct, the same wrapper-not-stripped shape as B-2026-08-17-27's `??` legs. (2) INTERPRETER SILENT WRONG ANSWER: the spec's own three-level example `u.address?.city?.name`, built with EVERY level `Some`, takes the `None` arm and prints "L3 none". (3) CODEGEN: not lowered -- both compiled backends refuse the same programs (`codegen failed: Undefined variable 's'`, and `no handler for method 'to_string' on variable 'z'` for the one-level form). | roadmap.md |
 | B-2026-08-17-29 | 2026-08-17 | codegen | high | A range bound to a `let` and then iterated compiles to a ZERO-ITERATION loop -- silent wrong answer under both compiled backends, `karac check` clean, interpreter correct. `let r = 0..5; let mut n = 0; for i in r { n = n + 1; } println(f"iterations={n}")` prints iterations=5 under `--interp` and iterations=0 under `karac run` (JIT) and `karac build` (AOT); the INLINE control in the same file (`for i in 0..5 { m = m + 1; }`) prints control=5 on all three, so the range itself and the loop lowering are both fine and only the binding indirection is lost. All three iterable range forms from design.md § Loops' range-literal table fail identically: exclusive `let r = 0..5` (0 instead of 5), inclusive `let r = 0..=4` (0 instead of 5), and variable endpoints `let a = 2; let b = 6; let r2 = a..b` (sum 0 instead of 14). design.md line 2616 types these as first-class library values (`Range[T]` / `RangeInclusive[T]`, "Iterable? Yes"), so binding one is ordinary use, not an exotic shape. | roadmap.md |
 | B-2026-08-17-30 | 2026-08-17 | typecheck+cli | low | E0218 TELLS YOU THE EXACT TEXT TO INSERT AND `karac fix` STILL DECLINES IT: the call-site `mut`-marker diagnostic ends with ``Write `mut <expr>`.`` but carries no `replacement`, while its EXACT INVERSE E0219 ("drop the `mut` marker") does carry one and is applied automatically. Same marker, opposite directions, adjacent codes, one fixable and one not. | E0218's diagnostic construction: it has no `replacement` field where E0219 emits `replacement: {offset, length, text}`. The repair is a single insertion at a known offset. |
@@ -151,6 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1293 surfaced
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-17-39 | 2026-08-17 | typecheck | low | Five iterator-adaptor diagnostics print types with Rust's `{:?}` Debug formatter, leaking internal AST structs into user-facing messages -- and one of them spells a Kara generic with ANGLE BRACKETS. `v.iter().flat_map(|x| [x, x])` reports `Iterator.flat_map() closure must return Iterator[U], found Named { name: "Vec", args: [Int(I64)] }`; with a String element it reports `found Str`. Every other diagnostic in the compiler uses the display form -- the control one line away in the same probe reads `expected 'Set[i64]', found 'Vec[i64]'`. The five sites are all in src/typechecker/stdlib_iter.rs: line 149 (`filter_map`), 615 (`find_map`), 834 (`flat_map`), 1032 (`scan`), 1191 (`zip`), each formatting the offending type with `{:?}` instead of `type_display`. Line 1032 additionally writes the expected type as `Option<(A, U)>` -- Rust turbofish-style angle brackets in a language whose spec opens with "**Generics syntax:** `[T]` not `<T>` -- no turbofish". | roadmap.md |
 | B-2026-08-17-41 | 2026-08-17 | typecheck | high | A QUALIFIED payload-free variant pattern (`Dir.North`) lowers to a WILDCARD in the exhaustiveness engine, so it silently covers the whole scrutinee: a genuinely non-exhaustive `match d { Dir.North => 0 }` over `enum Dir { North, South }` passes `karac check` and then diverges three ways at runtime -- the interpreter raises "internal error: non-exhaustive match ... (the typechecker should have rejected this)", `karac run` (JIT) dies with a stack overflow, and `karac build` exits 48 with NO output and no diagnostic. The bare-variant spelling of the same match (`North => 0`) is correctly rejected with "non-exhaustive match: missing variants: South", which is the control that isolates the qualifier as the trigger. Same root cause makes every arm after a qualified payload-free arm read as `unreachable_arm` (a Deny-able lint), so the canonical spelling of an enum match is simultaneously under-checked for exhaustiveness and over-warned for reachability. | — |
+| B-2026-08-17-42 | 2026-08-17 | codegen | medium | A RANGE bound to a variable has no codegen. `let r = 0..4; for i in r { println(i); }` prints 0 1 2 3 under `--interp` and NOTHING under `karac run` (JIT) and `karac build` (AOT), exiting 0 either way, with `karac check` clean. The inline spelling (`for i in 0..4`) is correct on all three -- only the binding form is dead. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::Range` arm. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure; implementing this should flip that case, which is a deliberate edit to that test. |
+| B-2026-08-17-43 | 2026-08-17 | codegen | high | `?.` OPTIONAL CHAINING has no codegen and produced a SILENT WRONG ANSWER. `let v = get(1)?.x; println(v);` where `get -> Option[P]` printed `Some(5)` under `--interp` and `0` under both `karac run` (JIT) and `karac build` (AOT), with `karac check` clean. roadmap.md line 241 carries a CHECKED box claiming `?.` optional chaining is done. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::OptionalChain` arm; roadmap.md line 241. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure. |
+| B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
 
 ### Wontfix (6)
 
@@ -167,9 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1293 surfaced
 
 </details>
 
-### Fixed (1256)
+### Fixed (1258)
 
-<details><summary>1256 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1258 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10407,6 +10408,107 @@ binding constraint on which defaults an author can actually write. The
 type-flow test in this change uses a tuple default for exactly that reason,
 with a comment naming -20. |
 | B-2026-08-17-21 | parser+typecheck | medium | `UPPERCASE_BINDING.field.method()` is misresolved as a type path -- "type 'Point' is not callable" -- so a module-level struct constant's field can n… | Fixed in three places, because the row's false positive was hiding a second defect behind it and a third would have been introduced by the fix. (1) TYPECHECK, the row's own diagnosis: the uppercase-receiver disambiguation in `infer_call` (src/typechecker/expr_call.rs) was gated on `segments.len() == 2`; widened to `>= 2`, with the middle segments synthesized into a `FieldAccess` chain on the receiver — exactly the AST the working parenthesized spelling `(ORIGIN.x).to_string()` produces, so every downstream phase is already proven on it. `rewrite_path_call_to_method_call` (src/lowering.rs) gained the identical chain so the lowered node matches what the typechecker typed. Type-rooted paths are untouched: the value-binding guard rejects them, so `Vec.new()`, `module.Sub.fn()` and the enum-literal receiver `Dir.North.code()` (B-2026-07-13-4, a 3-segment path that would now be in range) keep their existing routes — pinned by a new regression test. (2) CODEGEN, a second layer the row could not see because check never got that far: with the false positive gone, `ORIGIN.x.to_string()` reached codegen and died on "field-receiver method 'to_string' — outer 'ORIGIN' has no slot". `lower_field_access_ptr` (src/codegen/calls.rs) resolves the field-GEP base by looking the outer name up in `self.variables`, and a MODULE-LEVEL binding has no entry there — its storage is a program-lifetime LLVM global, and `reseed_module_binding_side_tables` re-registers only its TYPE tables per function. Added the `mod_bindings.module_bindings` fallback: the global pointer IS the receiver pointer (module bindings are never `shared` handles or `ref` params, so neither deref case applies). This fixes every field-receiver path, method-call and index alike, not just the one shape. Measured end to end: the row's headline program now checks clean, builds, and AOT output matches the interpreter exactly. (3) LINT PLACEMENT, a run-vs-build gap the widening would otherwise have OPENED: `CFG.inner.v.to_string()` is a genuine chained field receiver (FR4, deferred), but it parses as a 4-segment `Call(Path)` and only becomes a chained `FieldAccess` receiver after `rewrite_path_call_to_method_call` runs — so `chained_field_receiver`, which ran in `typecheck()`, could not see it: check clean, build refused. Moved the lint to the end of `Pipeline::lower()` (beside `escaping_closure`, moved there for the same reason one row earlier): its predicate mirrors `lower_field_access_ptr`, which codegen reaches on the LOWERED AST, so post-lower is the placement that has parity and pre-lower is the one that can diverge. The shape now gets the correct diagnostic with its remedy at check time. TESTS: two typechecker tests (the widened dispatch across module-const / local-uppercase / deeper-chain shapes, plus the enum-variant guard), one codegen E2E asserting both the clean check and the actual run output, and a CLI test pinning the lowered-shape lint fire with its one-level sibling as an over-fire control. Full --features llvm suite green (13,901 tests), both clippy legs and fmt clean. NOT FIXED, and out of scope: the FR4 chained-field-receiver deferral itself (B-2026-08-13-12's subject) — `CONST.a.b.method()` still needs the documented temporary; it is now reported at check instead of at build. |
+| B-2026-08-17-25 | codegen | high | The pipe operator `\|>` produces a SILENT WRONG ANSWER under both compiled backends -- every pipe expression evaluates to 0 -- and a String-typed pipe… | Fixed in 3e9a6287. `ExprKind::Pipe` now has an arm in `compile_expr` and is
+lowered through a desugar SHARED by all three phases.
+
+ROOT, confirmed as the row read it: the node reached `compile_expr` and
+matched no arm, falling to `_ => Ok(i64 0)`. Everything upstream worked, so
+the program typechecked, ran correctly under `--interp`, and returned 0 under
+both compiled backends.
+
+WHY A SHARED DESUGAR RATHER THAN A THIRD COPY. The typechecker and the
+interpreter each carried their own hand-written rewrite of `a |> f`, and the
+two had ALREADY DRIFTED: the typechecker built its synthesized call at the
+PIPE's span while the interpreter built it at the right-hand side's, and the
+typechecker preserved a `mut _` placeholder's marker while the interpreter
+dropped it. Codegen had no copy at all. One operator defined by its rewrite
+should have exactly one rewrite, so it now lives in `ast::desugar_pipe` and
+all three call it. The span disagreement mattered beyond tidiness: per-call
+facts (generic instantiations, narrow integer types) are recorded keyed on the
+call expression's span, and an evaluator that rebuilds the call at the wrong
+span reads them under a key nothing was written at. Codegen needs those
+facts, so the shared helper carries the typechecker's span.
+
+MEASURED, all three backends agreeing where two used to disagree: single
+stage, expression position, chained stages, extra args, the `_` hole,
+precedence against `+`, a generic stage at two instantiations, a pipe inside
+a loop, and the String cases -- including `"x" |> tag`, whose zero was read
+back as a String header and killed the AOT binary with SIGSEGV.
+
+FALLOUT FOUND AND FIXED HERE (`ref_arg_index_borrow_ptr`, collections.rs). A
+range subscript passed by `ref` to a trait-bound generic -- `show(v[0..2])` --
+reached the ELEMENT-borrow path, which compiled the range as its subscript,
+got the catch-all's 0, and produced `&v[0]`. That is the right address for a
+slice starting at 0 and the wrong one for every other, so the bug was
+invisible in the one fixture that exercised it (a 0-start range whose impl
+returns a literal and never reads through the pointer). The path now declines
+a range and lets the ordinary slice materialization run; pinned on the slice
+LENGTH, which a bare element pointer cannot carry.
+
+Tests: `pipe_compiles_to_the_call_it_desugars_to` (tests/codegen.rs) pins each
+piped spelling against the direct call it desugars to, since that equivalence
+IS the operator's definition; `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer`
+covers the fallout. Both verified failing on the pre-fix source.
+
+FILED FROM THIS PASS: B-2026-08-17-42 (a range bound to a variable has no
+codegen -- the loop printed nothing) and B-2026-08-17-43 (`?.` optional
+chaining, another silent zero). Both were invisible until the catch-all became
+loud; both now fail the build by name. |
+| B-2026-08-17-27 | codegen+interp | high | The `??` operator is wrong on BOTH backends, in three different ways, with `karac check` clean throughout | Fixed in 3e9a6287. All four defects, across three phases.
+
+`??` IS `unwrap_or` -- design.md line 782 gives it exactly that contract -- so
+it is now lowered to `left.unwrap_or(right)` by a shared `ast::desugar_nil_coalesce`
+rather than evaluated separately in each backend. That single change fixes
+three of the four legs at once, because `unwrap_or` was already correct on all
+of them (measured first, on both wrappers and both payload classes, before
+anything was built on it) and carries hardened payload reconstruction plus
+three double-free fixes for heap fallbacks (B-2026-07-16-23). A second
+implementation of one semantics is what produced the divergence; there is now
+one.
+
+(1) CODEGEN silent zero -- same root as B-2026-08-17-25, and fixed the same
+way: an arm now exists, and the catch-all it fell through is loud.
+
+(2) INTERPRETER wrapper not stripped on success. The hand-rolled evaluation
+recognized a unit `None` and returned the operand UNCHANGED otherwise, so
+`find(v, 7) ?? -1` yielded `Some(7)`. Gone with the desugar.
+
+(3) INTERPRETER fallback skipped on `Err`. Same line, same cause -- `Err` is
+not a unit `None`, so it fell to the "return the operand" default. Gone with
+the desugar.
+
+(4) A FOURTH DEFECT THE ROW DID NOT NAME, and the reason the other three
+reached the backends at all: the TYPECHECKER only ever handled `Option`. A
+`Result` operand fell to a bare `Type::Error` -- and since a REPORTED error
+returns `Type::Error` too, that fallthrough was SILENT. `karac check` printed
+"All checks passed" on `parse(s) ?? -1`, the fallback was never checked for
+assignability, and the expression had no type for anything downstream to use.
+This is the same shape as the index rule's silent tail (B-2026-08-17-10), one
+operator over. `Result` is now handled, and an operand that is neither wrapper
+gets `NilCoalesceNotWrapped` (E0276), run-fatal so the rejection reaches the
+author instead of the evaluators.
+
+THE ROW'S OWN OBSERVATION ABOUT A FALSE MESSAGE IS EXPLAINED BY (4). The
+interpreter's Add error claimed "the typechecker reports this as a hard error;
+it reached the interpreter only because `karac run` executes despite typecheck
+errors" -- and the row correctly noted `karac check` was clean. It was clean
+because nothing was ever reported: the parenthetical describes the usual path,
+and this was a silent one.
+
+Tests: `nil_coalesce_compiles_to_unwrap_or` (tests/codegen.rs) walks the full
+four-leg matrix on both payload classes and pins each `??` against the
+`unwrap_or` spelling; `test_nil_coalesce_strips_the_wrapper_on_every_leg` and
+`test_nil_coalesce_result_is_the_bare_payload` (tests/interpreter.rs) cover the
+two interpreter legs and the "the payload must be USABLE as T" shape the row
+reported dying on; four typechecker tests cover the typing.
+
+ONE OF THOSE TESTS HAD TO BE REWRITTEN TO MEAN ANYTHING. `typecheck_ok` on
+`let r: i64 = parse(s) ?? -1` passes on the BROKEN compiler exactly as on the
+fixed one -- an unreported `Type::Error` is universally assignable, which is
+defect (4) itself. Pinning the stripped type therefore goes through a use a
+real `T` would reject: each payload is also bound to the WRONG annotation, and
+the mismatch is what proves `??` produced a type at all. Caught by running the
+new tests against the pre-fix source, where three of four passed. |
 
 </details>
 
