@@ -40,12 +40,14 @@ Measured and partially burned down in
 [`name-interning.md`](name-interning.md) (2026-08-17): a front-end phase
 benchmark (`examples/bench_frontend.rs`) + callgrind attribution found ~60%
 of front-end instructions in string-identity overhead; fixing the
-`collect_calls_in_expr` key-scan quadratic (B-2026-08-17-1) plus FxHash on
-the effectchecker's internal tables cut the front end **−30% wall / −57%
-allocations** on the 10.9k-line synthetic corpus. Remaining: extend the
-FxHash seam to typechecker/ownership/resolver internals (~1 session, same
-recipe), then decide the `Symbol(u32)` conversion proper — scope and
-expected ceiling are in the spike doc.
+`collect_calls_in_expr` key-scan quadratic (B-2026-08-17-1), FxHash on the
+effectchecker's internal tables, and the seam extended to
+typechecker/ownership/resolver internals (stage 2½) cut the front end
+**~-33% wall / −57% allocations** on the 10.9k-line synthetic corpus.
+Remaining, per the spike doc's ranked list: move the std/Fx seam through
+the public result structs so the high-traffic `SpanKey` maps go Fx (most
+of the remaining ~13% SipHash), then decide the `Symbol(u32)` conversion
+proper — scope and expected ceiling are in the spike doc.
 
 ## Smaller residuals
 

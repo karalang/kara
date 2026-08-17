@@ -1,6 +1,6 @@
 # Name interning — front-end name-handling cost, measured
 
-**Status:** Stages 0–2 DONE (2026-08-17). Stage 3 (the `Symbol(u32)` interner
+**Status:** Stages 0–2½ DONE (2026-08-17). Stage 3 (the `Symbol(u32)` interner
 proper) is scoped below with measured expectations, not started. Origin:
 `docs/spikes/structural-debt.md` § "Name interning (review item 9c)".
 
@@ -80,12 +80,37 @@ strict improvement.
 **Session net (synthetic): front end 241 → ~168 ms (−30%), allocations
 3.14M → 1.34M (−57%).**
 
+## Stage 2½ — the FxHash seam extended to the other phases
+
+The "cheaper intermediate" from the original stage-3 scoping, done as its own
+slice: the same recipe applied to the typechecker (`TypeEnv`'s lookup tables,
+`LocalTypeScope`'s per-scope variable maps, the unification substitution
+maps), the ownership checker (per-callee/per-binding tables +
+`UseClassifier` prelude), and the resolver's three internal maps. Seam
+discipline held: public result structs (incl. `SymbolTable`/`Scope`) and pub
+signatures stay std; helpers called from both sides of the seam
+(`is_cross_task_safe_with`) became `BuildHasher`-generic.
+
+Result (interleaved A/B, 3 rounds, synthetic corpus): **~3–5% wall**
+(median 175–184 ms vs 181–190 ms), **−1.9% instructions** (0.915B →
+0.898B), allocations unchanged. Low end of the 5–10% estimate. The reason,
+per the post-change profile: remaining SipHash is **~13%** of instructions,
+and most of it is in the maps the seam rule deliberately keeps std — the
+`SpanKey`-keyed side tables (`expr_types` alone takes 165k inserts and is
+then consulted by every later phase through the std `TypeCheckResult`
+field) and `Scope.names`. "SipHash on a fixed-size key is not the per-byte
+problem" is true but incomplete: it is still ~10× an FxHash per operation,
+and the SpanKey tables are the highest-traffic maps in the compiler.
+Swapping them means moving the std/Fx seam *through* the public result
+structs (~50 `TypeCheckResult` fields and every consumer annotation in
+interpreter/codegen/concurrency) — a separate decision recorded here, not
+taken opportunistically. Landed as `cccfc6d9`.
+
 ## Stage 3 — the interner proper (NOT STARTED; scope before starting)
 
-What the remaining profile says (post-stage-2 callgrind): ~22% allocator,
-~18% SipHash (typechecker/ownership/resolver tables + the effectchecker's
-`HashSet<Effect>` web, whose `Effect` hashes String fields), ~5%
-memcpy/memcmp. The clone traffic FxHash cannot touch — 1.34M allocs, largely
+What the remaining profile says (post-stage-2½ callgrind): ~33% allocator,
+~13% SipHash (nearly all `SpanKey` maps + `Scope.names`, see stage 2½), ~4%
+memcpy. The clone traffic FxHash cannot touch — 1.37M allocs, largely
 `String` key clones and `Type`/`Token` clones — is the interning target.
 
 - **Ceiling:** eliminating all string hash+clone+compare overhead is worth
@@ -97,10 +122,13 @@ memcpy/memcmp. The clone traffic FxHash cannot touch — 1.34M allocs, largely
   hundreds of sites; every one becomes an intern() or a Symbol-carrying AST.
   This is the "large, cross-phase change" the backlog predicted — multiple
   dedicated sessions, each ending green.
-- **Cheaper intermediate first:** extending the stage-2 FxHash swap to the
-  typechecker/ownership/resolver internal tables is the same mechanical
-  recipe (~1 session, est. another 5–10%), and shrinks the eventual Symbol
-  diff since field types are already seam-isolated.
+- **Cheaper intermediates, ranked by the stage-2½ profile:** (a) moving the
+  std/Fx seam through the public result structs so the `SpanKey` maps go Fx
+  — mechanical but wide (~50 result fields + consumer annotations), worth
+  a good share of the remaining ~13% SipHash; (b) the Symbol conversion
+  itself, which subsumes (a) for String keys but not for `SpanKey`s. If
+  stage 3 is taken up, do (a) first as its own slice — it is
+  independently testable and shrinks the Symbol diff.
 
 ## Lifecycle
 
