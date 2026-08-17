@@ -662,7 +662,7 @@ pub struct Program {
     /// which `let`s are freeze sites, and converts the ones it admits into the
     /// existing `frozen_alias_bindings` hint, so codegen learns nothing new.
     /// Empty for every program that does not use the statement.
-    pub freeze_spans: std::collections::HashSet<crate::resolver::SpanKey>,
+    pub freeze_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// Set by the lowering pass; empty before lowering runs.
     pub question_conversions: QuestionConversionTable,
     /// Set by the lowering pass from `TypeCheckResult.question_ok_payload_types`;

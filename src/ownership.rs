@@ -700,7 +700,7 @@ pub struct OwnershipCheckResult {
     /// — the same `ParamUsage`-driven classification fn-param
     /// inference uses, applied with each closure parameter as the
     /// subject.
-    pub closure_param_modes: HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    pub closure_param_modes: FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     /// Inferred per-closure capture lists (round 12.24 — Closure
     /// ownership Step 2). Keyed by `SpanKey` of the closure
     /// expression. Each entry lists the names captured from an
@@ -715,7 +715,7 @@ pub struct OwnershipCheckResult {
     /// — captures form a set semantically; the alphabetic sort at
     /// emission time gives stable output for tests / `karac
     /// explain`.
-    pub closure_captures: HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    pub closure_captures: FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     /// Per-closure capture-path sets — line 353 phase-5 checklist
     /// disjoint-capture slice 1. Keyed by the closure expression's
     /// `SpanKey`. Each entry lists the distinct
@@ -730,7 +730,7 @@ pub struct OwnershipCheckResult {
     /// paths remain accessible (slice 3) consume this map without
     /// changing existing per-name semantics. Empty for any closure
     /// whose body references no outer bindings.
-    pub closure_capture_paths: HashMap<SpanKey, Vec<CapturePath>>,
+    pub closure_capture_paths: FxHashMap<SpanKey, Vec<CapturePath>>,
     /// Per-closure capture-path *modes* — line 353 phase-5 checklist
     /// disjoint-capture slice 2. Keyed by the closure expression's
     /// `SpanKey`. Each entry is the same `CapturePath` list as
@@ -745,7 +745,7 @@ pub struct OwnershipCheckResult {
     /// now: borrow-checker integration (slice 3) and codegen
     /// environment layout (slice 4) consume this map without changing
     /// existing per-name semantics.
-    pub closure_capture_path_modes: HashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
+    pub closure_capture_path_modes: FxHashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
     /// Per-`par {}` block capture modes — phase-7 codegen tracker
     /// line 227 (L227). Keyed by the par expression's `SpanKey`. Each
     /// entry lists the captures the codegen path-collector sees
@@ -762,7 +762,7 @@ pub struct OwnershipCheckResult {
     /// treated as `Copy` — never `SharedRc` by default, so the
     /// classifier failing to fire degrades to today's behavior
     /// rather than emitting an inc against a non-RC payload.
-    pub par_capture_modes: HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
+    pub par_capture_modes: FxHashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
     /// Per-closure whole-root capture *reasons* — line 353 phase-5
     /// checklist disjoint-capture slice 6. Keyed by the closure
     /// expression's `SpanKey`. The inner map is per captured root
@@ -779,7 +779,7 @@ pub struct OwnershipCheckResult {
     /// capture. The first stopping construct encountered per root
     /// wins; `BareIdentifier` loses to any stopping construct so the
     /// note steers toward a rewritable cause.
-    pub whole_root_capture_reasons: HashMap<SpanKey, HashMap<String, WholeRootCaptureReason>>,
+    pub whole_root_capture_reasons: FxHashMap<SpanKey, HashMap<String, WholeRootCaptureReason>>,
     /// Closure expression span → enclosing function key (round
     /// 12.25). Lets `karac query ownership <fn>` filter
     /// `closure_param_modes` / `closure_captures` to closures whose
@@ -787,12 +787,12 @@ pub struct OwnershipCheckResult {
     /// key follows the same convention as `param_modes` /
     /// `rc_values`: bare name for free functions, `"Type.method"`
     /// for impl methods.
-    pub closure_function: HashMap<SpanKey, String>,
+    pub closure_function: FxHashMap<SpanKey, String>,
     /// Closure expression `SpanKey` → full `Span`. The other
     /// closure-keyed maps store only `SpanKey` (offset+length); this
     /// table makes line/column available to consumers that surface
     /// closure-creation locations (e.g. `karac query ownership`).
-    pub closure_spans: HashMap<SpanKey, Span>,
+    pub closure_spans: FxHashMap<SpanKey, Span>,
     pub errors: Vec<OwnershipError>,
     /// Non-blocking notes (e.g. RC fallback perf notes). Distinct from
     /// `errors` so callers can render them separately.
@@ -813,7 +813,7 @@ pub struct OwnershipCheckResult {
     /// always names the storage binding (never an intermediate slice).
     /// Populated by Phase-5 Theme 1 Slice 1 (borrow source attribution);
     /// consumed by Slice 2's conflict detector.
-    pub slice_borrow_sources: HashMap<SpanKey, (PlaceExpr, bool)>,
+    pub slice_borrow_sources: FxHashMap<SpanKey, (PlaceExpr, bool)>,
     /// Phase-8 stdlib-floor § Compiler queries channel sub-item 2.
     /// Empty in v1; future P1.x catalogue entries (P1.1 RC fallback at
     /// `src/ownership.rs:360`) push `CompilerQuery` values here as
@@ -872,7 +872,7 @@ pub struct OwnershipCheckResult {
     /// a new field on `OwnershipError` to keep the 17+ existing
     /// construction sites unchanged — only the two new
     /// concurrent-struct kinds need to participate.
-    pub error_fix_diffs: HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    pub error_fix_diffs: FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
     /// B-2026-08-01-33 mechanism 2 — `shared` type names the concurrent-shared
     /// pass promoted to ATOMIC refcounting in order to admit a multi-branch
     /// `par {}` capture. Codegen must emit the atomic path for EVERY refcount
@@ -888,7 +888,7 @@ pub struct OwnershipCheckResult {
     /// would put non-atomic refcount traffic back into exactly the `par`
     /// branches this mode exists to admit. Empty for every program with no
     /// `frozen` parameter, which is every program that does not use the mode.
-    pub frozen_alias_bindings: HashSet<SpanKey>,
+    pub frozen_alias_bindings: FxHashSet<SpanKey>,
     /// B-2026-08-01-33 mechanism 3, stage 3c — the INITIALIZER span of every
     /// `let mut c: Vec[S] = …` the frozen-escape walk proved to be a
     /// FROZEN-ELEMENT CONTAINER: a local whose every element is a non-counting
@@ -902,7 +902,7 @@ pub struct OwnershipCheckResult {
     ///   container never took those counts. Its buffer is still freed.
     ///
     /// Empty for every program with no `freeze` and no `frozen` parameter.
-    pub frozen_element_containers: HashSet<SpanKey>,
+    pub frozen_element_containers: FxHashSet<SpanKey>,
 }
 
 // ── Copy Type Detection ─────────────────────────────────────────
@@ -1022,30 +1022,30 @@ pub struct OwnershipChecker<'a> {
     /// closure expression's `SpanKey`; values mirror `param_modes`'s
     /// per-fn `(name, mode)` shape. Surfaced via
     /// `OwnershipCheckResult::closure_param_modes`.
-    pub(crate) closure_param_modes: HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    pub(crate) closure_param_modes: FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     /// Inferred closure captures (round 12.24). Keyed by the closure
     /// expression's `SpanKey`. Surfaced via
     /// `OwnershipCheckResult::closure_captures`.
-    pub(crate) closure_captures: HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    pub(crate) closure_captures: FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     /// Per-closure capture-path sets — line 353 phase-5 checklist
     /// disjoint-capture slice 1. Populated alongside `closure_captures`
     /// in `check_expr_consuming`'s Closure arm by
     /// `classify_capture_body_paths`. Surfaced via
     /// `OwnershipCheckResult::closure_capture_paths`.
-    pub(crate) closure_capture_paths: HashMap<SpanKey, Vec<CapturePath>>,
+    pub(crate) closure_capture_paths: FxHashMap<SpanKey, Vec<CapturePath>>,
     /// Per-closure capture-path modes — line 353 phase-5 checklist
     /// disjoint-capture slice 2. Populated in the same Closure arm
     /// immediately after `closure_capture_paths`, combining the
     /// slice-1 path set with the slice-2 mutation walker's per-path
     /// overlap detection (see `classify_capture_path_mutations`).
     /// Surfaced via `OwnershipCheckResult::closure_capture_path_modes`.
-    pub(crate) closure_capture_path_modes: HashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
+    pub(crate) closure_capture_path_modes: FxHashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
     /// Per-par-block capture modes — phase-7 L227. Populated by
     /// `classify_par_capture_modes` in a final pass over the program
     /// (after typecheck data is available via `typecheck_result`),
     /// keyed by the par expression's `SpanKey`. Surfaced via
     /// `OwnershipCheckResult::par_capture_modes`.
-    pub(crate) par_capture_modes: HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
+    pub(crate) par_capture_modes: FxHashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
     /// Per-closure whole-root capture reasons — line 353 phase-5
     /// checklist disjoint-capture slice 6. Populated alongside
     /// `closure_capture_paths` in `check_expr_consuming`'s Closure arm
@@ -1054,14 +1054,14 @@ pub struct OwnershipChecker<'a> {
     /// identifier) that committed each root to whole-root capture.
     /// Surfaced via `OwnershipCheckResult::whole_root_capture_reasons`.
     pub(crate) whole_root_capture_reasons:
-        HashMap<SpanKey, HashMap<String, WholeRootCaptureReason>>,
+        FxHashMap<SpanKey, HashMap<String, WholeRootCaptureReason>>,
     /// Closure span → enclosing function key (round 12.25). Built
     /// up at every `Closure` arm visit alongside the param/capture
     /// inference. Surfaced via `OwnershipCheckResult::closure_function`.
-    pub(crate) closure_function: HashMap<SpanKey, String>,
+    pub(crate) closure_function: FxHashMap<SpanKey, String>,
     /// Closure `SpanKey` → full `Span`. Surfaced via
     /// `OwnershipCheckResult::closure_spans`.
-    pub(crate) closure_spans: HashMap<SpanKey, Span>,
+    pub(crate) closure_spans: FxHashMap<SpanKey, Span>,
     pub(crate) errors: Vec<OwnershipError>,
     pub(crate) notes: Vec<OwnershipError>,
     /// Per-function RC values populated during Phase 1.
@@ -1097,7 +1097,7 @@ pub struct OwnershipChecker<'a> {
     /// `concurrent_shared` pass for `ConcurrentSharedStruct` /
     /// `ConcurrentPlainStruct` diagnostics; other passes leave it empty.
     /// Surfaced to consumers via `OwnershipCheckResult.error_fix_diffs`.
-    pub(crate) error_fix_diffs: HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    pub(crate) error_fix_diffs: FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
     /// B-2026-08-01-33 mechanism 2 — `shared` type names promoted to ATOMIC
     /// refcounting so a multi-branch `par {}` capture could be admitted. Every
     /// refcount op on one of these types must take the atomic path, wherever
@@ -1110,12 +1110,12 @@ pub struct OwnershipChecker<'a> {
     /// bindings the frozen-escape walk admitted as non-counting aliases.
     /// Accumulated across functions (spans are unique program-wide) and
     /// surfaced via `OwnershipCheckResult::frozen_alias_bindings`.
-    pub(crate) frozen_alias_bindings: HashSet<SpanKey>,
+    pub(crate) frozen_alias_bindings: FxHashSet<SpanKey>,
     /// Stage 3c — initializer spans of the `let`s proved to be frozen-element
     /// containers. Accumulated across functions (spans are unique
     /// program-wide) and surfaced via
     /// `OwnershipCheckResult::frozen_element_containers`.
-    pub(crate) frozen_element_containers: HashSet<SpanKey>,
+    pub(crate) frozen_element_containers: FxHashSet<SpanKey>,
     /// Type name of each binding in scope for the current function.
     /// Used so RC trigger sites can look up `@no_rc` on the type.
     pub(crate) binding_type_names: FxHashMap<String, String>,
@@ -1204,7 +1204,7 @@ pub struct OwnershipChecker<'a> {
     /// `.as_slice()` / `.as_slice_mut()`, range-indexing, and call-arg
     /// coercion sites; the let-binding-rhs site reuses whichever
     /// recording its RHS expression already produced.
-    pub(crate) slice_borrow_sources: HashMap<SpanKey, (PlaceExpr, bool)>,
+    pub(crate) slice_borrow_sources: FxHashMap<SpanKey, (PlaceExpr, bool)>,
     /// Per-binding slice source attribution. Populated at `let pat = rhs`
     /// time when the RHS is a slice creation expression — the binding
     /// name maps to the same `(PlaceExpr, mutable)` pair recorded for the
@@ -1332,14 +1332,14 @@ impl<'a> OwnershipChecker<'a> {
             typecheck_result,
             param_modes: HashMap::new(),
             all_uam_consume_sites: std::collections::HashSet::new(),
-            closure_param_modes: HashMap::new(),
-            closure_captures: HashMap::new(),
-            closure_capture_paths: HashMap::new(),
-            closure_capture_path_modes: HashMap::new(),
-            par_capture_modes: HashMap::new(),
-            whole_root_capture_reasons: HashMap::new(),
-            closure_function: HashMap::new(),
-            closure_spans: HashMap::new(),
+            closure_param_modes: FxHashMap::default(),
+            closure_captures: FxHashMap::default(),
+            closure_capture_paths: FxHashMap::default(),
+            closure_capture_path_modes: FxHashMap::default(),
+            par_capture_modes: FxHashMap::default(),
+            whole_root_capture_reasons: FxHashMap::default(),
+            closure_function: FxHashMap::default(),
+            closure_spans: FxHashMap::default(),
             errors: Vec::new(),
             notes: Vec::new(),
             rc_values: HashMap::new(),
@@ -1353,10 +1353,10 @@ impl<'a> OwnershipChecker<'a> {
             elided_clusters: HashMap::new(),
             headerless_types: HashMap::new(),
             headerless_reshaper_dummies: HashMap::new(),
-            error_fix_diffs: HashMap::new(),
+            error_fix_diffs: FxHashMap::default(),
             atomic_promoted_types: std::collections::HashSet::new(),
-            frozen_alias_bindings: HashSet::new(),
-            frozen_element_containers: HashSet::new(),
+            frozen_alias_bindings: FxHashSet::default(),
+            frozen_element_containers: FxHashSet::default(),
             binding_type_names: FxHashMap::default(),
             binding_types: FxHashMap::default(),
             immutable_lets: FxHashMap::default(),
@@ -1371,7 +1371,7 @@ impl<'a> OwnershipChecker<'a> {
                 program,
                 typecheck_result,
             ),
-            slice_borrow_sources: HashMap::new(),
+            slice_borrow_sources: FxHashMap::default(),
             slice_binding_sources: HashMap::new(),
             active_borrows: HashMap::new(),
             closure_capture_borrows: HashMap::new(),

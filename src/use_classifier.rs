@@ -4,7 +4,7 @@
 //! CFG builder (`src/cfg.rs`) defaults every recorded `UseSite` to
 //! `UseKind::Read`; the predicate (`src/rc_predicate.rs`) only fires when
 //! at least one use of a binding is `UseKind::Consume`. This module walks
-//! a function body and produces a `HashMap<SpanKey, UseKind>` keyed by
+//! a function body and produces a `FxHashMap<SpanKey, UseKind>` keyed by
 //! the spans of binding-use leaves — `build_cfg_with_classification`
 //! consumes that map to tag each `UseSite` correctly.
 //!
@@ -1584,7 +1584,7 @@ mod tests {
     fn classify(
         src: &str,
     ) -> (
-        HashMap<SpanKey, UseKind>,
+        FxHashMap<SpanKey, UseKind>,
         crate::ast::Program,
         TypeCheckResult,
     ) {
@@ -1625,7 +1625,7 @@ mod tests {
         (class, parsed.program, tc)
     }
 
-    fn count_kinds(class: &HashMap<SpanKey, UseKind>) -> (usize, usize) {
+    fn count_kinds(class: &FxHashMap<SpanKey, UseKind>) -> (usize, usize) {
         let mut consumes = 0;
         let mut reads = 0;
         for k in class.values() {

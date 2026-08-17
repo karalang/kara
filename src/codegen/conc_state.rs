@@ -11,6 +11,7 @@
 //! state-decomposition spike; see
 //! `docs/spikes/state-decomposition-codegen-methodcall.md`.
 
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 use inkwell::types::{BasicTypeEnum, StructType};
@@ -179,7 +180,7 @@ pub(crate) struct ConcState<'ctx> {
     /// map) fall through to today's by-value-through-env copy
     /// behavior. Empty when codegen runs without an ownership pass
     /// (e.g. `compile_to_ir` invoked without an `OwnershipCheckResult`).
-    pub(crate) par_capture_modes: HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
+    pub(crate) par_capture_modes: FxHashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
     /// Per-function parallelization decisions populated from `ConcurrencyAnalysis`.
     /// Function name → `FunctionConcurrency` (parallel groups + total stmt count).
     /// Threaded in by `load_concurrency_analysis`; consumed in slice 2 by the

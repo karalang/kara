@@ -16,8 +16,8 @@
 use crate::ast::*;
 use crate::resolver::{ResolveResult, SpanKey};
 use crate::token::{FloatSuffix, IntSuffix, Span};
-use rustc_hash::FxHashMap;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::HashSet;
 
 mod alloc_rejection;
 mod bounds;
@@ -1089,7 +1089,7 @@ pub struct TypeCheckResult {
     /// later phases. Currently carries `UnreachableArm` from the Maranget
     /// reachability pass; future signals belong here too.
     pub warnings: Vec<TypeError>,
-    pub expr_types: HashMap<SpanKey, Type>,
+    pub expr_types: FxHashMap<SpanKey, Type>,
     /// Receiver `Vector[T, N]` type for each vector **instance**-method call
     /// (`reduce_*` / `dot` / `cross` / `select`), keyed by the method-call
     /// span, recorded as `(element, lane_count)`. A `MethodCall`'s span equals
@@ -1102,7 +1102,7 @@ pub struct TypeCheckResult {
     /// lane counts are recorded (symbolic const-generic lanes are skipped —
     /// they only arise pre-monomorphization and can't be classified per
     /// target).
-    pub vector_method_receivers: HashMap<SpanKey, (Type, usize)>,
+    pub vector_method_receivers: FxHashMap<SpanKey, (Type, usize)>,
     /// Raw-pointer instance-method receiver pointee `TypeExpr`, keyed by
     /// the method-call span (additive-interop Slice 4 Path A). Because the
     /// parser sets `MethodCall.span == receiver.span`, the method's *result*
@@ -1112,22 +1112,22 @@ pub struct TypeCheckResult {
     /// `infer_method_call`; lowering folds it into `raw_pointer_pointee_types`
     /// so codegen's existing lookup resolves it. Same rationale as
     /// [`TypeCheckResult::vector_method_receivers`].
-    pub pointer_method_receiver_pointees: HashMap<SpanKey, TypeExpr>,
-    pub struct_info: HashMap<String, StructInfo>,
-    pub enum_info: HashMap<String, EnumInfo>,
+    pub pointer_method_receiver_pointees: FxHashMap<SpanKey, TypeExpr>,
+    pub struct_info: FxHashMap<String, StructInfo>,
+    pub enum_info: FxHashMap<String, EnumInfo>,
     /// FFI union declarations (`union NAME { ... }`). Mirrors
     /// `struct_info` / `enum_info` shape. Consumed by `unsafe_lint`
     /// (slice 2a — `E_UNION_READ_REQUIRES_UNSAFE` field-read gate) and
     /// downstream phases that need to discriminate union types from
     /// regular structs (codegen lowering, follow-up use-site rules).
-    pub union_info: HashMap<String, UnionInfo>,
+    pub union_info: FxHashMap<String, UnionInfo>,
     /// Derived traits for each `distinct type` declaration.
-    pub distinct_type_traits: HashMap<String, HashSet<String>>,
+    pub distinct_type_traits: FxHashMap<String, FxHashSet<String>>,
     /// For each `?` expression that requires cross-error-type conversion via
     /// `From`, the target error type's name. Interpreter / codegen consult
     /// this side-table to know whether to call `<target>.from(err)` on the
     /// propagated Err value.
-    pub question_conversions: HashMap<SpanKey, String>,
+    pub question_conversions: FxHashMap<SpanKey, String>,
     /// For each `?` expression, the UNWRAPPED Ok/Some payload `TypeExpr` (what
     /// the `?` evaluates to). Written exactly once per `?`, by `resolve_question`
     /// — unambiguously the payload, never the `Result`/`Option` wrapper. Codegen's
@@ -1136,7 +1136,7 @@ pub struct TypeCheckResult {
     /// payload (`Result[Option[String], E]?`) that the span-colliding
     /// `enum_inst_type_exprs` recording can't distinguish from a mistakenly
     /// recorded wrapper (B-2026-07-13-19).
-    pub question_ok_payload_types: HashMap<SpanKey, TypeExpr>,
+    pub question_ok_payload_types: FxHashMap<SpanKey, TypeExpr>,
     /// B-2026-07-31-20 — result type of each `with_provider[R](p, || ...)`
     /// call appearing as a `let` RHS, keyed by the CALL expression's span.
     /// A wp call has no callee fn whose declared return type codegen could
@@ -1144,12 +1144,12 @@ pub struct TypeCheckResult {
     /// { f"..." })`) never registered its String/Vec metadata and method
     /// dispatch on it loud-bailed. Codegen's Let arm treats an entry here
     /// as an implicit type annotation (the annotated form already works).
-    pub wp_result_types: HashMap<SpanKey, TypeExpr>,
+    pub wp_result_types: FxHashMap<SpanKey, TypeExpr>,
     /// `(trait_name, target_type_name)` pairs for every impl registered at
     /// typecheck time. The lowering pass consults this to decide whether a
     /// non-primitive operand has an applicable trait impl (e.g. user
     /// `impl Eq for MyStruct` drives `==` dispatch).
-    pub trait_impls: std::collections::HashSet<(String, String)>,
+    pub trait_impls: FxHashSet<(String, String)>,
     /// Phase 7 user-`impl Drop` dispatch — Prereq.1 side-table.
     /// `type_name → "Type.drop"` for every `impl Drop for Type` block
     /// that passes `env_add_impl`'s focused signature validation
@@ -1162,24 +1162,24 @@ pub struct TypeCheckResult {
     /// name (no generic-args specialization at v1 — Drop must
     /// register generically per type, matching the trait-coherence
     /// gate that already rejects generic-vs-specialized overlap).
-    pub drop_method_keys: HashMap<String, String>,
+    pub drop_method_keys: FxHashMap<String, String>,
     /// For each `x.into()` call resolved against an expected type, the target
     /// type's name. Lowering rewrites these to `Target.from(x)` — the `Into`
     /// blanket impl is not materialized in `env.impls`, it's purely a lowering
     /// rewrite backed by the `From` dispatch already in place.
-    pub into_conversions: HashMap<SpanKey, String>,
+    pub into_conversions: FxHashMap<SpanKey, String>,
     /// For each `x.try_into()` call resolved against an expected `Result[T, E]`,
     /// the target type's name (the `T` inside the Result). Lowering rewrites
     /// these to `Target.try_from(x)` — same desugar architecture as `into`.
-    pub try_into_conversions: HashMap<SpanKey, String>,
+    pub try_into_conversions: FxHashMap<SpanKey, String>,
     /// For each STRING-receiver `s.parse()` resolved against an expected
     /// `Option[T]` (T a numeric primitive), the target type's name. Lowering
     /// rewrites these to `T.parse(s)` — the existing type-receiver parse — so no
     /// new interp/codegen surface is needed. Same desugar architecture as `into`.
-    pub parse_conversions: HashMap<SpanKey, String>,
+    pub parse_conversions: FxHashMap<SpanKey, String>,
     /// Enum names that derive `Display(snake_case)`. The interpreter uses
     /// this to convert variant names to `lower_snake_case` in `to_string()`.
-    pub display_snake_case_enums: HashSet<String>,
+    pub display_snake_case_enums: FxHashSet<String>,
     /// For each `MethodCall` expression, the canonical `Type.method` callee
     /// key — the same shape used in `EffectCheckResult.{inferred,declared}_effects`
     /// and in `Program.callee_effectful`. Lowering forwards this to
@@ -1191,7 +1191,7 @@ pub struct TypeCheckResult {
     /// `MethodCall.span == receiver.span`, so callers must not reuse
     /// `expr_types` for this purpose — a separate map avoids the
     /// return-type-overwrites-receiver-type race).
-    pub method_callee_types: HashMap<SpanKey, String>,
+    pub method_callee_types: FxHashMap<SpanKey, String>,
     /// B-2026-08-13-8. For a method call whose `(type-head, method)` pair has
     /// more than one non-generic impl, the RESOLVED impl's qualified dispatch
     /// segment. Both backends key their `Type.method` lookup off this instead of
@@ -1199,7 +1199,7 @@ pub struct TypeCheckResult {
     /// two instantiations of one type. Resolution here already distinguished
     /// them (`impl_args_match` compares the args vector) — the only thing
     /// missing was a way to NAME the winner for the runtimes.
-    pub method_impl_dispatch: HashMap<(SpanKey, String), String>,
+    pub method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
     /// Call sites of a DIRECT iterator terminal on an iterable collection
     /// receiver (`v.sum()` / `.product()` / `.max()` / `.min()` with no
     /// `.iter()` hop), which `src/lowering.rs` rewrites into the canonical
@@ -1208,7 +1208,7 @@ pub struct TypeCheckResult {
     /// Keyed by [`SpanKey::for_method_call`] — the closing-paren span — NOT by
     /// the call's own span, which the parser sets equal to the receiver's, so
     /// every call in a chain would share one key (B-2026-08-11-19).
-    pub direct_iter_terminals: std::collections::HashSet<SpanKey>,
+    pub direct_iter_terminals: FxHashSet<SpanKey>,
     /// MethodCall span → the receiver's type-PARAMETER name, recorded when the
     /// receiver types as a bare `Type::TypeParam` (`x.m()` where `x: T` inside
     /// a generic body). Distinct from `method_callee_types` (which records a
@@ -1220,7 +1220,7 @@ pub struct TypeCheckResult {
     /// `expr_types[receiver.span]` is clobbered by the method's result type
     /// (the same `MethodCall.span == receiver.span` collision noted above).
     /// B-2026-07-03-24.
-    pub method_typeparam_receiver: HashMap<SpanKey, String>,
+    pub method_typeparam_receiver: FxHashMap<SpanKey, String>,
     /// MethodCall span → the resolved `"Trait.method"` key when the receiver
     /// is a generic type parameter dispatched through a single trait bound
     /// (`a.cmp(b)` where `a: T`, `T: Ord`). Distinct from `method_callee_types`
@@ -1232,7 +1232,7 @@ pub struct TypeCheckResult {
     /// `a.cmp(b)` call (concrete-receiver calls resolved via `method_callee_-
     /// types` were fine). B-2026-07-08-6 secondary. Recorded only for the
     /// single-candidate case; an ambiguous/zero-bound call is an error already.
-    pub method_typeparam_trait_key: HashMap<SpanKey, String>,
+    pub method_typeparam_trait_key: FxHashMap<SpanKey, String>,
     /// Call-expression span → the callee's `Fn(..)` `TypeExpr`, for every
     /// `Call` whose callee is a closure VALUE produced by a non-identifier
     /// place expression (a struct field `(h.f)(x)`, a Vec/array index
@@ -1245,7 +1245,7 @@ pub struct TypeCheckResult {
     /// callee signature so codegen can recover the env-first indirect-call ABI
     /// type for the fat-pointer call (B-2026-06-22-4). Lowering folds this into
     /// `Program.fn_value_typed_exprs`.
-    pub fn_value_callee_types: HashMap<SpanKey, TypeExpr>,
+    pub fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
     /// `impl Trait` slice 4 — per-existential capture set, keyed by the
     /// `SpanKey` of the `TypeKind::ImplTrait` AST node (same key shape
     /// used by [`Type::Existential::origin`]). For each return-position
@@ -1257,7 +1257,7 @@ pub struct TypeCheckResult {
     /// lifetime at call sites — a drop of any captured input while the
     /// returned existential is still bound fires the existing
     /// drop-of-borrowed diagnostic.
-    pub impl_trait_captures: HashMap<SpanKey, ImplTraitCaptures>,
+    pub impl_trait_captures: FxHashMap<SpanKey, ImplTraitCaptures>,
     /// MethodCall span → inner `TypeExpr` for `Option[T].unwrap`/`expect`
     /// and `Result[T, E].unwrap`/`expect` receivers. Populated by
     /// `infer_method_call` when the receiver type is `Option`/`Result` and
@@ -1269,13 +1269,13 @@ pub struct TypeCheckResult {
     /// shape as `method_callee_types`); the receiver-span collision noted
     /// there does not apply here because we record the inner *element*
     /// type, not the receiver's whole type.
-    pub method_unwrap_inner_types: HashMap<SpanKey, TypeExpr>,
+    pub method_unwrap_inner_types: FxHashMap<SpanKey, TypeExpr>,
     /// The ERR (`E`) sibling of `method_unwrap_inner_types`: populated for the
     /// Result forms of the closure combinators whose ABSENT-branch closure
     /// takes the `Err` value (`unwrap_or_else`/`map_or_else`/`or_else`,
     /// B-2026-07-14-6), so codegen can reconstruct `e` to feed that closure.
     /// Same keying (MethodCall span) and no-collision rationale.
-    pub method_unwrap_err_types: HashMap<SpanKey, TypeExpr>,
+    pub method_unwrap_err_types: FxHashMap<SpanKey, TypeExpr>,
     /// `MethodCall` span → the SCALAR element `TypeExpr` of a non-identifier
     /// (fresh-temp) `Vec`/`VecDeque` receiver, for element-type-aware read
     /// methods (`get`/`first`/`last`/`get_unchecked`/`contains`) that codegen
@@ -1287,7 +1287,7 @@ pub struct TypeCheckResult {
     /// elements only: a heap element (`Vec[String]`) returns `Option[ref T]`
     /// aliasing the soon-freed temp buffer (general-owned-temp-tracking spike,
     /// slice 3b).
-    pub temp_recv_elem_types: HashMap<SpanKey, TypeExpr>,
+    pub temp_recv_elem_types: FxHashMap<SpanKey, TypeExpr>,
     /// B-2026-08-14-17 — the TENSOR type of an `Index` receiver, keyed by the
     /// RECEIVER's span. Needed because the parser stamps every postfix
     /// expression with its receiver's span, so an `Index` and its object share
@@ -1297,7 +1297,7 @@ pub struct TypeCheckResult {
     /// entry and was compiled as SCALAR arithmetic on two pointers — while
     /// `let r = t * 2; r[0]`, whose spans do not collide, compiled fine. Same
     /// shape and same reason as `temp_recv_elem_types` (B-2026-07-20-2).
-    pub tensor_index_recv_types: HashMap<SpanKey, Type>,
+    pub tensor_index_recv_types: FxHashMap<SpanKey, Type>,
     /// B-2026-08-14-38 — the `Vec[T]` / `VecDeque[T]` type of an `Index`
     /// receiver that is a METHOD CALL (`v.clone()[1]`,
     /// `nums[1..3].to_vec()[0]`), keyed by the RECEIVER's span. The Vec twin
@@ -1314,7 +1314,7 @@ pub struct TypeCheckResult {
     /// Recorded only for a directly-`Vec`-typed method result: a `ref Vec`
     /// return is `Type::Ref` and never matches, keeping borrows out of a
     /// path that frees the temporary.
-    pub index_recv_vec_types: HashMap<SpanKey, TypeExpr>,
+    pub index_recv_vec_types: FxHashMap<SpanKey, TypeExpr>,
     /// Sibling of `temp_recv_elem_types` for `Map`/`Set` fresh-temp receivers
     /// (`make_map().get(k)`, `make_set().contains(x)`): span of the MethodCall →
     /// the receiver's whole `Map[K, V]` / `Set[T]` `TypeExpr` (codegen needs K+V
@@ -1323,7 +1323,7 @@ pub struct TypeCheckResult {
     /// table (not the Vec one) so a `Vec[Map[..]]` element type can never be
     /// mistaken for a Map *receiver*. Scalar K/V/elem only (general-owned-temp
     /// spike, slice 3d).
-    pub temp_recv_mapset_types: HashMap<SpanKey, TypeExpr>,
+    pub temp_recv_mapset_types: FxHashMap<SpanKey, TypeExpr>,
     /// Sibling of `temp_recv_elem_types` for the element-agnostic read
     /// terminals `len` / `is_empty` / `count` on a fresh-temp `Vec` receiver
     /// (`mk().len()`, `Env.args().len()`): span of the MethodCall → the
@@ -1336,13 +1336,13 @@ pub struct TypeCheckResult {
     /// (String / Vec[scalar] / user struct / user enum) — a scalar element
     /// needs no walk, the outer-buffer free is already complete
     /// (B-2026-07-31-43).
-    pub temp_recv_len_elem_types: HashMap<SpanKey, TypeExpr>,
+    pub temp_recv_len_elem_types: FxHashMap<SpanKey, TypeExpr>,
     /// Channel-op element types: span of a `Sender.send` / `Receiver.recv` /
     /// `Receiver.try_recv` MethodCall → the channel element `T` `TypeExpr`.
     /// Same key shape / no-collision rationale as `method_unwrap_inner_types`
     /// (records the element type, not the receiver's whole type). Drives
     /// codegen's `karac_runtime_channel_*` `elem_size` + out-slot shape.
-    pub channel_elem_types: HashMap<SpanKey, TypeExpr>,
+    pub channel_elem_types: FxHashMap<SpanKey, TypeExpr>,
     /// Numeric iterator-terminal element types: span of an `Iterator.sum()` /
     /// `Iterator.reduce(f)` MethodCall → the yielded element `TypeExpr`
     /// (`i64` / `f64` / …). Codegen reads it to seed the fused-loop
@@ -1351,7 +1351,7 @@ pub struct TypeCheckResult {
     /// unsuffixed-literal i64 default. Same key shape / no-collision rationale
     /// as `channel_elem_types` (records the element type; exactly one such
     /// terminal writes a given MethodCall span). B-2026-07-11-19.
-    pub iter_terminal_elem_types: HashMap<SpanKey, TypeExpr>,
+    pub iter_terminal_elem_types: FxHashMap<SpanKey, TypeExpr>,
     /// `Iterator.fold(init, f)` MethodCall span → the ACCUMULATOR `TypeExpr`
     /// (the type of `init`, i.e. the fold's result type). Codegen desugars a
     /// heap-accumulator fold (`fold(String.from(""), |acc,x| f"…")`) into a
@@ -1364,19 +1364,19 @@ pub struct TypeCheckResult {
     /// synthetic `let`, restoring the tracking a hand-written loop gets for free.
     /// Same key shape / no-collision rationale as `iter_terminal_elem_types`.
     /// B-2026-07-13-18.
-    pub iter_terminal_acc_types: HashMap<SpanKey, TypeExpr>,
+    pub iter_terminal_acc_types: FxHashMap<SpanKey, TypeExpr>,
     /// `TaskHandle[T].join()` MethodCall span → the result type `T`. Drives
     /// codegen's cross-task result-transfer sizing so a non-scalar spawn
     /// return (`Vec`/`String`/struct) round-trips through `join` intact
     /// instead of being read as `i64`-shaped bytes (garbage + trap).
-    pub task_join_return_types: HashMap<SpanKey, TypeExpr>,
+    pub task_join_return_types: FxHashMap<SpanKey, TypeExpr>,
     /// `Stats.<fn>(xs, …)` Call span → the slice's element `TypeExpr`
     /// (`i64` or `f64`), recorded by `infer_stats_call` (S5 — the non-f64
     /// element axis). Codegen reads it to pick the element LLVM type for
     /// the reduction; missing (older recorded programs / typecheck errors)
     /// defaults to `f64`. The interpreter reads the ARG expression's type
     /// from `expr_types` instead, so this table is codegen-only.
-    pub stats_elem_types: HashMap<SpanKey, TypeExpr>,
+    pub stats_elem_types: FxHashMap<SpanKey, TypeExpr>,
     /// `gpu.dispatch(kernel, buffer)` kernel-argument span → the WGSL
     /// compute shader `gpu_wgsl::emit_kernel` generated from the `#[gpu]`
     /// kernel (spike slice-0c). The typechecker validates the kernel + buffer
@@ -1385,14 +1385,14 @@ pub struct TypeCheckResult {
     /// `ast`, so the emit happens outside `codegen.rs`). The interpreter needs
     /// no entry — it runs the kernel element-wise on the CPU. Keyed on the
     /// kernel argument's span (a leaf, never aliased by the outer call span).
-    pub gpu_dispatch_wgsl: HashMap<SpanKey, String>,
+    pub gpu_dispatch_wgsl: FxHashMap<SpanKey, String>,
     /// Bare-call dispatch resolutions: span of a `Call(Identifier(name))` →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when expected-
     /// type inference resolves a bare associated-function call to a concrete
     /// type. Lowering rewrites the call to `Target.name(args)` so the
     /// interpreter / codegen dispatches via the existing impl table without
     /// further special-casing.
-    pub bare_assoc_fn_targets: HashMap<SpanKey, String>,
+    pub bare_assoc_fn_targets: FxHashMap<SpanKey, String>,
     /// Call-expression spans for `Call(Path([X, method]))` shapes the
     /// typechecker dispatched as method calls on a value binding (local-scope
     /// or module-binding/const). The parser greedily wraps `X.method(args)`
@@ -1406,7 +1406,7 @@ pub struct TypeCheckResult {
     /// (effect, ownership, codegen) see the uniform method-call shape and
     /// don't need their own type-or-value disambiguation. Keyed by the
     /// `Call` expression's span.
-    pub path_call_method_dispatch: HashSet<SpanKey>,
+    pub path_call_method_dispatch: FxHashSet<SpanKey>,
     /// Per-call-site generic-param substitutions: call-expression span → name
     /// → resolved type name. Concrete entries (`"Wrapper"`) come from the
     /// typechecker's solver; abstract entries (`"T"`) propagate the caller's
@@ -1445,11 +1445,11 @@ pub struct TypeCheckResult {
     /// checks that do not route through one) and consumed NARROWLY — only at
     /// the container store/probe sites listed in the fix. A span in this set is
     /// a fact about the program, not an instruction to convert.
-    pub float_coerced_arg_sites: std::collections::HashMap<SpanKey, types::FloatSize>,
-    pub cast_source_unsigned: std::collections::HashSet<SpanKey>,
-    pub weak_elem_store_sites: std::collections::HashSet<SpanKey>,
-    pub weak_elem_read_sites: std::collections::HashSet<SpanKey>,
-    pub call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
+    pub float_coerced_arg_sites: FxHashMap<SpanKey, types::FloatSize>,
+    pub cast_source_unsigned: FxHashSet<SpanKey>,
+    pub weak_elem_store_sites: FxHashSet<SpanKey>,
+    pub weak_elem_read_sites: FxHashSet<SpanKey>,
+    pub call_type_subs: FxHashMap<SpanKey, FxHashMap<String, String>>,
     /// Per-call-site generic-param substitutions as ELEMENT-AWARE mono-mangle
     /// TOKENS (`T` → `"Vec_i64"` / `"Vec_String"` / `"String"`), the sibling of
     /// `call_type_subs` (which is head-only: both `Vec[i64]` and `Vec[String]`
@@ -1461,7 +1461,7 @@ pub struct TypeCheckResult {
     /// `$struct` symbol, sharing one element-erased body (B-2026-07-11-35 return
     /// leg exposed this via the element-typed return copy). Only consulted for
     /// the mangle; the interpreter ignores it.
-    pub call_type_subs_mangle: HashMap<SpanKey, HashMap<String, String>>,
+    pub call_type_subs_mangle: FxHashMap<SpanKey, FxHashMap<String, String>>,
     /// For each pattern-binding name introduced by `bind_pattern_types`, the
     /// canonical type name (e.g. `"MyError"`). Keyed by the pattern's span.
     /// Used by codegen to reconstitute struct payloads from the i64 word
@@ -1471,7 +1471,7 @@ pub struct TypeCheckResult {
     /// `e.field` field access can dispatch through the right struct shape.
     /// Only `Type::Named` types are recorded (primitives, refs, etc. don't
     /// need the reconstruction step).
-    pub pattern_binding_types: HashMap<SpanKey, String>,
+    pub pattern_binding_types: FxHashMap<SpanKey, String>,
     /// Sibling table to `pattern_binding_types` carrying the inner element
     /// `TypeExpr` for `Vec[T]` / `Slice[T]` pattern bindings only. Keyed by
     /// the same `SpanKey` (the pattern's span). Populated alongside the
@@ -1484,20 +1484,20 @@ pub struct TypeCheckResult {
     /// without going through function-arg routing as a work-around. Empty
     /// for non-collection bindings (the existing String-name table is
     /// sufficient for those). PB sibling slice (2026-05-09).
-    pub pattern_binding_inner_types: HashMap<SpanKey, TypeExpr>,
+    pub pattern_binding_inner_types: FxHashMap<SpanKey, TypeExpr>,
     /// Per-leaf-binding borrow mode under a `ref` / `mut ref` scrutinee.
     /// Keyed by the leaf binding pattern's span (or, for struct shorthand
     /// fields without a sub-pattern, the field's span). Owned bindings are
     /// absent. Forwarded to `Program.pattern_binding_borrow_modes` by the
     /// lowering pass and consumed by codegen at `bind_pattern_values` to
     /// emit the ref-binding shim — see `ast::PatternBindingBorrow`.
-    pub pattern_binding_borrow_modes: HashMap<SpanKey, crate::ast::PatternBindingBorrow>,
+    pub pattern_binding_borrow_modes: FxHashMap<SpanKey, crate::ast::PatternBindingBorrow>,
     /// Names of functions declared with `#[compiler_builtin]` (CR-202
     /// slice 2). The signature lives in `env.functions`; the entry here
     /// flags the function as having its body replaced by Rust dispatch.
     /// Empty in user-only programs (slice 1's resolver gate `E0115`
     /// prevents the attribute outside stdlib source).
-    pub compiler_builtins: HashSet<String>,
+    pub compiler_builtins: FxHashSet<String>,
     /// `#[must_use]` annotations on free functions and impl methods
     /// (slice 4 of the `#[must_use]` mandate — see
     /// `docs/implementation_checklist/phase-5-diagnostics.md`). Snapshot
@@ -1506,7 +1506,7 @@ pub struct TypeCheckResult {
     /// methods (matching the canonical shape produced by
     /// `method_callee_types` / `bare_assoc_fn_targets`). Consumed by
     /// the discard-site walker in `src/must_use_lint.rs`.
-    pub must_use_functions: HashMap<String, Option<String>>,
+    pub must_use_functions: FxHashMap<String, Option<String>>,
     /// Phase-8 stdlib-floor § Compiler queries channel sub-item 2.
     /// Empty in v1; future P1.2 catalogue entry (generic
     /// specialization on monomorphization tuple) pushes
@@ -1619,13 +1619,13 @@ pub struct TypeChecker<'a> {
     pub(super) owned_at_binding_outers: Vec<(String, Span)>,
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
-    pub(super) expr_types: HashMap<SpanKey, Type>,
+    pub(super) expr_types: FxHashMap<SpanKey, Type>,
     /// See [`TypeCheckResult::vector_method_receivers`]. Populated at vector
     /// instance-method inference; moved into the result at the end.
-    pub(super) vector_method_receivers: HashMap<SpanKey, (Type, usize)>,
+    pub(super) vector_method_receivers: FxHashMap<SpanKey, (Type, usize)>,
     /// See [`TypeCheckResult::pointer_method_receiver_pointees`]. Populated
     /// at raw-pointer instance-method inference; moved into the result.
-    pub(super) pointer_method_receiver_pointees: HashMap<SpanKey, TypeExpr>,
+    pub(super) pointer_method_receiver_pointees: FxHashMap<SpanKey, TypeExpr>,
     /// Lexical depth of enclosing `unsafe { ... }` blocks. Incremented
     /// on entry to `ExprKind::Unsafe`, decremented on exit. Read at the
     /// `E_UNION_READ_REQUIRES_UNSAFE` (line 549 slice 2a) field-read
@@ -1748,7 +1748,7 @@ pub struct TypeChecker<'a> {
     /// double-free (B-2026-07-18-31, the rule `types_compatible` still
     /// enforces), and it stays enforced because this set contains only
     /// parameters the escape checker governs.
-    pub(super) current_fn_frozen_params: std::collections::HashSet<String>,
+    pub(super) current_fn_frozen_params: FxHashSet<String>,
     /// Spans at which a `frozen` PARAMETER was read as a value. B-2026-08-08-11.
     ///
     /// `frozen T` lowers to `TypeKind::Ref(T)` at parse time (B-2026-08-01-33 —
@@ -1758,7 +1758,7 @@ pub struct TypeChecker<'a> {
     /// a parameter therefore read `found 'ref Node'`: a type the author never
     /// wrote and cannot find in their source. Recorded here so the renderer can
     /// name the surface spelling; nothing about lowering changes.
-    pub(super) frozen_param_use_spans: std::collections::HashSet<SpanKey>,
+    pub(super) frozen_param_use_spans: FxHashSet<SpanKey>,
     /// True when type-checking inside a defer/errdefer block.
     pub(super) in_defer: bool,
     /// B-2026-07-02-7: span of a suffixed integer literal that is the direct
@@ -1768,59 +1768,59 @@ pub struct TypeChecker<'a> {
     /// `-128i8` is not).
     pub(super) neg_validated_suffixed_literal: Option<(usize, usize)>,
     /// `?` cross-error From conversions (span → target error type name).
-    pub(super) question_conversions: HashMap<SpanKey, String>,
+    pub(super) question_conversions: FxHashMap<SpanKey, String>,
     /// `?` unwrapped Ok/Some payload type (span → payload `TypeExpr`). See the
     /// public copy on `TypeCheckResult`. B-2026-07-13-19.
-    pub(super) question_ok_payload_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) question_ok_payload_types: FxHashMap<SpanKey, TypeExpr>,
     /// B-2026-07-31-20 — `let`-RHS with_provider call result types
     /// (span of the wp CALL -> TypeExpr). See the public copy on
     /// `TypeCheckResult`.
-    pub(super) wp_result_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) wp_result_types: FxHashMap<SpanKey, TypeExpr>,
     /// `x.into()` conversions (span of the MethodCall → target type name).
-    pub(super) into_conversions: HashMap<SpanKey, String>,
+    pub(super) into_conversions: FxHashMap<SpanKey, String>,
     /// `x.try_into()` conversions (span of the MethodCall → target type name,
     /// where target is the `T` extracted from `Result[T, E]`).
-    pub(super) try_into_conversions: HashMap<SpanKey, String>,
+    pub(super) try_into_conversions: FxHashMap<SpanKey, String>,
     /// String-receiver `s.parse()` conversions (span of the MethodCall → target
     /// numeric type name from the expected `Option[T]`). Lowering rewrites to
     /// `T.parse(s)`.
-    pub(super) parse_conversions: HashMap<SpanKey, String>,
+    pub(super) parse_conversions: FxHashMap<SpanKey, String>,
     /// Enum names that derive `Display(snake_case)`. Populated during
     /// `env_add_enum`; transferred to `TypeCheckResult`.
-    pub(super) display_snake_case_enums: HashSet<String>,
+    pub(super) display_snake_case_enums: FxHashSet<String>,
     /// MethodCall span → `Type.method` canonical callee key. See the
     /// matching field on `TypeCheckResult` for the full rationale.
-    pub(super) method_callee_types: HashMap<SpanKey, String>,
+    pub(super) method_callee_types: FxHashMap<SpanKey, String>,
     /// Working half of `TypeCheckResult::method_impl_dispatch`.
-    pub(super) method_impl_dispatch: HashMap<(SpanKey, String), String>,
+    pub(super) method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
     /// B-2026-08-13-8 — qualified dispatch segments for impls whose head name is
     /// not a unique identity, computed once from the program AST via the same
     /// shared helper codegen and the interpreter use. Keyed by impl-target span.
     pub(super) impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames,
     /// See [`TypeCheckResult::direct_iter_terminals`].
-    pub(super) direct_iter_terminals: std::collections::HashSet<SpanKey>,
+    pub(super) direct_iter_terminals: FxHashSet<SpanKey>,
     /// MethodCall span → receiver type-parameter name. See the matching field
     /// on `TypeCheckResult` for the full rationale (B-2026-07-03-24).
-    pub(super) method_typeparam_receiver: HashMap<SpanKey, String>,
+    pub(super) method_typeparam_receiver: FxHashMap<SpanKey, String>,
     /// MethodCall span → resolved `"Trait.method"` key for a single-bound
     /// generic-receiver dispatch. See the matching `TypeCheckResult` field
     /// (B-2026-07-08-6 secondary — ownership arg-mode of a generic trait call).
-    pub(super) method_typeparam_trait_key: HashMap<SpanKey, String>,
+    pub(super) method_typeparam_trait_key: FxHashMap<SpanKey, String>,
     /// Call span → callee `Fn(..)` `TypeExpr` for a closure-VALUE call through
     /// a non-identifier callee. See the public copy on `TypeCheckResult` for
     /// the full rationale.
-    pub(super) fn_value_callee_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
     /// Per-existential capture sets, keyed by the SpanKey of the
     /// `TypeKind::ImplTrait` AST node. See the public copy on
     /// `TypeCheckResult` for the full rationale.
-    pub(super) impl_trait_captures: HashMap<SpanKey, ImplTraitCaptures>,
+    pub(super) impl_trait_captures: FxHashMap<SpanKey, ImplTraitCaptures>,
     /// MethodCall span → inner `TypeExpr` for `Option`/`Result` unwrap
     /// dispatch. See the public copy on `TypeCheckResult` for the full
     /// rationale.
-    pub(super) method_unwrap_inner_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) method_unwrap_inner_types: FxHashMap<SpanKey, TypeExpr>,
     /// MethodCall span → `Err` (`E`) `TypeExpr` for the Result forms of the
     /// absent-closure combinators. See the public copy on `TypeCheckResult`.
-    pub(super) method_unwrap_err_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) method_unwrap_err_types: FxHashMap<SpanKey, TypeExpr>,
     /// B-2026-08-05-19 — the EXPECTED type at a check-mode call position, handed
     /// to `check_call_args_with_substitution_full` so a generic call can seed its
     /// type params from the expectation before solving them from arguments.
@@ -1841,38 +1841,38 @@ pub struct TypeChecker<'a> {
     pub(super) pending_unwrap_receiver_expectation: Option<Type>,
     /// MethodCall span → scalar element `TypeExpr` of a fresh-temp
     /// `Vec`/`VecDeque` receiver. See the public copy on `TypeCheckResult`.
-    pub(super) temp_recv_elem_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) temp_recv_elem_types: FxHashMap<SpanKey, TypeExpr>,
     /// B-2026-08-14-17 — see `TypeCheckResult::tensor_index_recv_types`.
-    pub(super) tensor_index_recv_types: HashMap<SpanKey, Type>,
+    pub(super) tensor_index_recv_types: FxHashMap<SpanKey, Type>,
     /// B-2026-08-14-38 — see `TypeCheckResult::index_recv_vec_types`.
-    pub(super) index_recv_vec_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) index_recv_vec_types: FxHashMap<SpanKey, TypeExpr>,
     /// MethodCall span → `Map[K,V]` / `Set[T]` `TypeExpr` of a fresh-temp
     /// Map/Set receiver. See the public copy on `TypeCheckResult`.
-    pub(super) temp_recv_mapset_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) temp_recv_mapset_types: FxHashMap<SpanKey, TypeExpr>,
     /// MethodCall span → heap-bearing element `TypeExpr` of a fresh-temp `Vec`
     /// receiver of `len`/`is_empty`/`count`. See the public copy on
     /// `TypeCheckResult` (B-2026-07-31-43).
-    pub(super) temp_recv_len_elem_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) temp_recv_len_elem_types: FxHashMap<SpanKey, TypeExpr>,
     /// MethodCall span → yielded element `TypeExpr` of a numeric
     /// `Iterator.sum()` / `Iterator.reduce(f)` terminal. See the public copy
     /// on `TypeCheckResult`.
-    pub(super) iter_terminal_elem_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) iter_terminal_elem_types: FxHashMap<SpanKey, TypeExpr>,
     /// MethodCall span → the accumulator `TypeExpr` of an `Iterator.fold(init,
     /// f)` terminal. See the public copy on `TypeCheckResult`. B-2026-07-13-18.
-    pub(super) iter_terminal_acc_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) iter_terminal_acc_types: FxHashMap<SpanKey, TypeExpr>,
     /// MethodCall span → channel element `TypeExpr` for `Sender.send` /
     /// `Receiver.recv` / `Receiver.try_recv`. See the public copy on
     /// `TypeCheckResult` for the full rationale.
-    pub(super) channel_elem_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) channel_elem_types: FxHashMap<SpanKey, TypeExpr>,
     /// `Stats.<fn>` Call span → slice element `TypeExpr` (S5). See the
     /// public copy on `TypeCheckResult`.
-    pub(super) stats_elem_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) stats_elem_types: FxHashMap<SpanKey, TypeExpr>,
     /// `gpu.dispatch` kernel-arg span → generated WGSL (slice-0c). See the
     /// public copy on `TypeCheckResult`.
-    pub(super) gpu_dispatch_wgsl: HashMap<SpanKey, String>,
+    pub(super) gpu_dispatch_wgsl: FxHashMap<SpanKey, String>,
     /// `TaskHandle[T].join()` MethodCall span → result type `T`. See the
     /// public copy on `TypeCheckResult` for the full rationale.
-    pub(super) task_join_return_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) task_join_return_types: FxHashMap<SpanKey, TypeExpr>,
     /// User-declared `effect resource` names → optional provider trait
     /// (`effect resource Store: KvStore;` → `Some("KvStore")`; bare
     /// `effect resource Store;` → `None`). Populated from
@@ -1882,7 +1882,7 @@ pub struct TypeChecker<'a> {
     /// binds `Type::Error` and the `is_some`/`unwrap` side-tables
     /// never populate (bugs.md "untyped `let` from an effect-resource
     /// method call").
-    pub(super) user_effect_resources: HashMap<String, Option<String>>,
+    pub(super) user_effect_resources: FxHashMap<String, Option<String>>,
     /// Trait-less user resource name → concrete override type name,
     /// recovered syntactically from `with_provider[R](provider, ...)`
     /// sites during env build (struct-literal, `let`-bound, or
@@ -1892,18 +1892,18 @@ pub struct TypeChecker<'a> {
     /// typing; all overrides of a resource share their lowered method
     /// signatures (the vtable invariant), so any resolvable one is
     /// representative.
-    pub(super) user_resource_override_types: HashMap<String, String>,
+    pub(super) user_resource_override_types: FxHashMap<String, String>,
     /// Bare-call expected-type dispatch resolutions: call-expression span →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when
     /// `try_apply_expected_assoc_fn_inference` resolves a bare `name(args)`
     /// call against a concrete expected type. The lowering pass rewrites
     /// these to `Target.name(args)` so the interpreter / codegen can dispatch
     /// through the existing `Type.method` impl table.
-    pub(super) bare_assoc_fn_targets: HashMap<SpanKey, String>,
+    pub(super) bare_assoc_fn_targets: FxHashMap<SpanKey, String>,
     /// Call-expression spans rewritten from `Call(Path([X, method]))` to
     /// method-call semantics when `X` resolves to a value binding. See the
     /// public copy on `TypeCheckResult` for the consumer doc.
-    pub(super) path_call_method_dispatch: HashSet<SpanKey>,
+    pub(super) path_call_method_dispatch: FxHashSet<SpanKey>,
     /// Per-call-site type substitutions: call-expression span → name → resolved
     /// type name (concrete struct/enum, or another generic param if the caller
     /// is itself generic and propagates the binding). Populated by `infer_call`
@@ -1911,26 +1911,26 @@ pub struct TypeChecker<'a> {
     /// zero-arg generic calls. Consumed by the interpreter at each call: it
     /// pushes the resolved frame so `T.method()` and bare-method calls inside
     /// the callee's body can look up `T`'s concrete binding.
-    pub(super) call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
+    pub(super) call_type_subs: FxHashMap<SpanKey, FxHashMap<String, String>>,
     /// B-2026-08-08-14 — see the public copies on `TypeCheckResult`.
-    pub(super) float_coerced_arg_sites: std::collections::HashMap<SpanKey, types::FloatSize>,
-    pub(super) cast_source_unsigned: std::collections::HashSet<SpanKey>,
-    pub(super) weak_elem_store_sites: std::collections::HashSet<SpanKey>,
-    pub(super) weak_elem_read_sites: std::collections::HashSet<SpanKey>,
+    pub(super) float_coerced_arg_sites: FxHashMap<SpanKey, types::FloatSize>,
+    pub(super) cast_source_unsigned: FxHashSet<SpanKey>,
+    pub(super) weak_elem_store_sites: FxHashSet<SpanKey>,
+    pub(super) weak_elem_read_sites: FxHashSet<SpanKey>,
     /// Element-aware mono-mangle tokens per call site. See the public copy on
     /// `TypeCheckResult` for the consumer doc.
-    pub(super) call_type_subs_mangle: HashMap<SpanKey, HashMap<String, String>>,
+    pub(super) call_type_subs_mangle: FxHashMap<SpanKey, FxHashMap<String, String>>,
     /// Pattern-binding name → canonical type name. See the public copy on
     /// `TypeCheckResult` for the consumer doc.
-    pub(super) pattern_binding_types: HashMap<SpanKey, String>,
+    pub(super) pattern_binding_types: FxHashMap<SpanKey, String>,
     /// Pattern-binding span → inner element `TypeExpr` for `Vec[T]` / `Slice[T]`
     /// bindings. Sibling to `pattern_binding_types`. See the public copy on
     /// `TypeCheckResult` for the full rationale (PB sibling slice 2026-05-09).
-    pub(super) pattern_binding_inner_types: HashMap<SpanKey, TypeExpr>,
+    pub(super) pattern_binding_inner_types: FxHashMap<SpanKey, TypeExpr>,
     /// Internal mirror of the public table; written by `check_pattern_against`
     /// at every leaf-binding site (and at struct shorthand fields) when
     /// the scrutinee mode is non-Owned. Surfaced in `check()`.
-    pub(super) pattern_binding_borrow_modes: HashMap<SpanKey, crate::ast::PatternBindingBorrow>,
+    pub(super) pattern_binding_borrow_modes: FxHashMap<SpanKey, crate::ast::PatternBindingBorrow>,
     /// Parallel to `pattern_binding_inner_types`, storing the raw `Type`
     /// (which may contain unresolved `Type::TypeVar`) captured at the
     /// recording site. After body inference completes, `finalize_pattern_
@@ -1940,7 +1940,7 @@ pub struct TypeChecker<'a> {
     /// VecDeque.new(); q.push_back(x);` writes the inner-type entry at
     /// the let site (where `?T0` is still unsolved), and the resulting
     /// `TypeKind::Error` strands codegen with the wrong element type.
-    pub(super) pattern_binding_inner_unresolved: HashMap<SpanKey, Type>,
+    pub(super) pattern_binding_inner_unresolved: FxHashMap<SpanKey, Type>,
     /// Trait bounds for the generic parameters in the current enclosing scope
     /// (impl-level + function/method-level). Indexed by the param's textual
     /// name so it pairs naturally with `Type::TypeParam(name)`. Populated on
@@ -1948,7 +1948,7 @@ pub struct TypeChecker<'a> {
     /// the enclosing-generic-name list threaded through the lower / check
     /// path. Used to resolve bare `method(args)` calls at expected-type
     /// positions when the expected type is a generic param.
-    pub(super) enclosing_bounds: HashMap<String, Vec<crate::ast::TraitBound>>,
+    pub(super) enclosing_bounds: FxHashMap<String, Vec<crate::ast::TraitBound>>,
     /// Generic-parameter names that are DIM/const params (appear in a shape
     /// position `[D]` in the current function's signature, or are declared
     /// `const` / `...S`) — the subset whose body-annotation resolution needs
@@ -1976,7 +1976,7 @@ pub struct TypeChecker<'a> {
     /// finds a captured-non-Copy consume; consumed by `check_assignable` so
     /// `E_ONCE_FN_INTO_FN_SLOT` can name the consumed binding when a closure
     /// literal is rejected at a `Fn` slot. Round 12.45 (Step 3).
-    pub(super) closure_once_reasons: HashMap<SpanKey, OnceReason>,
+    pub(super) closure_once_reasons: FxHashMap<SpanKey, OnceReason>,
     /// B-2026-07-15-16 — pre-seeds for a closure literal's UN-annotated
     /// params, keyed by the closure expression's span. Set just before
     /// `infer_expr` on a closure argument of a direct collection/Result method
@@ -1987,7 +1987,7 @@ pub struct TypeChecker<'a> {
     /// the body sees the concrete param type — the same effect the check-mode
     /// `Fn(A) -> R` pushdown gives, without forcing a return-type expectation.
     /// An explicit param annotation still wins.
-    pub(super) closure_param_seeds: HashMap<SpanKey, Vec<Type>>,
+    pub(super) closure_param_seeds: FxHashMap<SpanKey, Vec<Type>>,
     /// `stdlib_origin` of the function whose body we're currently
     /// checking. Saved/restored across `check_function` so nested
     /// item-checks (e.g. impl method bodies inside a stdlib-origin
@@ -2043,7 +2043,7 @@ pub struct TypeChecker<'a> {
     /// `unfulfilled_lint_expectation` for any `Expect` override whose
     /// key is absent. Byte-offset alone is unique-enough as a key —
     /// each lint-name token in the source has a distinct offset.
-    pub(super) fulfilled_expectations: HashSet<(usize, String)>,
+    pub(super) fulfilled_expectations: FxHashSet<(usize, String)>,
     /// Active `[profile]`-table knob carrier (phase-8-stdlib-floor items 3–5).
     /// Defaulted to the knobless `default` profile in [`Self::new`]; threaded
     /// from `Pipeline.profile_config` via [`Self::with_profile_config`]. Its
@@ -2052,14 +2052,14 @@ pub struct TypeChecker<'a> {
     pub(super) profile_config: crate::manifest::ProfileConfig,
     /// Spans already flagged by the panicking-alloc rejection pass (item 4),
     /// so re-inference of the same expression doesn't double-report.
-    pub(super) alloc_rejected_spans: HashSet<SpanKey>,
+    pub(super) alloc_rejected_spans: FxHashSet<SpanKey>,
     /// Method-call span → builtin-collection receiver name (`"Vec"` / … /
     /// `"String"`), recorded during inference when the receiver resolves to a
     /// builtin collection. The panicking-alloc rejection pass (item 4) reads
     /// this because a `MethodCall`'s span equals its *receiver's* span, so the
     /// receiver type cannot be recovered from `expr_types` at that span (the
     /// method's return type is recorded there instead).
-    pub(super) method_receiver_collections: HashMap<SpanKey, String>,
+    pub(super) method_receiver_collections: FxHashMap<SpanKey, String>,
 }
 
 /// Why a closure is `OnceFunction`-typed: which captured outer binding the
@@ -2090,9 +2090,9 @@ impl<'a> TypeChecker<'a> {
             owned_at_binding_outers: Vec::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
-            expr_types: HashMap::new(),
-            vector_method_receivers: HashMap::new(),
-            pointer_method_receiver_pointees: HashMap::new(),
+            expr_types: FxHashMap::default(),
+            vector_method_receivers: FxHashMap::default(),
+            pointer_method_receiver_pointees: FxHashMap::default(),
             unsafe_depth: 0,
             comptime_depth: 0,
             assigning_lhs: false,
@@ -2102,70 +2102,70 @@ impl<'a> TypeChecker<'a> {
             current_return_impl_trait: None,
             return_impl_trait_witnesses: Vec::new(),
             current_fn_is_gpu: false,
-            current_fn_frozen_params: std::collections::HashSet::new(),
-            frozen_param_use_spans: std::collections::HashSet::new(),
+            current_fn_frozen_params: FxHashSet::default(),
+            frozen_param_use_spans: FxHashSet::default(),
             break_value_types: Vec::new(),
             closure_return_types: Vec::new(),
             current_self_type: None,
             in_defer: false,
             neg_validated_suffixed_literal: None,
-            question_conversions: HashMap::new(),
-            question_ok_payload_types: HashMap::new(),
-            wp_result_types: HashMap::new(),
-            into_conversions: HashMap::new(),
-            parse_conversions: HashMap::new(),
-            try_into_conversions: HashMap::new(),
-            display_snake_case_enums: HashSet::new(),
-            method_callee_types: HashMap::new(),
-            method_impl_dispatch: HashMap::new(),
-            impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::new(),
-            direct_iter_terminals: std::collections::HashSet::new(),
-            method_typeparam_receiver: HashMap::new(),
-            method_typeparam_trait_key: HashMap::new(),
-            fn_value_callee_types: HashMap::new(),
-            impl_trait_captures: HashMap::new(),
-            method_unwrap_inner_types: HashMap::new(),
-            method_unwrap_err_types: HashMap::new(),
+            question_conversions: FxHashMap::default(),
+            question_ok_payload_types: FxHashMap::default(),
+            wp_result_types: FxHashMap::default(),
+            into_conversions: FxHashMap::default(),
+            parse_conversions: FxHashMap::default(),
+            try_into_conversions: FxHashMap::default(),
+            display_snake_case_enums: FxHashSet::default(),
+            method_callee_types: FxHashMap::default(),
+            method_impl_dispatch: FxHashMap::default(),
+            impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::default(),
+            direct_iter_terminals: FxHashSet::default(),
+            method_typeparam_receiver: FxHashMap::default(),
+            method_typeparam_trait_key: FxHashMap::default(),
+            fn_value_callee_types: FxHashMap::default(),
+            impl_trait_captures: FxHashMap::default(),
+            method_unwrap_inner_types: FxHashMap::default(),
+            method_unwrap_err_types: FxHashMap::default(),
             pending_expected_call_return: None,
             pending_unwrap_receiver_expectation: None,
-            temp_recv_elem_types: HashMap::new(),
-            tensor_index_recv_types: HashMap::new(),
-            index_recv_vec_types: HashMap::new(),
-            temp_recv_mapset_types: HashMap::new(),
-            temp_recv_len_elem_types: HashMap::new(),
-            iter_terminal_elem_types: HashMap::new(),
-            iter_terminal_acc_types: HashMap::new(),
-            channel_elem_types: HashMap::new(),
-            stats_elem_types: HashMap::new(),
-            gpu_dispatch_wgsl: HashMap::new(),
-            task_join_return_types: HashMap::new(),
-            user_effect_resources: HashMap::new(),
-            user_resource_override_types: HashMap::new(),
-            bare_assoc_fn_targets: HashMap::new(),
-            path_call_method_dispatch: HashSet::new(),
-            call_type_subs: HashMap::new(),
-            float_coerced_arg_sites: std::collections::HashMap::new(),
-            cast_source_unsigned: std::collections::HashSet::new(),
-            weak_elem_store_sites: std::collections::HashSet::new(),
-            weak_elem_read_sites: std::collections::HashSet::new(),
-            call_type_subs_mangle: HashMap::new(),
-            pattern_binding_types: HashMap::new(),
-            pattern_binding_inner_types: HashMap::new(),
-            pattern_binding_borrow_modes: HashMap::new(),
-            pattern_binding_inner_unresolved: HashMap::new(),
-            enclosing_bounds: HashMap::new(),
+            temp_recv_elem_types: FxHashMap::default(),
+            tensor_index_recv_types: FxHashMap::default(),
+            index_recv_vec_types: FxHashMap::default(),
+            temp_recv_mapset_types: FxHashMap::default(),
+            temp_recv_len_elem_types: FxHashMap::default(),
+            iter_terminal_elem_types: FxHashMap::default(),
+            iter_terminal_acc_types: FxHashMap::default(),
+            channel_elem_types: FxHashMap::default(),
+            stats_elem_types: FxHashMap::default(),
+            gpu_dispatch_wgsl: FxHashMap::default(),
+            task_join_return_types: FxHashMap::default(),
+            user_effect_resources: FxHashMap::default(),
+            user_resource_override_types: FxHashMap::default(),
+            bare_assoc_fn_targets: FxHashMap::default(),
+            path_call_method_dispatch: FxHashSet::default(),
+            call_type_subs: FxHashMap::default(),
+            float_coerced_arg_sites: FxHashMap::default(),
+            cast_source_unsigned: FxHashSet::default(),
+            weak_elem_store_sites: FxHashSet::default(),
+            weak_elem_read_sites: FxHashSet::default(),
+            call_type_subs_mangle: FxHashMap::default(),
+            pattern_binding_types: FxHashMap::default(),
+            pattern_binding_inner_types: FxHashMap::default(),
+            pattern_binding_borrow_modes: FxHashMap::default(),
+            pattern_binding_inner_unresolved: FxHashMap::default(),
+            enclosing_bounds: FxHashMap::default(),
             current_body_dim_scope: Vec::new(),
             enclosing_trait: None,
-            closure_once_reasons: HashMap::new(),
-            closure_param_seeds: HashMap::new(),
+            closure_once_reasons: FxHashMap::default(),
+            closure_param_seeds: FxHashMap::default(),
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
             lint_override_stack: Vec::new(),
             cli_lint_overrides: crate::lints::CliLintOverrides::default(),
-            fulfilled_expectations: HashSet::new(),
+            fulfilled_expectations: FxHashSet::default(),
             profile_config: crate::manifest::ProfileConfig::default(),
-            alloc_rejected_spans: HashSet::new(),
-            method_receiver_collections: HashMap::new(),
+            alloc_rejected_spans: FxHashSet::default(),
+            method_receiver_collections: FxHashMap::default(),
         }
     }
 
@@ -2285,7 +2285,7 @@ impl<'a> TypeChecker<'a> {
         // executed; runs BEFORE the TypeCheckResult is returned so
         // the new warnings flow through the normal channel.
         self.emit_unfulfilled_lint_expectations();
-        let trait_impls: std::collections::HashSet<(String, String)> = self
+        let trait_impls: FxHashSet<(String, String)> = self
             .env
             .impls
             .iter()
@@ -2300,38 +2300,25 @@ impl<'a> TypeChecker<'a> {
         // mirrors the registration shape used by `must_use_functions`
         // and `method_callee_types`, so downstream phases can index
         // into the same impl-method table.
-        let drop_method_keys: HashMap<String, String> = self
+        let drop_method_keys: FxHashMap<String, String> = self
             .env
             .impls
             .iter()
             .filter(|imp| imp.trait_name.as_deref() == Some("Drop"))
             .map(|imp| (imp.target_type.clone(), format!("{}.drop", imp.target_type)))
             .collect();
-        // Boundary collects: the env's internal tables are FxHash-keyed; the
-        // public TypeCheckResult stays std HashMap/HashSet. One collect per
-        // field, once per compile.
-        let distinct_type_traits = self
-            .env
-            .distinct_types
-            .iter()
-            .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-            .collect();
-        let compiler_builtins = self.env.compiler_builtins.iter().cloned().collect();
-        let must_use_functions = self
-            .env
-            .must_use_functions
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let distinct_type_traits = self.env.distinct_types.clone();
+        let compiler_builtins = self.env.compiler_builtins.clone();
+        let must_use_functions = self.env.must_use_functions.clone();
         TypeCheckResult {
             errors: self.errors,
             warnings: self.warnings,
             expr_types: self.expr_types,
             vector_method_receivers: self.vector_method_receivers,
             pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
-            struct_info: self.env.structs.into_iter().collect(),
-            enum_info: self.env.enums.into_iter().collect(),
-            union_info: self.env.unions.into_iter().collect(),
+            struct_info: self.env.structs,
+            enum_info: self.env.enums,
+            union_info: self.env.unions,
             distinct_type_traits,
             question_conversions: self.question_conversions,
             question_ok_payload_types: self.question_ok_payload_types,
@@ -4360,7 +4347,7 @@ fn collect_expect_on_unfulfilled(
 /// `emit_unknown_lint_warnings` already uses for self-suppression.
 fn collect_unfulfilled_expects(
     overrides: &[crate::lints::LintLevelOverride],
-    fulfilled: &std::collections::HashSet<(usize, String)>,
+    fulfilled: &FxHashSet<(usize, String)>,
     outer_frame: Vec<crate::lints::LintLevelOverride>,
     inner_frame: Vec<crate::lints::LintLevelOverride>,
     out: &mut Vec<(

@@ -12,6 +12,7 @@
 //! state-decomposition spike; see
 //! `docs/spikes/state-decomposition-codegen-methodcall.md`.
 
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 use inkwell::types::{BasicTypeEnum, FunctionType};
@@ -154,5 +155,5 @@ pub(crate) struct ClosureState<'ctx> {
     /// `collect_closure_free_vars` layout (preserves the `compile_to_ir`
     /// path and any codegen-only tests that don't run the ownership
     /// pass).
-    pub(crate) closure_capture_paths: HashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
+    pub(crate) closure_capture_paths: FxHashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
 }

@@ -3,6 +3,7 @@
 //! Compiles the AST to LLVM IR, then to native object files.
 //! Uses the `inkwell` crate for LLVM bindings.
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
@@ -1580,14 +1581,14 @@ pub(super) struct Codegen<'ctx> {
     /// clone, skip the receive-inc, and register NO scope-exit cleanup — the
     /// caller's value stays the sole owner. Empty unless the program uses the
     /// `frozen` mode.
-    pub(crate) frozen_alias_bindings: HashSet<SpanKey>,
+    pub(crate) frozen_alias_bindings: FxHashSet<SpanKey>,
     /// B-2026-08-01-33 mechanism 3, stage 3c — initializer spans of the `let`s
     /// the ownership pass proved to be FROZEN-ELEMENT CONTAINERS. A hit at a
     /// `let` means the binding's name joins `frozen_elem_vec_owners`, which
     /// drives two suppressions that are a matched PAIR: no retain at
     /// `c.push(x)`, and no per-element release in the scope-exit drop (the
     /// buffer is still freed). Empty unless the program uses the `frozen` mode.
-    pub(crate) frozen_element_containers: HashSet<SpanKey>,
+    pub(crate) frozen_element_containers: FxHashSet<SpanKey>,
     /// Stage 3c, per function — the NAMES of the containers above, resolved at
     /// each `let` and consulted at the push site and the cleanup registration.
     /// Reset per function, because the hint set is span-keyed and
@@ -5163,7 +5164,7 @@ impl<'ctx> Codegen<'ctx> {
                 refinement_predicates: HashMap::new(),
                 current_contract_ensures: Vec::new(),
                 current_contract_result_type: None,
-                contract_old_snapshots: HashMap::new(),
+                contract_old_snapshots: FxHashMap::default(),
                 current_method_invariants: Vec::new(),
                 constructor_invariant_self_type: None,
                 strip_contracts: read_strip_contracts_env(),
@@ -5347,7 +5348,7 @@ impl<'ctx> Codegen<'ctx> {
                 channel_elem_types: HashMap::new(),
                 task_join_return_types: HashMap::new(),
                 branch_cancel_ptr: None,
-                par_capture_modes: HashMap::new(),
+                par_capture_modes: FxHashMap::default(),
                 concurrency_decisions: HashMap::new(),
                 par_counter: 0,
                 karac_branch_ty,
@@ -5435,7 +5436,7 @@ impl<'ctx> Codegen<'ctx> {
                 heap_env_vec_owners: std::collections::HashSet::new(),
                 pending_closure_fn_type: None,
                 pending_closure_param_hints: None,
-                closure_capture_paths: HashMap::new(),
+                closure_capture_paths: FxHashMap::default(),
             },
             indexed_elem_counter: 0,
             pending_reverse_iter: false,
@@ -5473,10 +5474,10 @@ impl<'ctx> Codegen<'ctx> {
             bce: BceState {
                 len_alias: HashMap::new(),
                 asserted_index_bounds: Vec::new(),
-                pending_vec_len_pins: HashMap::new(),
-                descending_skips: HashMap::new(),
+                pending_vec_len_pins: FxHashMap::default(),
+                descending_skips: FxHashMap::default(),
                 interproc_conv_skips: HashMap::new(),
-                converging_skips: HashMap::new(),
+                converging_skips: FxHashMap::default(),
                 vec_len_pins: Vec::new(),
                 binsearch_guard_stack: Vec::new(),
                 binsearch_assume_emitted: false,
@@ -5520,7 +5521,7 @@ impl<'ctx> Codegen<'ctx> {
                 sret_struct_returns: HashMap::new(),
             },
             pattern_state: PatternState {
-                discarded_branch_spans: std::collections::HashSet::new(),
+                discarded_branch_spans: FxHashSet::default(),
                 pattern_binding_is_borrow: false,
                 pattern_binding_source_retains_inline_payload: false,
                 pattern_binding_scrutinee_is_elidable_param: false,
@@ -5567,7 +5568,7 @@ impl<'ctx> Codegen<'ctx> {
                 question_ok_payload_types: HashMap::new(),
                 wp_result_types: HashMap::new(),
                 method_callee_types: HashMap::new(),
-                impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::new(),
+                impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::default(),
                 method_impl_dispatch: HashMap::new(),
                 call_effect_subs: crate::ast::CallEffectSubsTable::new(),
                 method_unwrap_inner_types: HashMap::new(),
@@ -5592,8 +5593,8 @@ impl<'ctx> Codegen<'ctx> {
                 user_ord_typed_exprs: HashMap::new(),
                 raw_pointer_pointee_types: HashMap::new(),
                 concrete_named_type_exprs: HashMap::new(),
-                vec_index_borrow_spans: HashSet::new(),
-                vec_index_cloned_sites: HashSet::new(),
+                vec_index_borrow_spans: FxHashSet::default(),
+                vec_index_cloned_sites: FxHashSet::default(),
                 uam_consume_sites: std::collections::HashSet::new(),
                 uam_copied_sites: std::collections::HashSet::new(),
             },
@@ -5626,8 +5627,8 @@ impl<'ctx> Codegen<'ctx> {
                 borrowed_param_skips: HashMap::new(),
             },
             atomic_promoted_types: HashSet::new(),
-            frozen_alias_bindings: HashSet::new(),
-            frozen_element_containers: HashSet::new(),
+            frozen_alias_bindings: FxHashSet::default(),
+            frozen_element_containers: FxHashSet::default(),
             frozen_elem_vec_owners: HashSet::new(),
             debug_info: None,
             runtime_debug_metadata_enabled: read_runtime_debug_metadata_env(),

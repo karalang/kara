@@ -71,6 +71,7 @@
 
 use crate::ast::*;
 use crate::resolver::SpanKey;
+use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
 
 /// Provenance facts gathered from one loop body in a single pass.
@@ -156,7 +157,7 @@ impl Ctx<'_> {
 pub fn iteration_local_spans(
     body: &Block,
     tc: &crate::typechecker::TypeCheckResult,
-) -> Option<HashSet<SpanKey>> {
+) -> Option<FxHashSet<SpanKey>> {
     let mut prov = Provenance::default();
     prov.scan_block(body);
     if prov.escapes {
@@ -170,7 +171,7 @@ pub fn iteration_local_spans(
     prov.solve(&mut cx);
     let mut walker = LocalWalker {
         cx: &cx,
-        spans: HashSet::new(),
+        spans: FxHashSet::default(),
     };
     walker.block(body);
     Some(walker.spans)
@@ -363,7 +364,7 @@ impl<'a> Visit<'a> for Provenance<'a> {
 
 struct LocalWalker<'a> {
     cx: &'a Ctx<'a>,
-    spans: HashSet<SpanKey>,
+    spans: FxHashSet<SpanKey>,
 }
 
 impl LocalWalker<'_> {
@@ -561,10 +562,10 @@ fn block_is_local(block: &Block, cx: &Ctx<'_>) -> bool {
 /// Fail-closed like its sibling: it whitelists on positive evidence only, so
 /// an expression shape [`place_root_name`] does not model is simply absent
 /// and the gate's decline stands.
-pub fn spans_rooted_at(body: &Block, roots: &HashSet<String>) -> HashSet<SpanKey> {
+pub fn spans_rooted_at(body: &Block, roots: &HashSet<String>) -> FxHashSet<SpanKey> {
     struct Collect<'r> {
         roots: &'r HashSet<String>,
-        out: HashSet<SpanKey>,
+        out: FxHashSet<SpanKey>,
     }
     impl<'e> Visit<'e> for Collect<'_> {
         fn on_expr(&mut self, expr: &'e Expr) {
@@ -602,7 +603,7 @@ pub fn spans_rooted_at(body: &Block, roots: &HashSet<String>) -> HashSet<SpanKey
     }
     let mut c = Collect {
         roots,
-        out: HashSet::new(),
+        out: FxHashSet::default(),
     };
     if roots.is_empty() {
         return c.out;

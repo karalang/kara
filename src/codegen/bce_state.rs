@@ -32,6 +32,7 @@
 //! disarm the optimization it guards, so a future "clear the BCE state"
 //! helper must take the scope it is clearing, not clear the struct.
 
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 use super::bce_length_pin;
@@ -67,7 +68,7 @@ pub(crate) struct BceState {
     /// its fill loop finishes emitting, so it goes live exactly for the code
     /// lexically after the fill loop.
     pub(crate) pending_vec_len_pins:
-        HashMap<crate::resolver::SpanKey, bce_length_pin::VecLengthPin>,
+        FxHashMap<crate::resolver::SpanKey, bce_length_pin::VecLengthPin>,
     /// Active length pins: `(bound, vec_var)` pairs. `bound` is a normalised
     /// pure-arithmetic `BoundTerm` (a bare var like `cols`, or `cols + 1`, …).
     /// Consulted by `resolve_len_origin`: a `while idx < BOUND` guard whose RHS
@@ -85,7 +86,8 @@ pub(crate) struct BceState {
     /// `asserted_index_bounds` for the inner loop body. Populated at
     /// `compile_function` (whole-body analysis, so it is stable across the
     /// function).
-    pub(crate) descending_skips: HashMap<crate::resolver::SpanKey, bce_length_pin::DescendingSkip>,
+    pub(crate) descending_skips:
+        FxHashMap<crate::resolver::SpanKey, bce_length_pin::DescendingSkip>,
     /// Converging two-pointer bounds-check skips for the current function
     /// (bce_length_pin.rs, B-2026-08-04-8): each maps an inner converging
     /// loop's condition `SpanKey` to the `(base_var, idx_vars, vec_vars)`
@@ -94,7 +96,8 @@ pub(crate) struct BceState {
     /// counter's bound, and the guard that bounds both converging indices by
     /// `hi`'s init). Consumed in `compile_while`, which pushes the matching
     /// `UpperBoundSum` facts. Populated at `compile_function`.
-    pub(crate) converging_skips: HashMap<crate::resolver::SpanKey, bce_length_pin::ConvergingSkip>,
+    pub(crate) converging_skips:
+        FxHashMap<crate::resolver::SpanKey, bce_length_pin::ConvergingSkip>,
     /// Converging skips a free function earns from an interprocedural bounds
     /// PRECONDITION every one of its call sites discharges (`bce_interproc.rs`,
     /// B-2026-08-05-6): the row-helper shape, where the length pin, the
@@ -105,7 +108,7 @@ pub(crate) struct BceState {
     /// once per program in `compile_program`, merged into `converging_skips` at
     /// `compile_function`.
     pub(crate) interproc_conv_skips:
-        HashMap<String, HashMap<crate::resolver::SpanKey, bce_length_pin::ConvergingSkip>>,
+        HashMap<String, FxHashMap<crate::resolver::SpanKey, bce_length_pin::ConvergingSkip>>,
     /// Stack of `(lo, hi)` variable-name pairs from dominating strict
     /// `while lo < hi` guards (innermost last). When a `let mid = lo +
     /// (hi - lo) / 2` (or `(lo + hi) / 2`) binding is compiled under such

@@ -42,6 +42,7 @@
 //! globally rejected at type lowering (`E_DYN_TRAIT_NOT_IMPLEMENTED_YET`), so
 //! no `#[gpu]`-specific dyn check is needed.
 
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
@@ -317,7 +318,7 @@ fn callee_key(callee: &Expr) -> Option<String> {
 fn collect_edges_block(
     block: &Block,
     known: &HashSet<String>,
-    method_callee: &HashMap<SpanKey, String>,
+    method_callee: &FxHashMap<SpanKey, String>,
     out: &mut Vec<(String, Span)>,
 ) {
     for stmt in &block.stmts {
@@ -331,7 +332,7 @@ fn collect_edges_block(
 fn collect_edges_stmt(
     stmt: &Stmt,
     known: &HashSet<String>,
-    method_callee: &HashMap<SpanKey, String>,
+    method_callee: &FxHashMap<SpanKey, String>,
     out: &mut Vec<(String, Span)>,
 ) {
     match &stmt.kind {
@@ -358,7 +359,7 @@ fn collect_edges_stmt(
 fn collect_edges_expr(
     expr: &Expr,
     known: &HashSet<String>,
-    method_callee: &HashMap<SpanKey, String>,
+    method_callee: &FxHashMap<SpanKey, String>,
     out: &mut Vec<(String, Span)>,
 ) {
     match &expr.kind {

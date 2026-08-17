@@ -38,7 +38,7 @@
 //! the plain-data `TypeCheckResult.expr_types` side-table, keeping the
 //! codegen-substrate boundary intact (CLAUDE.md § Codegen containment).
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::ast::{
     BinOp, Block, CallArg, Expr, ExprKind, Function, ImplItem, Item, Program, Stmt, StmtKind,
@@ -360,8 +360,8 @@ fn type_expr_name(ty: &crate::ast::TypeExpr) -> String {
 }
 
 struct Scan<'a> {
-    expr_types: &'a HashMap<SpanKey, Type>,
-    vector_method_receivers: &'a HashMap<SpanKey, (Type, usize)>,
+    expr_types: &'a FxHashMap<SpanKey, Type>,
+    vector_method_receivers: &'a FxHashMap<SpanKey, (Type, usize)>,
     /// Active target's vector width ([`native_vector_bits`], resolved once).
     vector_bits: Option<u32>,
     findings: Vec<SimdFinding>,

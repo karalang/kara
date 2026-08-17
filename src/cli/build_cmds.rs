@@ -3,6 +3,7 @@
 //! Extracted verbatim from `cli.rs` (structural-debt extraction, slice 3).
 
 use super::*;
+use rustc_hash::FxHashMap;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn cmd_build(
@@ -1805,8 +1806,8 @@ pub(super) fn run_multi_file_codegen(
     let parsed = ParseResult {
         program: super_program,
         errors: Vec::new(),
-        fix_edits: std::collections::HashMap::new(),
-        fix_diffs: std::collections::HashMap::new(),
+        fix_edits: FxHashMap::default(),
+        fix_diffs: FxHashMap::default(),
     };
     let mut pipeline = Pipeline {
         filename: mf.name.clone(),
@@ -2378,7 +2379,7 @@ pub(super) struct ModuleResolveErrors {
     /// owning diagnostic's span. Carried alongside `errors` so the
     /// project-mode JSON path advertises the same fixes the single-file path
     /// does — see [`crate::resolver::ResolveResult::error_fix_diffs`].
-    fix_diffs: std::collections::HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    fix_diffs: FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 }
 
 /// Run the resolver per module with the full `ProgramTree` attached so
@@ -2507,7 +2508,7 @@ pub(super) fn replacement_json_tail(err: &crate::resolver::ResolveError) -> Stri
 /// simply because the project was compiled as a project.
 pub(super) fn fix_diff_json_tail(
     err: &crate::resolver::ResolveError,
-    fix_diffs: &std::collections::HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    fix_diffs: &FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 ) -> String {
     match fix_diffs
         .get(&crate::resolver::SpanKey::from_span(&err.span))

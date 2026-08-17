@@ -14,6 +14,7 @@
 //! state-decomposition spike; see
 //! `docs/spikes/state-decomposition-codegen-methodcall.md`.
 
+use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::TypeExpr;
@@ -232,7 +233,7 @@ pub(crate) struct SpanTables {
     /// container element — and the binding's scope-exit `track_vec_*`
     /// (FreeVecBuffer + recursive element drop) is suppressed, since the
     /// container stays the unique owner. Recomputed (overwritten) per fn.
-    pub(crate) vec_index_borrow_spans: HashSet<SpanKey>,
+    pub(crate) vec_index_borrow_spans: FxHashSet<SpanKey>,
     /// B-2026-08-14-15 leg A — the RHS `SpanKey` of every index-read that
     /// `clone_owned_vec_index_element` actually deep-cloned. The clone makes the
     /// destination the owner of a FRESH value, but the `let` site's Map/Set
@@ -243,7 +244,7 @@ pub(crate) struct SpanTables {
     /// sides exact: the clone self-gates on element copyability and on the read
     /// value's LLVM type, so "not borrow-elided" is strictly wider than "cloned".
     /// Accumulates across the module; `SpanKey`s are source-unique.
-    pub(crate) vec_index_cloned_sites: HashSet<SpanKey>,
+    pub(crate) vec_index_cloned_sites: FxHashSet<SpanKey>,
     /// Per-variable element-`TypeExpr` side-table for collection variables —
     /// the *element* of a Vec/Slice/Array, or the *value* of a Map. Used by
     /// `compile_for_*_var` so for-loop bindings inherit the right side-table

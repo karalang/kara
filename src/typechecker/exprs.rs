@@ -14,6 +14,7 @@ use crate::ast::*;
 use crate::cross_task_safe::is_cross_task_safe_with;
 use crate::resolver::SpanKey;
 use crate::token::Span;
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 use super::env::{FunctionSig, ImplInfo};
@@ -1555,8 +1556,8 @@ impl<'a> super::TypeChecker<'a> {
         if solutions.is_empty() {
             return;
         }
-        let mut frame: HashMap<String, String> = HashMap::new();
-        let mut mangle_frame: HashMap<String, String> = HashMap::new();
+        let mut frame: FxHashMap<String, String> = FxHashMap::default();
+        let mut mangle_frame: FxHashMap<String, String> = FxHashMap::default();
         for (name, ty) in solutions {
             if let Some(resolved) = type_to_concrete_or_param_name(ty) {
                 frame.insert(name.clone(), resolved);

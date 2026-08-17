@@ -5,6 +5,7 @@
 //! Extracted verbatim from `cli.rs` (structural-debt extraction, slice 2).
 
 use super::*;
+use rustc_hash::FxHashMap;
 
 // ── JSON Output ─────────────────────────────────────────────────
 
@@ -232,7 +233,7 @@ pub fn build_callee_network_yield_effect_table(
 pub fn build_yield_points_table(
     program: &Program,
     network_yield: &std::collections::HashMap<String, bool>,
-    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+    method_callee_types: &FxHashMap<crate::resolver::SpanKey, String>,
 ) -> std::collections::HashMap<String, Vec<crate::ast::YieldPoint>> {
     let mut table = std::collections::HashMap::new();
     for item in &program.items {
@@ -280,7 +281,7 @@ pub fn build_yield_points_table(
 /// argument through each helper.
 struct YieldPointWalker<'a> {
     network_yield: &'a std::collections::HashMap<String, bool>,
-    method_callee_types: &'a std::collections::HashMap<crate::resolver::SpanKey, String>,
+    method_callee_types: &'a FxHashMap<crate::resolver::SpanKey, String>,
     /// Flat stack of in-scope local-binding names in source-introduction
     /// order. Function parameters occupy the bottom of the stack; later
     /// pushes come from `let` / `let-else` / `if let` / `while let` /
@@ -294,7 +295,7 @@ struct YieldPointWalker<'a> {
 pub(super) fn walk_fn_for_yield_points(
     func: &crate::ast::Function,
     network_yield: &std::collections::HashMap<String, bool>,
-    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+    method_callee_types: &FxHashMap<crate::resolver::SpanKey, String>,
 ) -> Vec<crate::ast::YieldPoint> {
     let mut walker = YieldPointWalker {
         network_yield,
@@ -690,8 +691,8 @@ pub(super) fn is_scalar_primitive_type_name(n: &str) -> bool {
 pub fn build_state_struct_layouts(
     program: &Program,
     network_yield: &std::collections::HashMap<String, bool>,
-    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
-    pattern_binding_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+    method_callee_types: &FxHashMap<crate::resolver::SpanKey, String>,
+    pattern_binding_types: &FxHashMap<crate::resolver::SpanKey, String>,
 ) -> std::collections::HashMap<String, crate::ast::StateStructLayout> {
     let mut table = std::collections::HashMap::new();
     for item in &program.items {
@@ -751,8 +752,8 @@ pub fn build_state_struct_layouts(
 /// get distinct slots.
 struct StateStructLayoutWalker<'a> {
     network_yield: &'a std::collections::HashMap<String, bool>,
-    method_callee_types: &'a std::collections::HashMap<crate::resolver::SpanKey, String>,
-    pattern_binding_types: &'a std::collections::HashMap<crate::resolver::SpanKey, String>,
+    method_callee_types: &'a FxHashMap<crate::resolver::SpanKey, String>,
+    pattern_binding_types: &'a FxHashMap<crate::resolver::SpanKey, String>,
     /// Flat stack of in-scope binding (name, introducing-pattern-span)
     /// pairs in source-introduction order. `self` carries a fixed sentinel
     /// span-key — its type comes from the impl target, not from the
@@ -796,8 +797,8 @@ pub(super) fn walk_fn_for_state_struct_layout(
     func: &crate::ast::Function,
     impl_target_type: Option<&str>,
     network_yield: &std::collections::HashMap<String, bool>,
-    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
-    pattern_binding_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+    method_callee_types: &FxHashMap<crate::resolver::SpanKey, String>,
+    pattern_binding_types: &FxHashMap<crate::resolver::SpanKey, String>,
 ) -> Option<crate::ast::StateStructLayout> {
     let mut walker = StateStructLayoutWalker {
         network_yield,

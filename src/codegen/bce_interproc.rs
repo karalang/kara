@@ -101,6 +101,7 @@
 //! and A/B lever, mirroring `KARAC_BCE_CONV_SKIP` / `KARAC_BCE_DESC_SKIP`);
 //! `KARAC_BCE_CONV_SKIP=0` also disables it, since it feeds that mechanism.
 
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
@@ -140,8 +141,8 @@ struct Precondition {
 /// program.
 pub(crate) fn compute_interproc_converging_skips(
     program: &Program,
-) -> HashMap<String, HashMap<SpanKey, ConvergingSkip>> {
-    let mut out: HashMap<String, HashMap<SpanKey, ConvergingSkip>> = HashMap::new();
+) -> HashMap<String, FxHashMap<SpanKey, ConvergingSkip>> {
+    let mut out: HashMap<String, FxHashMap<SpanKey, ConvergingSkip>> = HashMap::new();
 
     // Candidate callees: free functions with a unique name. A duplicated name
     // means a call site cannot be attributed to one body, so BOTH lose

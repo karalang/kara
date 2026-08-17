@@ -57,6 +57,7 @@
 
 use crate::ast::*;
 use crate::resolver::SpanKey;
+use rustc_hash::FxHashMap;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A pure-arithmetic loop bound, normalised to a span-free canonical form so the
@@ -175,8 +176,8 @@ struct Fill {
 /// the fill loop's key span (`SpanKey`). Codegen activates a pin when it finishes
 /// emitting the matching loop, so the pin is live exactly for the code lexically
 /// after the fill loop.
-pub(crate) fn compute_vec_length_pins(body: &Block) -> HashMap<SpanKey, VecLengthPin> {
-    let mut out = HashMap::new();
+pub(crate) fn compute_vec_length_pins(body: &Block) -> FxHashMap<SpanKey, VecLengthPin> {
+    let mut out = FxHashMap::default();
     // Whole-function binding counts. A pin is name-keyed on its Vec and stays
     // active to end of function, so it is only sound when that Vec name is bound
     // EXACTLY ONCE in the whole function — otherwise the pin could match a
@@ -202,7 +203,7 @@ pub(crate) fn compute_vec_length_pins(body: &Block) -> HashMap<SpanKey, VecLengt
 fn analyze_block_pins(
     block: &Block,
     whole: &RegionBindings,
-    out: &mut HashMap<SpanKey, VecLengthPin>,
+    out: &mut FxHashMap<SpanKey, VecLengthPin>,
 ) {
     let stmts = &block.stmts;
     for (li, stmt) in stmts.iter().enumerate() {
@@ -1651,9 +1652,9 @@ pub(crate) struct DescendingSkip {
 
 /// Analyse a function body and return the descending-loop skips it proves,
 /// keyed by the inner loop's condition `SpanKey`.
-pub(crate) fn compute_descending_skips(body: &Block) -> HashMap<SpanKey, DescendingSkip> {
+pub(crate) fn compute_descending_skips(body: &Block) -> FxHashMap<SpanKey, DescendingSkip> {
     let lbs = vec_length_lower_bounds(body);
-    let mut out = HashMap::new();
+    let mut out = FxHashMap::default();
     if lbs.is_empty() {
         return out;
     }
@@ -1671,7 +1672,7 @@ pub(crate) fn compute_descending_skips(body: &Block) -> HashMap<SpanKey, Descend
 fn scan_enclosing_loops(
     block: &Block,
     lbs: &HashMap<String, BoundTerm>,
-    out: &mut HashMap<SpanKey, DescendingSkip>,
+    out: &mut FxHashMap<SpanKey, DescendingSkip>,
 ) {
     for stmt in &block.stmts {
         let StmtKind::Expr(e) = &stmt.kind else {
@@ -1690,7 +1691,7 @@ fn analyze_enclosing_body(
     u_max: &BoundTerm,
     enc_body: &Block,
     lbs: &HashMap<String, BoundTerm>,
-    out: &mut HashMap<SpanKey, DescendingSkip>,
+    out: &mut FxHashMap<SpanKey, DescendingSkip>,
 ) {
     let stmts = &enc_body.stmts;
     for (pos, stmt) in stmts.iter().enumerate() {
@@ -2549,8 +2550,8 @@ pub(crate) struct ConvergingSkip {
 
 /// Analyse a function body and return the converging two-pointer skips it
 /// proves, keyed by the inner loop's condition `SpanKey`.
-pub(crate) fn compute_converging_skips(body: &Block) -> HashMap<SpanKey, ConvergingSkip> {
-    let mut out = HashMap::new();
+pub(crate) fn compute_converging_skips(body: &Block) -> FxHashMap<SpanKey, ConvergingSkip> {
+    let mut out = FxHashMap::default();
     let lbs = vec_length_lower_bounds(body);
     if lbs.is_empty() {
         return out;
@@ -2573,7 +2574,7 @@ fn scan_enclosing_loops_conv(
     block: &Block,
     lbs: &HashMap<String, BoundTerm>,
     consts: &HashMap<String, i64>,
-    out: &mut HashMap<SpanKey, ConvergingSkip>,
+    out: &mut FxHashMap<SpanKey, ConvergingSkip>,
 ) {
     for (pos, stmt) in block.stmts.iter().enumerate() {
         let StmtKind::Expr(e) = &stmt.kind else {
@@ -2619,7 +2620,7 @@ fn analyze_enclosing_body_conv(
     enc_body: &Block,
     lbs: &HashMap<String, BoundTerm>,
     consts: &HashMap<String, i64>,
-    out: &mut HashMap<SpanKey, ConvergingSkip>,
+    out: &mut FxHashMap<SpanKey, ConvergingSkip>,
 ) {
     let stmts = &enc_body.stmts;
     for (pos, stmt) in stmts.iter().enumerate() {

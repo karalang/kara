@@ -34,6 +34,7 @@
 //! captures so the codegen path can emit correct RC code for the
 //! single-branch (sole-ownership) case the diagnostic still admits.
 
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use crate::ast::*;
@@ -151,7 +152,7 @@ fn classify_par_in_block(
     binding_types: &[(String, String)],
     fn_key: &str,
     tcr: &TypeCheckResult,
-    out: &mut std::collections::HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
+    out: &mut FxHashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
     arc_values: &mut std::collections::HashMap<String, HashSet<String>>,
 ) {
     let mut scoped = binding_types.to_vec();
@@ -168,7 +169,7 @@ fn classify_par_in_stmt(
     binding_types: &mut Vec<(String, String)>,
     fn_key: &str,
     tcr: &TypeCheckResult,
-    out: &mut std::collections::HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
+    out: &mut FxHashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
     arc_values: &mut std::collections::HashMap<String, HashSet<String>>,
 ) {
     match &stmt.kind {
@@ -211,7 +212,7 @@ fn classify_par_in_expr(
     binding_types: &[(String, String)],
     fn_key: &str,
     tcr: &TypeCheckResult,
-    out: &mut std::collections::HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
+    out: &mut FxHashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
     arc_values: &mut std::collections::HashMap<String, HashSet<String>>,
 ) {
     match &expr.kind {

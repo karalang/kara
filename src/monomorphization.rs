@@ -61,6 +61,7 @@ use crate::effectchecker::{Effect, EffectCheckResult};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::TypeCheckResult;
+use rustc_hash::FxHashMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// One concrete instantiation of a generic — the resolved
@@ -203,7 +204,7 @@ pub fn analyze(
     tc: &TypeCheckResult,
     ec: Option<&EffectCheckResult>,
 ) -> MonomorphizationTable {
-    let empty_subs: HashMap<SpanKey, HashMap<String, HashSet<Effect>>> = HashMap::new();
+    let empty_subs: FxHashMap<SpanKey, HashMap<String, HashSet<Effect>>> = FxHashMap::default();
     let effect_subs = ec.map(|e| &e.call_effect_subs).unwrap_or(&empty_subs);
     let mut walker = Walker {
         tc,
@@ -272,7 +273,7 @@ struct Walker<'a> {
     /// Per-call effect-variable resolutions, sourced from
     /// `EffectCheckResult.call_effect_subs` (empty when no effect-check
     /// result was threaded).
-    effect_subs: &'a HashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
+    effect_subs: &'a FxHashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
     groups: BTreeMap<String, GroupAccum>,
 }
 
@@ -479,7 +480,7 @@ fn strip_receiver_generic_args(callee: &str) -> String {
 /// the output deterministic across runs (the underlying `HashMap`
 /// iteration order is not). Tools wanting declaration-order can map
 /// back via the function definition.
-fn ordered_types(subs: &HashMap<String, String>) -> Vec<String> {
+fn ordered_types(subs: &rustc_hash::FxHashMap<String, String>) -> Vec<String> {
     let names: BTreeSet<&String> = subs.keys().collect();
     names
         .into_iter()
@@ -546,7 +547,7 @@ mod tests {
 
     #[test]
     fn ordered_types_is_alphabetical_by_param_name() {
-        let mut subs: HashMap<String, String> = HashMap::new();
+        let mut subs: rustc_hash::FxHashMap<String, String> = Default::default();
         subs.insert("U".to_string(), "Receipt".to_string());
         subs.insert("T".to_string(), "Order".to_string());
         // Sorted by name (T, U) → values in that order.

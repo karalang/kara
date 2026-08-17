@@ -25,6 +25,7 @@ use crate::ast::{
 };
 use crate::resolver::SpanKey;
 use crate::token::Span;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 
 pub type BlockId = usize;
@@ -194,14 +195,14 @@ pub enum ConsumeOrigin {
 /// consumes become dominance-incomparable with subsequent outer uses.
 #[derive(Debug, Clone, Default)]
 pub struct Classification {
-    pub kinds: HashMap<SpanKey, UseKind>,
-    pub sink_arg_spans: HashSet<SpanKey>,
+    pub kinds: FxHashMap<SpanKey, UseKind>,
+    pub sink_arg_spans: FxHashSet<SpanKey>,
     /// Per-Consume-span origin tag (round 12.14). Sparse: spans absent
     /// from the map default to `ConsumeOrigin::Direct`. Populated by
     /// the use classifier when a Consume identifier-leaf is recorded
     /// inside a closure body (`ClosureCapture`) or as the
     /// owned-arg of a `mut ref self` method call (`ContainerStore`).
-    pub consume_origins: HashMap<SpanKey, ConsumeOrigin>,
+    pub consume_origins: FxHashMap<SpanKey, ConsumeOrigin>,
     /// Per-closure-expression body consume index — phase-7-codegen.md
     /// line 45. Outer key is the closure expression's `SpanKey`; inner
     /// map is `binding name → first consume span seen inside that body`
@@ -211,7 +212,7 @@ pub struct Classification {
     /// legacy state-machine's `ValueState::Moved` post-walk state.
     /// Includes consumes of inner-locals too — consumers filter against
     /// their `pre_live` set (only outer captures matter for mode).
-    pub closure_capture_consumes: HashMap<SpanKey, HashMap<String, Span>>,
+    pub closure_capture_consumes: FxHashMap<SpanKey, HashMap<String, Span>>,
     /// Per-use-leaf place path (B-2026-07-02-25). Keyed by the ROOT
     /// identifier-leaf's `SpanKey`; value is the projection chain applied
     /// to reach the sub-place the use touches (e.g. `b.left` records
@@ -220,7 +221,7 @@ pub struct Classification {
     /// empty path (the whole binding). Threaded into `UseSite.place` by
     /// the CFG builder so the predicate can skip pairing disjoint partial
     /// moves of the same root.
-    pub consume_places: HashMap<SpanKey, PlacePath>,
+    pub consume_places: FxHashMap<SpanKey, PlacePath>,
 }
 
 /// A basic block in the CFG. Statements are not stored — only the use

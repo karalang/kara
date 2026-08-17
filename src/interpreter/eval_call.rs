@@ -1852,7 +1852,7 @@ impl<'a> super::Interpreter<'a> {
                 let mut pushed_old = false;
                 if contract_fault.is_none() {
                     if let Some((_, ensures)) = &contract {
-                        let mut snap = HashMap::new();
+                        let mut snap = rustc_hash::FxHashMap::default();
                         for ens in ensures {
                             let ens_body = ens.body.clone();
                             self.capture_old_in_expr(&ens_body, &mut snap);

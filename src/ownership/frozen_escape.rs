@@ -178,6 +178,7 @@
 //!   safety argument ("concurrent readers cannot race a payload nobody may
 //!   write") should not silently depend on a check in another module.
 
+use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
@@ -260,7 +261,7 @@ struct Cx<'a, 't> {
     /// (stage 3). A `let` whose initializer is in here is a FREEZE SITE: it
     /// introduces a frozen root from an ordinary binding, rather than deriving
     /// one from a root that was already frozen.
-    freeze_spans: &'a HashSet<SpanKey>,
+    freeze_spans: &'a FxHashSet<SpanKey>,
     /// Every `freeze` site this walk visited, with the type name it resolved
     /// the source to (`None` when it could not) and the span to report at.
     /// Handed to the freeze-site classifier by the caller so that ADMISSION
@@ -297,7 +298,7 @@ struct Cx<'a, 't> {
     /// because that is the span codegen already has in hand at the decision
     /// point, and the one `vec_index_borrow_spans` — the existing
     /// alias-instead-of-own channel — is keyed by.
-    alias_spans: HashSet<SpanKey>,
+    alias_spans: FxHashSet<SpanKey>,
     /// Stage 3b step 1 — every local name USED so far, in walk order.
     ///
     /// This is the alias/uniqueness precondition the design calls "local and
@@ -872,9 +873,9 @@ impl super::OwnershipChecker<'_> {
 /// containers.
 type WalkResult = (
     Vec<Rejection>,
-    HashSet<SpanKey>,
+    FxHashSet<SpanKey>,
     Vec<(Option<String>, Span, FreezeSite)>,
-    HashSet<SpanKey>,
+    FxHashSet<SpanKey>,
 );
 
 /// Run the walk over `f` and return every rejected use, plus the initializer
@@ -918,7 +919,12 @@ fn collect_frozen_escapes<'a>(
     // program that does not — which is every program that does not use the
     // mode — without a per-function body scan.
     if frozen.is_empty() && program.freeze_spans.is_empty() {
-        return (Vec::new(), HashSet::new(), Vec::new(), HashSet::new());
+        return (
+            Vec::new(),
+            FxHashSet::default(),
+            Vec::new(),
+            FxHashSet::default(),
+        );
     }
 
     // Stage 3c — the frozen-element container fixpoint (B-2026-08-07-23).
@@ -970,7 +976,7 @@ fn collect_frozen_escapes<'a>(
         aliases: HashSet::new(),
         sources: HashSet::new(),
         found: Vec::new(),
-        alias_spans: HashSet::new(),
+        alias_spans: FxHashSet::default(),
         // A `frozen` parameter / `frozen self` is owned by the CALLER, whose
         // value lives for the whole call — the empty path, a prefix of every
         // block, i.e. it outlives anything a local container can be.

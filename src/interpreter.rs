@@ -1,3 +1,4 @@
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, RwLock};
@@ -402,7 +403,7 @@ pub struct Interpreter<'a> {
     /// RHS-eval path; the source-replay model retains its semantics
     /// for those forms (RHS re-runs each cell, mutation does not
     /// survive).
-    pub let_value_overrides: HashMap<crate::resolver::SpanKey, Value>,
+    pub let_value_overrides: FxHashMap<crate::resolver::SpanKey, Value>,
     /// REPL value-snapshot capture set. The bound value of any
     /// `StmtKind::Let { pattern: PatternKind::Binding(name), .. }` whose
     /// `name` is in this set is recorded into `captured_let_values`
@@ -535,7 +536,7 @@ pub struct Interpreter<'a> {
     /// evaluated and stored here keyed by the arg expression's span; when
     /// the postcondition runs at exit, the `old(arg)` call reads the
     /// snapshot back. A stack so nested contracted calls don't collide.
-    pub(crate) old_snapshots: Vec<HashMap<crate::resolver::SpanKey, Value>>,
+    pub(crate) old_snapshots: Vec<FxHashMap<crate::resolver::SpanKey, Value>>,
 }
 
 /// Per-pool state for the `Pool[T]` intrinsic. Lives in
@@ -804,7 +805,7 @@ impl<'a> Interpreter<'a> {
             rate_limiter_handle_counter: 0,
             bounded_channel_table: HashMap::new(),
             bounded_channel_handle_counter: 0,
-            let_value_overrides: HashMap::new(),
+            let_value_overrides: FxHashMap::default(),
             let_snapshot_watch: HashSet::new(),
             moved_out_drop_field_bindings: HashSet::new(),
             moved_out_enum_payload_bindings: HashSet::new(),
@@ -1089,7 +1090,7 @@ impl<'a> Interpreter<'a> {
     pub(crate) fn capture_old_in_expr(
         &mut self,
         expr: &Expr,
-        snap: &mut HashMap<crate::resolver::SpanKey, Value>,
+        snap: &mut FxHashMap<crate::resolver::SpanKey, Value>,
     ) {
         match &expr.kind {
             ExprKind::Call { callee, args } => {

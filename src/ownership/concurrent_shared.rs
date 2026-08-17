@@ -48,7 +48,7 @@
 // code on wasm32 without weakening the native dead-code gate.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
@@ -58,8 +58,8 @@ use crate::token::Span;
 
 use super::{OwnershipError, OwnershipErrorKind, OwnershipMode};
 
-type BindingTypeMap = HashMap<SpanKey, String>;
-type ClosureCaptures = HashMap<SpanKey, Vec<(String, OwnershipMode)>>;
+type BindingTypeMap = FxHashMap<SpanKey, String>;
+type ClosureCaptures = FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>;
 type ClosureBindings = HashMap<String, Vec<String>>;
 
 /// L205 — bundles the two maps needed to decide whether a `MethodCall`
@@ -72,7 +72,7 @@ type ClosureBindings = HashMap<String, Vec<String>>;
 /// mutating method-call writes (`c.field.push(x)`) alongside the
 /// L201b-shipped assign / compound-assign cases.
 struct MethodMutClassifier<'a> {
-    method_callee_types: &'a HashMap<SpanKey, String>,
+    method_callee_types: &'a FxHashMap<SpanKey, String>,
     method_self_modes: &'a FxHashMap<String, SelfParam>,
 }
 
@@ -533,7 +533,7 @@ impl<'a> super::OwnershipChecker<'a> {
     pub(crate) fn check_concurrent_shared_struct(&mut self) {
         let items: &[Item] = &self.program.items;
         let mut errors: Vec<OwnershipError> = Vec::new();
-        let mut fix_diffs: HashMap<SpanKey, Vec<TextEdit>> = HashMap::new();
+        let mut fix_diffs: FxHashMap<SpanKey, Vec<TextEdit>> = FxHashMap::default();
         // B-2026-08-01-33 mechanism 2 — `shared` types this pass promoted to
         // ATOMIC refcounting so a multi-branch capture could be admitted.
         // Consumed by codegen's `heap_type_uses_atomic_rc`.
@@ -893,7 +893,7 @@ fn scan_block_for_par_conflicts(
     closure_bindings: &ClosureBindings,
     classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
-    fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
+    fix_diffs: &mut FxHashMap<SpanKey, Vec<TextEdit>>,
     promoted: &mut HashSet<String>,
 ) {
     for stmt in &block.stmts {
@@ -942,7 +942,7 @@ fn collect_let_tracked_bindings(
     pattern_binding_types: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
     classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
-    freeze: &HashSet<SpanKey>,
+    freeze: &FxHashSet<SpanKey>,
 ) {
     for stmt in &block.stmts {
         collect_let_in_stmt(stmt, pattern_binding_types, out, classify, freeze);
@@ -957,7 +957,7 @@ fn collect_let_in_stmt(
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
     classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
-    freeze: &HashSet<SpanKey>,
+    freeze: &FxHashSet<SpanKey>,
 ) {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => unreachable!(
@@ -1146,7 +1146,7 @@ fn collect_let_in_expr(
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
     classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
-    freeze: &HashSet<SpanKey>,
+    freeze: &FxHashSet<SpanKey>,
 ) {
     match &expr.kind {
         ExprKind::Block(b)
@@ -1193,7 +1193,7 @@ fn scan_stmt_for_par_conflicts(
     closure_bindings: &ClosureBindings,
     classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
-    fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
+    fix_diffs: &mut FxHashMap<SpanKey, Vec<TextEdit>>,
     promoted: &mut HashSet<String>,
 ) {
     match &stmt.kind {
@@ -1356,7 +1356,7 @@ fn scan_expr_for_par_conflicts(
     closure_bindings: &ClosureBindings,
     classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
-    fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
+    fix_diffs: &mut FxHashMap<SpanKey, Vec<TextEdit>>,
     promoted: &mut HashSet<String>,
 ) {
     match &expr.kind {
@@ -1838,7 +1838,7 @@ fn detect_par_block_conflicts(
     closure_bindings: &ClosureBindings,
     classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
-    fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
+    fix_diffs: &mut FxHashMap<SpanKey, Vec<TextEdit>>,
     promoted: &mut HashSet<String>,
 ) {
     let mut first_use: HashMap<String, (usize, Span)> = HashMap::new();
@@ -2389,7 +2389,7 @@ pub(crate) fn build_consumer_rewrite_edits_with_mut_fields(
     // from the parsed program alone, so we compute it locally and reuse
     // it across both paths.
     let method_self_modes = collect_method_self_modes_in_items(program_items);
-    let empty_callee_types: HashMap<SpanKey, String> = HashMap::new();
+    let empty_callee_types: FxHashMap<SpanKey, String> = FxHashMap::default();
     let classifier = MethodMutClassifier {
         method_callee_types: type_ctx
             .as_ref()
@@ -2487,13 +2487,13 @@ pub(crate) struct ConsumerRewriteTypeCtx<'a> {
     /// typechecker doesn't record them in this map (outer `Type::Ref` /
     /// `Type::MutRef` doesn't match the `Named` / `Shared` insertion arms
     /// of `bind_pattern_types`).
-    pub pattern_binding_types: &'a HashMap<SpanKey, String>,
+    pub pattern_binding_types: &'a FxHashMap<SpanKey, String>,
     /// `TypeCheckResult.method_callee_types` — maps each `MethodCall`
     /// span to its resolved `Type.method` key. Combined with the locally
     /// derived `method_self_modes`, this lifts the L215b1/b2 limitation
     /// where mutating method-call writes (`c.field.push(x)`) silently
     /// no-op'd under parse-only mode.
-    pub method_callee_types: &'a HashMap<SpanKey, String>,
+    pub method_callee_types: &'a FxHashMap<SpanKey, String>,
 }
 
 /// Per-`Type.method` `SelfParam` table derived from `&[Item]`. Mirrors
@@ -3800,7 +3800,7 @@ pub(crate) fn classify_field_wrap_kinds(
     let mut disqualified: HashSet<String> = HashSet::new();
     for file in consumer_files {
         let method_self_modes = collect_method_self_modes_in_items(file.program_items);
-        let empty_callee_types: HashMap<SpanKey, String> = HashMap::new();
+        let empty_callee_types: FxHashMap<SpanKey, String> = FxHashMap::default();
         let classifier = MethodMutClassifier {
             method_callee_types: file
                 .type_ctx

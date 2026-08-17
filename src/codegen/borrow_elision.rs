@@ -27,7 +27,7 @@
 
 use crate::ast::{Block, Expr, ExprKind, Pattern, PatternKind, Stmt, StmtKind};
 use crate::resolver::SpanKey;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// Read-only methods on a `Vec`/`String` receiver that neither mutate, move, nor
 /// hand out a buffer pointer that could outlive the borrow. Kept intentionally
@@ -51,15 +51,15 @@ pub(crate) type HeapElemOracle<'o> = dyn Fn(&str) -> (bool, bool) + 'o;
 pub(crate) fn compute_vec_index_borrow_spans(
     body: &Block,
     heap_elem: &HeapElemOracle<'_>,
-) -> HashSet<SpanKey> {
-    let mut out = HashSet::new();
+) -> FxHashSet<SpanKey> {
+    let mut out = FxHashSet::default();
     scan_block(body, &mut out, heap_elem);
     out
 }
 
 /// Walk every block in the body, and at each `let r = v[i]` candidate run the
 /// conservative gate over `r`'s scope (the rest of the enclosing block).
-fn scan_block(block: &Block, out: &mut HashSet<SpanKey>, heap_elem: &HeapElemOracle<'_>) {
+fn scan_block(block: &Block, out: &mut FxHashSet<SpanKey>, heap_elem: &HeapElemOracle<'_>) {
     for (idx, stmt) in block.stmts.iter().enumerate() {
         if let Some((r_name, v_name, rhs_span)) = candidate_binding(stmt) {
             let (v_elem_heap, r_elem_heap) = heap_elem(&v_name);
@@ -583,7 +583,7 @@ fn mentions_rec(expr: &Expr, name: &str, found: &mut bool) {
 /// reaches `let r = v[i]` bindings declared inside loops / conditionals.
 fn stmt_walk_nested_blocks(
     stmt: &Stmt,
-    out: &mut HashSet<SpanKey>,
+    out: &mut FxHashSet<SpanKey>,
     heap_elem: &HeapElemOracle<'_>,
 ) {
     match &stmt.kind {
@@ -612,7 +612,7 @@ fn stmt_walk_nested_blocks(
 /// Recurse into nested blocks of an expression for the candidate search.
 fn expr_walk_nested_blocks(
     expr: &Expr,
-    out: &mut HashSet<SpanKey>,
+    out: &mut FxHashSet<SpanKey>,
     heap_elem: &HeapElemOracle<'_>,
 ) {
     match &expr.kind {
@@ -725,8 +725,8 @@ fn expr_walk_nested_blocks(
 /// Missing a position here costs a leak; wrongly INCLUDING one costs a double
 /// free, so every insertion is a syntactic discard the language guarantees —
 /// never an inference about whether a value happens to be used.
-pub(crate) fn compute_discarded_branch_spans(body: &Block) -> HashSet<SpanKey> {
-    let mut out = HashSet::new();
+pub(crate) fn compute_discarded_branch_spans(body: &Block) -> FxHashSet<SpanKey> {
+    let mut out = FxHashSet::default();
     walk_block_for_discards(body, &mut out);
     out
 }
@@ -748,7 +748,7 @@ pub(crate) fn compute_discarded_branch_spans(body: &Block) -> HashSet<SpanKey> {
 /// branch's own value, and the clone for that tail is gated by the branch node
 /// recorded here. Walking it would be recording the same decision twice, under a
 /// span that names something else.
-fn record_discarded_branch(expr: &Expr, out: &mut HashSet<SpanKey>) {
+fn record_discarded_branch(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
     match &expr.kind {
         ExprKind::If {
             condition,
@@ -786,7 +786,7 @@ fn record_discarded_branch(expr: &Expr, out: &mut HashSet<SpanKey>) {
 /// Walk every block reachable from `block`, recording the discarding positions.
 /// The walk itself has to be exhaustive over nested blocks — a discarded `if`
 /// three loops deep leaks exactly as readily as one at the top.
-fn walk_block_for_discards(block: &Block, out: &mut HashSet<SpanKey>) {
+fn walk_block_for_discards(block: &Block, out: &mut FxHashSet<SpanKey>) {
     for stmt in &block.stmts {
         if let StmtKind::Expr(e) = &stmt.kind {
             record_discarded_branch(e, out);
@@ -798,7 +798,7 @@ fn walk_block_for_discards(block: &Block, out: &mut HashSet<SpanKey>) {
     }
 }
 
-fn walk_stmt_for_discards(stmt: &Stmt, out: &mut HashSet<SpanKey>) {
+fn walk_stmt_for_discards(stmt: &Stmt, out: &mut FxHashSet<SpanKey>) {
     match &stmt.kind {
         StmtKind::Expr(e) => walk_expr_for_discards(e, out),
         StmtKind::Let { value, .. } => walk_expr_for_discards(value, out),
@@ -820,7 +820,7 @@ fn walk_stmt_for_discards(stmt: &Stmt, out: &mut HashSet<SpanKey>) {
 
 /// Descend an expression, recording loop bodies' trailing expressions (whose
 /// value the loop discards) and recursing through every nested block.
-fn walk_expr_for_discards(expr: &Expr, out: &mut HashSet<SpanKey>) {
+fn walk_expr_for_discards(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
     match &expr.kind {
         ExprKind::For { body, .. } | ExprKind::While { body, .. } | ExprKind::Loop { body, .. } => {
             if let Some(fe) = body.final_expr.as_deref() {

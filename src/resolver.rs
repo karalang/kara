@@ -871,7 +871,7 @@ impl std::fmt::Display for ResolveError {
 // ── Result ──────────────────────────────────────────────────────
 
 pub struct ResolveResult {
-    pub resolutions: HashMap<SpanKey, SymbolId>,
+    pub resolutions: FxHashMap<SpanKey, SymbolId>,
     pub symbol_table: SymbolTable,
     pub errors: Vec<ResolveError>,
     /// Phase-8 stdlib-floor § Compiler queries channel sub-item 1.
@@ -900,7 +900,7 @@ pub struct ResolveResult {
     /// envelope, precisely so a consumer that reads `replacement` alone
     /// applies nothing rather than the declaration half that breaks the
     /// program.
-    pub error_fix_diffs: HashMap<SpanKey, Vec<TextEdit>>,
+    pub error_fix_diffs: FxHashMap<SpanKey, Vec<TextEdit>>,
 }
 
 // ── Cross-module lookup helpers (CR-24 slice 5) ─────────────────
@@ -1039,7 +1039,7 @@ pub struct Resolver<'a> {
     /// sibling-lookup diagnostics. Set iff `tree` is set.
     pub(crate) current_module: Option<ModuleId>,
     pub(crate) table: SymbolTable,
-    pub(crate) resolutions: HashMap<SpanKey, SymbolId>,
+    pub(crate) resolutions: FxHashMap<SpanKey, SymbolId>,
     pub(crate) errors: Vec<ResolveError>,
     /// The target type name when inside an impl block.
     pub(crate) current_impl_type: Option<String>,
@@ -1094,7 +1094,7 @@ pub struct Resolver<'a> {
     /// off the `ProgramTree` in [`Resolver::with_tree`].
     pub(crate) target_tombstones: FxHashMap<String, String>,
     /// See [`ResolveResult::error_fix_diffs`].
-    pub(crate) error_fix_diffs: HashMap<SpanKey, Vec<TextEdit>>,
+    pub(crate) error_fix_diffs: FxHashMap<SpanKey, Vec<TextEdit>>,
     /// Renames proposed by `E_MODULE_BINDING_NAMING` that still need their
     /// use sites counted (B-2026-07-31-33). Collection runs before any body
     /// is resolved, so at diagnostic time the reference spans do not exist
@@ -1164,7 +1164,7 @@ impl<'a> Resolver<'a> {
             tree: None,
             current_module: None,
             table: SymbolTable::new(),
-            resolutions: HashMap::new(),
+            resolutions: FxHashMap::default(),
             errors: Vec::new(),
             current_impl_type: None,
             loop_labels: Vec::new(),
@@ -1173,7 +1173,7 @@ impl<'a> Resolver<'a> {
             is_test_file: false,
             call_callee_span: None,
             target_tombstones: FxHashMap::default(),
-            error_fix_diffs: HashMap::new(),
+            error_fix_diffs: FxHashMap::default(),
             pending_binding_renames: Vec::new(),
             ident_ref_offsets: FxHashMap::default(),
             pub_refs_may_be_external: false,

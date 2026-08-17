@@ -47,7 +47,7 @@ pub(crate) struct PatternState<'ctx> {
     /// thrown away, and only the consumer knows which. Computed per function by
     /// `compute_discarded_branch_spans`, which documents the discarding
     /// positions and why the set is keyed by span rather than carried as a flag.
-    pub(crate) discarded_branch_spans: std::collections::HashSet<crate::resolver::SpanKey>,
+    pub(crate) discarded_branch_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// Set by `compile_match` when the scrutinee is a borrow-returning
     /// call (`Map.get`, `Vec.first`, ...) — used by `bind_pattern_values`
     /// to suppress `track_vec_var` for the bound name, since the payload

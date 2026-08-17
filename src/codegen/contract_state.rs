@@ -27,6 +27,7 @@
 //! Accessed as `self.contract_state.<name>` from the sibling
 //! `impl Codegen` modules.
 
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 use crate::ast::TypeExpr;
@@ -88,7 +89,7 @@ pub(crate) struct ContractState<'ctx> {
     /// entry and keyed by the arg expression's span. Read back by the
     /// `old(...)` interception in `compile_call` when emitting the
     /// postcondition (design.md § Contracts rule 4).
-    pub(crate) contract_old_snapshots: HashMap<SpanKey, inkwell::values::BasicValueEnum<'ctx>>,
+    pub(crate) contract_old_snapshots: FxHashMap<SpanKey, inkwell::values::BasicValueEnum<'ctx>>,
     /// Struct/impl `invariant` predicates that must hold at every exit of the
     /// method currently being compiled (design.md § Contracts rule 3). Set at
     /// `compile_function` entry for impl-method functions — `impl invariant`

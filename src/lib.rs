@@ -141,6 +141,7 @@ use crate::parser::{ParseResult, Parser};
 use crate::resolver::{ResolveResult, Resolver};
 use crate::token::SpannedToken;
 use crate::typechecker::{TypeCheckResult, TypeChecker};
+use rustc_hash::FxHashMap;
 
 /// Convert a byte offset into the source string into a (line, column)
 /// pair suitable for diagnostic display. 1-indexed for both axes,
@@ -410,7 +411,7 @@ pub fn effectcheck_with_method_types(
     program: &Program,
     policy: PublicEffectsPolicy,
     profile: CompileProfile,
-    method_callee_types: std::collections::HashMap<crate::resolver::SpanKey, String>,
+    method_callee_types: FxHashMap<crate::resolver::SpanKey, String>,
 ) -> EffectCheckResult {
     let checker = EffectChecker::new_with_policy_and_profile(program, policy, profile)
         .with_method_callee_types(method_callee_types);
@@ -425,10 +426,10 @@ pub fn effectcheck_with_typecheck_data(
     program: &Program,
     policy: PublicEffectsPolicy,
     profile_config: impl Into<ProfileConfig>,
-    method_callee_types: std::collections::HashMap<crate::resolver::SpanKey, String>,
-    call_type_subs: std::collections::HashMap<
+    method_callee_types: FxHashMap<crate::resolver::SpanKey, String>,
+    call_type_subs: rustc_hash::FxHashMap<
         crate::resolver::SpanKey,
-        std::collections::HashMap<String, String>,
+        rustc_hash::FxHashMap<String, String>,
     >,
 ) -> EffectCheckResult {
     // Accepts a bare `CompileProfile` (via `From`) or the full `ProfileConfig`

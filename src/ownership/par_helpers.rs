@@ -12,6 +12,7 @@
 //! Free functions (no `Self` reference); the `Phase 2` driver in
 //! ownership.rs holds them under `pub(crate)` use-imports.
 
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
@@ -151,7 +152,7 @@ pub(crate) fn scan_block_for_par_uses(
     block: &Block,
     inside_parallel_region: bool,
     candidates: &HashSet<String>,
-    closure_captures: &HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    closure_captures: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     closure_bindings: &mut HashMap<String, Vec<String>>,
     let_types: &mut HashMap<String, String>,
     promoted: &mut HashSet<String>,
@@ -184,7 +185,7 @@ pub(crate) fn scan_stmt_for_par_uses(
     stmt: &Stmt,
     inside_parallel_region: bool,
     candidates: &HashSet<String>,
-    closure_captures: &HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    closure_captures: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     closure_bindings: &mut HashMap<String, Vec<String>>,
     let_types: &mut HashMap<String, String>,
     promoted: &mut HashSet<String>,
@@ -349,7 +350,7 @@ pub(crate) fn scan_expr_for_par_uses(
     expr: &Expr,
     inside_parallel_region: bool,
     candidates: &HashSet<String>,
-    closure_captures: &HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    closure_captures: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     closure_bindings: &mut HashMap<String, Vec<String>>,
     let_types: &mut HashMap<String, String>,
     promoted: &mut HashSet<String>,

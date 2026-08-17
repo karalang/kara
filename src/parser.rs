@@ -6,6 +6,7 @@
 use crate::ast::*;
 use crate::lexer::{classify_ident, IdentClass};
 use crate::token::{Span, SpannedToken, Token};
+use rustc_hash::FxHashMap;
 
 mod attributes;
 mod exprs;
@@ -83,7 +84,7 @@ pub struct ParseResult {
     /// Span-keyed machine-applicable edits synthesized during parsing (e.g.
     /// delete a stray comma in a comma-separated `with` clause). Consumed by
     /// `collect_diagnostics` (JSON `replacement`) and `cmd_fix`.
-    pub fix_edits: std::collections::HashMap<crate::resolver::SpanKey, crate::resolver::TextEdit>,
+    pub fix_edits: FxHashMap<crate::resolver::SpanKey, crate::resolver::TextEdit>,
     /// Multi-edit envelopes, keyed by the DIAGNOSTIC's span exactly like
     /// [`Self::fix_edits`]. The parse twin of
     /// [`crate::resolver::ResolveResult::error_fix_diffs`], and here for the
@@ -93,8 +94,7 @@ pub struct ParseResult {
     /// they cannot go in the single-edit slot, where a consumer that applied
     /// only what it found would leave an unbalanced brace behind. A diagnostic
     /// uses one channel or the other, never both.
-    pub fix_diffs:
-        std::collections::HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    pub fix_diffs: FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 }
 
 /// Surrounding signature kind for parameter parsing — selects between the
@@ -188,7 +188,7 @@ pub struct Parser {
     /// `freeze <place>` initializer spans collected during the parse, moved
     /// onto [`crate::ast::Program::freeze_spans`] at the end. B-2026-08-01-33
     /// stage 3.
-    pub(crate) freeze_spans: std::collections::HashSet<crate::resolver::SpanKey>,
+    pub(crate) freeze_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// Script mode (design.md § Script mode): when `true` (the default —
     /// root source files), top-level statements synthesize a unit
     /// `fn main()`. Item-only contexts — comptime `ast.item` quotes,
@@ -265,13 +265,11 @@ pub struct Parser {
     /// matched back to their diagnostic by span in `collect_diagnostics`
     /// (JSON `replacement`) and `cmd_fix`. Currently populated only by the
     /// comma-separated-effect-clause recovery in `parse_effect_list`.
-    pub(crate) fix_edits:
-        std::collections::HashMap<crate::resolver::SpanKey, crate::resolver::TextEdit>,
+    pub(crate) fix_edits: FxHashMap<crate::resolver::SpanKey, crate::resolver::TextEdit>,
     /// Multi-edit sibling of [`Self::fix_edits`], same key, same rationale —
     /// see [`ParseResult::fix_diffs`] for why a repair sometimes needs both
     /// halves or neither.
-    pub(crate) fix_diffs:
-        std::collections::HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    pub(crate) fix_diffs: FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 }
 
 /// Reason an `impl Trait` type expression is rejected at the current
@@ -307,7 +305,7 @@ impl Parser {
             frozen_ok: false,
             frozen_consumed: false,
             frozen_self_consumed: false,
-            freeze_spans: std::collections::HashSet::new(),
+            freeze_spans: rustc_hash::FxHashSet::default(),
             allow_script_mode: true,
             pending_doc: None,
             fn_context_stack: Vec::new(),
@@ -315,8 +313,8 @@ impl Parser {
             impl_trait_block_stack: Vec::new(),
             allow_type_class_param_name: false,
             no_struct_literal: false,
-            fix_edits: std::collections::HashMap::new(),
-            fix_diffs: std::collections::HashMap::new(),
+            fix_edits: FxHashMap::default(),
+            fix_diffs: FxHashMap::default(),
         }
     }
 

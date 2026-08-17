@@ -91,7 +91,7 @@ pub(super) struct Formatter {
     /// a counted one. Empty for every entry point that formats a fragment
     /// rather than a program (`render_type_expr` and friends), where no `let`
     /// is reachable.
-    pub(super) freeze_spans: std::collections::HashSet<crate::resolver::SpanKey>,
+    pub(super) freeze_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
 }
 
 impl Formatter {
@@ -99,7 +99,7 @@ impl Formatter {
         Formatter {
             output: String::new(),
             indent: 0,
-            freeze_spans: std::collections::HashSet::new(),
+            freeze_spans: rustc_hash::FxHashSet::default(),
         }
     }
 

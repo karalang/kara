@@ -90,6 +90,7 @@
 use crate::ast::*;
 use crate::token::Span;
 use crate::typechecker::TypeCheckResult;
+use rustc_hash::FxHashMap;
 
 /// Diagnostic emitted by [`check_raii_across_yield`]. One per
 /// (binding × function) pair that holds a non-cancel-safe binding
@@ -513,8 +514,8 @@ enum BindingState {
 /// branches. See module doc comment for the v1 fidelity statement.
 struct StateFlowWalker<'a> {
     annotations: &'a CancelUnsafeAnnotations,
-    method_callee_types: &'a std::collections::HashMap<crate::resolver::SpanKey, String>,
-    pattern_binding_types: &'a std::collections::HashMap<crate::resolver::SpanKey, String>,
+    method_callee_types: &'a FxHashMap<crate::resolver::SpanKey, String>,
+    pattern_binding_types: &'a FxHashMap<crate::resolver::SpanKey, String>,
     /// In-scope bindings with their resolved surface type name (looked
     /// up at push time from `pattern_binding_types`, or threaded from
     /// the impl's target type for `self`). `None` for bindings whose

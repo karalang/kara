@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod once_function_carrier_tests {
     use super::super::*;
+    use std::collections::HashMap;
 
     fn fn_i32_to_i32() -> Type {
         Type::Function {

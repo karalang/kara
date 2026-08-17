@@ -6,6 +6,7 @@
 //! and `compile_function` (the per-function-body compilation driver).
 
 use crate::ast::*;
+use rustc_hash::FxHashMap;
 
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
@@ -2623,7 +2624,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `KARAC_BCE_DESC_SKIP=0` (soundness-critical BCE escape hatch + A/B lever;
         // mirrors `KARAC_RC_ELIDE_REF_PARAMS`).
         self.bce.descending_skips = if std::env::var("KARAC_BCE_DESC_SKIP").as_deref() == Ok("0") {
-            std::collections::HashMap::new()
+            FxHashMap::default()
         } else {
             crate::codegen::bce_length_pin::compute_descending_skips(&func.body)
         };
@@ -2631,7 +2632,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `v[base + lo]` / `v[base + hi]` shape. Same whole-body-analysis and
         // kill-switch discipline as the descending path above.
         self.bce.converging_skips = if std::env::var("KARAC_BCE_CONV_SKIP").as_deref() == Ok("0") {
-            std::collections::HashMap::new()
+            FxHashMap::default()
         } else {
             crate::codegen::bce_length_pin::compute_converging_skips(&func.body)
         };

@@ -380,7 +380,7 @@ pub struct EffectCheckResult {
     /// omitted (a call site without any `with E` bindings has no
     /// table entry); consumers default to "no constraints" when the
     /// lookup misses.
-    pub call_effect_subs: HashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
+    pub call_effect_subs: FxHashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
 }
 
 // ── Effect Checker ──────────────────────────────────────────────
@@ -449,7 +449,7 @@ pub struct EffectChecker<'a> {
     /// `check_subtyping_in_expr_owned` (Fn-slot subtyping) to resolve the
     /// callee precisely instead of falling back to per-method-name heuristics.
     /// Empty when constructed via the unparameterised `new` family.
-    pub(crate) method_callee_types: HashMap<SpanKey, String>,
+    pub(crate) method_callee_types: FxHashMap<SpanKey, String>,
     /// Per-call-site type-parameter substitutions, populated by the
     /// typechecker (`TypeCheckResult.call_type_subs`). Maps a call-expression
     /// span to a `param_name → resolved_type_name` table — concrete entries
@@ -458,7 +458,7 @@ pub struct EffectChecker<'a> {
     /// diagnostics, so the user sees `Fn(i64) -> ()` instead of `Fn(T) -> ()`
     /// when a generic call's effect-subtyping check fails. Empty when
     /// constructed via the unparameterised `new` family.
-    pub(crate) call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
+    pub(crate) call_type_subs: FxHashMap<SpanKey, FxHashMap<String, String>>,
     /// Phase 6 line 26 slice 8aa: per-call-site effect-variable
     /// substitutions, populated by `check_call_args_subtyping` from
     /// the existing `compute_call_var_bindings` output. Exposed via
@@ -466,7 +466,7 @@ pub struct EffectChecker<'a> {
     /// (slice 8ab → codegen → slice 8y). See the
     /// `EffectCheckResult.call_effect_subs` doc-comment for the
     /// binding-model rationale.
-    pub(crate) call_effect_subs: HashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
+    pub(crate) call_effect_subs: FxHashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
     /// Per `let mut` module binding: its synthetic resource name and
     /// any modifying attributes. Populated once during `check()`
     /// setup; consumed by the call-collection walker in
@@ -525,9 +525,9 @@ impl<'a> EffectChecker<'a> {
             fn_uses_with_underscore: FxHashSet::default(),
             fn_bounds_index: FxHashMap::default(),
             fn_effect_var_positions: FxHashMap::default(),
-            method_callee_types: HashMap::new(),
-            call_type_subs: HashMap::new(),
-            call_effect_subs: HashMap::new(),
+            method_callee_types: FxHashMap::default(),
+            call_type_subs: FxHashMap::default(),
+            call_effect_subs: FxHashMap::default(),
             modbind_let_mut: FxHashMap::default(),
             refinement_type_names: program
                 .items
@@ -564,7 +564,7 @@ impl<'a> EffectChecker<'a> {
     /// arms of effect collection / `with E` unification / Fn-slot subtyping
     /// can resolve to the precise `Type.method` (mirroring the precision the
     /// `Call` arms already get from `extract_callee_name`).
-    pub fn with_method_callee_types(mut self, types: HashMap<SpanKey, String>) -> Self {
+    pub fn with_method_callee_types(mut self, types: FxHashMap<SpanKey, String>) -> Self {
         self.method_callee_types = types;
         self
     }
@@ -576,7 +576,10 @@ impl<'a> EffectChecker<'a> {
     /// `f[T, with E]` call shows the slot type with `T` literally — leaving
     /// the user to mentally substitute. With them, the diagnostic carries the
     /// monomorphized form (`Fn(i64) -> ()` instead of `Fn(T) -> ()`).
-    pub fn with_call_type_subs(mut self, subs: HashMap<SpanKey, HashMap<String, String>>) -> Self {
+    pub fn with_call_type_subs(
+        mut self,
+        subs: FxHashMap<SpanKey, FxHashMap<String, String>>,
+    ) -> Self {
         self.call_type_subs = subs;
         self
     }
@@ -1989,7 +1992,7 @@ pub(crate) fn format_monomorphized_signature(
     callee_name: &str,
     params: &[Param],
     return_type: Option<&TypeExpr>,
-    type_subs: &HashMap<String, String>,
+    type_subs: &FxHashMap<String, String>,
     var_bindings: &HashMap<String, HashSet<Effect>>,
 ) -> String {
     let mut s = String::new();
@@ -2015,7 +2018,7 @@ pub(crate) fn format_monomorphized_signature(
 /// set bound at the call site.
 fn format_type_expr_with_subs(
     ty: &TypeExpr,
-    type_subs: &HashMap<String, String>,
+    type_subs: &FxHashMap<String, String>,
     var_bindings: &HashMap<String, HashSet<Effect>>,
     out: &mut String,
 ) {
@@ -2163,7 +2166,7 @@ fn format_type_expr_with_subs(
 
 fn format_generic_args(
     args: &[GenericArg],
-    type_subs: &HashMap<String, String>,
+    type_subs: &FxHashMap<String, String>,
     var_bindings: &HashMap<String, HashSet<Effect>>,
     out: &mut String,
 ) {

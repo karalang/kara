@@ -43,6 +43,7 @@
 //! the type segment leaves every such split working unchanged; a suffix after
 //! the method would silently break all of them.
 
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 use crate::ast::{GenericArg, Item, Program, TypeExpr, TypeKind};
@@ -55,7 +56,7 @@ use crate::resolver::SpanKey;
 /// already have: codegen and the interpreter walk `Item::ImplBlock` directly and
 /// the typechecker records it on `ImplInfo`. An impl absent from this map keeps
 /// its head name, which is the overwhelmingly common case.
-pub type ImplDispatchNames = HashMap<SpanKey, String>;
+pub type ImplDispatchNames = FxHashMap<SpanKey, String>;
 
 /// One impl block's contribution to a collision group: the span that identifies
 /// it, and its rendered target (`None` when [`render_impl_target`] declined).
@@ -153,7 +154,7 @@ pub fn collect_impl_dispatch_names(program: &Program) -> ImplDispatchNames {
         }
     }
 
-    let mut out = ImplDispatchNames::new();
+    let mut out = ImplDispatchNames::default();
     for ((head, _method), members) in groups {
         if members.len() < 2 {
             continue;

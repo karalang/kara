@@ -480,7 +480,10 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     program.call_type_subs = tc
         .call_type_subs
         .iter()
-        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .map(|(k, v)| {
+            let inner = v.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
+            ((k.0, k.1), inner)
+        })
         .collect();
     // Sibling of `call_type_subs`: the element-aware mono-mangle tokens
     // (B-2026-07-11-35). Codegen uses these to give a distinct mono symbol to
@@ -490,7 +493,10 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     program.call_type_subs_mangle = tc
         .call_type_subs_mangle
         .iter()
-        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .map(|(k, v)| {
+            let inner = v.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
+            ((k.0, k.1), inner)
+        })
         .collect();
     // Sibling to `string_typed_exprs`: for every `Tensor[T, Shape]`-typed
     // expression whose rank is statically known (concrete `Type::Shape`,
@@ -687,7 +693,11 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     // wrappers for each user type with a validated drop body. Prereq.2
     // of the user-`impl Drop` dispatch slice — see
     // `docs/implementation_checklist/phase-7-codegen.md`.
-    program.drop_method_keys = tc.drop_method_keys.clone();
+    program.drop_method_keys = tc
+        .drop_method_keys
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     // Surface `TypeExpr` of every expression that produces a heap-owning
     // *temporary*. Codegen's `materialize_owned_temp` keys this by span to
     // reconstruct the scope-exit cleanup an unnamed temp needs: the element
