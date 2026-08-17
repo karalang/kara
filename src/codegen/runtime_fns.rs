@@ -102,6 +102,11 @@ pub(crate) struct RuntimeFns<'ctx> {
     pub(crate) sched_yield_fn: FunctionValue<'ctx>,
     /// Runtime entry point `void karac_par_run(const KaracBranch*, usize)`.
     pub(crate) karac_par_run_fn: FunctionValue<'ctx>,
+    /// `karac_par_run_auto` — same ABI as `karac_par_run`, routed to by
+    /// compiler-DERIVED parallel regions (auto-par statement groups). Runs
+    /// branches inline when the calling thread is already inside a par
+    /// worker at the fork-depth cap (B-2026-08-17-14).
+    pub(crate) karac_par_run_auto_fn: FunctionValue<'ctx>,
     /// Runtime entry point `void karac_par_reduce(*const KaracReduceDescriptor,
     /// *mut u8 out_slot, u32 spawn_site_id)`. Declared in slice 3a, called
     /// from slice 3b's `src/codegen/reduce.rs::emit_reduce_call`. See

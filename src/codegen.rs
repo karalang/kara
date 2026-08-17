@@ -2075,6 +2075,15 @@ impl<'ctx> Codegen<'ctx> {
         );
         let karac_par_run_fn =
             module.add_function("karac_par_run", karac_par_run_type, Some(Linkage::External));
+        // B-2026-08-17-14 — the depth-guarded AUTO-PAR sibling: same ABI,
+        // but a call reached from inside a par worker runs its branches
+        // inline instead of convoying the already-saturated pool. Explicit
+        // `par {}` keeps `karac_par_run` (siblings may rendezvous).
+        let karac_par_run_auto_fn = module.add_function(
+            "karac_par_run_auto",
+            karac_par_run_type,
+            Some(Linkage::External),
+        );
 
         // Auto-par reduction-lowering runtime entry (slice 3a, 2026-05-19).
         // `karac_par_reduce(*const KaracReduceDescriptor, *mut u8 out_slot,
@@ -5261,6 +5270,7 @@ impl<'ctx> Codegen<'ctx> {
                 memcmp_fn,
                 sched_yield_fn,
                 karac_par_run_fn,
+                karac_par_run_auto_fn,
                 karac_par_reduce_fn,
                 karac_provider_push_fn,
                 karac_provider_pop_fn,
@@ -7901,7 +7911,14 @@ impl<'ctx> Codegen<'ctx> {
                     .is_some()
             })
         };
-        let needs_capture = par_used("karac_par_run") || par_used("karac_par_reduce");
+        // B-2026-08-17-14 — `karac_par_run_auto` is a par dispatch like the
+        // other two: miss it here and every println in an auto-par program
+        // lowers to raw fwrite, so concurrent branches race the fd instead
+        // of capturing for ordered replay (measured: the map/set ASAN
+        // fixtures' output interleaved non-deterministically).
+        let needs_capture = par_used("karac_par_run")
+            || par_used("karac_par_run_auto")
+            || par_used("karac_par_reduce");
 
         let saved = self.builder.get_insert_block();
         let entry = self.context.append_basic_block(wrapper, "entry");

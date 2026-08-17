@@ -1179,7 +1179,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the second tuple element is always `None` here and
                 // we discard it.
                 let (slot_values, _, slot_ownership) =
-                    self.emit_par_run(&group_stmts, &group_span, &return_slots, &[])?;
+                    self.emit_par_run(&group_stmts, &group_span, &return_slots, &[], true)?;
                 // Slice A (sub-step g): bind each loaded slot value as a
                 // fresh let-binding in the surrounding function-body
                 // scope so subsequent stmts referencing the slot's

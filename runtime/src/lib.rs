@@ -467,6 +467,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // ordered-output console chokepoint (auto-par ordered-output).
     keep!(
         karac_par_run,
+        karac_par_run_auto,
         karac_par_reduce,
         karac_error_trace_push,
         karac_error_trace_clear,
@@ -1825,6 +1826,67 @@ pub unsafe extern "C" fn karac_par_run(
     }
 }
 
+/// AUTO-PAR sibling of [`karac_par_run`] — B-2026-08-17-14.
+///
+/// Codegen routes compiler-DERIVED parallel regions (auto-par statement
+/// groups and loop fan-outs) here, while explicit `par {}` blocks keep
+/// calling `karac_par_run`. The two differ in exactly one way: when this
+/// call is reached from INSIDE a par worker (the thread's fork depth is
+/// at the cap), the branches run inline on the calling thread via
+/// [`seq_par_run`] instead of dispatching to the pool.
+///
+/// Why the split is load-bearing rather than cosmetic:
+///
+/// * An auto-par region nested under an outer fan-out CONVOYS the pool if
+///   it dispatches: the outer region already occupies every worker, so
+///   the nested dispatch just adds queue-lock traffic, task churn, and a
+///   blocking join per call — measured on kata 278's bench as 48 nested
+///   dispatches serializing a 48-branch annotated collect to 101% CPU at
+///   1.03x the SEQUENTIAL lane's wall time, while `fanned_out: true`
+///   reported (truthfully) that the outer dispatch happened. Running the
+///   effect-checker-proven-independent branches inline is always correct
+///   and keeps the outer region's parallelism intact.
+/// * An EXPLICIT `par {}` block's branches may legitimately rendezvous
+///   (sibling channels), so inlining them would trade a slowdown for a
+///   possible deadlock. Explicit blocks therefore keep unconditional
+///   dispatch, exactly as before.
+///
+/// The depth check reuses the reduce fan-out's thread-local
+/// (`PAR_REDUCE_DEPTH` — raised by reduce worker bodies AND, as of this
+/// fix, by par-run branch bodies on both entries), so every combination
+/// of {reduce, par_run} nesting is one chain: reduce-inside-auto-par and
+/// auto-par-inside-reduce both inline at the cap.
+///
+/// # Safety
+///
+/// Same contract as [`karac_par_run`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_par_run_auto(
+    branches: *const KaracBranch,
+    count: u64,
+    spawn_site_id: u32,
+    parent_cancel: *const AtomicBool,
+) {
+    unsafe {
+        let count = count as usize;
+        if count == 0 {
+            return;
+        }
+        #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
+        {
+            seq_par_run(branches, count, spawn_site_id, parent_cancel);
+        }
+        #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+        {
+            if PAR_REDUCE_DEPTH.with(|d| d.get()) >= resolve_max_fork_depth() {
+                seq_par_run(branches, count, spawn_site_id, parent_cancel);
+            } else {
+                karac_par_run_pooled(branches, count, spawn_site_id, parent_cancel);
+            }
+        }
+    }
+}
+
 /// Native `karac_par_run` body — pool dispatch + work-helping join.
 /// Split out of the extern shell so the wasm sequential path above can
 /// swap in without `#[cfg]`-wrapping the whole emission.
@@ -1886,6 +1948,12 @@ unsafe fn karac_par_run_pooled(
                         // called fns included). RAII-restored on return OR unwind,
                         // and to the PREVIOUS value so a nested `par` branch nests.
                         let _redir = OutputRedirectGuard::new(cap_addr as *mut OutputCapture);
+                        // B-2026-08-17-14 — a par-run branch body counts toward
+                        // the per-thread fork depth, same as a reduce worker
+                        // body: any auto-par region (or capped reduce) reached
+                        // from inside it runs inline instead of convoying the
+                        // pool this branch already occupies.
+                        let _depth = ParReduceDepthGuard::enter();
                         func(ctx_addr as *mut c_void, cancel as *const AtomicBool);
                     }),
                 });
@@ -1932,16 +2000,17 @@ unsafe fn karac_par_run_pooled(
 ///   the native release archive (whose `catch_unwind` never runs under
 ///   `panic = "abort"` either).
 ///
-/// Compiled under `cfg(test)` on native as well so the ordering/cascade
-/// behavior is unit-testable without a wasm host. Under `--features
-/// wasm-threads` the pooled path takes over and this arm is compiled
-/// out (the tightened gate keeps the threaded archive's clippy free of
-/// dead code).
+/// Compiled on EVERY target as of B-2026-08-17-14: besides being the
+/// wasm-default lowering, this is now the inline arm
+/// `karac_par_run_auto` falls back to when the calling thread is already
+/// inside a par worker at the fork-depth cap — running the branches in
+/// source order on that thread is exactly the sequential semantics this
+/// fn already guarantees (cancel cascade, frame tracking, ordered output
+/// replay included).
 ///
 /// # Safety
 ///
 /// Same contract as [`karac_par_run`].
-#[cfg(any(all(target_family = "wasm", not(feature = "wasm-threads")), test))]
 pub(crate) unsafe fn seq_par_run(
     branches: *const KaracBranch,
     count: usize,
@@ -1970,6 +2039,8 @@ pub(crate) unsafe fn seq_par_run(
             // Redirect this branch's console output into its capture (RAII-restored
             // to the enclosing context at iteration end, so a nested `par` nests).
             let _redir = OutputRedirectGuard::new(cap as *mut OutputCapture);
+            // B-2026-08-17-14 — same depth accounting as the pooled branch body.
+            let _depth = ParReduceDepthGuard::enter();
             if track_frames {
                 let frame = KaracFrame {
                     parent: parent_addr as *const KaracFrame,
@@ -2260,7 +2331,6 @@ pub const KARAC_PAR_ORDER_FREE_FLAG: u64 = 1 << 63;
 //
 // Thread-local for the same reason as `CONTRACT_PREDICATE_DEPTH`: reduction
 // workers run on multiple pool threads, each tracking its own nesting.
-#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 thread_local! {
     static PAR_REDUCE_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
@@ -2291,10 +2361,8 @@ fn resolve_max_fork_depth() -> u32 {
 /// the pool worker's next task starts at the right depth even if the body
 /// aborts. While installed, any nested `karac_par_reduce` on this thread sees the
 /// raised depth and runs inline once the cap is hit.
-#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 struct ParReduceDepthGuard;
 
-#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 impl ParReduceDepthGuard {
     fn enter() -> Self {
         PAR_REDUCE_DEPTH.with(|d| d.set(d.get().saturating_add(1)));
@@ -2302,7 +2370,6 @@ impl ParReduceDepthGuard {
     }
 }
 
-#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 impl Drop for ParReduceDepthGuard {
     fn drop(&mut self) {
         PAR_REDUCE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));

@@ -8261,6 +8261,62 @@ fn main() {
     // proves the new helpers were synthesized rather than the sequential
     // fallback firing silently.
 
+    /// B-2026-08-17-14 — an AUTO-PARALLELIZED region nested inside an
+    /// annotated par collect must stay CORRECT while running inline. The
+    /// callee's accumulation loop is auto-par-recognizable; before the fix
+    /// each of the 24 branch bodies re-dispatched it to the pool the outer
+    /// collect already occupied, convoying the whole program to sequential
+    /// wall time (measured on kata 278: the par lane at 1.03x SLOWER than
+    /// its sequential twin, 101% CPU, while `fanned_out: true` truthfully
+    /// reported the outer dispatch). The fix routes compiler-derived
+    /// regions through `karac_par_run_auto`, which runs branches inline on
+    /// the calling thread when it is already inside a par worker at the
+    /// fork-depth cap. Deliberately OUTPUT-ONLY: scheduling behavior was
+    /// measured at fix time (231ms/1.01x -> 111ms/2.04x on 4 cores); a
+    /// timing assertion here would flake (the B-2026-08-15-23 lesson).
+    #[test]
+    fn test_e2e_nested_autopar_inside_annotated_collect_matches_serial() {
+        let src = r#"
+fn work(n: i64) -> i64 {
+    let mut acc: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < 400i64 {
+        acc.push((i * 31i64 + n) % 97i64);
+        i = i + 1i64;
+    }
+    let mut t = 0i64;
+    let mut j = 0i64;
+    while j < acc.len() {
+        t = (t + acc[j]) % 1000003i64;
+        j = j + 1i64;
+    }
+    t
+}
+fn main() {
+    let mut parts: Vec[i64] = Vec.new();
+    #[par_order_free]
+    for k in 0i64..24i64 {
+        parts.push((k * 1000003i64 + work(k)) % 1000000007i64);
+    }
+    let mut s = 0i64;
+    let mut i = 0i64;
+    while i < parts.len() {
+        s = (s + parts[i]) % 1000000007i64;
+        i = i + 1i64;
+    }
+    println(parts.len());
+    println(s);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2, "expected two lines, got:\n{out}");
+        assert_eq!(lines[0], "24", "length mismatch");
+        // The sink is order-independent (mod-sum); its value pins that every
+        // branch ran exactly once with the right `k` and `work(k)`.
+        assert_eq!(lines[1], "276460644", "sink mismatch:\n{out}");
+    }
+
     #[test]
     fn test_e2e_collect_bare_push_matches_serial_sink() {
         // K=1000 pushes of `k` produce a Vec whose length is 1000 and whose

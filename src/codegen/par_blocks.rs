@@ -249,8 +249,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // struct type + the `i32` "earliest err idx" cell that branch
         // fns CAS-min'd into. Step 7 uses this to surface the
         // source-order first Err without walking every slot tag.
-        let (slot_values, result_surface, slot_ownership) =
-            self.emit_par_run(&block.stmts, &block.span, &return_slots, &result_slots)?;
+        let (slot_values, result_surface, slot_ownership) = self.emit_par_run(
+            &block.stmts,
+            &block.span,
+            &return_slots,
+            &result_slots,
+            false,
+        )?;
 
         // Step 6 — Bind each loaded slot value as a fresh local in the
         // surrounding scope. Mirrors the auto-par dispatch site's
@@ -678,6 +683,7 @@ impl<'ctx> super::Codegen<'ctx> {
         span: &Span,
         return_slots: &[ReturnSlot<'ctx>],
         result_slots: &[ResultSlot],
+        auto: bool,
     ) -> Result<ParRunResult<'ctx>, String> {
         // Zero statements: nothing to do. Single statement: no parallelism
         // needed — compile in place to avoid the runtime call overhead.
@@ -1069,9 +1075,18 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(p) => p,
             None => ptr_type.const_null(),
         };
+        // B-2026-08-17-14 — auto-derived regions take the depth-guarded
+        // entry so a nested region inlines instead of convoying the pool;
+        // explicit `par {}` keeps unconditional dispatch (its branches may
+        // legitimately rendezvous, so inlining could deadlock them).
+        let par_run_fn = if auto {
+            self.runtime_fns.karac_par_run_auto_fn
+        } else {
+            self.runtime_fns.karac_par_run_fn
+        };
         self.builder
             .build_call(
-                self.runtime_fns.karac_par_run_fn,
+                par_run_fn,
                 &[
                     branches_alloca.into(),
                     count.into(),
