@@ -98,23 +98,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 128 | 5 |
 | codegen-gap | 114 | 0 |
 | missing-feature | 102 | 4 |
+| perf | 77 | 2 |
 | false-positive | 77 | 4 |
-| perf | 76 | 1 |
 | diagnostics | 71 | 5 |
 | crash | 50 | 1 |
 | soundness | 49 | 0 |
-| other | 35 | 1 |
+| other | 35 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 908 | 8 |
+| codegen | 909 | 9 |
 | typecheck | 191 | 11 |
 | interp | 149 | 3 |
 | ownership | 57 | 0 |
-| other | 51 | 3 |
+| other | 51 | 2 |
 | autopar | 48 | 0 |
 | cli | 37 | 3 |
 | runtime | 22 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1291 surfaced · 24 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1292 surfaced · 24 open · 1253 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (24)
 
@@ -132,7 +132,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1291 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort; the residual is now a pure work-count gap at IPC parity | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
-| B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-19 | 2026-08-17 | typecheck | medium | Default parameter values are INERT at every call site -- omitting a defaulted argument is an arity error, so the whole feature is unusable. design.md § Default Parameter Values' own example `create_server("0.0.0.0")` (3 defaulted params omitted) fails `karac check` with "expected 4 argument(s), found 1"; roadmap.md lines 111/199 mark the feature `[x]` done, but both checked boxes cover only the DECLARATION half (`param: Type = expr` syntax; trailing-only rule; const-expression validation) -- nothing ever consumes the stored default at a call. Minimal: `fn greet(name: String, greeting: String = "hello") -> String { greeting + ", " + name }` + `greet("world")` -> "expected 2 argument(s), found 1". Same error on all three backends (it is a check-phase gate, so no run-vs-build divergence). The label rules stack on top of the same hole: `create_server("0.0.0.0", max_connections: 100)` -- the spec's own "override one; requires label" line -- reports "label 'max_connections' does not match parameter 'port' at position 2", because labels are matched POSITIONALLY against the declaration list with no skip-the-defaulted-prefix step. So the spec's whole "labels allow skipping defaults without filling in placeholders" rule is unreachable too. | roadmap.md |
 | B-2026-08-17-20 | 2026-08-17 | typecheck | low | The default-parameter-value const validator rejects FOUR of the forms design.md explicitly lists as allowed, including the spec's own example literal. § Default Parameter Values says "The allowed forms are identical to those for Module-Level Bindings: literals (`42`, `"localhost"`, `true`), arithmetic on literals (`60 * 1000`), enum variants (`Direction.North`), struct/tuple/array literals built from constant expressions, and references to other module-level bindings", and separately calls `Option[T] = None` "idiomatic". Measured, one form per line: ACCEPTED -- `i64 = 42`, `bool = true`, `f64 = 1.5`, `char = 'z'`, `i64 = 60 * 1000`, `Direction = Direction.North`, `(i64,i64) = (1, 2)`. REJECTED -- (a) `String = "localhost"` -> "default parameter value must be a constant expression (no function calls, closures, or runtime-only values)", the spec's own quoted literal; (b) `i64 = LIMIT` where `let LIMIT: i64 = 7` is a module-level binding -> "const expression: 'LIMIT' is not a known const"; (c) `P = P { x: 1, y: 2 }` struct literal -> same not-a-constant-expression message (the TUPLE literal sibling is accepted, so it is the struct shape specifically); (d) `Option[i64] = None` -> "const expression: 'None' is not a known const", and `Option[i64] = Option.Some(42)` -> not-a-constant-expression. | roadmap.md |
 | B-2026-08-17-21 | 2026-08-17 | parser+typecheck | medium | `UPPERCASE_BINDING.field.method()` is misresolved as a type path -- "type 'Point' is not callable" -- so a module-level struct constant's field can never be a method receiver. `struct Point { x: i64, y: i64 }` + `let ORIGIN: Point = Point { x: 5, y: 9 };` + `println(ORIGIN.x.to_string())` fails `karac check` with `type 'Point' is not callable`, naming the CONSTANT'S TYPE as the thing being called. This is forced, not avoidable: E_MODULE_BINDING_NAMING requires every module-level `let` to be Const-class (SCREAMING_SNAKE), so every module-level binding's name starts uppercase and every `CONST.field.method()` in the language hits it. Discriminated axis is the receiver name's FIRST LETTER, not its scope: a function-local `let Origin = Point { .. }; Origin.x.to_string()` fails identically, while `origin` / `or_igin` pass -- and `ORIGIN2` / `O_R` fail, so it is `starts_upper`, not the full case class. | phase-12-self-hosting.md |
@@ -154,6 +153,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1291 surfaced
 | B-2026-08-17-37 | 2026-08-17 | cli | medium | The `must_use` lint NEVER RUNS under `karac check` or `karac build` -- it fires only under `karac run`, so the entire surface is invisible to `karac check --output=json` and therefore to the Mend loop. `fn main() { let mut m: Map[i64, i64] = Map.new(); m.insert(1, 10); m.get(1); }` -- a discarded `Option` from a LOOKUP, the exact case design.md § must_use exists to catch ("lookups, parses, fallible operations, where the `Option` IS the result") -- gets `warning[must_use]: discarded 'Option' value` under `karac run --interp` AND `karac run`, while `karac check` reports "All checks passed." and `karac build` reports only "Built: mu2.bin". `karac check --output=json` on the same file emits `"diagnostics":[]`. design.md describes must_use as a COMPILE warning ("silently dropping it is a compile warning"), and CLAUDE.md's Mend loop is built on `karac check --output=json` as its diagnostics feed -- so a lint the spec mandates across six stdlib categories reaches neither the compile path nor the AI-facing feed. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-17-39 | 2026-08-17 | typecheck | low | Five iterator-adaptor diagnostics print types with Rust's `{:?}` Debug formatter, leaking internal AST structs into user-facing messages -- and one of them spells a Kara generic with ANGLE BRACKETS. `v.iter().flat_map(|x| [x, x])` reports `Iterator.flat_map() closure must return Iterator[U], found Named { name: "Vec", args: [Int(I64)] }`; with a String element it reports `found Str`. Every other diagnostic in the compiler uses the display form -- the control one line away in the same probe reads `expected 'Set[i64]', found 'Vec[i64]'`. The five sites are all in src/typechecker/stdlib_iter.rs: line 149 (`filter_map`), 615 (`find_map`), 834 (`flat_map`), 1032 (`scan`), 1191 (`zip`), each formatting the offending type with `{:?}` instead of `type_display`. Line 1032 additionally writes the expected type as `Option<(A, U)>` -- Rust turbofish-style angle brackets in a language whose spec opens with "**Generics syntax:** `[T]` not `<T>` -- no turbofish". | roadmap.md |
+| B-2026-08-17-40 | 2026-08-17 | codegen | medium | Kāra-only ~14.5% regression on kata 236's recursive tree walk between 2026-07-27 and 689dadd6 — data and machine drift both ruled out, unbisected | roadmap.md |
 
 ### Wontfix (5)
 
@@ -169,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1291 surfaced
 
 </details>
 
-### Fixed (1252)
+### Fixed (1253)
 
-<details><summary>1252 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1253 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9740,6 +9740,7 @@ chained walk's comment even cited it as "the maintained sibling". Its
 consequence class is different (an advisory perf hint missed, not a
 check-vs-build gap), so it is filed as its own low row rather than bundled
 here. |
+| B-2026-08-16-14 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | No compiler change — the defect is entirely in kara-katas benchmark data generators. Fixed there in three commits, identified by subject because a cross-repo SHA cannot resolve in this repo: "bench(137,260,235,248): widen the one-draw LCG keys the modulus never reached" (the four katas whose bound is a literal above 32768), "bench(135,236,252,253,257,261,287): widen the remaining narrow LCG draws" (the seven whose bound is symbolic and invisible to a line-level scan), and "bench: re-measure the M5 lane for all ten widened katas". Every mirror of every kata was widened to the #270 two-draw form in one atomic change per kata and all agree on the new sink; the two sessions that did the work independently produced byte-identical sinks on the four katas they both touched. Exact SHAs are recorded in the detail above. |
 | B-2026-08-17-1 | effect | medium | collect_calls_in_expr name-only method fallback scans all method_bodies keys per call site, allocating a format! probe per key — O(call sites x impl… | FIXED by 3d466756. A method_name_index (bare method name -> the method_bodies keys ending in .name), built once at the end of collect_function_info, replaces the per-call-site scan; the same commit moves the effectchecker's internal String-keyed working tables to FxHashMap/FxHashSet (public result structs and signatures stay std HashMap). Measured on bench/compile_speed/synthetic.kara via examples/bench_frontend.rs: effectcheck 136.6 -> ~67 ms median, allocations 2.44M -> 0.64M, whole front end 241 -> ~168 ms (-30%). Verified: full non-LLVM suite 8,959/0; codegen E2E 3,000/0, par_codegen 258/0, memory_sanitizer 1,109/0 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1. |
 | B-2026-08-17-2 | cli | low | The `map_value_clone_reinsert` advisory lint shares the partial-walk idiom B-2026-08-16-12 removed from its sibling: its traversal carries `_ => {}`… | FIXED by 281a257. The probe confirmed the filed hypothesis on its first
 candidate: the clone-reinsert idiom inside a CLOSURE body fires nothing under
