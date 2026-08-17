@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 98 | 0 |
 | perf | 76 | 2 |
 | false-positive | 73 | 2 |
-| diagnostics | 66 | 1 |
+| diagnostics | 66 | 0 |
 | soundness | 49 | 0 |
 | crash | 49 | 0 |
 | other | 35 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 901 | 3 |
-| typecheck | 180 | 1 |
+| typecheck | 180 | 0 |
 | interp | 146 | 0 |
 | ownership | 57 | 2 |
 | other | 49 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 8 open · 1247 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 7 open · 1248 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-14 | 2026-08-17 | autopar+codegen | medium | A `#[par_order_free]` COLLECT LOOP REPORTS `fanned_out: true` AND RUNS AT 101% CPU — the B-2026-08-15-23 SIGNATURE AGAIN, on a compiler that already carries that fix. 48 branches, ~6 ms of work each, and the par build is 1.03x SLOWER than its sequential twin. Five isolations reproducing the loop's individual features all fan out correctly, so the trigger is still unidentified. | Unknown. NOT the B-2026-08-15-23 chunker floor: that fix is present and verified in the same binary (kata 276's 16-iteration loop fans out at 384% on it). The query reports `lowering: parallel_fanout, fanned_out: true, cost_gate: fanout` for the loop that does not parallelize, so whatever declines it is downstream of the reporting again. |
-| B-2026-08-17-15 | 2026-08-17 | typecheck | low | `type_display` renders a generic `Type::Named` with ANGLE brackets -- `Option<i64>`, `Vec<i64>` -- while every sibling arm in the same function uses Kara's `[...]` (`Slice[T]`, `Rc[T]`, `Arc[T]`). CLAUDE.md's first language rule is `[T]` not `<T>`, so every diagnostic naming a generic prints syntax that is not the language's. | src/typechecker/types.rs — `type_display`'s `Type::Named` arm formats `{}<{}>`; its `Slice` / `Rc` / `Arc` siblings format `{}[{}]`. Fixing it means updating every assertion that pins the old rendering (10+ in tests/typechecker.rs alone). |
 | B-2026-08-17-16 | 2026-08-17 | ownership | medium | `let mc = m.as_slice_mut().to_vec();` keeps the mut-Slice borrow of `m` alive for `mc`'s WHOLE lifetime, so any later `ref` read near `m` mis-fires CrossBorrowConflict — but `.to_vec()` copies out and the borrow is dead at the semicolon; `mc` is an independent owned Vec. Measured pre-existing in plain read positions; became VISIBLE when B-2026-08-17-13 taught the ownership walk to see f-string holes. | the CrossBorrowConflict live-range for a chain-rooted mut-slice borrow — `let mc = m.as_slice_mut().to_vec();` should END the borrow at the `.to_vec()` copy, not extend it through `mc`'s lifetime |
 | B-2026-08-17-17 | 2026-08-17 | ownership | low | `let x: i64; loop { x = 1; break; } println(x);` is REJECTED with use-of-uninitialized, but design.md's DA table lists the shape as OK — an infinite `loop`'s body runs at least once, so an assignment that dominates every `break` initializes. The restore-after-loop is applied uniformly to `loop` as if the body could run zero times. Masked until now by the f-string hole (the spec-transcription probes printed via f-strings, so the row that produced B-2026-08-17-13 recorded this shape as accepted-correct). | restore_uninit_after_loop — an infinite `loop` runs its body at least once, but the post-loop restore treats it like a zero-iteration-capable while/for |
 | B-2026-08-17-18 | 2026-08-17 | codegen | low | Deferred initialization of NON-SCALAR locals (`let s: String; if c { s = ... } else { s = ... }`) is check-clean and interp-correct but refuses to build — now with an actionable message (B-2026-08-17-13 replaced the silent store-drop + cryptic `Undefined variable` with a loud deferral naming the remedy). Scalars lower fully; the heap classes need the let-site sidecar registration (string_vars / vec_elem_types / drop wiring) replayed from a TypeExpr instead of a value. | the StmtKind::LetUninit arm in src/codegen/stmts.rs — extend past the scalar class |
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced
 
 </details>
 
-### Fixed (1247)
+### Fixed (1248)
 
-<details><summary>1247 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1248 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10207,6 +10206,17 @@ E2E test grandfathered against it), B-2026-08-17-17 (the loop-with-break DA
 over-fire — the spec table's twelfth row, needs break-dominance), and -18
 above. The interpreter's ()-for-uninit rendering became unreachable from any
 checked program and was left alone. |
+| B-2026-08-17-15 | typecheck | low | `type_display` renders a generic `Type::Named` with ANGLE brackets -- `Option<i64>`, `Vec<i64>` -- while every sibling arm in the same function uses… | FIXED, and the row's 'cosmetics-plus' framing turned out to UNDERSELL it -- the sweep found the wrong spelling already shipping in machine-applied form. Two arms in `type_display` (src/typechecker/types.rs) moved to the language's own brackets: the `Type::Named` generic arm (`Vec<i64>` -> `Vec[i64]`) and the `AssocProjection` RECEIVER arm, which was inconsistent with itself -- the projection's own args one slot over already rendered `[...]` (`Wrapper<String>.Mapped[i64]`).
+
+WHAT THE SWEEP ACTUALLY FOUND, beyond prose:
+
+1. THE DISPLAY STRING IS A REFLECTION API CONTRACT, not just diagnostic text. Comptime reflection's `Field.ty.name()` returns `type_display` output verbatim (`Value::TypeVal` carries the STRING), `nth_type_arg` (src/interpreter/reflection.rs) parses it to implement `element_type()` / `key_type()` / `value_type()`, and the `#[derive(Message)]` protobuf derive -- written in Kara, runtime/stdlib/protobuf.kara -- string-matches `"Vec<u8>"` and `starts_with("Vec<")` / `starts_with("Map<")` against it. All three had to move together: `nth_type_arg` now peels `[...]`, protobuf.kara matches `"Vec[u8]"` / `"Vec["` / `"Map["`. 29 of the 44 failing tests (protobuf_derive 23, protobuf_proto 6) were this contract, not assertion pins.
+
+2. A FIX-IT WAS WRITING THE RUST SPELLING INTO KARA SOURCE. The closure-annotation repair (B-2026-08-08-24 family) uses the rendered type as its REPLACEMENT text -- so for a `Vec[Vec[i64]]` payload, `karac fix` rewrote the annotation to `ref Vec<i64>`, which does not parse. The exact failure class the row named ('wrong about how to WRITE it') had already shipped through the machine-fix path. Verified repaired end-to-end: the fix now writes `ref Vec[i64]` and the fixed file checks cleanly.
+
+COST, measured: the row's '10 failures is a floor' was right -- the full-suite survey (all 104 targets, --no-fail-fast) found 44 unique failing tests across 6 targets: typechecker 10 (each read individually -- Option/ListNode/Tensor/host-boundary/spawn-capture message pins plus the fix-it replacement pin), lib 1 (the unit test literally named `..._renders_angle_brackets`, renamed and re-pinned), comptime_reflection 2, protobuf_derive 23, protobuf_proto 6, cli 2, example_corpus 1 (the last four all downstream of the reflection contract -- zero edits beyond protobuf.kara + nth_type_arg). One test comment had documented the angle rendering as 'a cross-codebase display convention separate from this slice's scope' -- that convention is now retired. Mend-example docs quoting the E0200 rendering (examples/mend/examples/user_lookup/*, README table) updated; `Option<T>`-from-Rust-priors phrasing left alone since it names Rust's convention. WGSL/WIT/C-header emitters keep `<>` -- those are TARGET languages that genuinely spell generics that way.
+
+COMPAT NOTE for comptime-derive authors: the reflected `name()` string is observable API, and any out-of-tree comptime code matching `"Vec<"`-style names must move to `"Vec["` -- in-tree protobuf.kara is the template. A latent behavior tightening rides along: `Slice[u8]` / `Array[i64, 4]` fields now peel under `element_type()` (their brackets were invisible to the old angle parser, so they returned identity); nothing in-tree relied on the identity behavior. |
 
 </details>
 
