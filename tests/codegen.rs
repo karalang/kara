@@ -96814,6 +96814,39 @@ fn main() {
         );
     }
 
+    /// B-2026-08-17-17 — deferred-init through a bare `loop` whose
+    /// assignment dominates every `break` (the DA-table shape the
+    /// ownership gate used to reject; scalar deferred-init lowering is
+    /// B-2026-08-17-13's). Paired with
+    /// `test_loop_break_dominated_init_oracle` in `tests/interpreter.rs`.
+    #[test]
+    fn test_e2e_loop_break_dominated_deferred_init() {
+        assert_eq!(
+            run_program(
+                r#"
+fn main() {
+    let x: i64;
+    loop { x = 1; break; }
+    println(x);
+    let c = true;
+    let mut y: i64;
+    outer: loop {
+        loop {
+            if c { y = 9; break outer; }
+            y = 1;
+            break;
+        }
+        y = 4;
+        break;
+    }
+    println(y);
+}
+"#
+            ),
+            Some("1\n9\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-24 — the TUPLE-element sibling of B-2026-08-15-21.
     /// `s[0].0 = v` through a `mut Slice[(A, B)]` param failed the build with
     /// "tuple-element assignment through this receiver shape is not yet

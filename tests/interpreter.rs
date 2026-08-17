@@ -33745,3 +33745,30 @@ fn test_prelude_colliding_variant_ctor_oracle() {
          }\n");
     assert_eq!(out, "req /users\nresp 200\nidle\nfile\n");
 }
+
+#[test]
+fn test_loop_break_dominated_init_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s
+    // `test_e2e_loop_break_dominated_deferred_init` (B-2026-08-17-17): a
+    // bare `loop` runs at least once, so an assignment dominating every
+    // `break` initializes the deferred binding.
+    let out = run("\n\
+         fn main() {\n\
+             let x: i64;\n\
+             loop { x = 1; break; }\n\
+             println(x);\n\
+             let c = true;\n\
+             let mut y: i64;\n\
+             outer: loop {\n\
+                 loop {\n\
+                     if c { y = 9; break outer; }\n\
+                     y = 1;\n\
+                     break;\n\
+                 }\n\
+                 y = 4;\n\
+                 break;\n\
+             }\n\
+             println(y);\n\
+         }\n");
+    assert_eq!(out, "1\n9\n");
+}

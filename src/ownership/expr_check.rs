@@ -33,11 +33,44 @@ use crate::token::Span;
 use crate::typechecker::Type;
 
 use super::{
-    merge_branch_into, merge_states, restore_uninit_after_loop, snapshot_uninit, BorrowKind,
-    CapturePath, OwnershipError, OwnershipErrorKind, OwnershipMode, ParamUsage, ValueState,
+    apply_loop_break_dominance, merge_branch_into, merge_states, restore_uninit_after_loop,
+    snapshot_uninit, BorrowKind, CapturePath, LoopDaFrame, OwnershipError, OwnershipErrorKind,
+    OwnershipMode, ParamUsage, ValueState,
 };
 
 impl<'a> super::OwnershipChecker<'a> {
+    /// B-2026-08-17-17 — resolve which enclosing frame a `break` exits and,
+    /// when that frame is a collecting bare-`loop` frame, snapshot the
+    /// tracked bindings' states at this exit. An unlabeled `break` targets
+    /// the innermost loop frame; a labeled one targets the frame carrying
+    /// that label. A label that matches nothing on the stack (a labeled
+    /// BLOCK, or a resolver-rejected stray) is by construction not an exit
+    /// of any tracked loop — `break 'blk` never lands in the code
+    /// immediately after a `loop` — so it records nothing.
+    fn record_break_for_loop_da(
+        &mut self,
+        label: Option<&str>,
+        states: &std::collections::HashMap<String, ValueState>,
+    ) {
+        let idx = match label {
+            None => self.loop_da_stack.iter().rposition(|f| f.is_loop),
+            Some(l) => self
+                .loop_da_stack
+                .iter()
+                .rposition(|f| f.label.as_deref() == Some(l)),
+        };
+        let Some(i) = idx else { return };
+        let frame = &mut self.loop_da_stack[i];
+        if !frame.collects {
+            return;
+        }
+        let snap = frame
+            .pre_uninit_keys
+            .iter()
+            .filter_map(|k| states.get(k).map(|s| (k.clone(), s.clone())))
+            .collect();
+        frame.break_snapshots.push(snap);
+    }
     /// Mark a named binding as consumed at `use_span`. Used by the
     /// MethodCall receiver-consume path (step 1) so the consume does
     /// not depend on `expr_types[span]`, which is unreliable at the
@@ -860,14 +893,26 @@ impl<'a> super::OwnershipChecker<'a> {
                 }
             }
             ExprKind::While {
-                condition, body, ..
+                label,
+                condition,
+                body,
+                ..
             } => {
                 self.check_expr_reading(condition, states, param_types, param_usage);
                 let pre_uninit = snapshot_uninit(states);
+                // Non-collecting frame: a zero-iteration entry is always
+                // possible, so the blanket restore below stays — the frame
+                // exists only so an unlabeled `break` inside resolves HERE
+                // rather than to an enclosing bare `loop`
+                // (B-2026-08-17-17).
+                self.loop_da_stack
+                    .push(LoopDaFrame::non_collecting(label.clone()));
                 self.check_block(body, states, param_types, param_usage);
+                self.loop_da_stack.pop();
                 restore_uninit_after_loop(pre_uninit, states);
             }
             ExprKind::WhileLet {
+                label,
                 value,
                 pattern,
                 body,
@@ -876,10 +921,14 @@ impl<'a> super::OwnershipChecker<'a> {
                 self.check_expr_reading(value, states, param_types, param_usage);
                 let pre_uninit = snapshot_uninit(states);
                 self.define_pattern_states(pattern, states);
+                self.loop_da_stack
+                    .push(LoopDaFrame::non_collecting(label.clone()));
                 self.check_block(body, states, param_types, param_usage);
+                self.loop_da_stack.pop();
                 restore_uninit_after_loop(pre_uninit, states);
             }
             ExprKind::For {
+                label,
                 pattern,
                 iterable,
                 body,
@@ -888,13 +937,33 @@ impl<'a> super::OwnershipChecker<'a> {
                 self.check_expr_reading(iterable, states, param_types, param_usage);
                 let pre_uninit = snapshot_uninit(states);
                 self.define_pattern_states(pattern, states);
+                self.loop_da_stack
+                    .push(LoopDaFrame::non_collecting(label.clone()));
                 self.check_block(body, states, param_types, param_usage);
+                self.loop_da_stack.pop();
                 restore_uninit_after_loop(pre_uninit, states);
             }
-            ExprKind::Loop { body, .. } => {
+            ExprKind::Loop { label, body, .. } => {
+                // B-2026-08-17-17 — a bare `loop` runs its body at least
+                // once, and its post-loop code is reachable only through
+                // `break`s that target it. So instead of the blanket
+                // zero-iteration restore, collect the break-site states
+                // and let `apply_loop_break_dominance` decide definite
+                // assignment per binding.
                 let pre_uninit = snapshot_uninit(states);
+                self.loop_da_stack.push(LoopDaFrame {
+                    label: label.clone(),
+                    is_loop: true,
+                    collects: true,
+                    pre_uninit_keys: pre_uninit.keys().cloned().collect(),
+                    break_snapshots: Vec::new(),
+                });
                 self.check_block(body, states, param_types, param_usage);
-                restore_uninit_after_loop(pre_uninit, states);
+                let frame = self
+                    .loop_da_stack
+                    .pop()
+                    .expect("loop frame pushed above is still on the stack");
+                apply_loop_break_dominance(frame, pre_uninit, states);
             }
             ExprKind::LabeledBlock { body, .. } => {
                 self.check_block(body, states, param_types, param_usage);
@@ -1321,11 +1390,16 @@ impl<'a> super::OwnershipChecker<'a> {
             ExprKind::Return(Some(inner)) => {
                 self.check_expr_consuming(inner, states, param_types, param_usage);
             }
-            ExprKind::Break {
-                value: Some(inner), ..
+            ExprKind::Break { label, value } => {
+                if let Some(inner) = value {
+                    self.check_expr_reading(inner, states, param_types, param_usage);
+                }
+                // B-2026-08-17-17 — record the break-site states into the
+                // frame this break targets, feeding post-`loop`
+                // break-dominance definite assignment.
+                self.record_break_for_loop_da(label.as_deref(), states);
             }
-            | ExprKind::Question(inner)
-            | ExprKind::OptionalChain { object: inner, .. } => {
+            ExprKind::Question(inner) | ExprKind::OptionalChain { object: inner, .. } => {
                 self.check_expr_reading(inner, states, param_types, param_usage);
             }
             ExprKind::NilCoalesce { left, right } => {
@@ -1412,7 +1486,6 @@ impl<'a> super::OwnershipChecker<'a> {
             | ExprKind::Bool(_)
             | ExprKind::Continue { .. }
             | ExprKind::Return(None)
-            | ExprKind::Break { value: None, .. }
             | ExprKind::PipePlaceholder
             | ExprKind::OffsetOf { .. }
             | ExprKind::Error => {}

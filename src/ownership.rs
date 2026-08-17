@@ -1295,6 +1295,13 @@ pub struct OwnershipChecker<'a> {
     /// state-machine's post-walk `ValueState::Moved` state. `None`
     /// outside a `check_function` invocation.
     pub(crate) current_classification: Option<crate::cfg::Classification>,
+    /// Stack of enclosing loop / break-target frames for the walk in
+    /// progress, driving post-`loop` break-dominance definite assignment
+    /// (B-2026-08-17-17). Pushed/popped by the `While` / `WhileLet` /
+    /// `For` / `Loop` arms of `check_expr_reading`; `Break` records a
+    /// state snapshot into its resolved target frame. Cleared per
+    /// function.
+    pub(crate) loop_da_stack: Vec<LoopDaFrame>,
 }
 
 impl<'a> OwnershipChecker<'a> {
@@ -1412,6 +1419,7 @@ impl<'a> OwnershipChecker<'a> {
             slice_borrow_sources: FxHashMap::default(),
             slice_binding_sources: HashMap::new(),
             active_borrows: HashMap::new(),
+            loop_da_stack: Vec::new(),
             closure_capture_borrows: HashMap::new(),
             current_scope_depth: 0,
             binding_scope_depth: HashMap::new(),
@@ -2111,6 +2119,7 @@ impl<'a> OwnershipChecker<'a> {
         self.active_borrows.clear();
         self.binding_scope_depth.clear();
         self.slice_binding_scope_depth.clear();
+        self.loop_da_stack.clear();
         self.current_scope_depth = 0;
 
         // Initialize value states for parameters
@@ -3416,6 +3425,104 @@ fn type_name(ty: &Type) -> Option<String> {
         Type::Shared(name) => Some(name.clone()),
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => type_name(inner),
         _ => None,
+    }
+}
+
+/// One entry in the checker's loop/break-target stack, driving the
+/// break-dominance definite-assignment rule for bare `loop`
+/// (B-2026-08-17-17). Frames are pushed for every `while` / `while let` /
+/// `for` / `loop` (so an UNLABELED `break` resolves to the innermost
+/// loop — including a `while` nested inside the `loop` under analysis,
+/// which must not count as that `loop`'s exit). Only bare-`loop` frames
+/// collect: its body runs at least once, so a binding is initialized
+/// after the loop iff EVERY `break` that targets it sees the binding
+/// assigned. Labeled-block break targets need no frame — a `break 'blk`
+/// never lands in the code immediately after a `loop`, so a label lookup
+/// that misses this stack is exactly the "not an exit of any tracked
+/// loop" answer.
+pub(crate) struct LoopDaFrame {
+    pub(crate) label: Option<String>,
+    /// `true` for all four loop forms; an unlabeled `break` targets the
+    /// innermost frame with this set.
+    pub(crate) is_loop: bool,
+    /// `true` only for bare `loop` — the one form whose body cannot run
+    /// zero times, where break-site states (not a blanket restore)
+    /// decide post-loop definite assignment.
+    pub(crate) collects: bool,
+    /// The bindings that were `Uninit` at loop entry — the only ones the
+    /// dominance verdict may promote.
+    pub(crate) pre_uninit_keys: Vec<String>,
+    /// States of `pre_uninit_keys` captured at each `break` that targets
+    /// this frame.
+    pub(crate) break_snapshots: Vec<HashMap<String, ValueState>>,
+}
+
+impl LoopDaFrame {
+    pub(crate) fn non_collecting(label: Option<String>) -> Self {
+        LoopDaFrame {
+            label,
+            is_loop: true,
+            collects: false,
+            pre_uninit_keys: Vec::new(),
+            break_snapshots: Vec::new(),
+        }
+    }
+}
+
+/// B-2026-08-17-17 — post-`loop` definite assignment by break dominance.
+/// design.md's DA table accepts `let x: i64; loop { x = 1; break; }
+/// println(x);`: an infinite `loop` runs its body at least once, so an
+/// assignment that dominates every `break` initializes. The blanket
+/// `restore_uninit_after_loop` (kept for `while` / `for`, whose bodies CAN
+/// run zero times) over-fired on exactly this shape. The sound rule
+/// implemented here: post-loop code is reachable only through `break`s
+/// targeting this loop, so each pre-loop-`Uninit` binding takes the JOIN
+/// of the break-site states — initialized iff every break saw it
+/// assigned, restored to `Uninit` otherwise (`loop { if c { break; }
+/// x = 1; break; }` stays rejected). With NO self-targeting break the
+/// post-loop code is unreachable and the body-end states stand — a
+/// restore there would reject unreachable reads the spec accepts.
+/// Only DA is decided here; a body-end `Moved` is the move analysis's
+/// business and stands untouched, mirroring `restore_uninit_after_loop`.
+pub(crate) fn apply_loop_break_dominance(
+    frame: LoopDaFrame,
+    pre_uninit: HashMap<String, ValueState>,
+    states: &mut HashMap<String, ValueState>,
+) {
+    if frame.break_snapshots.is_empty() {
+        return;
+    }
+    for (name, original) in pre_uninit {
+        if matches!(
+            states.get(&name),
+            Some(ValueState::Uninit { .. }) | Some(ValueState::Moved { .. })
+        ) {
+            continue;
+        }
+        let mut merged: Option<ValueState> = None;
+        let mut all_init = true;
+        for snap in &frame.break_snapshots {
+            match snap.get(&name) {
+                Some(v @ ValueState::Live) | Some(v @ ValueState::InitOnce { .. }) => {
+                    merged = Some(match (&merged, v) {
+                        (Some(ValueState::Live), _) | (_, ValueState::Live) => ValueState::Live,
+                        _ => v.clone(),
+                    });
+                }
+                _ => {
+                    all_init = false;
+                    break;
+                }
+            }
+        }
+        match (all_init, merged) {
+            (true, Some(state)) => {
+                states.insert(name, state);
+            }
+            _ => {
+                states.insert(name, original);
+            }
+        }
     }
 }
 

@@ -12726,3 +12726,108 @@ fn slice_binding_and_ref_carrying_chain_still_conflict() {
         "a ref-carrying chain result must keep the source borrowed: {errors:?}"
     );
 }
+
+// ── post-`loop` definite assignment by break dominance (B-2026-08-17-17) ──
+
+#[test]
+fn loop_assignment_dominating_every_break_initializes() {
+    // design.md's DA table accepts these: a bare `loop` runs its body at
+    // least once, and post-loop code is reachable only through `break`s
+    // targeting the loop — so a binding assigned before every such break
+    // is definitely initialized. The blanket zero-iteration restore
+    // rejected all four (the twelfth row of B-2026-08-17-13's table,
+    // masked until the f-string hole was closed).
+    for src in [
+        // The row's spec shape.
+        "fn main() {\n\
+             let x: i64;\n\
+             loop { x = 1; break; }\n\
+             println(x);\n\
+         }",
+        // Both break paths assigned.
+        "fn main() {\n\
+             let c = true;\n\
+             let x: i64;\n\
+             loop {\n\
+                 if c { x = 2; break; }\n\
+                 x = 1;\n\
+                 break;\n\
+             }\n\
+             println(x);\n\
+         }",
+        // An unlabeled break inside a NESTED while targets the while, not
+        // the loop — it must not count as the loop's exit.
+        "fn main() {\n\
+             let x: i64;\n\
+             loop {\n\
+                 while true { break; }\n\
+                 x = 3;\n\
+                 break;\n\
+             }\n\
+             println(x);\n\
+         }",
+        // A labeled break from an inner loop IS this loop's exit; both
+        // exits (labeled and plain) are assigned here.
+        "fn main() {\n\
+             let c = true;\n\
+             let mut x: i64;\n\
+             outer: loop {\n\
+                 loop {\n\
+                     if c { x = 9; break outer; }\n\
+                     x = 1;\n\
+                     break;\n\
+                 }\n\
+                 x = 4;\n\
+                 break;\n\
+             }\n\
+             println(x);\n\
+         }",
+    ] {
+        ownership_ok(src);
+    }
+}
+
+#[test]
+fn loop_break_not_dominated_by_assignment_stays_uninitialized() {
+    // The soundness half: any break the assignment does NOT dominate
+    // keeps the binding uninitialized after the loop — and `while` / `for`
+    // keep the zero-iteration restore regardless of their breaks.
+    for src in [
+        // A conditional break precedes the assignment.
+        "fn main() {\n\
+             let c = true;\n\
+             let x: i64;\n\
+             loop { if c { break; } x = 1; break; }\n\
+             println(x);\n\
+         }",
+        // The labeled exit path skips the assignment.
+        "fn main() {\n\
+             let c = true;\n\
+             let mut x: i64;\n\
+             outer: loop {\n\
+                 loop {\n\
+                     if c { break outer; }\n\
+                     x = 1;\n\
+                     break;\n\
+                 }\n\
+                 x = 4;\n\
+                 break;\n\
+             }\n\
+             println(x);\n\
+         }",
+        // `while` can run zero times — the same body shape stays rejected.
+        "fn main() {\n\
+             let x: i64;\n\
+             while true { x = 1; break; }\n\
+             println(x);\n\
+         }",
+    ] {
+        let errors = ownership_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == OwnershipErrorKind::UseOfUninitialized),
+            "expected use-of-uninitialized for:\n{src}\ngot: {errors:?}"
+        );
+    }
+}
