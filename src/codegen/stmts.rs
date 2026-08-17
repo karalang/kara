@@ -10032,11 +10032,53 @@ impl<'ctx> super::Codegen<'ctx> {
                             | "bool"
                             | "char"
                     ));
-                if !is_scalar {
+                // B-2026-08-17-18 — the String and Vec classes. Both share
+                // the `{ptr, len, cap}` slot layout, and EVERY displaced-value
+                // path they can later hit (assign-over, scope-exit free,
+                // append-in-place) is cap-guarded, so a zero header makes the
+                // pre-first-assignment state a structural no-op for all of
+                // them — free(null-cap-0) never runs. The sidecar
+                // registration mirrors the annotated-`let` detection chain
+                // (string_vars / vec_elem_types / var_elem_type_exprs) driven
+                // from the DECLARED TypeExpr instead of an initializer.
+                // Measured under ASAN+LSan including the reassignment shape:
+                // tests/memory_sanitizer.rs::asan_deferred_init_*.
+                let is_string = self.is_string_type_expr(ty);
+                let vec_elem = self.extract_vec_elem_type(ty);
+                // Vec admission is elem-gated fail-closed: scalar and String
+                // elements ride the FreeVecBuffer inline drain; user-struct /
+                // Map / nested-Vec elements need the per-element drop-fn
+                // plumbing and stay on the deferral until measured.
+                let vec_elem_ok = vec_inner_type_expr(ty).is_some_and(|inner| {
+                    self.is_string_type_expr(&inner)
+                        || matches!(&inner.kind, TypeKind::Path(p)
+                        if p.segments.len() == 1
+                            && matches!(
+                                p.segments[0].as_str(),
+                                "i8" | "i16"
+                                    | "i32"
+                                    | "i64"
+                                    | "i128"
+                                    | "u8"
+                                    | "u16"
+                                    | "u32"
+                                    | "u64"
+                                    | "u128"
+                                    | "usize"
+                                    | "f16"
+                                    | "bf16"
+                                    | "f32"
+                                    | "f64"
+                                    | "bool"
+                                    | "char"
+                            ))
+                });
+                if !is_scalar && !is_string && !(vec_elem.is_some() && vec_elem_ok) {
                     return Err(format!(
-                        "deferred initialization of a non-scalar type (`let {name}: …;`) is \
-                         not yet lowered — initialize at the declaration (`let {name}: T = \
-                         …;`). Scalar deferred initialization (i64, f64, bool, …) is supported."
+                        "deferred initialization of this type (`let {name}: …;`) is not \
+                         yet lowered — initialize at the declaration (`let {name}: T = \
+                         …;`). Deferred initialization is supported for scalars (i64, \
+                         f64, bool, …), String, and Vec of scalar/String elements."
                     ));
                 }
                 let llvm_ty = self.llvm_type_for_type_expr(ty);
@@ -10052,6 +10094,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         ty: llvm_ty,
                     },
                 );
+                if is_string {
+                    self.var_types
+                        .vec_elem_types
+                        .insert(name.clone(), self.context.i8_type().into());
+                    self.var_types.string_vars.insert(name.clone());
+                    // Scope-exit free of the (cap-guarded) owned buffer; a
+                    // static-literal or moved-out final value leaves cap 0
+                    // and the drain skips it.
+                    self.track_vec_var(alloca, Some(self.context.i8_type().into()));
+                } else if let Some(elem_ty) = vec_elem {
+                    self.var_types.vec_elem_types.insert(name.clone(), elem_ty);
+                    if let Some(inner) = vec_inner_type_expr(ty) {
+                        self.var_types
+                            .var_elem_type_exprs
+                            .insert(name.clone(), inner);
+                    }
+                    self.track_vec_var(alloca, Some(elem_ty));
+                }
                 Ok(())
             }
             _ => Ok(()),

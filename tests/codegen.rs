@@ -12760,6 +12760,37 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    /// B-2026-08-17-18 — heap-class deferred initialization: String and
+    /// Vec (scalar / String elements). Zero-header at the declaration,
+    /// sidecar registration from the declared TypeExpr, cap-guarded frees.
+    /// Interp-parity pins; the memory dimension is the ASAN trio
+    /// `asan_deferred_init_*`. A Map deferred-init stays a loud codegen
+    /// deferral (fail-closed elem gate), pinned by the message assert.
+    #[test]
+    fn heap_deferred_initialization_lowers() {
+        assert_eq!(
+            run_program(
+                "fn main() { let c = true; let mut s: String; if c { s = f\"hi{1}\"; } else { s = f\"no{2}\"; } s = s + \"!\"; println(s); }"
+            ),
+            Some("hi1!\n".to_string()),
+            "String branch-init + append"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() { let c = false; let mut v: Vec[i64]; if c { v = [1, 2]; } else { v = Vec.new(); } v.push(7); println(v.len() + v[0]); }"
+            ),
+            Some("8\n".to_string()),
+            "Vec[i64] branch-init + push"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() { let mut v: Vec[String]; v = Vec.new(); v.push(f\"a{1}\"); println(v[0]); }"
+            ),
+            Some("a1\n".to_string()),
+            "Vec[String] deferred init"
+        );
+    }
+
     /// B-2026-08-17-13 — deferred initialization (`let x: T;` + later
     /// assignment) of SCALAR locals lowers for real. The old "arm" was a
     /// no-op whose comment claimed lazy materialization; in fact the first

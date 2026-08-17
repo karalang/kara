@@ -50406,6 +50406,80 @@ fn main() {
     // (the parent's cleanup suppressed by the multi-branch capture) fails
     // here.
 
+    // B-2026-08-17-18 — DEFERRED INITIALIZATION of heap-class locals
+    // (`let s: String;` / `let v: Vec[T];` + branch assignment). The lowering
+    // zero-inits the `{ptr, len, cap}` header at the declaration and relies
+    // on every displaced-value path being cap-guarded, so the pre-assignment
+    // state must be a structural no-op: no free of the zero header, no leak
+    // of the first assigned value on REASSIGNMENT, and a clean scope-exit
+    // drain of the final value (per-element for Vec[String]). These fixtures
+    // are the measurement the row required before trusting that argument.
+
+    #[test]
+    fn asan_deferred_init_string_branch_reassign_append() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let c = true;
+    let mut s: String;
+    if c { s = f"hi{1}"; } else { s = f"no{2}"; }
+    s = f"replaced{3}";
+    s = s + "!";
+    println(s);
+    println(s.len());
+}
+"#,
+            &["replaced3!", "10"],
+            "asan_deferred_init_string_branch_reassign_append",
+        );
+    }
+
+    #[test]
+    fn asan_deferred_init_vec_i64_push_realloc() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let c = false;
+    let mut v: Vec[i64];
+    if c { v = [1, 2]; } else { v = Vec.new(); }
+    let mut i = 0;
+    while i < 100 {
+        v.push(i);
+        i = i + 1;
+    }
+    println(v.len());
+    println(v[99]);
+}
+"#,
+            &["100", "99"],
+            "asan_deferred_init_vec_i64_push_realloc",
+        );
+    }
+
+    #[test]
+    fn asan_deferred_init_vec_string_elements_drain() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let c = true;
+    let mut v: Vec[String];
+    if c {
+        v = Vec.new();
+        v.push(f"aaaaaaaaaaaaaaaa{1}");
+        v.push(f"bbbbbbbbbbbbbbbb{2}");
+        v.push(f"cccccccccccccccc{3}");
+    } else {
+        v = Vec.new();
+    }
+    println(v.len());
+    println(v[2].len());
+}
+"#,
+            &["3", "17"],
+            "asan_deferred_init_vec_string_elements_drain",
+        );
+    }
+
     #[test]
     fn asan_par_readonly_two_branch_vec_i64() {
         assert_clean_asan_run(
