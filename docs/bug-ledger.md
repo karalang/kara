@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 113 | 0 |
 | missing-feature | 98 | 0 |
 | perf | 75 | 1 |
-| false-positive | 71 | 1 |
+| false-positive | 71 | 0 |
 | diagnostics | 65 | 0 |
 | soundness | 49 | 1 |
 | crash | 49 | 1 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 899 | 2 |
 | typecheck | 179 | 1 |
 | interp | 146 | 1 |
-| ownership | 55 | 2 |
+| ownership | 55 | 1 |
 | other | 49 | 1 |
 | autopar | 47 | 0 |
 | cli | 35 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced · 6 open · 1244 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced · 5 open · 1245 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-10 | 2026-08-17 | typecheck+interp+codegen | medium | INDEXING AN ITERATOR TYPECHECKS, THEN EVERY BACKEND IMPROVISES DIFFERENTLY: `karac check` passes `w.chars()[0]` and `v.iter()[0]`; the interpreter dies on an `unreachable!()` INTERNAL ERROR, while codegen either compiles it correctly (let-bound `chars`) or fails the build (`iter`, or `chars` indexed inline). The typechecker should reject the index. | The typechecker's index-expression rule admits an `Iterator` operand. `src/interpreter/eval_expr.rs:747` then hits `unreachable!()` — and its own panic text names the two candidate causes, the second of which is the right one: "the typechecker accepted an unindexable operand pair". |
-| B-2026-08-17-12 | 2026-08-17 | ownership | high | MULTIPLE READERS IN A `par {}` BLOCK ARE REJECTED -- design.md's edge case #1, written out verbatim and labelled "ALLOWED (multiple readers)", fails with `plain struct `Vec` cannot be accessed from multiple concurrent tasks`. Nothing is written anywhere in the program. The check counts REFERENCES per branch with no read/write distinction, so the case the whole effect-conflict apparatus exists to permit is the one it refuses. | src/ownership/concurrent_shared.rs -- `E_CONCURRENT_PLAIN_STRUCT` / `check_concurrent_shared_struct`. Its own module doc states the rule: "Detects struct/enum bindings that are REFERENCED from two or more top-level statements (branches)" -- a reference count, not a conflict analysis. |
 | B-2026-08-17-13 | 2026-08-17 | ownership | high | READING AN UNINITIALIZED BINDING IS NOT REJECTED: `let x: i64; println(f"{x}")` passes `karac check`, the interpreter prints `()` -- the UNIT value in an `i64` slot -- and both compiled backends fail with `codegen failed: Undefined variable 'x'`. design.md calls this "always a DA error". Every flow-sensitive definite-assignment rule the spec specifies is unenforced; the `ValueState::Uninit` machinery exists and drives the init-vs-reassign rule, but no read is ever checked against it. | src/ownership.rs -- `ValueState::Uninit`, `snapshot_uninit`, `restore_uninit_after_loop` (whose own doc comment cites "the 'loop body might run zero times' invariant for definite-assignment"). The state exists and is maintained; the READ check is what is missing. Lead, not a conclusion -- I did not trace every consumer. |
 
 ### Wontfix (5)
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced
 
 </details>
 
-### Fixed (1244)
+### Fixed (1245)
 
-<details><summary>1244 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1245 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10023,6 +10022,56 @@ MACHINE-APPLICABILITY. When the direction is known AND the narrow operand's exac
 THE EXTENT GATE is the honest limit and is documented at `appended_cast_end_offset`: the postfix parser aliases most postfix shapes' spans to the RECEIVER's span (`Index.span = object.span` etc.), so for `b[0i64] - 97i64` -- the kata-278 shape -- the narrow operand's true end is unrecoverable and a span-end insertion would rewrite mid-expression (`b as i64[0i64]`). Those shapes keep the corrected widening PROSE but no replacement: a wrong-place edit is strictly worse than declining, per the row's own order-of-fixes point. Machine-applicable today: identifier, suffixed-literal, byte-literal, self, method-call (its `args_close_span` records the chain's true end), and prefix-unary operands (span_from covers all consumed tokens, parens included). Extending to `Index` means recording the `]` span in the AST (~293 construction/match sites) -- deliberately not taken in this row.
 
 Tests (all red at baseline): typechecker `test_mixed_int_diagnostic_steers_widening` (both operand orders + u32/i64 + the two usize-safe pairs; asserts the old example shape is gone), `test_mixed_int_without_value_preserving_direction_stays_advisory` (i64/u64, i8/u8, i64/usize; no fix_it), `test_mixed_int_fix_it_widens_the_narrow_operand` (insertion offset/length/text pinned; Index shape pinned prose-only); CLI `test_fix_widens_mixed_int_operand` (fix applies, fixed file checks cleanly). The float-arithmetic sibling message (B-2026-08-14-13) is untouched: float narrowing rounds rather than traps, so its both-directions phrasing is correct for its domain. |
+| B-2026-08-17-12 | ownership | high | MULTIPLE READERS IN A `par {}` BLOCK ARE REJECTED -- design.md's edge case #1, written out verbatim and labelled "ALLOWED (multiple readers)", fails… | FIXED by 29c92dc — the first live slice of the borrow-mode-aware target model
+the spec's own reconciliation blockquote had reserved ("remains the target
+model but is not v1"). The row's headline case — design.md edge case 1,
+transcribed verbatim — now compiles and runs correctly under both the
+interpreter and AOT, producing the right sums.
+
+WHAT WAS ACTUALLY AT STAKE, which the row could not see from the outside: the
+reference count was not merely lazy — it was the DIAGNOSTIC HALF of a
+documented codegen limitation. ParCaptureMode's doc says it outright: a plain
+struct/Vec/String par capture falls through to bitwise-Copy lowering (a
+header copy through the branch env, no branch-side cleanup), and "the latent
+miscompile risk for owned heap types is documented as a v1 limitation; the
+diagnostic for that case piggybacks on E_CONCURRENT_PLAIN_STRUCT". Relaxing
+the count on the wrong axis converts the false positive into a double-free.
+So the fix was measured before it was written: with the gate experimentally
+disabled, the case-1 shape runs clean under ASAN+LSan (correct output,
+no leak, no double free) precisely because read-only branches neither write,
+free, nor escape their header copies, and the parent — still sole owner —
+frees once, after the join barrier. Those measurements are now permanent
+fixtures (tests/memory_sanitizer.rs::asan_par_readonly_two_branch_*, RED
+against the pre-fix checker).
+
+THE ADMISSION IS A PROOF, FAIL-CLOSED EVERYWHERE. Read-only is recorded only
+on positive evidence — a bare unmarked identifier argument in a direct call
+to a program function whose parameter at that position is declared `ref`
+(signature modes are declared in Kāra, so the AST is authoritative), with
+the argument's full inferred type transitively cross-task-safe. The
+transitive walk refuses `shared` types, `Rc`, `OnceCell` at ANY depth —
+container elements and plain-struct fields included — because a read-only
+traversal still materializes RC handles whose non-atomic inc/dec pair races
+across sibling threads (the B-2026-07-28-13 class). One unproven use
+anywhere poisons the binding: owned-moves, mut-marked or forwarded mut-ref
+args, direct method receivers, closure captures, labeled calls, and every
+expression form the classifier does not model all keep today's rejection.
+`shared` bindings are untouched (their header races under any borrow mode;
+their admissions remain the frozen / atomic-promotion arms). Five checker
+pins in tests/ownership.rs; full llvm suite 105 binaries green; clippy
+--all-targets + fmt clean.
+
+SCOPE HONESTY, three deliberate exclusions recorded: (1) direct method
+receivers (`data.len()` inline in a branch) are NOT yet admitted — the
+receiver-mode classifier exists (MethodMutClassifier) but admitting through
+it needs its own soundness measurement for methods returning interior
+borrows; (2) the row's case 2 note (the effect-phase write rejection) was
+out of scope by the row's own words and is unchanged — a branch write is
+still rejected by the earlier, better effect diagnostic; (3) the row's
+observation that the FIX ADVICE (Mutex-wrap / par struct) was wrong for
+read-only workloads is mooted for the admitted shapes (no diagnostic fires)
+and unchanged for the rest. design.md's v1-status blockquote now records the
+live slice and names the remaining target-model work. |
 
 </details>
 
