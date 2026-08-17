@@ -1595,6 +1595,170 @@ fn test_non_exhaustive_match() {
     assert!(exhaust_err.message.contains("Blue") || exhaust_err.message.contains("Green"));
 }
 
+// ── Qualified unit-variant patterns (B-2026-08-17-41) ──────────
+//
+// `Dir.North` has no `Path` pattern kind to live in, so the parser stores it
+// as `Binding("Dir.North")`. The exhaustiveness engine compared that whole
+// dotted string against the enum's BARE variant names, never matched, and
+// fell through to `Pat::Wildcard` — a catch-all. That broke both halves at
+// once and in opposite directions: a genuinely non-exhaustive match was
+// reported exhaustive (then diverged three ways at runtime — interpreter
+// internal error, JIT stack overflow, AOT silent exit 48), while every arm
+// after a qualified one was reported unreachable. The bare spelling was
+// always handled correctly, which is the control that isolates the qualifier.
+
+#[test]
+fn qualified_unit_variant_non_exhaustive_match_rejected() {
+    let errors = typecheck_errors(
+        "enum Dir { North, South }\n\
+         fn f(d: Dir) -> i64 {\n\
+             match d {\n\
+                 Dir.North => 0,\n\
+             }\n\
+         }",
+    );
+    let err = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::NonExhaustiveMatch)
+        .unwrap_or_else(|| {
+            panic!("qualified `Dir.North` must not read as a catch-all, got: {errors:?}")
+        });
+    assert!(
+        err.message.contains("South"),
+        "expected the missing variant named, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn bare_unit_variant_non_exhaustive_match_rejected() {
+    // The control for the test above: the same match, unqualified, was
+    // rejected correctly throughout. Keeping both pins the two spellings to
+    // one behaviour so a future divergence fails here.
+    let errors = typecheck_errors(
+        "enum Dir { North, South }\n\
+         fn f(d: Dir) -> i64 {\n\
+             match d {\n\
+                 North => 0,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+        "expected NonExhaustiveMatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn qualified_unit_variant_complete_match_has_no_unreachable_warning() {
+    let result = typecheck_ok(
+        "enum Dir { North, South, East, West }\n\
+         fn f(d: Dir) -> i64 {\n\
+             match d {\n\
+                 Dir.North => 0,\n\
+                 Dir.South => 1,\n\
+                 Dir.East  => 2,\n\
+                 Dir.West  => 3,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::UnreachableArm),
+        "every arm here is reachable; got warnings: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn qualified_unit_variant_before_payload_arm_has_no_unreachable_warning() {
+    // A mixed enum was affected as soon as ONE earlier arm was a qualified
+    // unit variant — the wildcard it lowered to swallowed the payload arm too.
+    let result = typecheck_ok(
+        "enum Mix { A, B(i64) }\n\
+         fn f(m: Mix) -> i64 {\n\
+             match m {\n\
+                 Mix.A => 0,\n\
+                 Mix.B(x) => x,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::UnreachableArm),
+        "the payload arm is reachable; got warnings: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn qualified_unit_variant_duplicate_arm_still_unreachable() {
+    // The fix must not buy silence: a genuinely duplicated qualified arm is
+    // still redundant, and the bare spelling in an earlier arm must cover the
+    // qualified one (both lower to the same ctor now).
+    let result = typecheck_ok(
+        "enum Dir { North, South }\n\
+         fn f(d: Dir) -> i64 {\n\
+             match d {\n\
+                 North => 0,\n\
+                 Dir.North => 1,\n\
+                 Dir.South => 2,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::UnreachableArm),
+        "bare `North` must cover the later `Dir.North`; got warnings: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn qualified_unit_variant_nested_non_exhaustive_match_rejected() {
+    // Nested position goes through the same lowering, so `Option[Dir]` gains
+    // a precise witness instead of a false all-clear.
+    let errors = typecheck_errors(
+        "enum Dir { North, South }\n\
+         fn g(o: Option[Dir]) -> i64 {\n\
+             match o {\n\
+                 Option.Some(Dir.North) => 0,\n\
+                 Option.None => 2,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch && e.message.contains("South")),
+        "expected a `Some(South)` witness, got: {errors:?}"
+    );
+}
+
+#[test]
+fn qualified_unit_variant_binding_pattern_still_binds() {
+    // An UNDOTTED name is its own last segment, so a genuine binding pattern
+    // keeps falling through to the wildcard it always produced — the arm
+    // stays a catch-all and the match stays exhaustive.
+    typecheck_ok(
+        "enum Dir { North, South }\n\
+         fn f(d: Dir) -> i64 {\n\
+             match d {\n\
+                 Dir.North => 0,\n\
+                 other => 1,\n\
+             }\n\
+         }",
+    );
+}
+
 // B-2026-07-17-6: an enum-variant pattern matched against a scrutinee whose
 // type cannot own the variant used to pass `karac check` (the constructor
 // sub-patterns were silently bound to `Type::Error`, and a bare unit-variant

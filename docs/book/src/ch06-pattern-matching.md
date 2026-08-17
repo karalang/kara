@@ -95,7 +95,12 @@ The variable `t` binds the matched value, and the `if` clause adds an extra cond
 
 The compiler requires that `match` covers every possible case. This is enforced at compile time:
 
-```kara
+<!-- `ignore`: this snippet is a DELIBERATE compile error — the point of the
+     section. Until B-2026-08-17-41 it compiled clean (a qualified `Color.Red`
+     pattern lowered to a wildcard in the exhaustiveness engine, so the missing
+     `Blue` went unnoticed), and the snippet harness certified the book's own
+     counter-example as valid Kāra. -->
+```kara,ignore
 enum Color {
     Red,
     Green,

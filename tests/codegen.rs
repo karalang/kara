@@ -96913,6 +96913,40 @@ fn main() {
         );
     }
 
+    /// B-2026-08-17-41 — a qualified unit-variant match compiles and selects
+    /// the right arm. The bug that row fixed was in the exhaustiveness
+    /// ANALYSIS (`Dir.North` lowered to a wildcard, so a non-exhaustive match
+    /// was accepted and then failed differently on every backend); lowering
+    /// was always correct, and this pins that it stayed correct. Paired with
+    /// `test_qualified_unit_variant_match_oracle` in `tests/interpreter.rs`.
+    #[test]
+    fn test_e2e_qualified_unit_variant_match() {
+        assert_eq!(
+            run_program(
+                r#"
+enum Dir { North, South, East, West }
+
+fn f(d: Dir) -> i64 {
+    match d {
+        Dir.North => 0,
+        Dir.South => 1,
+        Dir.East  => 2,
+        Dir.West  => 3,
+    }
+}
+
+fn main() {
+    println(f(Dir.North));
+    println(f(Dir.South));
+    println(f(Dir.East));
+    println(f(Dir.West));
+}
+"#
+            ),
+            Some("0\n1\n2\n3\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-24 — the TUPLE-element sibling of B-2026-08-15-21.
     /// `s[0].0 = v` through a `mut Slice[(A, B)]` param failed the build with
     /// "tuple-element assignment through this receiver shape is not yet

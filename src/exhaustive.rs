@@ -556,14 +556,33 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
     match &p.kind {
         PatternKind::Wildcard => Pat::Wildcard,
         PatternKind::Binding(name) => {
+            // B-2026-08-17-41: a QUALIFIED payload-free variant pattern
+            // (`Dir.North`) has no `Path` pattern kind to live in, so the
+            // parser stores it as `Binding("Dir.North")` — the whole dotted
+            // string (src/parser/patterns.rs, "Just a binding with a
+            // qualified name (unit variant)"). Comparing that against the
+            // enum's BARE variant names never matched, so the arm fell
+            // through to `Pat::Wildcard` — a catch-all. Both halves of the
+            // engine then went wrong in opposite directions: a
+            // `match d { Dir.North => 0 }` missing every other variant was
+            // reported EXHAUSTIVE (and blew up at runtime — differently on
+            // each backend), while every arm after a qualified one was
+            // reported UNREACHABLE. Take the last segment, exactly as the
+            // `TupleVariant` / `Struct` arms already do with `path.last()`,
+            // so the two spellings lower to the same ctor and unify.
+            //
+            // An undotted name is its own last segment, so a genuine binding
+            // pattern (`match d { x => … }`) still falls through to the
+            // wildcard it has always produced.
+            let variant = name.rsplit('.').next().unwrap_or(name.as_str());
             if let Type::Named {
                 name: type_name, ..
             } = scrut_type
             {
                 if let Some(info) = env.enums.get(type_name) {
-                    if info.variants.iter().any(|(v, _)| v == name) {
+                    if info.variants.iter().any(|(v, _)| v == variant) {
                         return Pat::Ctor {
-                            ctor: PatCtor::Variant(name.clone()),
+                            ctor: PatCtor::Variant(variant.to_string()),
                             args: vec![],
                         };
                     }

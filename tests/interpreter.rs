@@ -33840,3 +33840,29 @@ fn test_default_parameter_call_site_fill_oracle() {
          }\n");
     assert_eq!(out, "14081\n15091\n13181\n9441\n");
 }
+
+#[test]
+fn test_qualified_unit_variant_match_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s
+    // `test_e2e_qualified_unit_variant_match` (B-2026-08-17-41). The bug was
+    // in the exhaustiveness ANALYSIS, not in lowering — both backends always
+    // selected the right arm — so this pins that the arm selection stayed
+    // correct while the analysis learned to strip the qualifier.
+    let out = run("\n\
+         enum Dir { North, South, East, West }\n\
+         fn f(d: Dir) -> i64 {\n\
+             match d {\n\
+                 Dir.North => 0,\n\
+                 Dir.South => 1,\n\
+                 Dir.East  => 2,\n\
+                 Dir.West  => 3,\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             println(f(Dir.North));\n\
+             println(f(Dir.South));\n\
+             println(f(Dir.East));\n\
+             println(f(Dir.West));\n\
+         }\n");
+    assert_eq!(out, "0\n1\n2\n3\n");
+}
