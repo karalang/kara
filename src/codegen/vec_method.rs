@@ -11792,8 +11792,14 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let sv = self.builder.build_load(elem_ty, sv_p, "q.sv").unwrap();
             let pv_v2 = self.builder.build_load(elem_ty, piv_a, "q.pv.v2").unwrap();
-            let sc = self
-                .emit_sort_by_inline_compare(qpart_fn, params, body, elem_type_name, sv, pv_v2)?;
+            let sc = self.emit_sort_by_inline_compare(
+                qpart_fn,
+                params,
+                body,
+                elem_type_name,
+                sv,
+                pv_v2,
+            )?;
             let goes_left = match pred {
                 // `nlt == 0`: the pivot is the range minimum, so the left half
                 // is the block equal to it and the split is on `<=`.
