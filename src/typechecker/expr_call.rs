@@ -19,6 +19,30 @@ use super::types::{type_display, ConstArg, DimArg, IntSize, Type, UIntSize};
 use super::{FixIt, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
+    /// Render the wrong-number-of-arguments message. For a free fn with
+    /// defaulted trailing parameters (`fn_name` resolvable in
+    /// `fn_default_arg_counts`), the expectation reads as a range —
+    /// "expected between 1 and 4 argument(s)" — since a caller may omit any
+    /// trailing defaulted suffix (design.md § Default Parameter Values; the
+    /// pre-resolve fill in `crate::default_args` completes every fillable
+    /// call before this phase runs).
+    pub(super) fn arity_error_message(
+        &self,
+        param_count: usize,
+        found: usize,
+        fn_name: Option<&str>,
+    ) -> String {
+        if let Some(&defaults) = fn_name.and_then(|n| self.env.fn_default_arg_counts.get(n)) {
+            let min = param_count.saturating_sub(defaults);
+            return format!(
+                "expected between {} and {} argument(s), found {} — \
+                 {} trailing parameter(s) have defaults and may be omitted",
+                min, param_count, found, defaults
+            );
+        }
+        format!("expected {} argument(s), found {}", param_count, found)
+    }
+
     /// `(explicit_args, formal_generic_params)` into the call-args
     /// substitution flow so the inference solver pre-binds each
     /// ConstVar / TypeVar to its user-supplied value before
@@ -48,11 +72,7 @@ impl<'a> super::TypeChecker<'a> {
         };
         if args.len() != sig.params.len() {
             self.type_error(
-                format!(
-                    "expected {} argument(s), found {}",
-                    sig.params.len(),
-                    args.len()
-                ),
+                self.arity_error_message(sig.params.len(), args.len(), Some(name)),
                 *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
@@ -1507,12 +1527,19 @@ impl<'a> super::TypeChecker<'a> {
                 return_type,
             } => {
                 if args.len() != params.len() {
+                    // Phrase the expectation as a range when the callee is an
+                    // unshadowed free fn with defaulted params — the call-site
+                    // fill (B-2026-08-17-19) already completed every fillable
+                    // call, so reaching here means a required argument is
+                    // missing (or there are too many).
+                    let defaulted_fn = match &callee.kind {
+                        ExprKind::Identifier(name) if self.local_scope.lookup(name).is_none() => {
+                            Some(name.as_str())
+                        }
+                        _ => None,
+                    };
                     self.type_error(
-                        format!(
-                            "expected {} argument(s), found {}",
-                            params.len(),
-                            args.len()
-                        ),
+                        self.arity_error_message(params.len(), args.len(), defaulted_fn),
                         *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );

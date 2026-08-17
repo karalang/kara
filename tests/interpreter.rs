@@ -33772,3 +33772,23 @@ fn test_loop_break_dominated_init_oracle() {
          }\n");
     assert_eq!(out, "1\n9\n");
 }
+
+#[test]
+fn test_default_parameter_call_site_fill_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s
+    // `test_e2e_default_parameter_call_site_fill` (B-2026-08-17-19): the
+    // stored defaults are filled at the call site, so the three backends
+    // agree on what an omitted / label-skipped argument evaluates to.
+    let out = run("\n\
+         fn create_server(host: i64, port: i64 = 8080, max_connections: i64 = 1000, \
+             timeout_ms: i64 = 5000) -> i64 {\n\
+             host + port + max_connections + timeout_ms\n\
+         }\n\
+         fn main() {\n\
+             println(create_server(1));\n\
+             println(create_server(1, 9090));\n\
+             println(create_server(1, max_connections: 100));\n\
+             println(create_server(1, 9090, max_connections: 100, timeout_ms: 250));\n\
+         }\n");
+    assert_eq!(out, "14081\n15091\n13181\n9441\n");
+}

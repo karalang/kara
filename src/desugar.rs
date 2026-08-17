@@ -25,6 +25,10 @@ pub fn desugar_program(program: &mut Program) {
     desugar_impl_trait_args_in_program(program);
     desugar_multi_assign_in_program(program);
     desugar_multiversion_in_program(program);
+    // Call-site default-parameter fill (B-2026-08-17-19). Runs LAST so calls
+    // inside synthesized bodies (trait default methods, multiversion thunks)
+    // are filled too.
+    crate::default_args::fill_default_args_in_program(program);
 }
 
 /// Where a `#[multiversion]` function lives — decides how the dispatch thunk

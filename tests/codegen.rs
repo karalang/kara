@@ -96885,6 +96885,34 @@ fn main() {
         );
     }
 
+    /// B-2026-08-17-19 — call-site default-parameter fill. The stored
+    /// defaults used to be inert (omitting one was an arity error, and a
+    /// label that skipped one was a label mismatch), so this program did
+    /// not check on any backend. The fill is a pre-resolve AST rewrite, so
+    /// codegen sees an ordinary full-arity call — this pins that the
+    /// compiled backends agree with the interpreter oracle
+    /// (`test_default_parameter_call_site_fill_oracle`) on the filled values.
+    #[test]
+    fn test_e2e_default_parameter_call_site_fill() {
+        assert_eq!(
+            run_program(
+                r#"
+fn create_server(host: i64, port: i64 = 8080, max_connections: i64 = 1000, timeout_ms: i64 = 5000) -> i64 {
+    host + port + max_connections + timeout_ms
+}
+
+fn main() {
+    println(create_server(1));
+    println(create_server(1, 9090));
+    println(create_server(1, max_connections: 100));
+    println(create_server(1, 9090, max_connections: 100, timeout_ms: 250));
+}
+"#
+            ),
+            Some("14081\n15091\n13181\n9441\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-24 — the TUPLE-element sibling of B-2026-08-15-21.
     /// `s[0].0 = v` through a `mut Slice[(A, B)]` param failed the build with
     /// "tuple-element assignment through this receiver shape is not yet

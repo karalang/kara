@@ -197,6 +197,7 @@ This is a *pitch artifact*, not a compiler. It validates the thesis concretely: 
 - [x] Associated types: declaration in traits, binding in impls, projection syntax `T.Assoc`, equality constraints in `where`
 - [x] `Copy` trait: auto-derive validation (all fields must be `Copy`), implicit copy insertion at own-inferred call sites
 - [x] Default parameter values: verify pure constant expressions; enforce trailing-only and no cross-parameter references
+- [x] Default parameter values — CALL SITES: omitted trailing arguments and label-skipped defaulted parameters are filled from the declaration's default expressions (B-2026-08-17-19). Neither box above covered this half, so until it landed every stored default was inert and the whole feature was unusable at a call.
 - [x] Integration tests — named arguments: unknown label, out-of-order label, partial label, UFCS receiver label (error), closure outer vs inner label scoping
 
 **Done when:** Type-incorrect programs are rejected with clear errors. Generic functions type-check correctly. `match` exhaustiveness is enforced. A non-trivial program (100+ lines) type-checks correctly.

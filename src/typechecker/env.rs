@@ -343,6 +343,15 @@ pub struct TypeEnv {
     /// precision) shipped alongside.
     pub opaque_foreign_types: FxHashSet<String>,
     pub functions: FxHashMap<String, FunctionSig>,
+    /// Free functions with defaulted trailing parameters: fn name → number of
+    /// defaulted params. The call-site fill happens pre-resolve
+    /// (`crate::default_args`), so by this phase such calls are full-arity;
+    /// this sidecar only improves the arity DIAGNOSTIC (`expected between …`)
+    /// for calls the fill could not complete (a missing required argument, or
+    /// a driver that skipped the desugar pass). Kept out of `FunctionSig` so
+    /// its 31 construction sites don't all need a field that is almost always
+    /// zero.
+    pub fn_default_arg_counts: FxHashMap<String, usize>,
     pub constants: FxHashMap<String, Type>,
     /// Resolved compile-time values of module-level consts, keyed by name.
     /// Populated after env build by evaluating each `const`'s initializer.
@@ -474,6 +483,7 @@ impl TypeEnv {
             distinct_bases: FxHashMap::default(),
             opaque_foreign_types: FxHashSet::default(),
             functions: FxHashMap::default(),
+            fn_default_arg_counts: FxHashMap::default(),
             constants: FxHashMap::default(),
             type_aliases: FxHashMap::default(),
             type_alias_params: FxHashMap::default(),

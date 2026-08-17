@@ -26,6 +26,7 @@ pub mod concurrency_report;
 pub mod cost_summary;
 pub mod crash_report;
 pub mod def_path;
+pub mod default_args;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dep_diagnostic;
 #[cfg(not(target_arch = "wasm32"))]

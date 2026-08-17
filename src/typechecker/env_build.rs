@@ -2180,6 +2180,19 @@ impl<'a> super::TypeChecker<'a> {
                 ),
             },
         );
+        // Call-site default fill (B-2026-08-17-19): record how many params
+        // carry defaults so the arity diagnostic can phrase the expectation
+        // as a range for a call the pre-resolve fill could not complete.
+        let default_count = f
+            .params
+            .iter()
+            .filter(|p| p.default_value.is_some())
+            .count();
+        if default_count > 0 {
+            self.env
+                .fn_default_arg_counts
+                .insert(f.name.clone(), default_count);
+        }
         if f.attributes.iter().any(|a| a.is_bare("compiler_builtin")) {
             self.env.compiler_builtins.insert(f.name.clone());
         }

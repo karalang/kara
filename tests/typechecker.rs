@@ -6145,6 +6145,162 @@ fn test_default_closure_error() {
     );
 }
 
+// ── Default Parameter Values — CALL SITES (B-2026-08-17-19) ────
+//
+// The declaration half above shipped without anything consuming a stored
+// default at a call, so every one of these was an arity or label error. The
+// fill runs pre-resolve (`karac::default_args`), hence `_desugared` helpers.
+
+#[test]
+fn test_call_omits_trailing_default() {
+    typecheck_ok_desugared(
+        "fn add(a: i64, b: i64 = 10) -> i64 { a + b }\n\
+         fn main() { let x: i64 = add(5); }",
+    );
+}
+
+#[test]
+fn test_call_omits_every_default() {
+    // design.md § Default Parameter Values' own example shape.
+    typecheck_ok_desugared(
+        "fn create_server(host: String, port: i64 = 8080, max_connections: i64 = 1000, \
+         timeout_ms: i64 = 5000) -> i64 { port + max_connections + timeout_ms }\n\
+         fn main() { let x: i64 = create_server(\"0.0.0.0\"); }",
+    );
+}
+
+#[test]
+fn test_call_label_skips_defaulted_parameter() {
+    // The spec's "override one; requires label" line — `port` is skipped by
+    // the label, so it is filled from its default.
+    typecheck_ok_desugared(
+        "fn create_server(host: String, port: i64 = 8080, max_connections: i64 = 1000) -> i64 \
+         { port + max_connections }\n\
+         fn main() { let x: i64 = create_server(\"0.0.0.0\", max_connections: 100); }",
+    );
+}
+
+#[test]
+fn test_call_passes_every_argument_positionally() {
+    typecheck_ok_desugared(
+        "fn add(a: i64, b: i64 = 10) -> i64 { a + b }\n\
+         fn main() { let x: i64 = add(5, 100); }",
+    );
+}
+
+#[test]
+fn test_call_default_type_flows_to_parameter() {
+    // The filled argument is type-checked like any other — a non-scalar
+    // default reaching its param must not become an inference hole.
+    //
+    // A `String` default (the spec's own `"localhost"` example) would be the
+    // natural case here, but the DECLARATION-side const validator still
+    // rejects string literals in default position; that is sibling row
+    // B-2026-08-17-20, whose fix site is `validate_default_params`. Use a
+    // tuple default, which that validator already accepts.
+    typecheck_ok_desugared(
+        "fn at(label: bool, p: (i64, i64) = (3, 4)) -> i64 { p.0 + p.1 }\n\
+         fn main() { let x: i64 = at(true); }",
+    );
+}
+
+#[test]
+fn test_call_missing_required_argument_still_errors() {
+    // Only the DEFAULTED suffix is fillable — omitting the required `a` is
+    // still an arity error, now phrased as a range.
+    let errors = typecheck_desugared_errors(
+        "fn add(a: i64, b: i64 = 10) -> i64 { a + b }\n\
+         fn main() { let x: i64 = add(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("between 1 and 2")
+                && e.message.contains("have defaults")),
+        "expected a range-phrased arity error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_call_too_many_arguments_still_errors() {
+    let errors = typecheck_desugared_errors(
+        "fn add(a: i64, b: i64 = 10) -> i64 { a + b }\n\
+         fn main() { let x: i64 = add(1, 2, 3); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs),
+        "expected an arity error for the over-long call, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_defaults_do_not_travel_with_a_function_value() {
+    // A fn VALUE has no parameter names or defaults — `g(5)` is a plain
+    // two-arg call through the value, so the arity error stands.
+    let errors = typecheck_desugared_errors(
+        "fn add(a: i64, b: i64 = 10) -> i64 { a + b }\n\
+         fn main() { let g = add; let x: i64 = g(5); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs),
+        "expected an arity error through the fn-value binding, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_local_binding_shadows_the_defaulted_function() {
+    // The closure's own arity wins; no fill happens for a shadowed name.
+    typecheck_ok_desugared(
+        "fn add(a: i64, b: i64 = 10) -> i64 { a + b }\n\
+         fn main() { let add = |x: i64| x * 2; let y: i64 = add(5); }",
+    );
+}
+
+#[test]
+fn test_out_of_order_labels_still_error_with_defaults() {
+    // Labels are documentation, not reordering (design.md § Named / Labeled
+    // Function Arguments) — the fill must not paper over a reversed pair.
+    let errors = typecheck_desugared_errors(
+        "fn f(a: i64, b: i64 = 1, c: i64 = 2) -> i64 { a + b + c }\n\
+         fn main() { let x: i64 = f(1, c: 30, b: 20); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::LabelMismatch),
+        "expected a label-mismatch error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_unknown_label_still_errors_with_defaults() {
+    let errors = typecheck_desugared_errors(
+        "fn f(a: i64, b: i64 = 1) -> i64 { a + b }\n\
+         fn main() { let x: i64 = f(1, nope: 5); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::LabelMismatch),
+        "expected a label-mismatch error for the unknown label, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_call_default_fills_inside_a_nested_argument() {
+    // The walk is program-wide: a fillable call nested in another call's
+    // argument is filled too.
+    typecheck_ok_desugared(
+        "fn add(a: i64, b: i64 = 10) -> i64 { a + b }\n\
+         fn main() { let x: i64 = add(add(1), 2); }",
+    );
+}
+
 // ── Copy trait validation ──────────────────────────────────────
 
 #[test]
