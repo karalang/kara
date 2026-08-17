@@ -532,9 +532,9 @@ impl<'a> super::EffectChecker<'a> {
         let synth_calls = self.collect_modbind_synth_calls_in_block(block, &[]);
         let mut effects: Vec<Effect> = Vec::new();
         for (callee, _span) in direct_calls.into_iter().chain(synth_calls) {
-            for e in self.get_callee_effects(callee) {
-                if !effects.contains(&e) {
-                    effects.push(e);
+            for e in self.callee_effect_sets(callee).iter() {
+                if !effects.contains(e) {
+                    effects.push(e.clone());
                 }
             }
         }

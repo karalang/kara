@@ -14,7 +14,6 @@
 //! Lives in a sibling `impl<'a> super::EffectChecker<'a>` block.
 
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::HashSet;
 
 use crate::ast::*;
 use crate::intern::Symbol;
@@ -66,6 +65,61 @@ fn clause_verbs_on_resource_without_writes(
     } else {
         mentioned.dedup();
         Some(mentioned.join("/"))
+    }
+}
+
+/// The effect sets a callee contributes, borrowed from the checker's
+/// tables — see [`super::EffectChecker::callee_effect_sets`]. `Two` is
+/// the `PolymorphicWithFixed` union: iteration yields the first set in
+/// full, then the second set filtered by membership in the first (the
+/// same deduped union the old `HashSet`-collecting lookup built, minus
+/// the allocations).
+pub(crate) enum CalleeEffectSets<'a> {
+    None,
+    One(&'a EffectSet),
+    Two(&'a EffectSet, &'a EffectSet),
+}
+
+pub(crate) struct CalleeEffectIter<'a> {
+    first: std::slice::Iter<'a, super::TracedEffect>,
+    /// `(filter_set, iter)` — yield only effects absent from `filter_set`.
+    second: Option<(&'a EffectSet, std::slice::Iter<'a, super::TracedEffect>)>,
+}
+
+impl<'a> CalleeEffectSets<'a> {
+    pub(crate) fn iter(&self) -> CalleeEffectIter<'a> {
+        match self {
+            CalleeEffectSets::None => CalleeEffectIter {
+                first: [].iter(),
+                second: None,
+            },
+            CalleeEffectSets::One(set) => CalleeEffectIter {
+                first: set.effects.iter(),
+                second: None,
+            },
+            CalleeEffectSets::Two(first, second) => CalleeEffectIter {
+                first: first.effects.iter(),
+                second: Some((first, second.effects.iter())),
+            },
+        }
+    }
+}
+
+impl<'a> Iterator for CalleeEffectIter<'a> {
+    type Item = &'a Effect;
+
+    fn next(&mut self) -> Option<&'a Effect> {
+        if let Some(te) = self.first.next() {
+            return Some(&te.effect);
+        }
+        if let Some((filter_set, iter)) = &mut self.second {
+            for te in iter.by_ref() {
+                if !filter_set.contains(&te.effect) {
+                    return Some(&te.effect);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -441,13 +495,14 @@ impl<'a> super::EffectChecker<'a> {
     /// set, which is equivalent: everything the pre-pass set contains is
     /// already in `current`, so those adds were no-ops either way.
     pub(crate) fn infer_function_effects(&mut self, fn_name: Symbol, body: &Block) -> bool {
-        let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
-        let bounds = self
-            .fn_bounds_index
-            .get(&fn_name)
-            .cloned()
-            .unwrap_or(empty_bounds);
-        let mut calls = self.collect_calls_in_block(body, &bounds);
+        let mut calls = {
+            // Borrow the bounds map instead of cloning it per call — the
+            // collection walk only needs `&self` (the old clone predates
+            // that; DHAT flagged it as real per-pass traffic).
+            let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
+            let bounds = self.fn_bounds_index.get(&fn_name).unwrap_or(&empty_bounds);
+            self.collect_calls_in_block(body, bounds)
+        };
         // Append synthetic per-binding-resource call entries
         // (design.md §1322) — reads / writes of module-level `let mut`
         // bindings flow through the same call-graph propagation by
@@ -464,29 +519,37 @@ impl<'a> super::EffectChecker<'a> {
             .unwrap_or_default();
         calls.extend(self.collect_modbind_synth_calls_in_block(body, &param_names));
 
+        // Dedupe callees in place (first call site wins — matching
+        // `EffectSet::add`'s first-origin-wins semantics).
+        let mut seen_callees: FxHashSet<Symbol> = FxHashSet::default();
+        calls.retain(|&(callee, _)| seen_callees.insert(callee));
+
+        // Propagate the polymorphic marker only for callees that use
+        // `with _` (anonymous polymorphism). A callee that declares
+        // only `with E` (named) resolves its effect variable at the
+        // call site against concrete bindings, so it does not "leak"
+        // through callers that lack a `with _` of their own. Hoisted
+        // out of the effects loop so that loop holds no `&mut self`
+        // (equivalent: the marker only ever inserts `fn_name` itself,
+        // which could only influence a self-recursive callee check
+        // that was already poly-or-not identically).
+        let any_poly = calls.iter().any(|&(callee, _)| {
+            self.fn_uses_with_underscore.contains(&callee)
+                || self.calls_polymorphic.contains(&callee)
+        });
+        if any_poly {
+            self.calls_polymorphic.insert(fn_name);
+        }
+
         let mut changed = false;
         let mut current = self.inferred_effects.remove(&fn_name).unwrap_or_default();
-        let mut seen_callees: FxHashSet<Symbol> = FxHashSet::default();
         for &(callee_name, call_span) in &calls {
-            if !seen_callees.insert(callee_name) {
-                continue;
-            }
-            // Propagate the polymorphic marker only for callees that use
-            // `with _` (anonymous polymorphism). A callee that declares
-            // only `with E` (named) resolves its effect variable at the
-            // call site against concrete bindings, so it does not "leak"
-            // through callers that lack a `with _` of their own.
-            let callee_is_poly = self.fn_uses_with_underscore.contains(&callee_name)
-                || self.calls_polymorphic.contains(&callee_name);
-            if callee_is_poly {
-                self.calls_polymorphic.insert(fn_name);
-            }
-
-            // Look up callee's effects
-            for effect in self.get_callee_effects(callee_name) {
-                if !current.contains(&effect) {
+            // Iterate the callee's effects by reference — clone an
+            // `Effect` only when it is genuinely new to `current`.
+            for effect in self.callee_effect_sets(callee_name).iter() {
+                if !current.contains(effect) {
                     current.add(
-                        effect,
+                        effect.clone(),
                         EffectOrigin::Callee {
                             fn_name: self.interner.resolve(callee_name).to_string(),
                             span: call_span,
@@ -542,9 +605,9 @@ impl<'a> super::EffectChecker<'a> {
             let mut calls = Vec::new();
             self.collect_calls_in_expr(expr, &mut calls, &empty_bounds);
             for &(callee, call_span) in &calls {
-                for effect in self.get_callee_effects(callee) {
+                for effect in self.callee_effect_sets(callee).iter() {
                     if effect.verb != EffectVerbKind::Panics {
-                        violations.push((effect, call_span, *kind));
+                        violations.push((effect.clone(), call_span, *kind));
                     }
                 }
             }
@@ -570,14 +633,24 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
-    /// Get the effects of a callee function.
-    /// For public functions: use declared effects (inference firewall).
-    /// For private functions: use inferred effects.
-    /// For polymorphic (`with _`) functions: use inferred effects (transparent —
-    /// the function's own internal effects are contributed to the caller).
-    /// Note: effects from closure arguments are already propagated because
-    /// `collect_calls_in_expr` walks into closure bodies at the call site.
-    pub(crate) fn get_callee_effects(&self, callee_name: Symbol) -> Vec<Effect> {
+    /// The effect sets a callee contributes, BY REFERENCE — no
+    /// `HashSet` build, no `Effect` clone, no `Vec` (DHAT put the old
+    /// collecting version at ~9% of all front-end allocation bytes;
+    /// hashing `Effect`'s String resource was also a chunk of the
+    /// remaining SipHash tail). Iterate with
+    /// [`CalleeEffectSets::iter`]; clone only what you keep.
+    ///
+    /// For public functions: declared effects (inference firewall).
+    /// For private functions: inferred effects.
+    /// For polymorphic (`with _`) functions: inferred effects
+    /// (transparent — the function's own internal effects are
+    /// contributed to the caller). For `PolymorphicWithFixed`: the
+    /// union of fixed + inferred, deduped by filtering the inferred
+    /// side against the fixed side (same set the old `HashSet` union
+    /// produced). Note: effects from closure arguments are already
+    /// propagated because `collect_calls_in_expr` walks into closure
+    /// bodies at the call site.
+    pub(crate) fn callee_effect_sets(&self, callee_name: Symbol) -> CalleeEffectSets<'_> {
         let is_pub = self
             .function_visibility
             .get(&callee_name)
@@ -585,36 +658,26 @@ impl<'a> super::EffectChecker<'a> {
             .unwrap_or(false);
 
         if is_pub {
-            // Use declared effects
             match self.declared_effects.get(&callee_name) {
-                Some(DeclaredEffects::Explicit(set)) => set.effect_set().into_iter().collect(),
+                Some(DeclaredEffects::Explicit(set)) => CalleeEffectSets::One(set),
                 Some(DeclaredEffects::Polymorphic) => {
-                    // `with _` — transparent: use the callee's inferred effects so its
-                    // own fixed effects (allocations, I/O, etc.) propagate to the caller.
-                    // Closure-argument effects are handled separately by the caller's
-                    // body scan (collect_calls_in_expr walks into closure bodies).
                     match self.inferred_effects.get(&callee_name) {
-                        Some(set) => set.effect_set().into_iter().collect(),
-                        None => Vec::new(),
+                        Some(set) => CalleeEffectSets::One(set),
+                        None => CalleeEffectSets::None,
                     }
                 }
                 Some(DeclaredEffects::PolymorphicWithFixed(fixed)) => {
-                    // Mixed declaration (e.g. `with reads(X) + _`): return the fixed
-                    // effects plus the callee's inferred effects. Closure-argument effects
-                    // are propagated by the caller's body scan.
-                    let mut effects: HashSet<Effect> = fixed.effect_set();
-                    if let Some(inferred) = self.inferred_effects.get(&callee_name) {
-                        effects.extend(inferred.effect_set());
+                    match self.inferred_effects.get(&callee_name) {
+                        Some(inferred) => CalleeEffectSets::Two(fixed, inferred),
+                        None => CalleeEffectSets::One(fixed),
                     }
-                    effects.into_iter().collect()
                 }
-                Some(DeclaredEffects::None) | None => Vec::new(), // pure
+                Some(DeclaredEffects::None) | None => CalleeEffectSets::None, // pure
             }
         } else {
-            // Use inferred effects
             match self.inferred_effects.get(&callee_name) {
-                Some(set) => set.effect_set().into_iter().collect(),
-                None => Vec::new(),
+                Some(set) => CalleeEffectSets::One(set),
+                None => CalleeEffectSets::None,
             }
         }
     }

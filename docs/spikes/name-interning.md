@@ -182,17 +182,45 @@ cli 590/0 (all under `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`).
 **Session net (synthetic): front end 240.8 → ~140 ms (−42%), instructions
 1.62B → 0.671B (−59%), allocations 3.14M → 0.93M (−70%).**
 
+### Stage 3b — effectcheck's per-pass allocation tail (LANDED)
+
+Post-3a DHAT (the honest attribution the phase timings could not give):
+the top allocation sources were *still* effectcheck — `collect_calls_in_expr`
+15.2% of all front-end bytes (the calls-vector churn) and
+`get_callee_effects` 9.4% (it built a `HashSet<Effect>` + `Vec<Effect>`
+with String-resource clones per distinct callee per pass — also a chunk
+of the SipHash tail, since `Effect` hashes its String resource) — plus a
+hidden `fn_bounds_index.get(..).cloned()` cloning a whole per-fn bounds
+map on every `infer_function_effects` call.
+
+The fix, contained in the effectchecker: `callee_effect_sets` returns
+the underlying `EffectSet`s **by reference** (`CalleeEffectSets` +
+zero-alloc iterator; the `PolymorphicWithFixed` union preserved by
+filtering the inferred side against the fixed side), so an `Effect` is
+cloned only when genuinely new to the accumulating set; the polymorphic
+marker is hoisted out of the effects loop so it holds no `&mut self`;
+and the bounds map is borrowed, not cloned.
+
+Result (interleaved A/B, 3 rounds, synthetic): effectcheck
+**42–44 → 38–39 ms (−9%)**, its allocations **202k → 117k (−42%)**;
+front-end total ~−2.5%; instructions **0.671B → 0.630B (−6.1%)**.
+Effectcheck's allocations are now down **82%** from the spike's start
+(643k → 117k post-stage-1). Same full verification battery as 3a.
+
 ### Remaining stage-3 phases (not started)
 
-Post-3a profile: allocator ~31% — now concentrated in ownership (365k
-allocs), typecheck (165k), parse (162k), with effectcheck's share
-collapsed; SipHash ~10% (Effect `HashSet`s, `Scope.names`); `Token`/
-`Type` clone tails ~3%. Next in line by the phase-at-a-time rule:
-**ownership** (its String-keyed binding/method tables were Fx'd in 2½ but
-still clone keys), then **typechecker** (`TypeEnv` string keys — though
-its allocs are dominated by `Type` clones, a different lever), AST
-identifiers last. Each is its own session-sized slice with this slice as
-the template.
+Post-3b profile: allocator ~30% — the remainder now genuinely lives in
+parse (token/`Expr` allocs, 13%+5% of bytes), ownership
+(`rc_predicate` ~6%, `check_function` ~2.6%), and typecheck
+(`infer_expr`/`infer_binary` ~4%, `Type` clones); SipHash ~9%
+(`Scope.names`, remaining std maps); `Token`/`Type` clone tails.
+Next in line by the phase-at-a-time rule: **ownership** (its
+String-keyed binding/method tables were Fx'd in 2½ but still clone
+keys; note its module tree is ~29k lines across 13 submodules — 3–4×
+the effectchecker conversion surface, so plan a full session), then
+**typechecker** (`TypeEnv` string keys — though its allocs are
+dominated by `Type` clones, a different lever), AST identifiers last.
+Each is its own session-sized slice with 3a as the template.
 
 ## Lifecycle
 

@@ -1869,8 +1869,8 @@ impl<'a> EffectChecker<'a> {
             ExprKind::Identifier(name) => {
                 let mut result = EffectSet::new();
                 if let Some(sym) = self.interner.get(name) {
-                    for e in self.get_callee_effects(sym) {
-                        result.add(e, EffectOrigin::Direct(arg.span));
+                    for e in self.callee_effect_sets(sym).iter() {
+                        result.add(e.clone(), EffectOrigin::Direct(arg.span));
                     }
                 }
                 result
@@ -1881,9 +1881,9 @@ impl<'a> EffectChecker<'a> {
                 self.collect_calls_in_expr(body, &mut calls, &empty_bounds);
                 let mut result = EffectSet::new();
                 for (callee, span) in calls {
-                    for e in self.get_callee_effects(callee) {
+                    for e in self.callee_effect_sets(callee).iter() {
                         result.add(
-                            e,
+                            e.clone(),
                             EffectOrigin::Callee {
                                 fn_name: self.interner.resolve(callee).to_string(),
                                 span,
