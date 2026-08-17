@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 124 | 1 |
 | codegen-gap | 113 | 0 |
 | missing-feature | 98 | 0 |
-| perf | 75 | 1 |
+| perf | 76 | 2 |
 | false-positive | 71 | 0 |
 | diagnostics | 65 | 0 |
 | soundness | 49 | 1 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 899 | 2 |
+| codegen | 900 | 3 |
 | typecheck | 179 | 1 |
 | interp | 146 | 1 |
 | ownership | 55 | 1 |
 | other | 49 | 1 |
-| autopar | 47 | 0 |
+| autopar | 48 | 1 |
 | cli | 35 | 1 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced · 5 open · 1245 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1266 surfaced · 6 open · 1245 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-10 | 2026-08-17 | typecheck+interp+codegen | medium | INDEXING AN ITERATOR TYPECHECKS, THEN EVERY BACKEND IMPROVISES DIFFERENTLY: `karac check` passes `w.chars()[0]` and `v.iter()[0]`; the interpreter dies on an `unreachable!()` INTERNAL ERROR, while codegen either compiles it correctly (let-bound `chars`) or fails the build (`iter`, or `chars` indexed inline). The typechecker should reject the index. | The typechecker's index-expression rule admits an `Iterator` operand. `src/interpreter/eval_expr.rs:747` then hits `unreachable!()` — and its own panic text names the two candidate causes, the second of which is the right one: "the typechecker accepted an unindexable operand pair". |
 | B-2026-08-17-13 | 2026-08-17 | ownership | high | READING AN UNINITIALIZED BINDING IS NOT REJECTED: `let x: i64; println(f"{x}")` passes `karac check`, the interpreter prints `()` -- the UNIT value in an `i64` slot -- and both compiled backends fail with `codegen failed: Undefined variable 'x'`. design.md calls this "always a DA error". Every flow-sensitive definite-assignment rule the spec specifies is unenforced; the `ValueState::Uninit` machinery exists and drives the init-vs-reassign rule, but no read is ever checked against it. | src/ownership.rs -- `ValueState::Uninit`, `snapshot_uninit`, `restore_uninit_after_loop` (whose own doc comment cites "the 'loop body might run zero times' invariant for definite-assignment"). The state exists and is maintained; the READ check is what is missing. Lead, not a conclusion -- I did not trace every consumer. |
+| B-2026-08-17-14 | 2026-08-17 | autopar+codegen | medium | A `#[par_order_free]` COLLECT LOOP REPORTS `fanned_out: true` AND RUNS AT 101% CPU — the B-2026-08-15-23 SIGNATURE AGAIN, on a compiler that already carries that fix. 48 branches, ~6 ms of work each, and the par build is 1.03x SLOWER than its sequential twin. Five isolations reproducing the loop's individual features all fan out correctly, so the trigger is still unidentified. | Unknown. NOT the B-2026-08-15-23 chunker floor: that fix is present and verified in the same binary (kata 276's 16-iteration loop fans out at 384% on it). The query reports `lowering: parallel_fanout, fanned_out: true, cost_gate: fanout` for the loop that does not parallelize, so whatever declines it is downstream of the reporting again. |
 
 ### Wontfix (5)
 
