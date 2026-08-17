@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 113 | 0 |
 | missing-feature | 98 | 0 |
 | perf | 75 | 1 |
-| false-positive | 70 | 0 |
+| false-positive | 71 | 1 |
 | diagnostics | 65 | 1 |
 | crash | 49 | 1 |
 | soundness | 48 | 0 |
@@ -111,23 +111,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 899 | 2 |
-| typecheck | 178 | 1 |
+| typecheck | 179 | 2 |
 | interp | 146 | 1 |
-| ownership | 53 | 0 |
+| ownership | 54 | 1 |
 | other | 49 | 1 |
 | autopar | 47 | 0 |
-| cli | 34 | 1 |
+| cli | 35 | 2 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 17 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
-| diagnostics | 1 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1263 surfaced · 5 open · 1243 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1264 surfaced · 6 open · 1243 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +134,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1263 surfaced
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-10 | 2026-08-17 | typecheck+interp+codegen | medium | INDEXING AN ITERATOR TYPECHECKS, THEN EVERY BACKEND IMPROVISES DIFFERENTLY: `karac check` passes `w.chars()[0]` and `v.iter()[0]`; the interpreter dies on an `unreachable!()` INTERNAL ERROR, while codegen either compiles it correctly (let-bound `chars`) or fails the build (`iter`, or `chars` indexed inline). The typechecker should reject the index. | The typechecker's index-expression rule admits an `Iterator` operand. `src/interpreter/eval_expr.rs:747` then hits `unreachable!()` — and its own panic text names the two candidate causes, the second of which is the right one: "the typechecker accepted an unindexable operand pair". |
-| B-2026-08-17-11 | 2026-08-17 | diagnostics | medium | E0200'S SUGGESTED REPAIR IS THE UNSAFE ONE: `cannot mix 'u8' and 'i64' ... cast explicitly with `as` (e.g. the operand as 'u8')` names the NARROWING direction, which turns a compile error into a runtime overflow trap; widening to i64 is the correct repair. It also carries no `replacement`, so `karac fix` declines it — a diagnostic that states its own fix in prose but cannot apply it. | The E0200 mixed-integer-width diagnostic: both its example text (`the operand as 'u8'`) and its missing `replacement` field. Machine-applicable diagnostics (e.g. E0001 `!` -> `not`) emit `replacement: {offset, length, text}`; E0200 emits none. |
+| B-2026-08-17-11 | 2026-08-17 | typecheck+cli | medium | E0200'S SUGGESTED REPAIR IS THE UNSAFE ONE: `cannot mix 'u8' and 'i64' ... cast explicitly with `as` (e.g. the operand as 'u8')` names the NARROWING direction, which turns a compile error into a runtime overflow trap; widening to i64 is the correct repair. It also carries no `replacement`, so `karac fix` declines it — a diagnostic that states its own fix in prose but cannot apply it. | The E0200 mixed-integer-width diagnostic: both its example text (`the operand as 'u8'`) and its missing `replacement` field. Machine-applicable diagnostics (e.g. E0001 `!` -> `not`) emit `replacement: {offset, length, text}`; E0200 emits none. |
+| B-2026-08-17-12 | 2026-08-17 | ownership | high | MULTIPLE READERS IN A `par {}` BLOCK ARE REJECTED -- design.md's edge case #1, written out verbatim and labelled "ALLOWED (multiple readers)", fails with `plain struct `Vec` cannot be accessed from multiple concurrent tasks`. Nothing is written anywhere in the program. The check counts REFERENCES per branch with no read/write distinction, so the case the whole effect-conflict apparatus exists to permit is the one it refuses. | src/ownership/concurrent_shared.rs -- `E_CONCURRENT_PLAIN_STRUCT` / `check_concurrent_shared_struct`. Its own module doc states the rule: "Detects struct/enum bindings that are REFERENCED from two or more top-level statements (branches)" -- a reference count, not a conflict analysis. |
 
 ### Wontfix (5)
 
