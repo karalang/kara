@@ -90,10 +90,27 @@ if [[ -n "$new_failures" ]]; then
   echo
   echo "!! NEW -O0 FAILURES (not on the quarantine list):"
   echo "$new_failures" | sed 's/^/     /'
-  echo "   These are real: at -O0 the fixture's allocations are not optimized away,"
-  echo "   so ASAN is reporting on memory the program actually touched. Fix the"
-  echo "   codegen defect, or add the fixture to $(basename "$EXPECTED") WITH the"
-  echo "   bug row that owns it."
+  # A LINK failure lands in this same bucket and is NOT a leak. Under
+  # KARAC_REQUIRE_RUNTIME_ARCHIVE=1 the soft-skip becomes a hard failure, so a
+  # missing OPT-IN archive (regex / arrow / gpu — none of which the CLAUDE.md
+  # setup recipe builds by default) fails exactly like a sanitizer report. Said
+  # "these are real, fix the codegen defect" unconditionally, this message sends
+  # you hunting a leak that is not there; the actual fix is one `cargo rustc`.
+  # So name the cause before prescribing a remedy.
+  if grep -q 'needs the .* runtime archive' "$LOG"; then
+    echo "   NOT LEAKS — at least one is a LINK failure for a missing OPT-IN archive:"
+    grep -oE 'needs the [a-z]+ runtime archive `[^`]+`' "$LOG" | sort -u | sed 's/^/     /'
+    echo "   Build the named archive(s) per CLAUDE.md § Commands, then re-run. Under"
+    echo "   KARAC_REQUIRE_RUNTIME_ARCHIVE=1 a missing archive is a hard failure"
+    echo "   rather than a skip, which is why these surface here rather than passing"
+    echo "   vacuously. Re-run the plain full build afterward so the canonical"
+    echo "   archive name is the non-feature one again."
+  else
+    echo "   These are real: at -O0 the fixture's allocations are not optimized away,"
+    echo "   so ASAN is reporting on memory the program actually touched. Fix the"
+    echo "   codegen defect, or add the fixture to $(basename "$EXPECTED") WITH the"
+    echo "   bug row that owns it."
+  fi
 fi
 if [[ -n "$now_passing" ]]; then
   status=1
