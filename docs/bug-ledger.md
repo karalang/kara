@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 254 | 1 |
+| miscompile | 254 | 0 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 122 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 898 | 3 |
+| codegen | 898 | 2 |
 | typecheck | 175 | 0 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1249 surfaced · 3 open · 1232 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1249 surfaced · 2 open · 1233 fixed · 4 wontfix** (2026-05-20 → 2026-08-16). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-16-7 | 2026-08-16 | codegen | high | A struct FIELD moved into a binding (`let cur = e.doc;`) and then passed as a `mut ref` ARGUMENT (`apply(mut e.doc, ..)`) loses the field's heap contents on both compiled backends: the Vec's LENGTH survives but its Strings read back EMPTY. The interpreter is correct. Deleting only the `let cur = e.doc;` line makes it agree. | the `UseAfterMove` defensive copy for a moved struct FIELD whose place is later passed as `mut ref`. B-2026-08-15-10 fixed the garbage-String leg of this family for non-`main` functions; this reproduces IN `main` and yields empty rather than garbage, so it may be a distinct leg. |
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.61x driftsort after the insertion leaf; the partition TREE is now the larger half and the leaf split needs re-measuring | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-11 | 2026-08-16 | codegen | medium | The default integer overflow check is emitted inside the loop, blocking auto-vectorisation of EVERY integer reduction | integer overflow check emission (codegen) |
 
@@ -147,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1249 surfaced
 
 </details>
 
-### Fixed (1232)
+### Fixed (1233)
 
-<details><summary>1232 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1233 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9610,6 +9609,85 @@ Full `--features llvm` suite green (105 binaries), clippy --all-targets and fmt
 clean. Fixtures: `tailless_body_with_non_unit_return_is_rejected`,
 `correct_return_forms_stay_accepted`,
 `panic_types_as_never_and_checks_its_argument` (tests/typechecker.rs). |
+| B-2026-08-16-7 | codegen | high | A struct FIELD moved into a binding (`let cur = e.doc;`) and then passed as a `mut ref` ARGUMENT (`apply(mut e.doc, ..)`) loses the field's heap cont… | FIXED in c049126. The defensive-copy planner covered ONE move per binding; the
+program has two.
+
+MECHANISM, walked end to end. `UseAfterMove` diagnostics dedup to one witness
+per binding — `direct_uam_candidates` returns `HashMap<String, UamWitness>` and
+`first_uam_witness` stops at the first (C, U) pair — which is the right UX for
+warnings. B-2026-08-10-21 then derived the defensive-copy site set FROM the
+diagnostics ("so the set and the warning can never disagree"), inheriting the
+dedup. With `e.doc` moved twice and reused after each move:
+
+    let cur = e.doc;            // consume #1 — IN the set: deep-copied
+    … apply(mut e.doc, ..);     // reuse #1 — reads the intact source, fine
+    let after = e.doc;          // consume #2 — NOT in the set: the move's
+                                //   source-zeroing suppression runs UNCOPIED,
+                                //   zeroing e.doc.lines' len AND cap
+    render(e.doc)               // reuse #2 — reads a zero-length Vec
+
+The IR confirms it: one `uam.fld.struct` deep copy (at `cur`), then `smv.f0.len`
+/ `smv.f0.cap` stored 0 at `after` with nothing copied. `render` sees len=0 —
+so "[ ] lines=1": the length in the output comes from `after`'s moved copy, the
+emptiness from the zeroed source. ONE CORRECTION to the row's reading: the
+element does not "read back empty" — the source Vec reads as length ZERO at the
+render site; the intact length the program prints is the copy's. Same
+observable, different mechanism, and it matters for anyone probing the family.
+
+THE FIX keeps the diagnostic exactly as it was and widens only the copy set.
+`first_uam_witness`'s body moved into `uam_witnesses_for_binding(.., first_only)`;
+a new `direct_uam_all_consume_sites` collects EVERY (C, U) witness's consume
+span (one per consume site C, breaking on its first U). One shared function, so
+the diagnostic and the planner can never again drift on the filter set — the
+drift IS this bug. `OwnershipChecker::all_uam_consume_sites` accumulates across
+functions and is unioned into `use_after_move_consume_sites` at harvest. The
+documented invariant survives in the direction that matters: if the user was
+told, codegen copies. This only ADDS sites, and only for moves of a binding the
+user was already warned about.
+
+THE ROW'S REDUCTION FLOOR IS EXPLAINED, and there is a smaller red member than
+its 31 lines once you know the mechanism. Its failed reductions all removed one
+of {second move, reuse-after-second-move} and so left the family. Knowing the
+cause, this is red at the parent commit with no `mut ref` call and no enum:
+
+    struct Doc { lines: Vec[String] }
+    struct Ed { doc: Doc }
+    fn text(d: ref Doc) -> String { return d.lines[0]; }
+    fn main() {
+        …
+        let cur = e.doc;
+        let after = e.doc;
+        println(f"… {text(e.doc)} …");   // PANICS: vec index out of bounds
+    }
+
+— a louder symptom too (len zeroed under a live element ⇒ OOB, not silent
+emptiness). Both the row's repro and this minimal are now E2E tests.
+
+ALSO MEASURED, recorded because it prunes the search space: a chain of
+consuming CALLS on a plain binding — `eat(a); eat(a); eat(a); println(a)` — is
+NOT in this family. Green at the parent commit, heap-backed or not, so by-value
+call args reach a different copy path; field MOVES are the shape the dedup
+starved.
+
+WHETHER THE CLUSTER REFACTOR INTRODUCED IT — the row left this open. Neither:
+the defect is B-2026-08-10-21's harvest design (2026-08-10), predating the
+BorrowVars/ModBindings extraction. The refactor merely reshuffled which dogfood
+run tripped it.
+
+MEMORY IS THE RISK OF THIS FIX, not the values: after two copied moves there
+are THREE live owners of one heap shape (source + two deep copies), and a copy
+that aliased double-frees at the three scope exits while an over-suppressed
+source leaks. Gated: an ASAN fixture carrying the row's repro, the panicking
+minimal, and a 10-iteration loop of a reused-move pair so a per-iteration
+imbalance accumulates; the full memory_sanitizer suite (1110 green); and the
+LSan corpus at both KARAC_AUTO_PAR settings.
+
+TESTS: E2E (row's repro, red at baseline with "[] lines=1"), E2E minimal (red
+at baseline with the OOB panic), ASAN fixture (red at baseline), interpreter
+oracle (green throughout, as an oracle should be).
+
+Gates: full `--features llvm` sweep of all 100 targets, 12591 tests, 0
+failures; clippy `--all --all-targets` and fmt clean. |
 | B-2026-08-16-8 | other | medium | memory_sanitizer's four link-skip sites bypassed `link_or_skip` — the B-2026-07-28-1 stale-archive panic never protected the ASan/LSan suite | FIXED by 220070be. All four hand-rolled link-skip sites in tests/memory_sanitizer.rs now route the linker result through `common::link_or_skip`, picking up both discriminations: undefined-symbol (stale archive) panics with the rebuild recipe, and `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` (added in the same commit, set by CI's seven archive-building jobs) forbids the remaining soft-skip outright. Verified empirically with archives hidden: default mode green-skips, gated mode fails with the actionable message; smoke test green with archives restored. |
 | B-2026-08-16-10 | other | medium | CI never built the regex/arrow opt-in archives, so the 8 Regex / Arrow-IPC codegen E2E tests (and memory_sanitizer's regex fixtures) green-skipped in… | FIXED by c92476aa. The six gated jobs (codegen-e2e ×3, memory-sanitizer ×3) now build lean → regex → arrow → full in the CLAUDE.md archive order; bench-gate stays lean → full (no regex/arrow fixtures). Verified locally with all four archives present: full codegen E2E 2,999 passed / 0 failed under KARAC_REQUIRE_RUNTIME_ARCHIVE=1 — the first run anywhere in which the 8 regex/arrow E2E tests provably executed under the gate. |
 
