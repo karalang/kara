@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 254 | 0 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
-| run-vs-build | 124 | 1 |
+| run-vs-build | 126 | 3 |
 | codegen-gap | 114 | 0 |
 | missing-feature | 99 | 1 |
 | perf | 76 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 901 | 1 |
+| codegen | 903 | 3 |
 | typecheck | 184 | 4 |
 | interp | 146 | 0 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1274 surfaced · 7 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1276 surfaced · 9 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1274 surfaced
 | B-2026-08-17-20 | 2026-08-17 | typecheck | low | The default-parameter-value const validator rejects FOUR of the forms design.md explicitly lists as allowed, including the spec's own example literal. § Default Parameter Values says "The allowed forms are identical to those for Module-Level Bindings: literals (`42`, `"localhost"`, `true`), arithmetic on literals (`60 * 1000`), enum variants (`Direction.North`), struct/tuple/array literals built from constant expressions, and references to other module-level bindings", and separately calls `Option[T] = None` "idiomatic". Measured, one form per line: ACCEPTED -- `i64 = 42`, `bool = true`, `f64 = 1.5`, `char = 'z'`, `i64 = 60 * 1000`, `Direction = Direction.North`, `(i64,i64) = (1, 2)`. REJECTED -- (a) `String = "localhost"` -> "default parameter value must be a constant expression (no function calls, closures, or runtime-only values)", the spec's own quoted literal; (b) `i64 = LIMIT` where `let LIMIT: i64 = 7` is a module-level binding -> "const expression: 'LIMIT' is not a known const"; (c) `P = P { x: 1, y: 2 }` struct literal -> same not-a-constant-expression message (the TUPLE literal sibling is accepted, so it is the struct shape specifically); (d) `Option[i64] = None` -> "const expression: 'None' is not a known const", and `Option[i64] = Option.Some(42)` -> not-a-constant-expression. | roadmap.md |
 | B-2026-08-17-21 | 2026-08-17 | parser+typecheck | medium | `UPPERCASE_BINDING.field.method()` is misresolved as a type path -- "type 'Point' is not callable" -- so a module-level struct constant's field can never be a method receiver. `struct Point { x: i64, y: i64 }` + `let ORIGIN: Point = Point { x: 5, y: 9 };` + `println(ORIGIN.x.to_string())` fails `karac check` with `type 'Point' is not callable`, naming the CONSTANT'S TYPE as the thing being called. This is forced, not avoidable: E_MODULE_BINDING_NAMING requires every module-level `let` to be Const-class (SCREAMING_SNAKE), so every module-level binding's name starts uppercase and every `CONST.field.method()` in the language hits it. Discriminated axis is the receiver name's FIRST LETTER, not its scope: a function-local `let Origin = Point { .. }; Origin.x.to_string()` fails identically, while `origin` / `or_igin` pass -- and `ORIGIN2` / `O_R` fail, so it is `starts_upper`, not the full case class. | phase-12-self-hosting.md |
 | B-2026-08-17-22 | 2026-08-17 | typecheck | medium | A string literal NESTED inside a module-level struct / tuple / array initializer types as `String` instead of `StringSlice`, and since `String` is forbidden at module scope this makes module-level constants carrying static string data unwritable. design.md § Module-Level Bindings states "String literals have type `StringSlice` at module scope" and separately lists "Struct and tuple literals built from constant expressions" and "Array literals" among the allowed initializers -- the intersection must work, and does not. `let DIRECT: StringSlice = "ok";` checks fine, but `let NESTED: Cfg = Cfg { name: "karac", retries: 3 };` -> "expected 'StringSlice', found 'String'", `let TUP: (StringSlice, i64) = ("karac", 3);` -> "expected '(StringSlice, i64)', found '(String, i64)'", and `let ARR: Array[StringSlice, 2] = ["a", "b"];` -> one such error per element. There is no spelling that works: declaring the field as `String` is rejected by the constant-initializer rule ("String is heap-allocated; use StringSlice for static string data"), so the module-scope literal rule reaching only the TOP LEVEL of the initializer leaves the composite forms with no legal form at all. | roadmap.md |
+| B-2026-08-17-23 | 2026-08-17 | codegen | medium | A destructuring pattern in FUNCTION-parameter position is never lowered by codegen -- `karac check` passes clean, `--interp` runs correctly, and BOTH compiled backends refuse with `codegen failed: Undefined variable '<binding>'`. design.md § Destructuring in Function and Closure Parameters opens with "Any irrefutable pattern may appear in parameter position" and roadmap.md line 112 marks it `[x]` done. Measured, every shape fails identically: `fn add((a, b): (i64, i64)) -> i64 { a + b }` -> "Undefined variable 'a'"; `fn y_only((_, y): (i64, i64))` -> "Undefined variable 'y'"; `fn only_a((a, _): (i64, i64))` -> "Undefined variable 'a'"; `fn nested(((a, b), c): ((i64,i64), i64))` -> "Undefined variable 'a'"; `fn px(Point { x, y }: Point)` -> "Undefined variable 'x'"; the spec's own two-parameter example `fn distance(Point { x: x1, y: y1 }: Point, Point { x: x2, y: y2 }: Point)` -> "Undefined variable 'x2'"; heap-carrying `fn take(H { s, n }: H) -> String` -> "Undefined variable 's'". Same error under `karac run` (JIT) and `karac build` (AOT) -- the codegen prologue binds the parameter slot but never walks the pattern to bind its leaves. | roadmap.md |
+| B-2026-08-17-24 | 2026-08-17 | codegen | low | The STRUCT-pattern sibling of B-2026-07-14-21's tuple fix: a struct destructuring pattern as an iterator-adaptor closure parameter still bails out of the codegen chain peel, and the fallthrough MISATTRIBUTES the failure to the terminal method. `v.iter().map(|P { x, y }| x + y).collect()` -> `codegen: no handler for method 'collect' on non-identifier receiver (method dispatch fell through; this is a codegen bug -- add a dispatcher arm in compile_method_call ...)`; the same closure under `fold` -> the identical message naming 'fold'. The interpreter runs both correctly and `karac check` is clean. B-2026-07-14-21 fixed exactly this class for the TUPLE form (`ps.iter().map(|(a, b)| a + b)`) -- the tuple form now lowers on all three backends, so the peel handles destructuring closure params in principle and only the struct pattern is unrecognized. | roadmap.md |
 
 ### Wontfix (5)
 
