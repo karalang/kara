@@ -74,7 +74,7 @@
 //! build — the exact gap the row is about. `-A chained_field_receiver` opts out
 //! for a program that only ever runs under `--interp`, where the shape is fine.
 
-use crate::ast::{Block, Expr, ExprKind, Item, Program, Stmt, StmtKind};
+use crate::ast::{Block, Expr, ExprKind, Item, ParsedInterpolationPart, Program, Stmt, StmtKind};
 use crate::typechecker::{TypeError, TypeErrorKind};
 
 const LINT_NAME: &str = "chained_field_receiver";
@@ -201,21 +201,35 @@ fn walk_block(block: &Block, out: &mut Vec<TypeError>) {
 }
 
 fn walk_stmt(stmt: &Stmt, out: &mut Vec<TypeError>) {
-    // Arm set mirrors `map_entry_lint::walk_stmt`, the maintained sibling.
+    // EXHAUSTIVE on purpose — no `_ => {}`. B-2026-08-16-12: the original arm
+    // set (mirroring `map_entry_lint::walk_stmt`) silently skipped every
+    // position it didn't name, and five expression positions `karac build`
+    // refuses sailed through `check` unflagged. An exhaustive match makes the
+    // next `StmtKind` addition a compile error here instead of a new hole.
     match &stmt.kind {
         StmtKind::Let { value, .. } => walk_expr(value, out),
+        StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {
             value, else_block, ..
         } => {
             walk_expr(value, out);
             walk_block(else_block, out);
         }
-        StmtKind::Expr(e) => walk_expr(e, out),
+        StmtKind::Defer { body } => walk_block(body, out),
+        StmtKind::ErrDefer { body, .. } => walk_block(body, out),
         StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
             walk_expr(target, out);
             walk_expr(value, out);
         }
-        _ => {}
+        StmtKind::MultiAssign { targets, values } => {
+            for t in targets {
+                walk_expr(t, out);
+            }
+            for v in values {
+                walk_expr(v, out);
+            }
+        }
+        StmtKind::Expr(e) => walk_expr(e, out),
     }
 }
 
@@ -234,9 +248,41 @@ fn walk_expr(expr: &Expr, out: &mut Vec<TypeError>) {
     // Recurse through the children so a chained receiver nested inside an
     // argument, an operand, a block or a match arm is found too — the walk is
     // what makes this a program-wide gate rather than a statement-shape check.
-    // Arm set mirrors `map_entry_lint::walk_expr`, the maintained sibling.
+    //
+    // EXHAUSTIVE on purpose — no `_ => {}`. B-2026-08-16-12: the original
+    // hand-picked arm set missed `Cast` operands, f-string interpolation
+    // holes, and `Range` bounds — five positions where the same expression
+    // `karac build` refuses passed `check` clean, re-opening exactly the gap
+    // this lint exists to close. The arm inventory mirrors
+    // `span_visitor::visit_expr`, the complete in-tree walk; keeping the
+    // match exhaustive makes the next `ExprKind` addition a compile error
+    // here instead of a silently unvisited position.
     match &expr.kind {
+        ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::Continue { .. }
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Error => {}
+        ExprKind::InterpolatedStringLit(parts) => {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
+                    walk_expr(inner, out);
+                }
+            }
+        }
         ExprKind::Block(b)
+        | ExprKind::Comptime(b)
         | ExprKind::Par(b)
         | ExprKind::Seq(b)
         | ExprKind::Try(b)
@@ -255,10 +301,26 @@ fn walk_expr(expr: &Expr, out: &mut Vec<TypeError>) {
                 walk_expr(e, out);
             }
         }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            walk_expr(value, out);
+            walk_block(then_block, out);
+            if let Some(e) = else_branch {
+                walk_expr(e, out);
+            }
+        }
         ExprKind::While {
             condition, body, ..
         } => {
             walk_expr(condition, out);
+            walk_block(body, out);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            walk_expr(value, out);
             walk_block(body, out);
         }
         ExprKind::For { iterable, body, .. } => {
@@ -268,6 +330,9 @@ fn walk_expr(expr: &Expr, out: &mut Vec<TypeError>) {
         ExprKind::Match { scrutinee, arms } => {
             walk_expr(scrutinee, out);
             for arm in arms {
+                if let Some(g) = &arm.guard {
+                    walk_expr(g, out);
+                }
                 walk_expr(&arm.body, out);
             }
         }
@@ -283,16 +348,82 @@ fn walk_expr(expr: &Expr, out: &mut Vec<TypeError>) {
                 walk_expr(&a.value, out);
             }
         }
+        ExprKind::OptionalChain { object, args, .. } => {
+            walk_expr(object, out);
+            if let Some(args) = args {
+                for a in args {
+                    walk_expr(&a.value, out);
+                }
+            }
+        }
         ExprKind::Index { object, index } => {
             walk_expr(object, out);
             walk_expr(index, out);
         }
-        ExprKind::Binary { left, right, .. } => {
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::NilCoalesce { left, right }
+        | ExprKind::Pipe { left, right } => {
             walk_expr(left, out);
             walk_expr(right, out);
         }
         ExprKind::Unary { operand, .. } => walk_expr(operand, out),
-        ExprKind::FieldAccess { object, .. } => walk_expr(object, out),
-        _ => {}
+        ExprKind::Question(inner) => walk_expr(inner, out),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            walk_expr(object, out)
+        }
+        ExprKind::Cast { expr: inner, .. } => walk_expr(inner, out),
+        ExprKind::Closure { body, .. } => walk_expr(body, out),
+        ExprKind::Return(opt) => {
+            if let Some(inner) = opt {
+                walk_expr(inner, out);
+            }
+        }
+        ExprKind::Break { value, .. } => {
+            if let Some(v) = value {
+                walk_expr(v, out);
+            }
+        }
+        ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => {
+            for x in exprs {
+                walk_expr(x, out);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for x in items {
+                walk_expr(x, out);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            walk_expr(value, out);
+            walk_expr(count, out);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                walk_expr(k, out);
+                walk_expr(v, out);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                walk_expr(&f.value, out);
+            }
+            if let Some(sp) = spread {
+                walk_expr(sp, out);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                walk_expr(s, out);
+            }
+            if let Some(e) = end {
+                walk_expr(e, out);
+            }
+        }
+        ExprKind::Providers { bindings, body } => {
+            for pb in bindings {
+                walk_expr(&pb.value, out);
+            }
+            walk_block(body, out);
+        }
     }
 }

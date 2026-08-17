@@ -1046,6 +1046,115 @@ fn main() {
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "1");
 }
 
+/// B-2026-08-16-12 — the lint's traversal covers EVERY expression position,
+/// not just statement-level and condition ones. The eleven-row table from the
+/// ledger: six positions the original walk caught (over-fire controls for the
+/// widened walk) and five it missed — an f-string hole, behind an `as` cast
+/// (bare, in a call arg, and in a tail), a `for` range bound, and an index
+/// chain inside an f-string. Every one is refused by `karac build`, so every
+/// one must fail `karac check`. Plus two negative controls that build today
+/// and must stay clean.
+#[test]
+fn test_chained_field_receiver_walks_all_expression_positions() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-chained-positions-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let preamble = r#"
+struct Doc { lines: Vec[String] }
+struct Ed { doc: Doc }
+fn mk() -> Ed { return Ed { doc: Doc { lines: Vec.new() } }; }
+fn take(n: i64) -> i64 { return n; }
+fn takeu(n: usize) -> usize { return n; }
+"#;
+    let positions: &[(&str, &str)] = &[
+        // The six the original walk already caught — over-fire controls.
+        ("let", "let _n = e.doc.lines.len();"),
+        ("ifcond", "if e.doc.lines.len() > 0 { let _ = 1; }"),
+        ("sum", "let _n = e.doc.lines.len() + 1;"),
+        ("callarg", "let _ = takeu(e.doc.lines.len());"),
+        (
+            "matchscrut",
+            "match e.doc.lines.len() { _ => { let _ = 1; } }",
+        ),
+        // The five B-2026-08-16-12 pins — missed before the exhaustive walk.
+        ("fstring", "println(f\"{e.doc.lines.len()}\");"),
+        ("cast", "let _n = e.doc.lines.len() as i64;"),
+        ("castarg", "let _ = take(e.doc.lines.len() as i64);"),
+        ("range", "for i in 0..e.doc.lines.len() { let _ = i; }"),
+        ("fstring_index", "println(f\"{e.doc.lines[0]}\");"),
+        // A 12th position the row's table did not list: a closure body. The
+        // old walk's `_ => {}` skipped `ExprKind::Closure` too; found while
+        // widening, pinned with the rest.
+        ("closure", "let f = || e.doc.lines.len(); let _ = f();"),
+    ];
+    for (label, stmt) in positions {
+        let path = tmp.join(format!("pos_{label}.kara"));
+        std::fs::write(
+            &path,
+            format!("{preamble}\nfn main() {{\n    let e = mk();\n    {stmt}\n}}\n"),
+        )
+        .unwrap();
+        let out = karac_bin()
+            .args(["check", path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success() && stderr.contains("chained field receivers"),
+            "{label}: `build` refuses this position, so `check` must too; stderr={stderr}",
+        );
+    }
+    // The cast-in-tail-position row needs its own fn shape.
+    let path = tmp.join("pos_casttail.kara");
+    std::fs::write(
+        &path,
+        format!(
+            "{preamble}\nfn tail(e: ref Ed) -> i64 {{ return e.doc.lines.len() as i64; }}\n\
+             fn main() {{ let e = mk(); let _ = tail(e); }}\n"
+        ),
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success() && stderr.contains("chained field receivers"),
+        "casttail: `build` refuses this position, so `check` must too; stderr={stderr}",
+    );
+    // Negative controls: the hoisted form and a plain depth-2 field read both
+    // build, so both must stay clean — the widened walk must not over-fire.
+    for (label, body) in [
+        (
+            "hoisted",
+            "let e = mk();\n    let d = e.doc;\n    println(f\"{d.lines.len()}\");",
+        ),
+        (
+            "field_read",
+            "let e = mk();\n    let n = e.doc.lines;\n    let _ = n;",
+        ),
+    ] {
+        let path = tmp.join(format!("neg_{label}.kara"));
+        std::fs::write(&path, format!("{preamble}\nfn main() {{\n    {body}\n}}\n")).unwrap();
+        let out = karac_bin()
+            .args(["check", path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{label}: builds today, must stay clean; stderr={}",
+            String::from_utf8_lossy(&out.stderr),
+        );
+    }
+}
+
 // ── JSON Output Snapshots ───────────────────────────────────────
 
 #[test]
