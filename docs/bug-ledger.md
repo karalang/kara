@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 98 | 0 |
 | perf | 75 | 1 |
 | false-positive | 71 | 1 |
-| diagnostics | 65 | 1 |
+| diagnostics | 65 | 0 |
 | soundness | 49 | 1 |
 | crash | 49 | 1 |
 | other | 35 | 1 |
@@ -111,12 +111,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 899 | 2 |
-| typecheck | 179 | 2 |
+| typecheck | 179 | 1 |
 | interp | 146 | 1 |
 | ownership | 55 | 2 |
 | other | 49 | 1 |
 | autopar | 47 | 0 |
-| cli | 35 | 2 |
+| cli | 35 | 1 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 17 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced · 7 open · 1243 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced · 6 open · 1244 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-10 | 2026-08-17 | typecheck+interp+codegen | medium | INDEXING AN ITERATOR TYPECHECKS, THEN EVERY BACKEND IMPROVISES DIFFERENTLY: `karac check` passes `w.chars()[0]` and `v.iter()[0]`; the interpreter dies on an `unreachable!()` INTERNAL ERROR, while codegen either compiles it correctly (let-bound `chars`) or fails the build (`iter`, or `chars` indexed inline). The typechecker should reject the index. | The typechecker's index-expression rule admits an `Iterator` operand. `src/interpreter/eval_expr.rs:747` then hits `unreachable!()` — and its own panic text names the two candidate causes, the second of which is the right one: "the typechecker accepted an unindexable operand pair". |
-| B-2026-08-17-11 | 2026-08-17 | typecheck+cli | medium | E0200'S SUGGESTED REPAIR IS THE UNSAFE ONE: `cannot mix 'u8' and 'i64' ... cast explicitly with `as` (e.g. the operand as 'u8')` names the NARROWING direction, which turns a compile error into a runtime overflow trap; widening to i64 is the correct repair. It also carries no `replacement`, so `karac fix` declines it — a diagnostic that states its own fix in prose but cannot apply it. | The E0200 mixed-integer-width diagnostic: both its example text (`the operand as 'u8'`) and its missing `replacement` field. Machine-applicable diagnostics (e.g. E0001 `!` -> `not`) emit `replacement: {offset, length, text}`; E0200 emits none. |
 | B-2026-08-17-12 | 2026-08-17 | ownership | high | MULTIPLE READERS IN A `par {}` BLOCK ARE REJECTED -- design.md's edge case #1, written out verbatim and labelled "ALLOWED (multiple readers)", fails with `plain struct `Vec` cannot be accessed from multiple concurrent tasks`. Nothing is written anywhere in the program. The check counts REFERENCES per branch with no read/write distinction, so the case the whole effect-conflict apparatus exists to permit is the one it refuses. | src/ownership/concurrent_shared.rs -- `E_CONCURRENT_PLAIN_STRUCT` / `check_concurrent_shared_struct`. Its own module doc states the rule: "Detects struct/enum bindings that are REFERENCED from two or more top-level statements (branches)" -- a reference count, not a conflict analysis. |
 | B-2026-08-17-13 | 2026-08-17 | ownership | high | READING AN UNINITIALIZED BINDING IS NOT REJECTED: `let x: i64; println(f"{x}")` passes `karac check`, the interpreter prints `()` -- the UNIT value in an `i64` slot -- and both compiled backends fail with `codegen failed: Undefined variable 'x'`. design.md calls this "always a DA error". Every flow-sensitive definite-assignment rule the spec specifies is unenforced; the `ValueState::Uninit` machinery exists and drives the init-vs-reassign rule, but no read is ever checked against it. | src/ownership.rs -- `ValueState::Uninit`, `snapshot_uninit`, `restore_uninit_after_loop` (whose own doc comment cites "the 'loop body might run zero times' invariant for definite-assignment"). The state exists and is maintained; the READ check is what is missing. Lead, not a conclusion -- I did not trace every consumer. |
 
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1265 surfaced
 
 </details>
 
-### Fixed (1243)
+### Fixed (1244)
 
-<details><summary>1243 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1244 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10015,6 +10014,15 @@ runs 1110 fixtures where it ran 1105 before. The five regex/Arrow fixtures were
 not failing previously — they were SKIPPING, which the leg reported as a pass.
 That is the vacuity the require-archive flag exists to expose, and it is worth
 setting it deliberately rather than trusting a bare green. |
+| B-2026-08-17-11 | typecheck+cli | medium | E0200'S SUGGESTED REPAIR IS THE UNSAFE ONE: `cannot mix 'u8' and 'i64' .. | BOTH HALVES SHIPPED, in the order the row required: the direction was corrected first, and only then was the diagnostic made machine-applicable -- so the edit `karac fix` now applies is the value-preserving one, never the trap.
+
+DIRECTION. The old example always named the LEFT operand's type ("the operand as 'u8'" for `u8 - i64`) -- the narrowing steer half the time, with no direction argument ever. E0200 now computes the value-preserving direction explicitly (`int_cast_preserves_all_values`, src/typechecker/expr_ops.rs): same signedness needs the destination at least as wide, unsigned->signed needs strictly wider, signed->unsigned never preserves. `usize` is modeled as the width RANGE [32, 64] because wasm32 is a first-class target -- so `u32 -> usize` and `usize -> u64` are safe on every target while `u64 -> usize` and `usize -> i64` are not. When exactly one direction preserves every value, the message names it concretely ("cast the 'u8' operand up to 'i64' with `as` -- widening preserves every value, while the cast down to 'u8' can overflow at runtime"). The row's open question -- what to do when NO direction is safe -- is answered: a signed/unsigned pair of equal width (i64/u64, i8/u8, and i64/usize by the range rule) stays advisory ("choosing the direction deliberately: neither type can represent every value of the other") and carries no replacement, because naming either side would be the same wrong steer this row measured.
+
+MACHINE-APPLICABILITY. When the direction is known AND the narrow operand's exact source extent is recoverable from the AST, the diagnostic carries a `fix_it` -- a zero-length ` as <wide>` insertion just past the narrow operand -- which flows through the existing typechecker fix_it channel into `--output=json` (`"replacement":{offset,length,text}`) and `karac fix`. Verified end-to-end: `n + w` (i32/i64) fixes to `n + w as i64` and runs; `s.get() + big` (u8 method call) fixes to `s.get() as i64 + big`; `big + -a` (unary) fixes to `big + -a as i64`, which parses as `(-a) as i64` since `as` (bp 23) binds looser than unary (24) and tighter than every arithmetic op.
+
+THE EXTENT GATE is the honest limit and is documented at `appended_cast_end_offset`: the postfix parser aliases most postfix shapes' spans to the RECEIVER's span (`Index.span = object.span` etc.), so for `b[0i64] - 97i64` -- the kata-278 shape -- the narrow operand's true end is unrecoverable and a span-end insertion would rewrite mid-expression (`b as i64[0i64]`). Those shapes keep the corrected widening PROSE but no replacement: a wrong-place edit is strictly worse than declining, per the row's own order-of-fixes point. Machine-applicable today: identifier, suffixed-literal, byte-literal, self, method-call (its `args_close_span` records the chain's true end), and prefix-unary operands (span_from covers all consumed tokens, parens included). Extending to `Index` means recording the `]` span in the AST (~293 construction/match sites) -- deliberately not taken in this row.
+
+Tests (all red at baseline): typechecker `test_mixed_int_diagnostic_steers_widening` (both operand orders + u32/i64 + the two usize-safe pairs; asserts the old example shape is gone), `test_mixed_int_without_value_preserving_direction_stays_advisory` (i64/u64, i8/u8, i64/usize; no fix_it), `test_mixed_int_fix_it_widens_the_narrow_operand` (insertion offset/length/text pinned; Index shape pinned prose-only); CLI `test_fix_widens_mixed_int_operand` (fix applies, fixed file checks cleanly). The float-arithmetic sibling message (B-2026-08-14-13) is untouched: float narrowing rounds rather than traps, so its both-directions phrasing is correct for its domain. |
 
 </details>
 
