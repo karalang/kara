@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 130 | 0 |
 | run-vs-build | 124 | 1 |
 | codegen-gap | 113 | 0 |
-| missing-feature | 98 | 1 |
+| missing-feature | 98 | 0 |
 | perf | 75 | 1 |
 | false-positive | 70 | 0 |
 | diagnostics | 64 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 898 | 1 |
-| typecheck | 177 | 1 |
+| typecheck | 177 | 0 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
 | other | 49 | 1 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1261 surfaced · 4 open · 1242 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1261 surfaced · 3 open · 1243 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort; the residual is now a pure work-count gap at IPC parity | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
-| B-2026-08-17-7 | 2026-08-17 | typecheck | low | DESIGN CALL, not a defect report: should a bare `Span(...)` resolve to the USER's enum variant when the colliding prelude name has no bare-callable form? The same bare name already binds that variant in PATTERN position, so the two positions disagree today. Its sibling row fixed only the diagnostic; the resolution rule is untouched and wants an owner's decision. | resolve_identifier_type (src/typechecker/expr_ops.rs) — the `if is_prelude_type_or_module_name(name) { continue; }` in the variant fallback; decide whether the skip should be narrowed, and to what |
 
 ### Wontfix (5)
 
@@ -149,9 +148,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1261 surfaced
 
 </details>
 
-### Fixed (1242)
+### Fixed (1243)
 
-<details><summary>1242 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1243 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9871,6 +9870,13 @@ test still leaves the env var in a defined state for the next one, and convertin
 its failure into a second "poisoned lock" failure would only bury the real one.
 The header now states the invariant — nothing in this binary may touch
 `KARAC_PAR_ATOMIC_PROMOTION` without holding `ENV_GUARD`. |
+| B-2026-08-17-7 | typecheck | low | DESIGN CALL, not a defect report: should a bare `Span(...)` resolve to the USER's enum variant when the colliding prelude name has no bare-callable f… | DECIDED AND SHIPPED (a46916b): the position-axis resolution, landing on exactly the seam the same-day pricing (af4cf14) identified, and extending its (c) to bare VALUE position on the same error-to-intended argument. A new `user_variant_value_type` (src/typechecker/expr_ops.rs) is consulted ONLY at the bare-identifier arm of `infer_expr` (src/typechecker/exprs.rs) -- the identifier-is-the-whole-expression position, which is also how `infer_call` types a bare callee -- and only after that arm computed `Type::Error`, i.e. strictly inside B-2026-08-11-6's diagnostic set. The pricing's finding 3 stands untouched: `resolve_identifier_type`'s prelude skip is NOT narrowed (the name-list axis stays off the table); no pattern machinery, no path-first-segment resolution is affected. The value-position extension is priced by the same logic as call position -- `let x = File;` errors identically today (B-2026-08-11-6's own value-position test) -- and it is what closes the row's measured asymmetry for UNIT variants: `let m = File;` now means what `match m { File => .. }` always meant.
+
+Unit variants resolve to the enum value, tuple variants to a constructor `Type::Function` with generic-param instantiation (`Entry(42)` on `Box[T]` infers `Box[i64]`). Exclusions, each load-bearing: `builtin_variant_owner` names (Some/None/Ok/Err keep the built-in meaning), stdlib-origin and prelude-NAMED enums (only a variant the user declared can outrank a prelude name), and Struct-shaped variants (no bare-call form exists anywhere, so they keep the diagnostic -- with B-2026-08-17-5's qualified remedy now rendered as the braced `Shape.Span { lo: ... }` literal instead of the `(...)` call form that would be a second error). Owner selection mirrors `user_enum_owning_variant` (sorted, first), so diagnostic and resolution can never name different enums.
+
+ZERO BLAST RADIUS, measured not argued: corpus sweep of 943 .kara files (kara-katas + examples + selfhost), `karac check` baseline vs fixed -- 0 files differ. Full suite green post-change (13,831 tests across all targets + lib/bins, 4-batch disk protocol). Three-backend agreement on the resolved set verified (interp/AOT/auto-par byte-identical). Confirming the pricing's finding 2 from the other side: the tree-walk interpreter ALREADY executed these shapes with the user-variant meaning (the new interpreter oracle was green at baseline), so this also retires a latent check-vs-interp disagreement.
+
+Tests: typechecker `prelude_colliding_variant_resolves_bare_in_value_position` (tuple call + unit value + generic + path-root `String.from` control + builtin-`Some` control) and `prelude_colliding_struct_variant_remedy_names_the_braced_form`, both red at baseline; codegen E2E `test_e2e_prelude_colliding_variant_constructs_bare`, red at baseline; interpreter oracle `test_prelude_colliding_variant_ctor_oracle`. B-2026-08-17-5's remedy test reworked: the shapes it pinned as errors now resolve, and its qualified-remedy pin lives on the still-erroring Struct-shaped collision. |
 | B-2026-08-17-8 | effect | low | `#[no_effect(allocates(Heap))]` is spec vocabulary with NO implementation — design.md prescribes it in three passages (5792's purposes list, the corr… | FIXED by f0ee064c — `#[no_effect(VERB, ...)]` implemented end to end, mirroring the
 `#[profile(...)]` template the row identified.
 
