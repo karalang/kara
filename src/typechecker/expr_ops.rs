@@ -491,6 +491,34 @@ impl<'a> super::TypeChecker<'a> {
         if !is_prelude_type_or_module_name(name) && !self.is_type_name(name) {
             return None;
         }
+        // A USER-DECLARED VARIANT OF THIS NAME OUTRANKS EVERY ARM BELOW,
+        // because for that author the name is not a stray type reference —
+        // they declared it, and the bare form they wrote is the one the
+        // variant-resolution fallback deliberately skips (see the
+        // `is_prelude_type_or_module_name` `continue` in
+        // `resolve_identifier_type`: the built-in meaning wins the bare name,
+        // and the variant stays reachable QUALIFIED). Every arm below would
+        // then answer about the type they did not mean — `Span(a, b)` was told
+        // to "construct one with `Span.new(…)`", naming the `std.tracing`
+        // struct, which has no `new` either, so following the advice produced a
+        // SECOND error and no reachable third step. Name the qualified form
+        // instead; it is the one edit that compiles.
+        if let Some(owner) = self.user_enum_owning_variant(name) {
+            let unit = self.env.enums[&owner]
+                .variants
+                .iter()
+                .any(|(v, t)| v == name && matches!(t, VariantTypeInfo::Unit));
+            let call = if unit {
+                format!("{owner}.{name}")
+            } else {
+                format!("{owner}.{name}(…)")
+            };
+            return Some(format!(
+                "'{name}' is a type, not a function — it is also a variant of \
+                 enum '{owner}', but the bare name resolves to the type, so \
+                 construct the variant with `{call}`"
+            ));
+        }
         // ORDER MATTERS. The prelude arms come FIRST because the baked types
         // are registered in `env.structs` too — keying on that alone told the
         // author to write `F64 { … }` and `Vec { … }`, neither of which is a
@@ -536,6 +564,29 @@ impl<'a> super::TypeChecker<'a> {
             }
         };
         Some(format!("'{name}' is a type, not a function — {msg}"))
+    }
+
+    /// The USER-declared enum that declares a variant called `name`, if any.
+    ///
+    /// Stdlib/prelude-owned enums are excluded on purpose: the point is to name
+    /// the enum the AUTHOR wrote, so the remedy is an edit they recognize. A
+    /// seeded `IoError.Other` is not what someone writing `Other(…)` in their
+    /// own file needs pointed at.
+    ///
+    /// Sorted, so a variant name declared by two user enums always names the
+    /// same one rather than whichever the map iterated first — the same
+    /// determinism `resolve_identifier_type`'s variant fallback establishes.
+    fn user_enum_owning_variant(&self, name: &str) -> Option<String> {
+        let mut owners: Vec<&String> = self
+            .env
+            .enums
+            .iter()
+            .filter(|(n, info)| !info.defining_stdlib_origin && !is_prelude_type_or_module_name(n))
+            .filter(|(_, info)| info.variants.iter().any(|(v, _)| v == name))
+            .map(|(n, _)| n)
+            .collect();
+        owners.sort_unstable();
+        owners.first().map(|n| (*n).clone())
     }
 
     pub(super) fn resolve_path_type(&mut self, segments: &[String], span: &Span) -> Type {

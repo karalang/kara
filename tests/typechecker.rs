@@ -37868,6 +37868,86 @@ fn test_bare_type_name_in_call_position_rejected() {
     );
 }
 
+// ── a prelude-colliding enum variant gets the QUALIFIED remedy ──
+
+#[test]
+fn prelude_colliding_variant_remedy_names_the_qualified_form() {
+    // `Span` / `File` are scope-0 stdlib types, so the variant fallback in
+    // `resolve_identifier_type` deliberately skips the user's variant and the
+    // bare name resolves to the type — by design, and the variant stays
+    // reachable qualified. The DIAGNOSTIC did not say so: it fell through to
+    // the generic prelude arm and suggested `Span.new(…)`, naming the
+    // `std.tracing` struct, which has no `new` either. Following the compiler's
+    // own advice therefore produced a SECOND error and no reachable third step
+    // — the dead end this pins shut.
+    for (src, owner, want) in [
+        (
+            "enum Shape { Point(String), Span(String, i64) }\n\
+             fn main() { let a = Span(\"b\", 1); let _ = a; }",
+            "Shape",
+            "`Shape.Span(…)`",
+        ),
+        // Unit variant: the remedy must NOT grow a call form it cannot take.
+        (
+            "enum Mode { Fast(i64), File }\n\
+             fn main() { let a = File; let _ = a; }",
+            "Mode",
+            "`Mode.File`",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        let msgs: Vec<&String> = errors.iter().map(|e| &e.message).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains(want)),
+            "remedy must name the qualified form {want}, got: {msgs:?}"
+        );
+        assert!(
+            msgs.iter().any(|m| m.contains(owner)),
+            "remedy must name the owning enum {owner}, got: {msgs:?}"
+        );
+        // The whole point: the OLD advice is gone. `.new(` on a stdlib type the
+        // author never mentioned is the unfollowable step.
+        assert!(
+            !msgs.iter().any(|m| m.contains(".new(")),
+            "remedy must not suggest an associated `new` on the shadowing type, \
+             got: {msgs:?}"
+        );
+    }
+}
+
+#[test]
+fn a_prelude_type_with_no_user_variant_keeps_its_family_remedy() {
+    // Counterweight, and the reason the arm is gated on a USER-declared variant
+    // rather than on "the name collides": these remedies are per-family because
+    // the right answer differs, and an author who declared no such variant must
+    // still get theirs. Passes before the change as well as after — it pins the
+    // direction the fix could have broken.
+    for (src, want) in [
+        ("fn main() { let a = F64(1.5); let _ = a; }", "F64.from(x)"),
+        (
+            r#"fn main() { let a = String("hi"); let _ = a; }"#,
+            "String.from(x)",
+        ),
+        (
+            "struct P { x: i64 }\nfn main() { let a = P(1); let _ = a; }",
+            "P { x: … }",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        let msgs: Vec<&String> = errors.iter().map(|e| &e.message).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains(want)),
+            "family remedy {want} must survive, got: {msgs:?}"
+        );
+    }
+    // And a variant whose name collides with NOTHING is untouched — it still
+    // constructs bare, so the arm cannot be firing on ordinary enums.
+    typecheck_ok(
+        "enum Shape { Point(String), Seg(String, i64) }\n\
+         fn main() { let a = Seg(\"b\", 1); let _ = a; }",
+    );
+}
+
 #[test]
 fn test_type_name_rejection_names_the_right_remedy() {
     // The row is reachable by FOLLOWING THE COMPILER'S OWN ADVICE: `max(1.5,
