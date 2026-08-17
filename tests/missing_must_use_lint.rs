@@ -84,6 +84,7 @@ fn must_use_attr() -> Attribute {
         path: vec!["must_use".to_string()],
         args: Vec::new(),
         string_value: Some("test reason".to_string()),
+        effect_args: Vec::new(),
     }
 }
 
@@ -100,6 +101,7 @@ fn allow_missing_must_use_attr() -> Attribute {
             span: syn_span(),
         }],
         string_value: None,
+        effect_args: Vec::new(),
     }
 }
 
@@ -143,6 +145,7 @@ impl<'a> FnSpec<'a> {
             is_cold: false,
             lint_overrides: Vec::new(),
             profile_compat: Vec::new(),
+            no_effect: Vec::new(),
             abi: None,
         }
     }

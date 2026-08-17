@@ -145,6 +145,7 @@ pub(super) fn lower_test_case_to_function(
         is_cold: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),
+        no_effect: Vec::new(),
         abi: None,
     }
 }

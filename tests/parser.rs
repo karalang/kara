@@ -3105,6 +3105,101 @@ fn profile_slice1_multiple_attributes_accumulate() {
 }
 
 #[test]
+fn no_effect_parses_the_spec_spelling() {
+    // B-2026-08-17-8 — design.md prescribes `#[no_effect(allocates(Heap))]`
+    // in three passages and it did not parse: effect verbs are reserved
+    // keywords, so the generic attribute-argument path rejected it with
+    // "'allocates' is a reserved keyword and cannot be used as an
+    // identifier" — an error naming the very word the spec told the author
+    // to write, and blaming the argument rather than the attribute.
+    let (prog, errors) = parse_with_errors(
+        "#[no_effect(allocates(Heap))]\n\
+         fn f() { }",
+    );
+    assert!(errors.is_empty(), "expected a clean parse; got: {errors:?}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert_eq!(f.no_effect.len(), 1);
+    assert_eq!(f.no_effect[0].kind, EffectVerbKind::Allocates);
+    assert_eq!(
+        f.no_effect[0]
+            .resources
+            .iter()
+            .map(|r| r.path.join("."))
+            .collect::<Vec<_>>(),
+        vec!["Heap".to_string()]
+    );
+}
+
+#[test]
+fn no_effect_accepts_several_verbs_and_a_bare_one() {
+    // The resource-less verbs (`panics`, `blocks`, `suspends`) and the
+    // multi-verb list, so the grammar is pinned as the same one a `with`
+    // clause accepts rather than a narrower lookalike.
+    let (prog, errors) = parse_with_errors(
+        "#[no_effect(allocates(Heap), panics, reads(Config))]\n\
+         fn f() { }",
+    );
+    assert!(errors.is_empty(), "expected a clean parse; got: {errors:?}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let kinds: Vec<_> = f.no_effect.iter().map(|v| v.kind.clone()).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            EffectVerbKind::Allocates,
+            EffectVerbKind::Panics,
+            EffectVerbKind::Reads
+        ]
+    );
+    assert!(
+        f.no_effect[1].resources.is_empty(),
+        "`panics` takes no resource"
+    );
+}
+
+#[test]
+fn no_effect_rejects_an_empty_guarantee() {
+    // Both empty spellings, because an attribute that READS as a guarantee
+    // must never be a silent no-op — the failure mode would be a function
+    // the author believes is allocation-free and the compiler never checked.
+    for src in ["#[no_effect]\nfn f() { }", "#[no_effect()]\nfn f() { }"] {
+        let (_prog, errors) = parse_with_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("E_NO_EFFECT_EMPTY")),
+            "Expected E_NO_EFFECT_EMPTY for {src:?}; got: {errors:?}",
+        );
+    }
+}
+
+#[test]
+fn no_effect_rejects_the_string_shorthand() {
+    let (_prog, errors) = parse_with_errors("#[no_effect = \"allocates\"]\nfn f() { }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_NO_EFFECT_STRING_VALUE")),
+        "Expected E_NO_EFFECT_STRING_VALUE; got: {errors:?}",
+    );
+}
+
+#[test]
+fn no_effect_rejects_a_non_verb_argument() {
+    let (_prog, errors) = parse_with_errors("#[no_effect(embedded)]\nfn f() { }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_NO_EFFECT_BAD_VERB")),
+        "Expected E_NO_EFFECT_BAD_VERB — `embedded` is a profile name, not an \
+         effect verb; got: {errors:?}",
+    );
+}
+
+#[test]
 fn profile_slice1_rejects_empty_arg_list() {
     let (_prog, errors) = parse_with_errors("#[profile()]\nfn f() { }");
     assert!(

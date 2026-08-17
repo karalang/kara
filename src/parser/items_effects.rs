@@ -231,7 +231,11 @@ impl super::Parser {
         }
     }
 
-    fn try_parse_effect_verb(&mut self) -> Option<EffectVerb> {
+    /// `pub(crate)` for the `#[no_effect(...)]` attribute parser, which needs
+    /// exactly this grammar: the attribute forbids the same verbs a `with`
+    /// clause declares, so sharing one parser is what keeps the two spellings
+    /// from drifting.
+    pub(crate) fn try_parse_effect_verb(&mut self) -> Option<EffectVerb> {
         let start = self.current_span();
         let kind = match self.peek_token() {
             Token::Reads => {

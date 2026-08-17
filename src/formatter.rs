@@ -367,6 +367,29 @@ mod tests {
     }
 
     #[test]
+    fn no_effect_attribute_keeps_its_verbs() {
+        // The verbs live in `Attribute::effect_args`, not `args`, because they
+        // are reserved keywords. A formatter that renders only `args` emitted a
+        // bare `#[no_effect]` — silently DROPPING a safety declaration, and
+        // producing source that no longer parses (an empty list is
+        // `E_NO_EFFECT_EMPTY`). Formatting must never be able to weaken a
+        // guarantee, so this pins the round-trip.
+        let out = fmt_ok("#[no_effect(allocates(Heap), panics, reads(Config))]\nfn f() { }");
+        assert!(
+            out.contains("#[no_effect(allocates(Heap), panics, reads(Config))]"),
+            "verbs must survive formatting:\n{out}"
+        );
+        // A resource-less verb renders bare. `panics()` would not re-parse:
+        // `try_parse_effect_verb` returns before looking for `(`, so the empty
+        // parens would be left over.
+        assert!(!out.contains("panics()"), "no empty parens:\n{out}");
+        // Idempotent, and the output is still parseable — the property the
+        // dropped-verb bug broke.
+        let again = fmt_ok(&out);
+        assert_eq!(out, again, "second format pass must be a fixpoint");
+    }
+
+    #[test]
     fn enum_explicit_discriminants_roundtrip() {
         // `= VALUE` is emitted after each payload with a single space on either
         // side of `=` (design.md § Explicit Discriminants on Payload Variants);

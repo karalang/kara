@@ -5802,6 +5802,46 @@ The guarantee is **compositional and transitive**: if every callee a function in
 
 Cross-category combinations (`reads` + `sends`, `writes` + `receives`, etc.) on the same resource are **Safe** — `reads`/`writes` track state access while `sends`/`receives` track communication, and these are independent concerns. `sends` + `receives` on the same resource is also **Safe** — this matches real-world full-duplex I/O semantics (e.g., simultaneous send/receive on a TCP socket). Protocol-level ordering constraints are the application's responsibility, not the effect system's. Resources typically use one category or the other.
 
+### No-Effect Attribute
+
+`#[no_effect(VERB, ...)]` on a function declares that the named effects are **absent** from its transitive effect set. It is the per-function form of the guarantee a constrained profile gives project-wide, and it is what the real-time bullets above refer to: under the default profile, where `allocates(Heap)` is permitted and therefore invisible in signatures, this attribute is how a single boundary opts back into the constraint.
+
+```kara
+// Heap use anywhere below this boundary is a compile error. The declared
+// `with panics` is unrelated and still required: indexing bounds-checks, and
+// forbidding one effect says nothing about the others.
+#[no_effect(allocates(Heap))]
+pub fn render_frame(buf: mut Slice[f32]) with panics {
+    let mut i = 0;
+    while i < buf.len() {
+        buf[i] = buf[i] * 0.5;
+        i = i + 1;
+    }
+}
+
+// Several verbs in one attribute.
+#[no_effect(allocates(Heap), panics)]
+fn mix(a: f32, b: f32) -> f32 { a * 0.5 + b * 0.5 }
+```
+
+The arguments are **effect verbs**, in exactly the grammar a `with` clause accepts — `allocates(Heap)`, `panics`, `reads(Config)`, `writes(fs.File)`. This is deliberate: one grammar, so the spelling that declares an effect and the spelling that forbids it can never drift apart.
+
+**Matching is by verb, then by resource if one is named.** A bare verb forbids every occurrence of it regardless of resource; a verb with a resource list forbids only those resources:
+
+| Declaration | `allocates(Heap)` in the effect set | `allocates(Arena)` in the effect set |
+|---|---|---|
+| `#[no_effect(allocates)]` | rejected | rejected |
+| `#[no_effect(allocates(Heap))]` | rejected | accepted |
+| `#[no_effect(allocates(Arena))]` | accepted | rejected |
+
+The bare form has to be the broad one. `panics`, `blocks` and `suspends` take no resource at all, so reading a bare verb as "resource-less occurrences only" would make `#[no_effect(allocates)]` almost a no-op while `#[no_effect(panics)]` worked — one spelling meaning two different strengths depending on which verb it names.
+
+The check is **compositional and transitive** in the same sense as the paragraph above, and for the same reason: it consults the function's full transitive effect set, so a function that calls an allocating helper carries the helper's `allocates` and is rejected. It applies equally to a declared effect set (`pub fn f() with panics` while claiming `#[no_effect(panics)]` is a contradiction the checker catches) and to an inferred one on a private function. Violations are `error[E_NO_EFFECT_VIOLATED]`.
+
+The attribute is **`fn`-only** — it constrains a function's effect set, and only a function has one; placement elsewhere is `error[E_NO_EFFECT_INVALID_TARGET]`. An empty list (`#[no_effect]` or `#[no_effect()]`) is rejected rather than accepted as a vacuous truth: an attribute that reads as a guarantee must never be a silent no-op.
+
+**Relationship to `#[profile(...)]`.** `#[profile(P1, P2, ...)]` on a function asserts that its effect set satisfies the constraints of every listed profile — the profile's `no_effects` list (§ Project Profiles) supplies the forbidden set, and a violation is `error[E_PROFILE_INCOMPATIBLE_EFFECT]`. The two attributes are the same machinery reached from opposite ends: `#[profile]` names a target environment and inherits whatever that environment forbids, while `#[no_effect]` names the forbidden effects directly and is independent of any profile. Reach for `#[profile(embedded)]` when the function must be valid for a named target; reach for `#[no_effect(allocates(Heap))]` when one specific boundary carries a constraint the surrounding project does not.
+
 ### Catching Panics: `catch_panic[T]`
 
 `catch_panic[T]` runs a closure inside an unwind-isolation frame; if the closure panics, the panic is absorbed and the call returns `Err(PanicInfo)` instead of propagating. It is the single user-facing primitive for converting an unwinding panic into a value, and it has two intended use cases:

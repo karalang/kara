@@ -7,7 +7,7 @@
 
 use crate::token::Span;
 
-use super::{EffectList, Expr};
+use super::{EffectList, EffectVerb, Expr};
 
 // ── Attributes ───────────────────────────────────────────────────
 
@@ -20,6 +20,19 @@ pub struct Attribute {
     pub path: Vec<String>,
     pub args: Vec<AttrArg>,
     pub string_value: Option<String>,
+    /// `#[no_effect(allocates(Heap), panics)]` payload — the effect verbs
+    /// this attribute forbids, parsed with the SAME `try_parse_effect_verb`
+    /// the `with` clause uses.
+    ///
+    /// A separate field rather than `args` because effect verbs are reserved
+    /// KEYWORDS: `allocates` cannot travel through `AttrArg::value`, which
+    /// holds an `Expr`, without either being rejected outright (the shipped
+    /// behaviour before this existed — `'allocates' is a reserved keyword`)
+    /// or being flattened into an identifier string that loses the resource
+    /// list. `reads(A, B)` and `reads(fs.File[N])` are both legal effect
+    /// syntax, so the flattening would not round-trip. Empty for every other
+    /// attribute.
+    pub effect_args: Vec<EffectVerb>,
 }
 
 impl Attribute {

@@ -447,6 +447,7 @@ impl super::Parser {
         let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         let profile_compat = self.scan_profile_attr(&attributes);
+        let no_effect = self.scan_no_effect_attr(&attributes);
         self.validate_target_feature_attr(&attributes, is_unsafe);
         self.validate_multiversion_attr(&attributes);
 
@@ -478,6 +479,7 @@ impl super::Parser {
             is_cold,
             lint_overrides,
             profile_compat,
+            no_effect,
             // FFI export ABI is attached by the module-scope `extern
             // "ABI" fn` parse path after this constructor returns;
             // every other call (plain fn, `unsafe fn`, methods) leaves
@@ -864,6 +866,54 @@ impl super::Parser {
     /// computes the constraint-intersection in slice 3. Multiple
     /// `#[profile(...)]` attributes on the same function accumulate
     /// (union of all listed names) — again, slice 3 dedupes.
+    /// `#[no_effect(...)]` payload for one item — the union across repeated
+    /// attributes, in source order.
+    ///
+    /// The verbs themselves were parsed in `parse_attribute` (they are
+    /// keywords, so they cannot survive the generic arg path); this only
+    /// collects them and rejects the shapes that are syntactically well-formed
+    /// but meaningless. `#[no_effect = "..."]` is one of those: it parses as a
+    /// string-valued attribute and would otherwise be silently ignored,
+    /// leaving the author believing they had a guarantee.
+    pub(crate) fn scan_no_effect_attr(&mut self, attributes: &[Attribute]) -> Vec<EffectVerb> {
+        let mut out = Vec::new();
+        for attr in attributes {
+            if !attr.is_bare("no_effect") {
+                continue;
+            }
+            if attr.string_value.is_some() {
+                self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
+                    message: "error[E_NO_EFFECT_STRING_VALUE]: \
+                              `#[no_effect = \"...\"]` is not a recognised shape; use \
+                              `#[no_effect(VERB, ...)]` with effect verbs, e.g. \
+                              `#[no_effect(allocates(Heap))]`"
+                        .to_string(),
+                    span: attr.span,
+                });
+                continue;
+            }
+            if attr.effect_args.is_empty() {
+                // Bare `#[no_effect]` with no parens at all. The parenthesised
+                // empty list already reported at parse; this catches the other
+                // spelling, and for the same reason — an attribute that reads
+                // as a guarantee must never be a silent no-op.
+                self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
+                    message: "error[E_NO_EFFECT_EMPTY]: \
+                              `#[no_effect]` requires at least one effect verb — \
+                              `#[no_effect(allocates(Heap))]`, `#[no_effect(panics)]`. \
+                              See design.md § No-Effect Attribute."
+                        .to_string(),
+                    span: attr.span,
+                });
+                continue;
+            }
+            out.extend(attr.effect_args.iter().cloned());
+        }
+        out
+    }
+
     pub(crate) fn scan_profile_attr(&mut self, attributes: &[Attribute]) -> Vec<String> {
         use crate::ast::ExprKind;
         let mut out = Vec::new();

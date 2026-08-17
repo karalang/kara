@@ -294,6 +294,7 @@ fn mv_allow_undocumented_unsafe_attr(span: Span) -> Attribute {
             span,
         }],
         string_value: None,
+        effect_args: Vec::new(),
     }
 }
 
@@ -310,6 +311,7 @@ fn mv_target_feature_attr(feat: &str, span: Span) -> Attribute {
             span,
         }],
         string_value: None,
+        effect_args: Vec::new(),
     }
 }
 
@@ -971,6 +973,7 @@ fn trait_method_to_function(m: &TraitMethod, stdlib_origin: bool) -> Function {
         is_gpu: m.is_gpu,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),
+        no_effect: Vec::new(),
         abi: None,
     }
 }
@@ -1297,6 +1300,7 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
         is_cold: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),
+        no_effect: Vec::new(),
         abi: None,
     };
     Item::ImplBlock(ImplBlock {

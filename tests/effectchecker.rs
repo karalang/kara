@@ -9385,6 +9385,119 @@ fn default_heap_permit_is_exactly_the_allocates_heap_pair() {
 // this test; until then this is the proof the guarantee is real today.
 
 #[test]
+fn no_effect_attribute_delivers_the_allocation_free_guarantee() {
+    // B-2026-08-17-8 — the twin its sibling test's comment promised. Same
+    // three cases as `profile_attribute_delivers_the_allocation_free_guarantee`
+    // below, because it is the same guarantee: `#[profile(embedded)]` gets it
+    // by naming a profile whose forbidden set contains `allocates`, and this
+    // gets it by naming the effect. The difference that matters to a user is
+    // that this one works per-function on the DEFAULT profile, which is what
+    // design.md's real-time-audio and game-loop bullets ask for.
+    let errors = effectcheck_errors(
+        "#[no_effect(allocates(Heap))]\n\
+         pub fn frame() -> i64 { let mut v: Vec[i64] = Vec.new(); v.push(1); v.len() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::NoEffectViolated),
+        "a directly-allocating #[no_effect(allocates(Heap))] fn must be rejected; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+
+    let errors = effectcheck_errors(
+        "fn helper() -> i64 { let mut v: Vec[i64] = Vec.new(); v.push(1); v.len() }\n\
+         #[no_effect(allocates(Heap))]\n\
+         pub fn frame() -> i64 { helper() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::NoEffectViolated),
+        "a TRANSITIVELY-allocating #[no_effect] fn must be rejected — the \
+         guarantee is compositional or it is worthless; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+
+    effectcheck_ok(
+        "#[no_effect(allocates(Heap))]\n\
+         pub fn frame(x: i64) -> i64 { x * 2 }",
+    );
+}
+
+#[test]
+fn no_effect_matches_by_verb_then_by_resource_if_one_is_named() {
+    // The two halves of the matching rule, pinned against each other.
+    //
+    // A BARE verb forbids the whole verb. It has to be the broad reading:
+    // `panics` / `blocks` / `suspends` carry no resource at all, so treating a
+    // bare verb as "resource-less occurrences only" would make
+    // `#[no_effect(allocates)]` nearly a no-op while `#[no_effect(panics)]`
+    // worked — one spelling meaning two different strengths depending on which
+    // verb it names.
+    let errors = effectcheck_errors(
+        "fn helper() -> i64 { let mut v: Vec[i64] = Vec.new(); v.push(1); v.len() }\n\
+         #[no_effect(allocates)]\n\
+         pub fn frame() -> i64 { helper() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::NoEffectViolated),
+        "a bare `allocates` must forbid `allocates(Heap)`; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+
+    // A NAMED resource narrows it, and must stay silent on every other
+    // resource — otherwise the attribute could not express "no heap here, but
+    // arena allocation is fine", which is the whole point of naming one.
+    effectcheck_ok(
+        "fn helper() -> i64 { let mut v: Vec[i64] = Vec.new(); v.push(1); v.len() }\n\
+         #[no_effect(allocates(Arena))]\n\
+         pub fn frame() -> i64 { helper() }",
+    );
+}
+
+#[test]
+fn no_effect_fires_on_an_inherent_method_and_on_a_declared_effect() {
+    // Impl-block methods go through a separate arm of the walk (keyed
+    // `Type.method`), so a fix that only handled free functions would pass
+    // every test above and silently ignore every method.
+    let errors = effectcheck_errors(
+        "struct C { n: i64 }\n\
+         impl C {\n\
+             #[no_effect(allocates(Heap))]\n\
+             pub fn grow(ref self) -> i64 { let mut v: Vec[i64] = Vec.new(); v.push(self.n); v.len() }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::NoEffectViolated),
+        "an allocating inherent METHOD must be rejected too; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+
+    // And the DECLARED path, not just the inferred one: a `pub fn` that
+    // declares `with panics` while also claiming `#[no_effect(panics)]` is
+    // contradicting itself, and the effect set it declared is what convicts
+    // it. Pins that the check reads `inferred_effects` (where declared and
+    // inferred converge) rather than the inference result alone.
+    let errors = effectcheck_errors(
+        "fn boom(x: i64) -> i64 { if x < 0 { panic(\"neg\"); } x }\n\
+         #[no_effect(panics)]\n\
+         pub fn frame(x: i64) -> i64 with panics { boom(x) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::NoEffectViolated),
+        "a DECLARED `with panics` must still violate `#[no_effect(panics)]`; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn profile_attribute_delivers_the_allocation_free_guarantee() {
     let errors = effectcheck_errors(
         "#[profile(embedded)]\n\

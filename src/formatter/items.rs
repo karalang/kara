@@ -139,6 +139,37 @@ impl super::Formatter {
                 }
                 self.write_str(")");
             }
+            // `#[no_effect(...)]` keeps its verbs in `effect_args`, not `args`
+            // (they are keywords and cannot be `Expr`s). Rendering only `args`
+            // emitted a bare `#[no_effect]`, which SILENTLY DROPPED the
+            // guarantee — and the result did not even re-parse, since an empty
+            // list is `E_NO_EFFECT_EMPTY`. Formatting must never be able to
+            // weaken a safety declaration.
+            //
+            // Parens are conditional here, unlike `format_effects`: a
+            // resource-less verb must render as `panics`, not `panics()` —
+            // `try_parse_effect_verb` returns immediately for those, so the
+            // trailing `()` would be left unconsumed and fail to re-parse.
+            if !attr.effect_args.is_empty() {
+                self.write_str("(");
+                for (i, verb) in attr.effect_args.iter().enumerate() {
+                    if i > 0 {
+                        self.write_str(", ");
+                    }
+                    self.write_str(&crate::formatter::format_effect_verb_kind(&verb.kind));
+                    if !verb.resources.is_empty() {
+                        self.write_str("(");
+                        for (j, r) in verb.resources.iter().enumerate() {
+                            if j > 0 {
+                                self.write_str(", ");
+                            }
+                            self.write_path(&r.path);
+                        }
+                        self.write_str(")");
+                    }
+                }
+                self.write_str(")");
+            }
             if let Some(ref s) = attr.string_value {
                 self.write_str("(\"");
                 self.write_str(s);

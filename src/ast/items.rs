@@ -297,6 +297,14 @@ pub struct Function {
     /// integration) consults the list to intersect constraints
     /// against the function's effect set.
     pub profile_compat: Vec<String>,
+    /// `#[no_effect(allocates(Heap), panics)]` payload — effect verbs this
+    /// function asserts are ABSENT from its transitive effect set. Sibling of
+    /// `profile_compat` and checked the same way, the difference being that
+    /// this names the forbidden effects directly where `#[profile]` names
+    /// profiles whose forbidden sets are looked up. Empty when the attribute
+    /// is absent. Enforced in `effectchecker/no_effect.rs`; see design.md
+    /// § No-Effect Attribute.
+    pub no_effect: Vec<EffectVerb>,
     /// FFI export ABI for a *definition* exposed to C —
     /// `[pub] extern "C" fn name(...) { body }` →
     /// `Some("C")`, `extern "C-unwind" fn ...` → `Some("C-unwind")`.

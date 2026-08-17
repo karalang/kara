@@ -20,6 +20,7 @@ mod extern_ffi;
 mod gpu_effect_gate;
 mod inference;
 mod modbind_synth;
+mod no_effect;
 mod profile_compat;
 mod subtyping;
 mod target_gate;
@@ -209,6 +210,11 @@ pub enum EffectErrorKind {
     /// forbids. Emitted by `check_profile_compat` after inference
     /// settles.
     ProfileIncompatibleEffect,
+    /// A function with `#[no_effect(V, ...)]` declared that its effect set
+    /// EXCLUDES the named effects, but the transitive (declared + inferred)
+    /// set includes one of them. Emitted by `check_no_effect` after inference
+    /// settles — the per-function twin of `ProfileIncompatibleEffect`.
+    NoEffectViolated,
     /// Phase-10 target gate: a function reachable from the build's
     /// entry point requires a HOST resource the current compilation
     /// target does not provide (and no provider is bound on the call
@@ -1256,6 +1262,7 @@ impl<'a> EffectChecker<'a> {
         self.check_call_site_subtyping();
         self.check_with_e_unification();
         self.check_profile_compat();
+        self.check_no_effect();
         self.check_modbind_par_conflicts();
         self.check_captured_local_par_writes();
         // Phase-10: effect-driven target gating — reachable-from-entry
@@ -1728,6 +1735,7 @@ impl<'a> EffectChecker<'a> {
                             is_cold: false,
                             lint_overrides: Vec::new(),
                             profile_compat: Vec::new(),
+                            no_effect: Vec::new(),
                             abi: None,
                         };
                         if self.method_bodies.insert(key, Rc::new(stub)).is_none() {

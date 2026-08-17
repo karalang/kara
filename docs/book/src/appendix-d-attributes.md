@@ -158,6 +158,19 @@ fn scale(x: i64, factor: i64) -> i64 {
 }
 ```
 
+### `#[no_effect(VERB, ...)]`
+
+On a function: asserts the named effects are **absent** from its transitive effect set. The arguments are effect verbs in the same grammar a `with` clause uses. It is the per-function counterpart of `#[profile(...)]` — that one inherits a target environment's forbidden set, this one names the forbidden effects directly and is independent of any profile, which is what makes it usable on the default profile where `allocates(Heap)` is permitted.
+
+A bare verb forbids every occurrence of it; a verb with a resource narrows it to that resource, so `#[no_effect(allocates(Heap))]` still permits `allocates(Arena)`. A forbidden effect in the declared or inferred set is `error[E_NO_EFFECT_VIOLATED]`. The attribute is `fn`-only (`error[E_NO_EFFECT_INVALID_TARGET]` elsewhere), and an empty list is rejected rather than treated as a vacuous guarantee.
+
+```kara
+#[no_effect(allocates(Heap), panics)]
+fn mix(a: f32, b: f32) -> f32 {
+    a * 0.5 + b * 0.5
+}
+```
+
 ### `#[must_use]`  /  `#[must_use = "reason"]`
 
 On a **type**: every binding site where a value of this type would be silently dropped produces a warning. Use for types that must be explicitly handled (e.g., a connection that must be closed).

@@ -358,6 +358,7 @@ impl<'a> super::TypeChecker<'a> {
                         is_cold: false,
                         lint_overrides: Vec::new(),
                         profile_compat: Vec::new(),
+                        no_effect: Vec::new(),
                         abi: None,
                     };
                     self.check_function(&synthesized, Some(&self_type), &enclosing);

@@ -69,6 +69,7 @@ fn allow_attr(name: &str) -> Attribute {
         }],
         span: syn_span(),
         string_value: None,
+        effect_args: Vec::new(),
     }
 }
 
@@ -112,6 +113,7 @@ fn make_function(name: &str, stdlib_origin: bool, is_pub: bool) -> Function {
         is_cold: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),
+        no_effect: Vec::new(),
         abi: None,
     }
 }

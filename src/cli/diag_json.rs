@@ -1862,6 +1862,9 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::effectchecker::EffectErrorKind::ProfileIncompatibleEffect => {
                     ("E0407", "error")
                 }
+                // Sibling of E0407 — same guarantee, declared per function
+                // with `#[no_effect(...)]` instead of via a profile.
+                crate::effectchecker::EffectErrorKind::NoEffectViolated => ("E0416", "error"),
                 crate::effectchecker::EffectErrorKind::ModuleBindingWriteInPar => {
                     ("E0408", "error")
                 }

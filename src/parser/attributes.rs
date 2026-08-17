@@ -81,6 +81,7 @@ impl super::Parser {
             path: vec![name],
             args: Vec::new(),
             string_value: None,
+            effect_args: Vec::new(),
         })
     }
 
@@ -157,6 +158,26 @@ impl super::Parser {
                     return None;
                 }
             }
+        } else if path.len() == 1 && name == "no_effect" && self.check(&Token::LeftParen) {
+            // `#[no_effect(allocates(Heap), panics)]` — the arguments are
+            // effect VERBS, which are reserved keywords, so they can never
+            // reach the generic expression path below: it rejected them with
+            // "'allocates' is a reserved keyword and cannot be used as an
+            // identifier", pointing at the very word design.md tells the
+            // author to write (B-2026-08-17-8). Same shape of carve-out as
+            // `#[repr(transparent)]` further down, and it delegates to the
+            // `with`-clause verb parser so both spellings accept exactly one
+            // grammar.
+            self.advance(); // `(`
+            let verbs = self.parse_no_effect_args(&start);
+            self.expect(&Token::RightBracket)?;
+            return Some(Attribute {
+                span: self.span_from(&start),
+                path,
+                args: Vec::new(),
+                string_value: None,
+                effect_args: verbs,
+            });
         } else if self.eat(&Token::LeftParen) {
             let mut args = Vec::new();
             while !self.check(&Token::RightParen) && !self.is_at_end() {
@@ -332,7 +353,52 @@ impl super::Parser {
             path,
             args,
             string_value,
+            effect_args: Vec::new(),
         })
+    }
+
+    /// The argument list of `#[no_effect(...)]` — comma-separated effect
+    /// verbs, parsed by the same routine the `with` clause uses.
+    ///
+    /// Recovery is deliberate: an unparseable verb consumes tokens up to the
+    /// next `,` or `)` so one typo does not cascade into "expected item"
+    /// errors for the whole rest of the file. `attr_span` is the `#`, so an
+    /// empty list blames the attribute rather than whatever followed it.
+    fn parse_no_effect_args(&mut self, attr_span: &Span) -> Vec<EffectVerb> {
+        let mut verbs = Vec::new();
+        while !self.check(&Token::RightParen) && !self.is_at_end() {
+            match self.try_parse_effect_verb() {
+                Some(v) => verbs.push(v),
+                None => {
+                    let bad = self.current_span();
+                    self.error_at(
+                        "error[E_NO_EFFECT_BAD_VERB]: `#[no_effect(...)]` takes effect \
+                         verbs — `allocates(Heap)`, `panics`, `blocks`, `reads(Config)`. \
+                         See design.md § No-Effect Attribute.",
+                        bad,
+                    );
+                    while !self.check(&Token::Comma)
+                        && !self.check(&Token::RightParen)
+                        && !self.is_at_end()
+                    {
+                        self.advance();
+                    }
+                }
+            }
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(&Token::RightParen);
+        if verbs.is_empty() {
+            self.error_at(
+                "error[E_NO_EFFECT_EMPTY]: `#[no_effect]` requires at least one effect \
+                 verb — `#[no_effect(allocates(Heap))]`. An empty list forbids nothing, \
+                 so it is a silent no-op rather than the guarantee it looks like.",
+                *attr_span,
+            );
+        }
+        verbs
     }
 
     /// Parse the `#[unsafe(NAME)]` / `#[unsafe(NAME("string"))]` wrap.
@@ -401,6 +467,7 @@ impl super::Parser {
             path: vec![inner_name],
             args: Vec::new(),
             string_value: attr_string_value,
+            effect_args: Vec::new(),
         })
     }
 }

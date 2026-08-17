@@ -138,6 +138,16 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     // placement/name validation in `resolver/collect.rs`; enforcement in
     // `effectchecker/profile_compat.rs`.
     "profile",
+    // Per-function effect exclusion — `#[no_effect(allocates(Heap))]` on a
+    // function asserts the named effects are ABSENT from its transitive
+    // effect set (design.md § No-Effect Attribute). The verbs are keywords,
+    // so they are parsed in `parser/attributes.rs` rather than through the
+    // generic arg path and collected by `parser/items.rs::scan_no_effect_attr`
+    // into `Function.no_effect`; placement validation in
+    // `resolver/collect.rs`; enforcement in `effectchecker/no_effect.rs`.
+    // Sibling of `profile` — that one names profiles whose forbidden sets are
+    // looked up, this one names the forbidden effects directly.
+    "no_effect",
     // Portable SIMD — `#[require_simd]` on a function makes scalar
     // fallback for any `Vector[T, N]` op in its body a hard build error
     // (phase-7-codegen.md line 308). Read by `simd_report::require_simd_errors`;

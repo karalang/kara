@@ -390,6 +390,7 @@ impl<'a> super::EffectChecker<'a> {
                                 is_cold: false,
                                 lint_overrides: Vec::new(),
                                 profile_compat: Vec::new(),
+                                no_effect: Vec::new(),
                                 abi: None,
                             };
                             let by_var = scan(&stub);

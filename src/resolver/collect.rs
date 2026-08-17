@@ -770,6 +770,33 @@ impl<'a> super::Resolver<'a> {
         }
     }
 
+    /// Reject `#[no_effect(...)]` on an item kind that doesn't support it.
+    /// Same rule and same reason as `reject_profile_attr` one function up:
+    /// the attribute constrains a function's effect set, and only a `fn` has
+    /// one. Shares `ProfileInvalidTarget` because the placement rule is
+    /// literally the same rule — a distinct error kind would imply the two
+    /// can diverge, and nothing here should let them.
+    fn reject_no_effect_attr(&mut self, attrs: &[Attribute], target_kind: &str) {
+        for attr in attrs {
+            if attr.is_bare("no_effect") {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "error[E_NO_EFFECT_INVALID_TARGET]: \
+                         `#[no_effect(...)]` is not valid on {target_kind}; \
+                         the attribute asserts that a function's effect set \
+                         excludes the named effects and only applies to `fn` \
+                         declarations",
+                    ),
+                    span: attr.span,
+                    kind: ResolveErrorKind::ProfileInvalidTarget,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
+        }
+    }
+
     /// Validate every `#[profile(...)]` name on a `fn` against the
     /// closed v1 set (`default` / `embedded` / `kernel`, mirroring
     /// `CompileProfile` from `src/manifest.rs`). Unknown names emit
@@ -902,6 +929,7 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&s.attributes, "struct");
         self.reject_codegen_hint_attrs(&s.attributes, "struct");
         self.reject_profile_attr(&s.attributes, "struct");
+        self.reject_no_effect_attr(&s.attributes, "struct");
         // Field-level `#[non_exhaustive]` is post-v1 (Rust accepts it
         // on fields too; we ship type-level only). Reject so users get
         // a focused message instead of a silent acceptance that does
@@ -913,6 +941,7 @@ impl<'a> super::Resolver<'a> {
             self.reject_gpu_attr(&field.attributes, "struct field");
             self.reject_codegen_hint_attrs(&field.attributes, "struct field");
             self.reject_profile_attr(&field.attributes, "struct field");
+            self.reject_no_effect_attr(&field.attributes, "struct field");
             self.reject_deprecated_on_field(&field.attributes);
         }
         let field_names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
@@ -990,12 +1019,14 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&u.attributes, "union");
         self.reject_codegen_hint_attrs(&u.attributes, "union");
         self.reject_profile_attr(&u.attributes, "union");
+        self.reject_no_effect_attr(&u.attributes, "union");
         for field in &u.fields {
             self.reject_non_exhaustive_attr(&field.attributes, "union field");
             self.reject_track_caller_attr(&field.attributes, "union field");
             self.reject_gpu_attr(&field.attributes, "union field");
             self.reject_codegen_hint_attrs(&field.attributes, "union field");
             self.reject_profile_attr(&field.attributes, "union field");
+            self.reject_no_effect_attr(&field.attributes, "union field");
             self.reject_deprecated_on_field(&field.attributes);
         }
         let field_names: Vec<String> = u.fields.iter().map(|f| f.name.clone()).collect();
@@ -1022,6 +1053,7 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&e.attributes, "enum");
         self.reject_codegen_hint_attrs(&e.attributes, "enum");
         self.reject_profile_attr(&e.attributes, "enum");
+        self.reject_no_effect_attr(&e.attributes, "enum");
         // Variant-level attribute placement validation —
         // `#[track_caller]` and `#[non_exhaustive]` are rejected on
         // individual variants (the spec scopes both at type-level
@@ -1032,6 +1064,7 @@ impl<'a> super::Resolver<'a> {
             self.reject_gpu_attr(&variant.attributes, "enum variant");
             self.reject_codegen_hint_attrs(&variant.attributes, "enum variant");
             self.reject_profile_attr(&variant.attributes, "enum variant");
+            self.reject_no_effect_attr(&variant.attributes, "enum variant");
             self.reject_non_exhaustive_attr(&variant.attributes, "enum variant");
         }
         let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
@@ -1087,6 +1120,7 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&t.attributes, "trait");
         self.reject_codegen_hint_attrs(&t.attributes, "trait");
         self.reject_profile_attr(&t.attributes, "trait");
+        self.reject_no_effect_attr(&t.attributes, "trait");
         // Trait-method-level attribute placement validation —
         // `#[track_caller]` IS legal (propagates to impls), so the
         // helper is not called. `#[deprecated]` IS legal. But
@@ -1143,6 +1177,7 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&t.attributes, "trait alias");
         self.reject_codegen_hint_attrs(&t.attributes, "trait alias");
         self.reject_profile_attr(&t.attributes, "trait alias");
+        self.reject_no_effect_attr(&t.attributes, "trait alias");
         match self
             .table
             .define(t.name.clone(), SymbolKind::TraitAlias, t.span, t.is_pub)
@@ -1161,6 +1196,7 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&t.attributes, "marker trait");
         self.reject_codegen_hint_attrs(&t.attributes, "marker trait");
         self.reject_profile_attr(&t.attributes, "marker trait");
+        self.reject_no_effect_attr(&t.attributes, "marker trait");
         // Marker traits register in the trait namespace alongside ordinary
         // traits; no methods to track, so the symbol carries an empty
         // method list. Trait-bound resolution and impl coherence treat
@@ -1200,6 +1236,7 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&imp.attributes, "impl block");
         self.reject_codegen_hint_attrs(&imp.attributes, "impl block");
         self.reject_profile_attr(&imp.attributes, "impl block");
+        self.reject_no_effect_attr(&imp.attributes, "impl block");
         self.reject_deprecated_on_impl(&imp.attributes);
         // Methods are registered in type_methods, not global scope.
         // We need the type name from the target_type.
@@ -1289,6 +1326,7 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&c.attributes, "module const");
         self.reject_codegen_hint_attrs(&c.attributes, "module const");
         self.reject_profile_attr(&c.attributes, "module const");
+        self.reject_no_effect_attr(&c.attributes, "module const");
         match self
             .table
             .define(c.name.clone(), SymbolKind::Constant, c.span, c.is_pub)
@@ -1428,6 +1466,7 @@ impl<'a> super::Resolver<'a> {
         self.reject_gpu_attr(&t.attributes, "type alias");
         self.reject_codegen_hint_attrs(&t.attributes, "type alias");
         self.reject_profile_attr(&t.attributes, "type alias");
+        self.reject_no_effect_attr(&t.attributes, "type alias");
         match self
             .table
             .define(t.name.clone(), SymbolKind::TypeAlias, t.span, t.is_pub)
