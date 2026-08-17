@@ -92,14 +92,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 254 | 0 |
+| miscompile | 255 | 1 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 126 | 3 |
 | codegen-gap | 114 | 0 |
 | missing-feature | 99 | 1 |
+| false-positive | 77 | 4 |
 | perf | 76 | 1 |
-| false-positive | 76 | 3 |
 | diagnostics | 66 | 0 |
 | soundness | 49 | 0 |
 | crash | 49 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 903 | 3 |
-| typecheck | 184 | 4 |
+| codegen | 904 | 4 |
+| typecheck | 185 | 5 |
 | interp | 146 | 0 |
 | ownership | 57 | 0 |
 | other | 49 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1276 surfaced · 9 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1278 surfaced · 11 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1276 surfaced
 | B-2026-08-17-22 | 2026-08-17 | typecheck | medium | A string literal NESTED inside a module-level struct / tuple / array initializer types as `String` instead of `StringSlice`, and since `String` is forbidden at module scope this makes module-level constants carrying static string data unwritable. design.md § Module-Level Bindings states "String literals have type `StringSlice` at module scope" and separately lists "Struct and tuple literals built from constant expressions" and "Array literals" among the allowed initializers -- the intersection must work, and does not. `let DIRECT: StringSlice = "ok";` checks fine, but `let NESTED: Cfg = Cfg { name: "karac", retries: 3 };` -> "expected 'StringSlice', found 'String'", `let TUP: (StringSlice, i64) = ("karac", 3);` -> "expected '(StringSlice, i64)', found '(String, i64)'", and `let ARR: Array[StringSlice, 2] = ["a", "b"];` -> one such error per element. There is no spelling that works: declaring the field as `String` is rejected by the constant-initializer rule ("String is heap-allocated; use StringSlice for static string data"), so the module-scope literal rule reaching only the TOP LEVEL of the initializer leaves the composite forms with no legal form at all. | roadmap.md |
 | B-2026-08-17-23 | 2026-08-17 | codegen | medium | A destructuring pattern in FUNCTION-parameter position is never lowered by codegen -- `karac check` passes clean, `--interp` runs correctly, and BOTH compiled backends refuse with `codegen failed: Undefined variable '<binding>'`. design.md § Destructuring in Function and Closure Parameters opens with "Any irrefutable pattern may appear in parameter position" and roadmap.md line 112 marks it `[x]` done. Measured, every shape fails identically: `fn add((a, b): (i64, i64)) -> i64 { a + b }` -> "Undefined variable 'a'"; `fn y_only((_, y): (i64, i64))` -> "Undefined variable 'y'"; `fn only_a((a, _): (i64, i64))` -> "Undefined variable 'a'"; `fn nested(((a, b), c): ((i64,i64), i64))` -> "Undefined variable 'a'"; `fn px(Point { x, y }: Point)` -> "Undefined variable 'x'"; the spec's own two-parameter example `fn distance(Point { x: x1, y: y1 }: Point, Point { x: x2, y: y2 }: Point)` -> "Undefined variable 'x2'"; heap-carrying `fn take(H { s, n }: H) -> String` -> "Undefined variable 's'". Same error under `karac run` (JIT) and `karac build` (AOT) -- the codegen prologue binds the parameter slot but never walks the pattern to bind its leaves. | roadmap.md |
 | B-2026-08-17-24 | 2026-08-17 | codegen | low | The STRUCT-pattern sibling of B-2026-07-14-21's tuple fix: a struct destructuring pattern as an iterator-adaptor closure parameter still bails out of the codegen chain peel, and the fallthrough MISATTRIBUTES the failure to the terminal method. `v.iter().map(|P { x, y }| x + y).collect()` -> `codegen: no handler for method 'collect' on non-identifier receiver (method dispatch fell through; this is a codegen bug -- add a dispatcher arm in compile_method_call ...)`; the same closure under `fold` -> the identical message naming 'fold'. The interpreter runs both correctly and `karac check` is clean. B-2026-07-14-21 fixed exactly this class for the TUPLE form (`ps.iter().map(|(a, b)| a + b)`) -- the tuple form now lowers on all three backends, so the peel handles destructuring closure params in principle and only the struct pattern is unrecognized. | roadmap.md |
+| B-2026-08-17-25 | 2026-08-17 | codegen | high | The pipe operator `|>` produces a SILENT WRONG ANSWER under both compiled backends -- every pipe expression evaluates to 0 -- and a String-typed pipe SEGFAULTS the AOT binary. Minimal: `fn dbl(n: i64) -> i64 { n * 2 }` + `let a = 5 |> dbl; println(a.to_string())` prints 10 under `--interp` and 0 under `karac run` (JIT) and `karac build` (AOT). `karac check` reports "All checks passed." The direct-call control in the same file (`println(dbl(5).to_string())`) prints 10 on all three, so only the pipe form is wrong. Expression position and let position both fail (`println((5 |> dbl).to_string())` -> 0). Every pipe shape measured is affected: single stage, chained stages (`"x" |> tag |> tag`), and the `_` pipe-hole placeholder (`7 |> takes_two("v", _)`). When the pipe's type is String the 0 is consumed as a String header pointer and the binary dies: `fn tag(s: String) -> String { "[" + s + "]" }` + `let a = "x" |> tag; println(a)` -> SIGSEGV, exit 139. | roadmap.md |
+| B-2026-08-17-26 | 2026-08-17 | typecheck | low | A closure literal as the pipe RHS is rejected -- "right-hand side of pipe must be a function name or function call" -- even though design.md prescribes exactly that form as the workaround for its own `_` restrictions. § Pipe Operator's `_` rule says: "The correct form is `let d = data |> g; d |> |d| f(d, extra)` or `data |> |d| f(g(d), extra)`", and the multi-use rule adds "Workaround for multi-use: wrap in a closure -- `data |> |d| f(d, d)`". Both prescribed forms fail `karac check` verbatim, each with the not-a-function-name error plus a cascaded `expected 'i64', found '?T0'` on the closure's own parameter (the closure body is typed against an uninstantiated var once the pipe arm bails). So the spec's escape hatch for the at-most-one-`_`-per-stage and no-`_`-in-a-nested-subexpression rules does not exist, leaving those two restrictions with no documented way out. | roadmap.md |
 
 ### Wontfix (5)
 
