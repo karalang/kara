@@ -1155,6 +1155,64 @@ fn takeu(n: usize) -> usize { return n; }
     }
 }
 
+/// Typed WARNINGS reach the text renderer. `TypeCheckResult::warnings` — the
+/// channel every `type_lint_warning` lint rides (`deprecated`, `unstable_api`,
+/// `map_value_clone_reinsert`, …) — was rendered by the JSON emitter and
+/// silently DROPPED by text mode: `karac check` printed "All checks passed."
+/// for a program whose `--output=json` carried a warning. The bracket names
+/// the lint (what `-A` takes); exit stays 0 — a warning is not an error.
+#[test]
+fn test_typed_warnings_render_in_text_mode() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-warn-text-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("warn.kara");
+    std::fs::write(
+        &path,
+        "fn main() {\n\
+         let mut index: Map[String, Vec[i64]] = Map.new();\n\
+         let w: String = \"the\";\n\
+         let i: i64 = 0;\n\
+         match index.get(w) {\n\
+             Some(existing) => {\n\
+                 let mut hits: Vec[i64] = existing.clone();\n\
+                 hits.push(i);\n\
+                 let _ = index.insert(w, hits);\n\
+             }\n\
+             None => {\n\
+                 let mut hits: Vec[i64] = Vec.new();\n\
+                 hits.push(i);\n\
+                 let _ = index.insert(w, hits);\n\
+             }\n\
+         }\n\
+         }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a warning must not fail check; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("warning[map_value_clone_reinsert]"),
+        "text mode must render the typed warning with the lint name; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("All checks passed."),
+        "the verdict line stays; stderr={stderr}",
+    );
+}
+
 // ── JSON Output Snapshots ───────────────────────────────────────
 
 #[test]

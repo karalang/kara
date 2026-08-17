@@ -225,3 +225,37 @@ fn does_not_fire_on_the_fixed_form() {
     }";
     assert!(lint(src).is_empty(), "the fixed form must be a fixpoint");
 }
+
+/// B-2026-08-17-2 — the walk reaches a match inside a CLOSURE body. The old
+/// hand-picked arm set (`_ => {}`) never descended into `ExprKind::Closure`,
+/// so the canonical idiom written inside a closure went unreported while the
+/// statement-position twin warned.
+#[test]
+fn fires_inside_a_closure_body() {
+    let src = "fn main() {\n\
+        let mut index: Map[String, Vec[i64]] = Map.new();\n\
+        let mut add = |w: String, i: i64| {\n\
+            match index.get(w) {\n\
+                Some(existing) => {\n\
+                    let mut hits: Vec[i64] = existing.clone();\n\
+                    hits.push(i);\n\
+                    let _ = index.insert(w, hits);\n\
+                }\n\
+                None => {\n\
+                    let mut hits: Vec[i64] = Vec.new();\n\
+                    hits.push(i);\n\
+                    let _ = index.insert(w, hits);\n\
+                }\n\
+            }\n\
+        };\n\
+        add(\"a\", 1);\n\
+        println(index.len());\n\
+    }";
+    let diags = lint(src);
+    assert_eq!(
+        diags.len(),
+        1,
+        "the closure-body position must fire: {diags:?}"
+    );
+    assert_eq!(diags[0].lint_name.as_deref(), Some(LINT_NAME));
+}

@@ -1701,6 +1701,27 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                 err.span.length,
             ));
         }
+        // `TypeCheckResult::warnings` — the channel every `type_lint_warning`
+        // lint rides (`deprecated`, `unstable_api`, …) plus the CLI-attached
+        // `map_value_clone_reinsert`. The JSON emitter has always rendered it;
+        // the text renderer dropped it entirely, so `karac check` printed
+        // "All checks passed." while `--output=json` carried a warning for the
+        // same program. The bracket names the LINT when there is one — that is
+        // what `-A <name>` takes, so it is the actionable label — and falls
+        // back to the phase, matching the `error[typecheck]` convention above.
+        for warn in &t.warnings {
+            let label = warn.lint_name.as_deref().unwrap_or("typecheck");
+            out.push(with_snippet(
+                format!(
+                    "warning[{label}]: {}:{}:{}: {}",
+                    filename, warn.span.line, warn.span.column, warn.message
+                ),
+                source,
+                warn.span.line,
+                warn.span.column,
+                warn.span.length,
+            ));
+        }
     }
     if let Some(ref e) = pipeline.effects {
         for err in &e.errors {

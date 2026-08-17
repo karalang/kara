@@ -69,7 +69,10 @@
 //! the AST, so the user's own spelling, spacing and comments inside those
 //! expressions survive the rewrite.
 
-use crate::ast::{Block, Expr, ExprKind, ImplItem, Item, Program, Stmt, StmtKind, TraitItem};
+use crate::ast::{
+    Block, Expr, ExprKind, ImplItem, Item, ParsedInterpolationPart, Program, Stmt, StmtKind,
+    TraitItem,
+};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{FixIt, Type, TypeCheckResult, TypeError, TypeErrorKind};
@@ -420,20 +423,36 @@ fn walk_block(block: &Block, typed: &TypeCheckResult, src: &str, out: &mut Vec<T
 }
 
 fn walk_stmt(stmt: &Stmt, typed: &TypeCheckResult, src: &str, out: &mut Vec<TypeError>) {
+    // EXHAUSTIVE on purpose — no `_ => {}`. B-2026-08-17-2: this lint shared
+    // the partial-walk idiom B-2026-08-16-12 removed from its sibling
+    // (`chained_receiver_lint`), and the same measurement showed the same
+    // hole — the clone-reinsert idiom inside a CLOSURE body went unreported.
+    // An exhaustive match makes the next `StmtKind` addition a compile error
+    // here instead of a silently unvisited position.
     match &stmt.kind {
         StmtKind::Let { value, .. } => walk_expr(value, typed, src, out),
+        StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {
             value, else_block, ..
         } => {
             walk_expr(value, typed, src, out);
             walk_block(else_block, typed, src, out);
         }
-        StmtKind::Expr(e) => walk_expr(e, typed, src, out),
+        StmtKind::Defer { body } => walk_block(body, typed, src, out),
+        StmtKind::ErrDefer { body, .. } => walk_block(body, typed, src, out),
         StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
             walk_expr(target, typed, src, out);
             walk_expr(value, typed, src, out);
         }
-        _ => {}
+        StmtKind::MultiAssign { targets, values } => {
+            for t in targets {
+                walk_expr(t, typed, src, out);
+            }
+            for v in values {
+                walk_expr(v, typed, src, out);
+            }
+        }
+        StmtKind::Expr(e) => walk_expr(e, typed, src, out),
     }
 }
 
@@ -444,8 +463,37 @@ fn walk_expr(expr: &Expr, typed: &TypeCheckResult, src: &str, out: &mut Vec<Type
         // produce overlapping fix-its for one rewrite.
         return;
     }
+    // EXHAUSTIVE on purpose — no `_ => {}`; see walk_stmt. Arm inventory
+    // mirrors `span_visitor::visit_expr`, the complete in-tree walk. The
+    // detection stays on Match nodes only; widening the WALK cannot over-fire,
+    // it can only reach Match nodes the old arm set never visited (a closure
+    // body being the measured miss).
     match &expr.kind {
+        ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::Continue { .. }
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Error => {}
+        ExprKind::InterpolatedStringLit(parts) => {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
+                    walk_expr(inner, typed, src, out);
+                }
+            }
+        }
         ExprKind::Block(b)
+        | ExprKind::Comptime(b)
         | ExprKind::Par(b)
         | ExprKind::Seq(b)
         | ExprKind::Try(b)
@@ -464,10 +512,26 @@ fn walk_expr(expr: &Expr, typed: &TypeCheckResult, src: &str, out: &mut Vec<Type
                 walk_expr(e, typed, src, out);
             }
         }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            walk_expr(value, typed, src, out);
+            walk_block(then_block, typed, src, out);
+            if let Some(e) = else_branch {
+                walk_expr(e, typed, src, out);
+            }
+        }
         ExprKind::While {
             condition, body, ..
         } => {
             walk_expr(condition, typed, src, out);
+            walk_block(body, typed, src, out);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            walk_expr(value, typed, src, out);
             walk_block(body, typed, src, out);
         }
         ExprKind::For { iterable, body, .. } => {
@@ -477,6 +541,9 @@ fn walk_expr(expr: &Expr, typed: &TypeCheckResult, src: &str, out: &mut Vec<Type
         ExprKind::Match { scrutinee, arms } => {
             walk_expr(scrutinee, typed, src, out);
             for arm in arms {
+                if let Some(g) = &arm.guard {
+                    walk_expr(g, typed, src, out);
+                }
                 walk_expr(&arm.body, typed, src, out);
             }
         }
@@ -492,6 +559,82 @@ fn walk_expr(expr: &Expr, typed: &TypeCheckResult, src: &str, out: &mut Vec<Type
                 walk_expr(&a.value, typed, src, out);
             }
         }
-        _ => {}
+        ExprKind::OptionalChain { object, args, .. } => {
+            walk_expr(object, typed, src, out);
+            if let Some(args) = args {
+                for a in args {
+                    walk_expr(&a.value, typed, src, out);
+                }
+            }
+        }
+        ExprKind::Index { object, index } => {
+            walk_expr(object, typed, src, out);
+            walk_expr(index, typed, src, out);
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::NilCoalesce { left, right }
+        | ExprKind::Pipe { left, right } => {
+            walk_expr(left, typed, src, out);
+            walk_expr(right, typed, src, out);
+        }
+        ExprKind::Unary { operand, .. } => walk_expr(operand, typed, src, out),
+        ExprKind::Question(inner) => walk_expr(inner, typed, src, out),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            walk_expr(object, typed, src, out)
+        }
+        ExprKind::Cast { expr: inner, .. } => walk_expr(inner, typed, src, out),
+        ExprKind::Closure { body, .. } => walk_expr(body, typed, src, out),
+        ExprKind::Return(opt) => {
+            if let Some(inner) = opt {
+                walk_expr(inner, typed, src, out);
+            }
+        }
+        ExprKind::Break { value, .. } => {
+            if let Some(v) = value {
+                walk_expr(v, typed, src, out);
+            }
+        }
+        ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => {
+            for x in exprs {
+                walk_expr(x, typed, src, out);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for x in items {
+                walk_expr(x, typed, src, out);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            walk_expr(value, typed, src, out);
+            walk_expr(count, typed, src, out);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                walk_expr(k, typed, src, out);
+                walk_expr(v, typed, src, out);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                walk_expr(&f.value, typed, src, out);
+            }
+            if let Some(sp) = spread {
+                walk_expr(sp, typed, src, out);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(st) = start {
+                walk_expr(st, typed, src, out);
+            }
+            if let Some(en) = end {
+                walk_expr(en, typed, src, out);
+            }
+        }
+        ExprKind::Providers { bindings, body } => {
+            for pb in bindings {
+                walk_expr(&pb.value, typed, src, out);
+            }
+            walk_block(body, typed, src, out);
+        }
     }
 }
