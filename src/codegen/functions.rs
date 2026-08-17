@@ -1634,7 +1634,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // is 1 when this fn returns via sret, 0 otherwise (the common case).
             let sret_base = u32::from(self.fn_ctx.current_fn_sret_param.is_some());
             for (i, param) in func.params.iter().enumerate() {
-                let param_name = self.param_name(param);
+                // B-2026-08-17-23: `param_name` renders every non-binding
+                // (destructuring) pattern as `"_"`, so TWO such params in one
+                // signature — design.md's own `fn distance(Point { x: x1, y:
+                // y1 }: Point, Point { x: x2, y: y2 }: Point)` — collided on a
+                // single slot and a single `register_var_from_type_expr` entry.
+                // Index-qualify the synthetic name; a destructuring param has
+                // no source-visible name, so nothing can refer to it and the
+                // uniqueness is free.
+                let param_name = match &param.pattern.kind {
+                    crate::ast::PatternKind::Binding(n) => n.clone(),
+                    _ => format!("_param{i}"),
+                };
                 let param_val = fn_val.get_nth_param(i as u32 + sret_base).unwrap();
                 // AArch64 `#[repr(C)]` struct-by-value reconstruction
                 // (B-2026-07-09-2): the LLVM param is the AAPCS-coerced type
@@ -2458,6 +2469,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         ty: param_val.get_type(),
                     },
                 );
+                // B-2026-08-17-23 — a DESTRUCTURING parameter (`fn add((a, b):
+                // (i64, i64))`, `fn px(Point { x, y }: Point)`) binds only the
+                // whole-parameter slot above; its leaves were never bound, so
+                // every use in the body died with "Undefined variable 'a'" on
+                // both compiled backends while `karac check` passed and the
+                // interpreter ran fine. design.md § Destructuring in Function
+                // and Closure Parameters admits any irrefutable pattern here.
+                //
+                // `bind_pattern` is the same choke point `let (a, b) = p;`
+                // goes through — the control the row measured, which already
+                // compiled — so the leaves are bound exactly as the one-line
+                // body rewrite would have. It runs AFTER the slot insert so a
+                // leaf may shadow the (synthetic) parameter name, and the
+                // value is the parameter's, loaded through the alloca's own
+                // type to keep ABI-reconstructed shapes (arm64 coerced /
+                // indirect structs, niche Options) on the same path every
+                // other consumer reads.
+                if !matches!(param.pattern.kind, crate::ast::PatternKind::Binding(_)) {
+                    let loaded = self
+                        .builder
+                        .build_load(param_val.get_type(), alloca, "param.pat")
+                        .unwrap();
+                    self.bind_pattern(&param.pattern, loaded)?;
+                }
             }
         }
 

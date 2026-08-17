@@ -16960,6 +16960,45 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_destructuring_function_parameters() {
+        // B-2026-08-17-23 — design.md § Destructuring in Function and Closure
+        // Parameters opens with "Any irrefutable pattern may appear in
+        // parameter position", and roadmap.md marks it done, but codegen's
+        // prologue bound only the whole-parameter slot and never walked the
+        // pattern: every shape died with `Undefined variable '<leaf>'` on BOTH
+        // compiled backends while `karac check` passed clean and `--interp`
+        // ran correctly. Every shape the ledger row enumerated is pinned here.
+        let src = "struct Point { x: i64, y: i64 }\n\
+                   struct H { s: String, n: i64 }\n\
+                   fn add((a, b): (i64, i64)) -> i64 { a + b }\n\
+                   fn y_only((_, y): (i64, i64)) -> i64 { y }\n\
+                   fn only_a((a, _): (i64, i64)) -> i64 { a }\n\
+                   fn nested(((a, b), c): ((i64, i64), i64)) -> i64 { a + b + c }\n\
+                   fn px(Point { x, y }: Point) -> i64 { x + y }\n\
+                   fn distance(Point { x: x1, y: y1 }: Point, Point { x: x2, y: y2 }: Point) \
+                   -> i64 { (x2 - x1) + (y2 - y1) }\n\
+                   fn take(H { s, n }: H) -> String { s + n.to_string() }\n\
+                   fn main() {\n\
+                       println(add((3, 4)));\n\
+                       println(y_only((3, 4)));\n\
+                       println(only_a((3, 4)));\n\
+                       println(nested(((1, 2), 3)));\n\
+                       println(px(Point { x: 1, y: 2 }));\n\
+                       println(distance(Point { x: 1, y: 1 }, Point { x: 4, y: 6 }));\n\
+                       println(take(H { s: \"v\", n: 9 }));\n\
+                   }";
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "7\n4\n3\n6\n3\n8\nv9\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_module_const_nested_string_slice_initializers() {
         // B-2026-08-17-22 — a string literal nested in a module-level
         // struct / tuple / array initializer now types as `StringSlice`

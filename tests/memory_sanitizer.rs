@@ -50625,4 +50625,37 @@ fn main() {
             "asan_par_readonly_two_branch_vec_of_heap_structs",
         );
     }
+
+    /// B-2026-08-17-23 — a HEAP-CARRYING struct destructured in parameter
+    /// position. The fix binds the pattern's leaves through the same
+    /// `bind_pattern` choke point `let (a, b) = p;` uses, which means the
+    /// leaves take ownership of the parameter's heap fields exactly as a
+    /// body-level destructure would; this pins that the resulting
+    /// retain/release balance is clean rather than merely that the program
+    /// prints the right thing. Loops so a per-call imbalance accumulates
+    /// into something LSan cannot miss.
+    #[test]
+    fn asan_destructured_heap_struct_param() {
+        assert_clean_asan_run(
+            r#"struct H { s: String, n: i64 }
+struct P { a: String, b: String }
+fn take(H { s, n }: H) -> String { s + n.to_string() }
+fn both(P { a, b }: P) -> String { a + b }
+fn pair((l, r): (String, String)) -> String { l + r }
+fn main() {
+    let mut i = 0i64;
+    let mut last: String = "";
+    while i < 40i64 {
+        last = take(H { s: "v", n: i });
+        last = both(P { a: "x", b: "y" });
+        last = pair(("p", "q"));
+        i = i + 1i64;
+    }
+    println(last);
+}
+"#,
+            &["pq"],
+            "asan_destructured_heap_struct_param",
+        );
+    }
 }
