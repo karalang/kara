@@ -33954,3 +33954,27 @@ fn test_qualified_unit_variant_match_oracle() {
          }\n");
     assert_eq!(out, "0\n1\n2\n3\n");
 }
+
+#[test]
+fn test_enum_variant_path_display_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s `test_e2e_enum_variant_path_display`
+    // (B-2026-08-17-34). The interpreter always handled the variant-path
+    // operand; the compiled backends refused it, and separately ignored
+    // `#[derive(Display(snake_case))]`. This is the reference the two
+    // compiled backends were made to match.
+    let out = run("\n\
+         #[derive(Display)]\n\
+         enum Direction { Up, Down }\n\
+         #[derive(Display(snake_case))]\n\
+         enum Mode { FastPath, SlowPath }\n\
+         #[derive(Display)]\n\
+         enum Evt { KeyDown(i64), MouseUp }\n\
+         fn main() {\n\
+             println(f\"{Direction.Up}\");\n\
+             println(Direction.Down);\n\
+             println(f\"{Mode.FastPath}\");\n\
+             println(f\"{Evt.MouseUp}\");\n\
+             println(f\"{Direction.Up} then {Direction.Down}\");\n\
+         }\n");
+    assert_eq!(out, "Up\nDown\nfast_path\nMouseUp\nUp then Down\n");
+}

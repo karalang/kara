@@ -96947,6 +96947,46 @@ fn main() {
         );
     }
 
+    /// B-2026-08-17-34 — `#[derive(Display)]` with the operand written as an
+    /// enum-variant PATH, which is the form design.md § derive(Display) on
+    /// enums teaches (`println(f"{Direction.Up}")` -> "Up"). Both compiled
+    /// backends refused it (`--interp` printed it fine), with a diagnostic
+    /// that misnamed the program: it prescribed binding "a struct literal or
+    /// call result" to a `let`, and the operand was neither.
+    ///
+    /// Four shapes in one program: the all-unit path, the same in argument
+    /// position, a `snake_case`-derived enum (whose casing the compiled
+    /// backends were ALSO ignoring — a silent run-vs-build divergence that
+    /// this row's fix would otherwise have converted a build error into), and
+    /// a unit variant of a PAYLOAD-bearing enum. Paired with
+    /// `test_enum_variant_path_display_oracle` in `tests/interpreter.rs`.
+    #[test]
+    fn test_e2e_enum_variant_path_display() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Display)]
+enum Direction { Up, Down }
+
+#[derive(Display(snake_case))]
+enum Mode { FastPath, SlowPath }
+
+#[derive(Display)]
+enum Evt { KeyDown(i64), MouseUp }
+
+fn main() {
+    println(f"{Direction.Up}")
+    println(Direction.Down)
+    println(f"{Mode.FastPath}")
+    println(f"{Evt.MouseUp}")
+    println(f"{Direction.Up} then {Direction.Down}")
+}
+"#
+            ),
+            Some("Up\nDown\nfast_path\nMouseUp\nUp then Down\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-24 — the TUPLE-element sibling of B-2026-08-15-21.
     /// `s[0].0 = v` through a `mut Slice[(A, B)]` param failed the build with
     /// "tuple-element assignment through this receiver shape is not yet

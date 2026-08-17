@@ -1808,7 +1808,70 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 None
             }
+            // A unit-variant PATH used directly as the operand —
+            // `f"{Direction.Up}"` / `println(Status.Closed)`, which is the
+            // form design.md § derive(Display) on enums teaches
+            // (B-2026-08-17-34). The parser emits it as a 2-segment `Path`,
+            // not an `Identifier`, so the place-expression arms above never
+            // saw it and the operand fell through to the struct-shaped
+            // refusal further down — a diagnostic that then misnamed the
+            // program ("bind a struct literal or call result to a `let`"
+            // describes neither). `compile_unit_enum_display` compiles the
+            // operand through the ordinary path lowering, so recognizing the
+            // shape here is the whole fix.
+            //
+            // Guarded exactly as `compile_path_expr` guards its own
+            // enum-variant arm: a leading segment that names a local variable
+            // or module binding is a value-rooted field path (`CFG.max`), not
+            // a variant, and must keep falling through.
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                let (head, variant) = (&segments[0], &segments[1]);
+                if self.variables.contains_key(head)
+                    || self.mod_bindings.module_bindings.contains_key(head)
+                {
+                    return None;
+                }
+                let variants = self.type_decls.enum_unit_variants.get(head.as_str())?;
+                variants.contains(variant).then(|| head.clone())
+            }
             _ => None,
+        }
+    }
+
+    /// The DISPLAY spelling of `variant` for `enum_name` — the variant name as
+    /// written, or its `snake_case` form when the enum carries
+    /// `#[derive(Display(snake_case))]`.
+    ///
+    /// B-2026-08-17-34: codegen rendered the raw variant name unconditionally
+    /// while the interpreter applied the flag, so the same program printed
+    /// `fast_path` under `--interp` and `FastPath` under both compiled
+    /// backends — a silent run-vs-build divergence on a documented derive
+    /// option. Both the attribute predicate (`has_display_snake_case`) and the
+    /// case transform (`pascal_to_snake`) are the interpreter's own, reused
+    /// here rather than re-implemented, so the two backends cannot drift.
+    pub(super) fn enum_display_variant_name(&self, enum_name: &str, variant: &str) -> String {
+        let snake = |items: &[Item]| -> Option<bool> {
+            items.iter().find_map(|it| match it {
+                Item::EnumDef(e) if e.name == enum_name => {
+                    Some(crate::typechecker::has_display_snake_case(&e.attributes))
+                }
+                _ => None,
+            })
+        };
+        let is_snake = self
+            .program_snapshot
+            .as_ref()
+            .and_then(|p| snake(&p.items))
+            .or_else(|| {
+                crate::prelude::STDLIB_PROGRAMS
+                    .iter()
+                    .find_map(|(_, p)| snake(&p.items))
+            })
+            .unwrap_or(false);
+        if is_snake {
+            crate::interpreter::pascal_to_snake(variant)
+        } else {
+            variant.to_string()
         }
     }
 
@@ -1854,12 +1917,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(enum_name)
                 .and_then(|l| l.tags.get(vname))
                 .ok_or_else(|| format!("Display: missing tag for {enum_name}.{vname}"))?;
+            // Display spelling, not the declared spelling — honours
+            // `#[derive(Display(snake_case))]` (B-2026-08-17-34).
+            let disp = self.enum_display_variant_name(enum_name, vname);
             let g = self
                 .builder
-                .build_global_string_ptr(vname, "enumv")
+                .build_global_string_ptr(&disp, "enumv")
                 .unwrap()
                 .as_pointer_value();
-            let l = i64_t.const_int(vname.len() as u64, false);
+            let l = i64_t.const_int(disp.len() as u64, false);
             acc = Some(match acc {
                 None => (g, l),
                 Some((ap, al)) => {
@@ -2423,6 +2489,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     None
                 }
+            }
+            // A variant PATH operand on a PAYLOAD-BEARING enum —
+            // `f"{Evt.MouseUp}"` where `Evt` also has tuple/struct variants.
+            // The all-unit twin of this arm lives in `expr_user_enum_name`;
+            // both were missing, so every variant-path operand fell through
+            // to the struct-shaped refusal (B-2026-08-17-34). Membership is
+            // checked against the layout's tag map so a non-variant path on
+            // an enum-named head keeps falling through, and a variable- or
+            // module-binding-rooted path stays a field read, exactly as
+            // `compile_path_expr` treats it.
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                let (head, variant) = (&segments[0], &segments[1]);
+                if self.variables.contains_key(head)
+                    || self.mod_bindings.module_bindings.contains_key(head)
+                {
+                    return None;
+                }
+                self.type_decls
+                    .enum_layouts
+                    .get(head.as_str())
+                    .filter(|l| l.tags.contains_key(variant))
+                    .map(|_| head.clone())
             }
             _ => None,
         }?;

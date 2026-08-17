@@ -271,7 +271,14 @@ pub(super) fn repr_arg_head_names(attributes: &[Attribute]) -> Vec<String> {
 }
 
 /// Returns `true` when `attributes` contains `#[derive(Display(snake_case))]`.
-pub(super) fn has_display_snake_case(attributes: &[Attribute]) -> bool {
+///
+/// `pub(crate)` rather than `pub(super)` because CODEGEN needs the same
+/// answer (B-2026-08-17-34): the interpreter honoured the flag and the
+/// compiled backends did not, so `#[derive(Display(snake_case))] enum Mode {
+/// FastPath }` printed `fast_path` under `--interp` and `FastPath` under
+/// `karac build`. One implementation, consulted by both, is what keeps that
+/// from drifting apart again.
+pub(crate) fn has_display_snake_case(attributes: &[Attribute]) -> bool {
     for attr in attributes {
         if attr.is_bare("derive") {
             for arg in &attr.args {
