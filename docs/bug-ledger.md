@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 254 | 0 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
-| run-vs-build | 122 | 0 |
+| run-vs-build | 124 | 2 |
 | codegen-gap | 113 | 0 |
 | missing-feature | 96 | 0 |
 | perf | 75 | 1 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 53 | 0 |
 | autopar | 47 | 0 |
 | other | 45 | 0 |
-| cli | 30 | 0 |
+| cli | 32 | 2 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 17 | 0 |
@@ -124,13 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1250 surfaced · 1 open · 1234 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1252 surfaced · 3 open · 1234 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.61x driftsort after the insertion leaf; the partition TREE is now the larger half and the leaf split needs re-measuring | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
+| B-2026-08-16-12 | 2026-08-16 | cli | medium | The `chained_field_receiver` lint that closed B-2026-08-13-12 only walks SOME expression positions: it catches `let n = e.doc.lines.len();` and an `if` condition, and MISSES the same expression inside an f-string hole, behind an `as` cast, in a `for` range bound, and as an INDEX chain. All of them are still refused by `karac build`, so the check-vs-build gap that row was filed to close is only half closed. | src/chained_receiver_lint.rs -- the AST traversal that looks for `is_chained_field_receiver`. Two unvisited positions are named below; the pattern is that the walk covers statement-level and condition positions and not general sub-expressions. |
+| B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | the `E_ESCAPING_CLOSURE_NOT_YET` codegen refusal; the pattern to copy is `src/chained_receiver_lint.rs` (a check-phase Deny lint with `-A` opt-out and an `--interp` exemption via `Pipeline::codegen_bound`). |
 
 ### Wontfix (5)
 
