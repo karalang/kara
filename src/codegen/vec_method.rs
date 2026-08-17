@@ -11623,7 +11623,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let ci_n1 = self.builder.build_int_add(ci_n, one, "q.ci.n").unwrap();
         self.builder.build_store(ii_a, ci_n1).unwrap();
-        self.builder.build_unconditional_branch(cnt_chk).unwrap();
+        let cnt_latch = self.builder.build_unconditional_branch(cnt_chk).unwrap();
+        // The count pass is a pure branchless reduction and vectorises 8-wide
+        // in isolation (3.25 instr/elem) but is DECLINED BY THE COST MODEL in
+        // the shipped compiler (5.00, scalar) — B-2026-08-16-9. The hint
+        // overrides the cost model only; if the loop were illegal to vectorise
+        // this would change nothing. `KARAC_SORT_COUNT_VEC=0` opts out.
+        if std::env::var("KARAC_SORT_COUNT_VEC").as_deref() != Ok("0") {
+            self.attach_vectorize_enable_metadata(cnt_latch);
+        }
 
         // ── gate: abandon, having written nothing ──────────────────────────
         // `neq / len` is an unbiased estimate of 1 / distinct-keys for a

@@ -1668,6 +1668,58 @@ impl<'ctx> super::Codegen<'ctx> {
         body_top_level_constant_step(body, &var) && body_is_scalar_only(body)
     }
 
+    /// Attach `!llvm.loop !{!self, !{!"llvm.loop.vectorize.enable", i1 true}}`
+    /// to a loop's back-edge branch, overriding the vectoriser's COST MODEL
+    /// (not its legality analysis — an unvectorisable loop stays that way).
+    ///
+    /// B-2026-08-16-9: the partition's counting pass is a pure branchless
+    /// reduction that vectorises 8-wide when compiled in isolation — 26 NEON
+    /// instrs / 8 elements, 3.25 instr/elem — but in the shipped compiler it
+    /// comes out 2x-unrolled scalar at 5.00, and the whole binary contains no
+    /// NEON at all. `-pass-remarks-analysis=loop-vectorize` attributes exactly
+    /// one "the cost-model indicates that vectorization is not beneficial" to
+    /// the partition, and the count pass is the only loop in it that CAN
+    /// vectorise (the scatter's store address is data-dependent). So this is a
+    /// cost-model decision to override, not a legality problem to fix.
+    ///
+    /// Same self-referential loop-id recipe as the unroll hints: the
+    /// temporary-node then RAUW dance, which is LLVM's canonical way to build
+    /// cyclic metadata through the C API.
+    pub(super) fn attach_vectorize_enable_metadata(
+        &self,
+        branch: inkwell::values::InstructionValue<'ctx>,
+    ) {
+        use inkwell::values::AsValueRef;
+        use llvm_sys::core::{
+            LLVMGetMDKindIDInContext, LLVMMDNodeInContext2, LLVMMDStringInContext2,
+            LLVMMetadataAsValue, LLVMSetMetadata, LLVMValueAsMetadata,
+        };
+        use llvm_sys::debuginfo::{LLVMMetadataReplaceAllUsesWith, LLVMTemporaryMDNode};
+        use std::os::raw::{c_char, c_uint};
+
+        let ctx = self.context.raw();
+        unsafe {
+            // !{!"llvm.loop.vectorize.enable", i1 true}
+            let key = b"llvm.loop.vectorize.enable";
+            let prop_str = LLVMMDStringInContext2(ctx, key.as_ptr() as *const c_char, key.len());
+            let one = self.context.bool_type().const_int(1, false);
+            let one_md = LLVMValueAsMetadata(one.as_value_ref());
+            let mut prop_ops = [prop_str, one_md];
+            let prop_node = LLVMMDNodeInContext2(ctx, prop_ops.as_mut_ptr(), prop_ops.len());
+
+            let temp = LLVMTemporaryMDNode(ctx, std::ptr::null_mut(), 0);
+            let mut loop_ops = [temp, prop_node];
+            let loop_id = LLVMMDNodeInContext2(ctx, loop_ops.as_mut_ptr(), loop_ops.len());
+            LLVMMetadataReplaceAllUsesWith(temp, loop_id);
+
+            let kind = b"llvm.loop";
+            let kind_id =
+                LLVMGetMDKindIDInContext(ctx, kind.as_ptr() as *const c_char, kind.len() as c_uint);
+            let loop_id_val = LLVMMetadataAsValue(ctx, loop_id);
+            LLVMSetMetadata(branch.as_value_ref(), kind_id, loop_id_val);
+        }
+    }
+
     /// Attach `!llvm.loop !{!self, !{!"llvm.loop.unroll.full"}}` to a
     /// loop's back-edge branch so LLVM's full unroller fires. Builds the
     /// self-referential loop-id node via the temporary-node + RAUW recipe
