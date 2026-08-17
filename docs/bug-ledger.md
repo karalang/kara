@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 114 | 1 |
 | missing-feature | 98 | 0 |
 | perf | 76 | 2 |
-| false-positive | 73 | 2 |
+| false-positive | 73 | 1 |
 | diagnostics | 66 | 0 |
 | soundness | 49 | 0 |
 | crash | 49 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 901 | 3 |
 | typecheck | 180 | 0 |
 | interp | 146 | 0 |
-| ownership | 57 | 2 |
+| ownership | 57 | 1 |
 | other | 49 | 1 |
 | autopar | 48 | 1 |
 | cli | 35 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 7 open · 1248 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 6 open · 1249 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
 | B-2026-08-17-14 | 2026-08-17 | autopar+codegen | medium | A `#[par_order_free]` COLLECT LOOP REPORTS `fanned_out: true` AND RUNS AT 101% CPU — the B-2026-08-15-23 SIGNATURE AGAIN, on a compiler that already carries that fix. 48 branches, ~6 ms of work each, and the par build is 1.03x SLOWER than its sequential twin. Five isolations reproducing the loop's individual features all fan out correctly, so the trigger is still unidentified. | Unknown. NOT the B-2026-08-15-23 chunker floor: that fix is present and verified in the same binary (kata 276's 16-iteration loop fans out at 384% on it). The query reports `lowering: parallel_fanout, fanned_out: true, cost_gate: fanout` for the loop that does not parallelize, so whatever declines it is downstream of the reporting again. |
-| B-2026-08-17-16 | 2026-08-17 | ownership | medium | `let mc = m.as_slice_mut().to_vec();` keeps the mut-Slice borrow of `m` alive for `mc`'s WHOLE lifetime, so any later `ref` read near `m` mis-fires CrossBorrowConflict — but `.to_vec()` copies out and the borrow is dead at the semicolon; `mc` is an independent owned Vec. Measured pre-existing in plain read positions; became VISIBLE when B-2026-08-17-13 taught the ownership walk to see f-string holes. | the CrossBorrowConflict live-range for a chain-rooted mut-slice borrow — `let mc = m.as_slice_mut().to_vec();` should END the borrow at the `.to_vec()` copy, not extend it through `mc`'s lifetime |
 | B-2026-08-17-17 | 2026-08-17 | ownership | low | `let x: i64; loop { x = 1; break; } println(x);` is REJECTED with use-of-uninitialized, but design.md's DA table lists the shape as OK — an infinite `loop`'s body runs at least once, so an assignment that dominates every `break` initializes. The restore-after-loop is applied uniformly to `loop` as if the body could run zero times. Masked until now by the f-string hole (the spec-transcription probes printed via f-strings, so the row that produced B-2026-08-17-13 recorded this shape as accepted-correct). | restore_uninit_after_loop — an infinite `loop` runs its body at least once, but the post-loop restore treats it like a zero-iteration-capable while/for |
 | B-2026-08-17-18 | 2026-08-17 | codegen | low | Deferred initialization of NON-SCALAR locals (`let s: String; if c { s = ... } else { s = ... }`) is check-clean and interp-correct but refuses to build — now with an actionable message (B-2026-08-17-13 replaced the silent store-drop + cryptic `Undefined variable` with a loud deferral naming the remedy). Scalars lower fully; the heap classes need the let-site sidecar registration (string_vars / vec_elem_types / drop wiring) replayed from a TypeExpr instead of a value. | the StmtKind::LetUninit arm in src/codegen/stmts.rs — extend past the scalar class |
 
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced
 
 </details>
 
-### Fixed (1248)
+### Fixed (1249)
 
-<details><summary>1248 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1249 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10217,6 +10216,13 @@ WHAT THE SWEEP ACTUALLY FOUND, beyond prose:
 COST, measured: the row's '10 failures is a floor' was right -- the full-suite survey (all 104 targets, --no-fail-fast) found 44 unique failing tests across 6 targets: typechecker 10 (each read individually -- Option/ListNode/Tensor/host-boundary/spawn-capture message pins plus the fix-it replacement pin), lib 1 (the unit test literally named `..._renders_angle_brackets`, renamed and re-pinned), comptime_reflection 2, protobuf_derive 23, protobuf_proto 6, cli 2, example_corpus 1 (the last four all downstream of the reflection contract -- zero edits beyond protobuf.kara + nth_type_arg). One test comment had documented the angle rendering as 'a cross-codebase display convention separate from this slice's scope' -- that convention is now retired. Mend-example docs quoting the E0200 rendering (examples/mend/examples/user_lookup/*, README table) updated; `Option<T>`-from-Rust-priors phrasing left alone since it names Rust's convention. WGSL/WIT/C-header emitters keep `<>` -- those are TARGET languages that genuinely spell generics that way.
 
 COMPAT NOTE for comptime-derive authors: the reflected `name()` string is observable API, and any out-of-tree comptime code matching `"Vec<"`-style names must move to `"Vec["` -- in-tree protobuf.kara is the template. A latent behavior tightening rides along: `Slice[u8]` / `Array[i64, 4]` fields now peel under `element_type()` (their brackets were invisible to the old angle parser, so they returned identity); nothing in-tree relied on the identity behavior. |
+| B-2026-08-17-16 | ownership | medium | `let mc = m.as_slice_mut().to_vec();` keeps the mut-Slice borrow of `m` alive for `mc`'s WHOLE lifetime, so any later `ref` read near `m` mis-fires C… | FIXED with a copy-out gate at the binding propagation, plus explicit borrow-ending. Root cause pinned first: the parser aliases a postfix chain's span to its RECEIVER's span, so at `let mc = m.as_slice_mut().to_vec();` the `slice_borrow_sources` entry the inner `as_slice_mut()` records is keyed by the SAME SpanKey as the whole RHS -- indistinguishable, by key, from `let s = m.as_slice_mut();`. The let arm's span-keyed lookup (src/ownership/block_stmt.rs) therefore attributed the mut-slice borrow to `mc` via `slice_binding_sources`, `place_expr_root` then resolved every later read of `mc` to root `m`, and each read pushed a ref borrow of `m` against the still-active MutSlice entry -> one CrossBorrowConflict per read.
+
+THE GATE: the RHS's recorded type discriminates what the span cannot. `expr_types` is span-keyed too, and the OUTERMOST expression's record wins under the same aliasing -- which is exactly the value the binding receives. A new `type_is_deeply_owned` (src/ownership.rs) answers "does NO borrow form (ref / mut ref / Slice / weak / raw pointer / closure) appear anywhere in this type": for a deeply-owned RHS (`Vec[i64]` from `.to_vec()`), the borrow's last live use was inside the statement, so the let arm (and the D5 assign arm, same lookup) skips the propagation AND calls `end_copied_out_slice_borrow` (src/ownership/borrow.rs) -- removing both the creation entry and its ActiveBorrow, so neither later reads of the binding nor a later fresh borrow of the source (`let r = m.as_slice();`, which the stale entry also mis-rejected) nor scope-exit drains see a dead borrow. The gate is monotone by construction -- it only ever accepts more programs, never rejects more -- and conservative everywhere it cannot see: type params, inference vars, projections, and closures (which may capture borrows) all decline the gate, and a borrow-CARRYING chain result (`Option[ref i64]` from `.first()`) keeps the conservative propagation, measured still-rejected.
+
+VERIFIED: the row's repro accepts and runs identically on all three backends (interp / AOT / auto-par); the genuine-conflict controls still fire (live mut-slice binding vs new slice -> SliceBorrowConflict; ref-carrying chain -> still errors). The grandfathered harness entry for test_e2e_string_bytes_round_trip_and_slice_to_vec (tests/common/mod.rs OWNERSHIP_GATE_GRANDFATHERED) is REMOVED per this row -- the list is empty again on that side -- and that E2E passes under the strict gate; it and the new ownership tests (slice_chain_copied_out_does_not_borrow_the_source, slice_binding_and_ref_carrying_chain_still_conflict) are red at baseline.
+
+DELIBERATELY LEFT: the `.first()` shape's rejection is arguably over-strict in ITS OWN way (the error fires at creation, before any conflicting use), but it is sound conservatism over a genuinely borrow-carrying value, pre-existing, and out of this row's copy-out scope. |
 
 </details>
 
