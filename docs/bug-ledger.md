@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 122 | 0 |
 | codegen-gap | 113 | 0 |
 | missing-feature | 96 | 0 |
-| perf | 75 | 2 |
+| perf | 75 | 1 |
 | false-positive | 70 | 0 |
 | diagnostics | 60 | 0 |
 | soundness | 48 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 898 | 2 |
+| codegen | 898 | 1 |
 | typecheck | 175 | 0 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1250 surfaced · 2 open · 1234 fixed · 4 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1250 surfaced · 1 open · 1234 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.61x driftsort after the insertion leaf; the partition TREE is now the larger half and the leaf split needs re-measuring | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
-| B-2026-08-16-11 | 2026-08-16 | codegen | medium | The default integer overflow check is emitted inside the loop, blocking auto-vectorisation of EVERY integer reduction | integer overflow check emission (codegen) |
 
-### Wontfix (4)
+### Wontfix (5)
 
-<details><summary>4 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
+<details><summary>5 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
 
 | id | date | surface | sev | title |
 |---|---|---|---|---|
@@ -143,6 +142,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1250 surfaced
 | B-2026-08-11-28 | 2026-08-11 | codegen | low | RESIDUAL of B-2026-08-10-9, split out per the live-remainder rule: on SHUFFLED-UNIFORM input the mono `sort_by` is still ~1.6x Rust's driftsort. 50a50e8 replaced the fixed-32-run merge sort with a natural-run merge sort, which was the right fix and moved the ORDERED patterns enormously (sorted and reverse went from 39-54x behind to roughly 2x AHEAD -- measured here at 0.47x and 0.52x). It deliberately did not move the shuffled case, and the closing note records that in its own numbers: `random 14.91 -> 14.60 ms (UNCHANGED)`, because shuffled input has ~2-element natural runs so the RUN padding reproduces the old run length and the old pass count. MEASURED FRESH (hyperfine, 10 runs each, clone subtracted via an identical kernel minus the sort call; 25 rounds x 150k (i64,i64) pairs, x86 container): kara pure sort 260.6 ms vs rust 159.0 ms = 1.64x. Same kernel by pattern: shuffled 1.51x total / 1.64x pure, sorted 0.47x, reverse 0.52x. SEVERITY LOW deliberately -- shuffled-uniform is the regime where an adaptive sort has least to exploit, driftsort is a strong baseline, and 1.6x on the hardest pattern while beating it 2x on ordered input is a defensible place to sit. Filed so the remainder is visible in the work queue rather than only inside a closed row's prose, NOT as a claim that it must be closed. CAVEAT: single host, x86_64 shared container, not the canonical Apple-silicon bench host. NEXT STEP if picked up: compare the emitted merge inner loop against driftsort's on shuffled input; the run-detection phase is already known not to help there, so any remaining gap is in the merge itself. |
 | B-2026-08-15-31 | 2026-08-15 | codegen | medium | MECHANISM PINNED (was: not pinned). Kata #246's 1.57x deficit to `clang -O3` on arm64 is ENTIRELY LOOP UNROLLING, and karac is at `clang -O2` PARITY. Dynamic counts: kara 527.4M instrs / 66.2M cycles, clang -O3 370.7M / 42.0M, clang -O2 500.5M / 74.4M, clang -O3 -fno-unroll-loops 500.6M / 63.7M. So kara vs equal-treatment C is 1.05x on instructions and 1.06x on wall time, and kara is 11% AHEAD of clang -O2 on cycles. karac's own full-unroll hint machinery is live and working but declines this loop, and THREE ways of making it fire were then built and measured -- hint the converging guard (LLVM refuses and warns), canonicalise to a counted loop + full unroll (works, #246 -> 1.08x of clang -O3, but unbounded: kata #189's million-iteration reverse took `karac build` from 0.6s to killed at 300s), and canonicalise + bounded partial unroll (safe, but a corpus NET REGRESSION -- 10 rows better, 11 worse). WONTFIX: the blocker is that a converging loop's trip count has NO COMPILE-TIME BOUND, and until that changes every unroll strategy either misfires or over-applies. |
 | B-2026-08-15-33 | 2026-08-15 | codegen | medium | `karac build` IS NOT REPRODUCIBLE: the SAME karac binary, on the SAME source, emits DIFFERENT executables across runs. Three consecutive builds of kata #253's min_meeting_rooms.kara gave two distinct sha256s (c909a866 / 76932c29 / c909a866); #252, #16 and #18 were stable across the same test, so it is program-dependent rather than universal. Sinks are unaffected -- the binaries are equivalent, not wrong -- so this is a build-reproducibility defect, not a miscompile. UPSTREAM: reproduces in stock `opt` 18.1.8 on a fixed .ll, so karac is not in the loop; the varying thing is the pass manager's FUNCTION VISIT ORDER (slot 513 names a different function per run), first diverging among the 66 identical `__karac_panic_site_*` cold leaves. |
+| B-2026-08-16-11 | 2026-08-16 | codegen | medium | The default integer overflow check is emitted inside the loop, blocking auto-vectorisation of EVERY integer reduction |
 
 </details>
 
