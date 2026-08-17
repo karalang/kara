@@ -99,7 +99,7 @@ pub fn output_with_hang_watchdog(mut cmd: Command, timeout: Duration) -> Option<
 /// exists to shrink: fix the bug (or the test program), remove the
 /// entry.
 pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
-    // B-2026-08-17-14 — CrossBorrowConflict FALSE POSITIVE: `let mc =
+    // B-2026-08-17-16 — CrossBorrowConflict FALSE POSITIVE: `let mc =
     // m.as_slice_mut().to_vec();` registers a mut-slice borrow of `m` that
     // stays live for `mc`'s whole lifetime, but `.to_vec()` COPIES out and
     // ends the borrow — `mc` is an independent owned Vec, and any later read

@@ -96,12 +96,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 124 | 1 |
-| codegen-gap | 113 | 0 |
+| codegen-gap | 114 | 1 |
 | missing-feature | 98 | 0 |
 | perf | 76 | 2 |
-| false-positive | 71 | 0 |
+| false-positive | 73 | 2 |
 | diagnostics | 66 | 1 |
-| soundness | 49 | 1 |
+| soundness | 49 | 0 |
 | crash | 49 | 0 |
 | other | 35 | 1 |
 | use-after-free | 20 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 900 | 2 |
+| codegen | 901 | 3 |
 | typecheck | 180 | 1 |
 | interp | 146 | 0 |
-| ownership | 55 | 1 |
+| ownership | 57 | 2 |
 | other | 49 | 1 |
 | autopar | 48 | 1 |
 | cli | 35 | 1 |
@@ -124,18 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1267 surfaced · 6 open · 1246 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 8 open · 1247 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort; the residual is now a pure work-count gap at IPC parity | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
-| B-2026-08-17-13 | 2026-08-17 | ownership | high | READING AN UNINITIALIZED BINDING IS NOT REJECTED: `let x: i64; println(f"{x}")` passes `karac check`, the interpreter prints `()` -- the UNIT value in an `i64` slot -- and both compiled backends fail with `codegen failed: Undefined variable 'x'`. design.md calls this "always a DA error". Every flow-sensitive definite-assignment rule the spec specifies is unenforced; the `ValueState::Uninit` machinery exists and drives the init-vs-reassign rule, but no read is ever checked against it. | src/ownership.rs -- `ValueState::Uninit`, `snapshot_uninit`, `restore_uninit_after_loop` (whose own doc comment cites "the 'loop body might run zero times' invariant for definite-assignment"). The state exists and is maintained; the READ check is what is missing. Lead, not a conclusion -- I did not trace every consumer. |
 | B-2026-08-17-14 | 2026-08-17 | autopar+codegen | medium | A `#[par_order_free]` COLLECT LOOP REPORTS `fanned_out: true` AND RUNS AT 101% CPU — the B-2026-08-15-23 SIGNATURE AGAIN, on a compiler that already carries that fix. 48 branches, ~6 ms of work each, and the par build is 1.03x SLOWER than its sequential twin. Five isolations reproducing the loop's individual features all fan out correctly, so the trigger is still unidentified. | Unknown. NOT the B-2026-08-15-23 chunker floor: that fix is present and verified in the same binary (kata 276's 16-iteration loop fans out at 384% on it). The query reports `lowering: parallel_fanout, fanned_out: true, cost_gate: fanout` for the loop that does not parallelize, so whatever declines it is downstream of the reporting again. |
 | B-2026-08-17-15 | 2026-08-17 | typecheck | low | `type_display` renders a generic `Type::Named` with ANGLE brackets -- `Option<i64>`, `Vec<i64>` -- while every sibling arm in the same function uses Kara's `[...]` (`Slice[T]`, `Rc[T]`, `Arc[T]`). CLAUDE.md's first language rule is `[T]` not `<T>`, so every diagnostic naming a generic prints syntax that is not the language's. | src/typechecker/types.rs — `type_display`'s `Type::Named` arm formats `{}<{}>`; its `Slice` / `Rc` / `Arc` siblings format `{}[{}]`. Fixing it means updating every assertion that pins the old rendering (10+ in tests/typechecker.rs alone). |
+| B-2026-08-17-16 | 2026-08-17 | ownership | medium | `let mc = m.as_slice_mut().to_vec();` keeps the mut-Slice borrow of `m` alive for `mc`'s WHOLE lifetime, so any later `ref` read near `m` mis-fires CrossBorrowConflict — but `.to_vec()` copies out and the borrow is dead at the semicolon; `mc` is an independent owned Vec. Measured pre-existing in plain read positions; became VISIBLE when B-2026-08-17-13 taught the ownership walk to see f-string holes. | the CrossBorrowConflict live-range for a chain-rooted mut-slice borrow — `let mc = m.as_slice_mut().to_vec();` should END the borrow at the `.to_vec()` copy, not extend it through `mc`'s lifetime |
+| B-2026-08-17-17 | 2026-08-17 | ownership | low | `let x: i64; loop { x = 1; break; } println(x);` is REJECTED with use-of-uninitialized, but design.md's DA table lists the shape as OK — an infinite `loop`'s body runs at least once, so an assignment that dominates every `break` initializes. The restore-after-loop is applied uniformly to `loop` as if the body could run zero times. Masked until now by the f-string hole (the spec-transcription probes printed via f-strings, so the row that produced B-2026-08-17-13 recorded this shape as accepted-correct). | restore_uninit_after_loop — an infinite `loop` runs its body at least once, but the post-loop restore treats it like a zero-iteration-capable while/for |
+| B-2026-08-17-18 | 2026-08-17 | codegen | low | Deferred initialization of NON-SCALAR locals (`let s: String; if c { s = ... } else { s = ... }`) is check-clean and interp-correct but refuses to build — now with an actionable message (B-2026-08-17-13 replaced the silent store-drop + cryptic `Undefined variable` with a loud deferral naming the remedy). Scalars lower fully; the heap classes need the let-site sidecar registration (string_vars / vec_elem_types / drop wiring) replayed from a TypeExpr instead of a value. | the StmtKind::LetUninit arm in src/codegen/stmts.rs — extend past the scalar class |
 
 ### Wontfix (5)
 
@@ -151,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1267 surfaced
 
 </details>
 
-### Fixed (1246)
+### Fixed (1247)
 
-<details><summary>1246 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1247 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10162,6 +10164,49 @@ observation that the FIX ADVICE (Mutex-wrap / par struct) was wrong for
 read-only workloads is mooted for the admitted shapes (no diagnostic fires)
 and unchanged for the rest. design.md's v1-status blockquote now records the
 live slice and names the remaining target-model work. |
+| B-2026-08-17-13 | ownership | high | READING AN UNINITIALIZED BINDING IS NOT REJECTED: `let x: i64; println(f"{x}")` passes `karac check`, the interpreter prints `()` -- the UNIT value i… | FIXED by d0e204b — but not the fix the row describes, because the row's
+premise did not survive discrimination. Re-probing every table row with
+PLAIN reads (println(x), not println(f"{x}")) showed the flow-sensitive DA
+analysis CORRECT in 13 of 14 positions: partial branches, else-only, nested
+partials, zero-iteration while/for, match scrutinees, casts, range bounds,
+method args, struct-literal fields, closure bodies, returns, and the heap
+partial all reject; both-branches-assign accepts. The entire twelve-row
+ACCEPTS table was ONE hole: check_expr_reading carried InterpolatedStringLit
+in its leaf-literal group, so a read inside an f-string hole was the single
+position the analysis never saw — and the row's probes (transcribing spec
+examples whose `print(x)` becomes `println(f"{x}")` in Kāra) all routed
+through it. Third occurrence of the unvisited-position class
+(B-2026-08-16-12, B-2026-08-17-2), first with a soundness diagnostic behind
+it. The arm now walks its holes; the row's headline repro rejects with the
+DA diagnostic pointing at the read.
+
+TWO ADJACENT DEFECTS the row's symptoms actually came from, fixed in the
+same commit:
+
+1. `karac run` NEVER CONSULTED THE OWNERSHIP VERDICT — the "interpreter
+   prints ()" half. The interp lane skipped ownershipcheck by design
+   (codegen was its only consumer), so the rejected program executed with
+   exit 0; the JIT lane ran the check but only passed the RESULT to codegen,
+   never reading errors — hence `Undefined variable 'x'` instead of a DA
+   diagnostic. Both lanes now gate on build's fatal/advisory classifier.
+   Pinned: test_run_interp_gates_on_fatal_ownership.
+
+2. CODEGEN HAD NO LetUninit LOWERING — the "both compiled backends fail"
+   half, and it was wider than the row could see: even the spec's canonical
+   CHECK-CLEAN deferred-init program (`let x: i64; if c { x = 1 } else
+   { x = 2 }`) refused to build, because the arm's claimed lazy
+   materialization did not exist (the generic identifier store is an if-let
+   with NO else — first assignment silently dropped). Scalars now alloca at
+   the declaration, zero-init, full interp parity (pinned:
+   scalar_deferred_initialization_lowers). Non-scalar deferred init stays a
+   deferral with an actionable message — split to B-2026-08-17-18.
+
+REMAINDERS SPLIT OUT: B-2026-08-17-16 (CrossBorrowConflict false positive on
+`m.as_slice_mut().to_vec()`, pre-existing, unmasked by the hole fix — one
+E2E test grandfathered against it), B-2026-08-17-17 (the loop-with-break DA
+over-fire — the spec table's twelfth row, needs break-dominance), and -18
+above. The interpreter's ()-for-uninit rendering became unreachable from any
+checked program and was left alone. |
 
 </details>
 
