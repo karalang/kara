@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 96 | 0 |
 | perf | 75 | 1 |
 | false-positive | 70 | 0 |
-| diagnostics | 61 | 1 |
+| diagnostics | 62 | 0 |
 | soundness | 48 | 0 |
 | crash | 48 | 0 |
 | other | 33 | 1 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 53 | 0 |
 | autopar | 47 | 0 |
 | other | 46 | 1 |
-| cli | 33 | 2 |
+| cli | 34 | 1 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 17 | 0 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1254 surfaced · 4 open · 1235 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1255 surfaced · 3 open · 1237 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort; the residual is now a pure work-count gap at IPC parity | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
-| B-2026-08-17-2 | 2026-08-17 | cli | low | The `map_value_clone_reinsert` advisory lint shares the partial-walk idiom B-2026-08-16-12 removed from its sibling: its traversal carries `_ => {}` catch-alls at three sites, so the quadratic clone-reinsert idiom inside an unvisited position (a closure body being the most plausible) is silently unreported. Advisory-only consequence — a missed perf hint, not a check-vs-build gap. | src/map_entry_lint.rs — the walk_stmt/walk_expr traversal (`_ => {}` at three sites) |
 
 ### Wontfix (5)
 
@@ -149,9 +148,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1254 surfaced
 
 </details>
 
-### Fixed (1235)
+### Fixed (1237)
 
-<details><summary>1235 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1237 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9721,6 +9720,26 @@ consequence class is different (an advisory perf hint missed, not a
 check-vs-build gap), so it is filed as its own low row rather than bundled
 here. |
 | B-2026-08-17-1 | effect | medium | collect_calls_in_expr name-only method fallback scans all method_bodies keys per call site, allocating a format! probe per key — O(call sites x impl… | FIXED by 3d466756. A method_name_index (bare method name -> the method_bodies keys ending in .name), built once at the end of collect_function_info, replaces the per-call-site scan; the same commit moves the effectchecker's internal String-keyed working tables to FxHashMap/FxHashSet (public result structs and signatures stay std HashMap). Measured on bench/compile_speed/synthetic.kara via examples/bench_frontend.rs: effectcheck 136.6 -> ~67 ms median, allocations 2.44M -> 0.64M, whole front end 241 -> ~168 ms (-30%). Verified: full non-LLVM suite 8,959/0; codegen E2E 3,000/0, par_codegen 258/0, memory_sanitizer 1,109/0 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1. |
+| B-2026-08-17-2 | cli | low | The `map_value_clone_reinsert` advisory lint shares the partial-walk idiom B-2026-08-16-12 removed from its sibling: its traversal carries `_ => {}`… | FIXED by 281a257. The probe confirmed the filed hypothesis on its first
+candidate: the clone-reinsert idiom inside a CLOSURE body fires nothing under
+the old walk while the statement-position twin warns (measured via
+--output=json, because text mode had its own independent bug — split out and
+fixed as B-2026-08-17-3). Both walks are now exhaustive with no `_ => {}`,
+mirroring `span_visitor::visit_expr` exactly as the B-2026-08-16-12 template
+prescribes; the next `ExprKind`/`StmtKind` addition is a compile error in this
+file. Widening the walk cannot over-fire: detection stays on Match nodes, the
+walk only reaches nodes the old arm set never visited. Pinned by
+`fires_inside_a_closure_body` (tests/map_entry_lint.rs). The row's "may close
+invalid" branch did not materialize — the pattern hosts fine inside a closure,
+which is also where real accumulator code writes it (a `for_each` body). |
+| B-2026-08-17-3 | cli | medium | Text-mode `karac check` silently DROPS the whole `TypeCheckResult::warnings` channel: every `type_lint_warning` lint (`deprecated`, `unstable_api`, `… | FIXED by 281a257 (same commit as B-2026-08-17-2 — the walk fix is invisible in
+text mode without this one). `render_text_diagnostics` gains a `t.warnings`
+loop rendering `warning[<lint_name>]` — the bracket names the lint because
+that is what `-A <name>` takes — with the standard source snippet; exit code
+unchanged (a warning is not an error, and the `All checks passed.` verdict
+still prints, matching the ownership-warning convention). Pinned by
+`test_typed_warnings_render_in_text_mode` (tests/cli.rs): warning present in
+stderr, lint name in the bracket, exit 0, verdict line intact. |
 
 </details>
 
