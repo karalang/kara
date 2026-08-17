@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 124 | 1 |
 | codegen-gap | 114 | 1 |
 | missing-feature | 98 | 0 |
-| perf | 76 | 2 |
+| perf | 76 | 1 |
 | false-positive | 73 | 1 |
 | diagnostics | 66 | 0 |
 | soundness | 49 | 0 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 901 | 3 |
+| codegen | 901 | 2 |
 | typecheck | 180 | 0 |
 | interp | 146 | 0 |
 | ownership | 57 | 1 |
 | other | 49 | 1 |
-| autopar | 48 | 1 |
+| autopar | 48 | 0 |
 | cli | 35 | 1 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 6 open · 1249 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced · 5 open · 1250 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort; the residual is now a pure work-count gap at IPC parity | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
-| B-2026-08-17-14 | 2026-08-17 | autopar+codegen | medium | A `#[par_order_free]` COLLECT LOOP REPORTS `fanned_out: true` AND RUNS AT 101% CPU — the B-2026-08-15-23 SIGNATURE AGAIN, on a compiler that already carries that fix. 48 branches, ~6 ms of work each, and the par build is 1.03x SLOWER than its sequential twin. Five isolations reproducing the loop's individual features all fan out correctly, so the trigger is still unidentified. | Unknown. NOT the B-2026-08-15-23 chunker floor: that fix is present and verified in the same binary (kata 276's 16-iteration loop fans out at 384% on it). The query reports `lowering: parallel_fanout, fanned_out: true, cost_gate: fanout` for the loop that does not parallelize, so whatever declines it is downstream of the reporting again. |
 | B-2026-08-17-17 | 2026-08-17 | ownership | low | `let x: i64; loop { x = 1; break; } println(x);` is REJECTED with use-of-uninitialized, but design.md's DA table lists the shape as OK — an infinite `loop`'s body runs at least once, so an assignment that dominates every `break` initializes. The restore-after-loop is applied uniformly to `loop` as if the body could run zero times. Masked until now by the f-string hole (the spec-transcription probes printed via f-strings, so the row that produced B-2026-08-17-13 recorded this shape as accepted-correct). | restore_uninit_after_loop — an infinite `loop` runs its body at least once, but the post-loop restore treats it like a zero-iteration-capable while/for |
 | B-2026-08-17-18 | 2026-08-17 | codegen | low | Deferred initialization of NON-SCALAR locals (`let s: String; if c { s = ... } else { s = ... }`) is check-clean and interp-correct but refuses to build — now with an actionable message (B-2026-08-17-13 replaced the silent store-drop + cryptic `Undefined variable` with a loud deferral naming the remedy). Scalars lower fully; the heap classes need the let-site sidecar registration (string_vars / vec_elem_types / drop wiring) replayed from a TypeExpr instead of a value. | the StmtKind::LetUninit arm in src/codegen/stmts.rs — extend past the scalar class |
 
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1270 surfaced
 
 </details>
 
-### Fixed (1249)
+### Fixed (1250)
 
-<details><summary>1249 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1250 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10205,6 +10204,64 @@ E2E test grandfathered against it), B-2026-08-17-17 (the loop-with-break DA
 over-fire — the spec table's twelfth row, needs break-dominance), and -18
 above. The interpreter's ()-for-uninit rendering became unreachable from any
 checked program and was left alone. |
+| B-2026-08-17-14 | autopar+codegen | medium | A `#[par_order_free]` COLLECT LOOP REPORTS `fanned_out: true` AND RUNS AT 101% CPU — the B-2026-08-15-23 SIGNATURE AGAIN, on a compiler that already… | FIXED by 342bc96, and the mechanism is neither of the row's two theories —
+not the original "reports a fan-out that does not happen" (the follow-up
+correctly refuted that: the dispatch happens) and not the follow-up's
+RC-contention suspect. Instrumenting the dispatch path on the kata's own
+bench (this container, 4 cores, reproduced at 231ms par vs 207ms seq,
+1.01x CPU) showed: iter_total=48, n_workers=4, order_free, chunker yielding
+4 clean chunks of 12 — and then ALL FOUR TASKS EXECUTING SEQUENTIALLY ON
+ONE POOL THREAD, because an AUTO-PARALLELIZED loop inside `solve` dispatched
+`karac_par_run` once per call: 48 nested dispatches into the pool the outer
+collect already saturated, each one blocking its worker in dispatch_and_wait.
+`karac_par_reduce` has had a fork-depth cap since slice 3b; `karac_par_run`
+had none. That asymmetry is the whole bug.
+
+WHY TEN ISOLATIONS MISSED IT: an isolation reproduces the feature it names,
+and none of the named features (branch count, captured collections,
+allocation, String returns, nested SEQUENTIAL_TABULATE reductions, let-vs-
+expression push) controls whether the callee contains a loop AUTO-PAR
+recognizes as dispatchable. The follow-up's bisection table now has a
+mechanical reading: each simplification of `solve` changed WHICH loops
+auto-par recognized, so the 101%/166%/248%/345% gradient tracks how much of
+each variant's runtime sat inside a nested-dispatching region — graded
+because the convoy is proportional, not because of payload contention.
+
+THE RC-RACE QUESTION THE FOLLOW-UP ASKED TO SETTLE, settled: plain
+`Vec[String]` elements carry NO refcount — RC is the `shared struct` tier
+(design.md ownership tiers; the rc-elide spike's retain/release surface is
+`shared`/`Option[shared]` params). A read-only `words[p]` on a plain
+element is a load, not a retain. No data race exists on this program, which
+the B-2026-08-17-12 admission's cross-task-safe walk (shared-at-any-depth
+refuses) also enforces from the checker side.
+
+THE FIX: compiler-DERIVED regions (auto-par groups) now route through a new
+`karac_par_run_auto` — same ABI, but at the fork-depth cap the branches run
+inline via seq_par_run (cfg-widened; cancel/frames/ordered-output
+preserved). Explicit `par {}` keeps unconditional dispatch: its branches
+may rendezvous, so inlining could deadlock them. Par-run branch bodies now
+raise the same depth counter reduce workers do, unifying the nesting chain.
+Measured: par lane 231ms -> 124ms vs 214ms seq (1.03x slower -> 1.7x
+faster), sink byte-identical, nine fan-out isolations unchanged at ~3x.
+
+THE BUG THE FIX EXPOSED (same commit): `__karac_write_console`'s body is
+finalized on a NAME-KEYED par_used gate that did not know the new symbol,
+so auto-par programs' println lowered to raw fwrite and branch output raced
+the fd — caught by three ASAN fixtures' output asserts going
+non-deterministic, root-caused by observing the branch redirects install
+while write_console never fired. Gate now includes karac_par_run_auto. Note
+for the next runtime-entry author: that gate is a hidden coupling every new
+par dispatch symbol must visit.
+
+RESIDUAL, left open deliberately: 2.04x CPU on 4 cores is not 4x. The scan
+is memory-bandwidth-shaped (250k string headers per branch), and the
+follow-up's like-for-like contention measurement remains worth doing if the
+kata's cross-language lanes suggest kara-specific scaling loss. That is a
+different, smaller question than this row's, which was the 1.03x-SLOWER
+lane. Pinned output-only by test_e2e_nested_autopar_inside_annotated_
+collect_matches_serial; a timing assertion would flake (the -23 lesson).
+Full suite 105 green including the three output-order ASAN fixtures;
+clippy --all-targets + fmt + both wasm clippy gates clean. |
 | B-2026-08-17-15 | typecheck | low | `type_display` renders a generic `Type::Named` with ANGLE brackets -- `Option<i64>`, `Vec<i64>` -- while every sibling arm in the same function uses… | FIXED, and the row's 'cosmetics-plus' framing turned out to UNDERSELL it -- the sweep found the wrong spelling already shipping in machine-applied form. Two arms in `type_display` (src/typechecker/types.rs) moved to the language's own brackets: the `Type::Named` generic arm (`Vec<i64>` -> `Vec[i64]`) and the `AssocProjection` RECEIVER arm, which was inconsistent with itself -- the projection's own args one slot over already rendered `[...]` (`Wrapper<String>.Mapped[i64]`).
 
 WHAT THE SWEEP ACTUALLY FOUND, beyond prose:
