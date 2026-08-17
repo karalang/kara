@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 98 | 2 |
 | perf | 75 | 1 |
 | false-positive | 70 | 0 |
-| diagnostics | 63 | 0 |
+| diagnostics | 64 | 0 |
 | soundness | 48 | 0 |
 | crash | 48 | 0 |
 | other | 35 | 1 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 177 | 1 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
-| other | 48 | 1 |
+| other | 49 | 1 |
 | autopar | 47 | 0 |
 | cli | 34 | 1 |
 | runtime | 22 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1260 surfaced · 5 open · 1240 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1261 surfaced · 5 open · 1241 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1260 surfaced
 
 </details>
 
-### Fixed (1240)
+### Fixed (1241)
 
-<details><summary>1240 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1241 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9872,6 +9872,51 @@ test still leaves the env var in a defined state for the next one, and convertin
 its failure into a second "poisoned lock" failure would only bury the real one.
 The header now states the invariant — nothing in this binary may touch
 `KARAC_PAR_ATOMIC_PROMOTION` without holding `ENV_GUARD`. |
+| B-2026-08-17-9 | other | low | `scripts/asan-o0-leg.sh` calls every new -O0 failure a real leak -- "ASAN is reporting on memory the program actually touched" -- but under KARAC_REQ… | FIXED by 394fc56d, in the new-failure branch of scripts/asan-o0-leg.sh.
+
+THE MESSAGE ASSERTED ITS OWN DIAGNOSIS. Every entry in `new_failures` got the
+same verdict — "These are real: at -O0 the fixture's allocations are not
+optimized away, so ASAN is reporting on memory the program actually touched" —
+followed by a remedy that only fits a leak: fix the codegen defect, or quarantine
+the fixture WITH an owning bug row. For the class the leg was built for that is
+right. It is not right for a LINK failure, which lands in the same bucket and is
+not a sanitizer report at all.
+
+HIT IT LIVE, which is how it was found. Running the leg on a container whose
+opt-in archives had never been built produced five "NEW -O0 FAILURES" — four
+regex fixtures and one Arrow — under a banner insisting they were real leaks in
+memory the program touched. They were `libkarac_runtime_regex.a` and
+`libkarac_runtime_arrow.a` not existing. The actual repair is one `cargo rustc`
+per archive; the message pointed at a codegen defect that was not there, and its
+fallback ("add the fixture to the quarantine list WITH the bug row that owns it")
+would have written a permanent entry for a missing file.
+
+THE COMBINATION IS NOT EXOTIC, which is why it is worth a row rather than a
+shrug. CLAUDE.md's setup recipe deliberately does NOT build the regex / arrow /
+gpu archives — they are opt-in and heavy — so a fresh checkout has exactly this
+state. And `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` is the documented way to prove a run
+is not vacuous (CI's archive-building jobs set it), so the person most likely to
+meet this is the one being most careful. Before B-2026-08-16-10 taught CI to
+build the regex/arrow archives, CI itself was one config change away from it.
+
+THE FIX DISCRIMINATES ON THE LOG rather than guessing: if any fixture failed with
+the runtime's own `needs the <feature> runtime archive` text, say NOT LEAKS,
+print the archive name(s) the linker asked for, and point at the build recipe —
+including the re-run of the plain full build afterward, since the feature builds
+emit to the canonical archive name. Otherwise the original leak text is
+unchanged, because for a genuine leak it was already the right message.
+
+VERIFIED BOTH DIRECTIONS on the real leg, not by reading the branch: with the
+regex archive moved aside, 4 failures and the new NOT-LEAKS text naming
+`libkarac_runtime_regex.a`; with every archive present, 1110 passed / 0 failed
+and the quarantine list matched exactly. The else-arm is byte-identical to what
+shipped, so the leak path is untouched.
+
+NOTE FOR WHOEVER RUNS THE LEG NEXT: with all five archives built, this container
+runs 1110 fixtures where it ran 1105 before. The five regex/Arrow fixtures were
+not failing previously — they were SKIPPING, which the leg reported as a pass.
+That is the vacuity the require-archive flag exists to expose, and it is worth
+setting it deliberately rather than trusting a bare green. |
 
 </details>
 
