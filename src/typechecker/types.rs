@@ -711,8 +711,14 @@ pub fn type_display(ty: &Type) -> String {
         }
         Type::Named { name, args } if args.is_empty() => name.clone(),
         Type::Named { name, args } => {
+            // Kāra spells generics `[T]`, never `<T>` (design.md; CLAUDE.md's
+            // first language rule). Diagnostics are the AI-first wedge's main
+            // output, and an author who copies `Vec<i64>` out of one writes a
+            // parse error the compiler taught them — so this arm must render
+            // what the LANGUAGE accepts, like its Slice/Rc/Arc siblings
+            // already did (B-2026-08-17-15).
             let inner: Vec<String> = args.iter().map(type_display).collect();
-            format!("{}<{}>", name, inner.join(", "))
+            format!("{}[{}]", name, inner.join(", "))
         }
         Type::Shared(name) => name.clone(),
         Type::Rc(inner) => format!("Rc[{}]", type_display(inner)),
@@ -760,8 +766,11 @@ pub fn type_display(ty: &Type) -> String {
             let recv_str = if receiver_args.is_empty() {
                 param.clone()
             } else {
+                // Same rule as the `Named` arm (B-2026-08-17-15) — and this
+                // one was inconsistent with ITSELF: the projection's own
+                // `args` two lines down always rendered `[...]`.
                 let inner: Vec<String> = receiver_args.iter().map(type_display).collect();
-                format!("{}<{}>", param, inner.join(", "))
+                format!("{}[{}]", param, inner.join(", "))
             };
             if args.is_empty() {
                 format!("{}.{}", recv_str, assoc)

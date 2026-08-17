@@ -1369,8 +1369,8 @@ fn test_generic_vec_accessor_owned_return_rejected() {
         assert!(
             errors
                 .iter()
-                .any(|e| e.message.contains("Option<T>") && e.message.contains("Option<ref T>")),
-            "expected `Option<T>` vs `Option<ref T>` mismatch for {accessor}, got {errors:?}"
+                .any(|e| e.message.contains("Option[T]") && e.message.contains("Option[ref T]")),
+            "expected `Option[T]` vs `Option[ref T]` mismatch for {accessor}, got {errors:?}"
         );
     }
 }
@@ -27145,10 +27145,9 @@ fn spawn_capturing_vec_of_raw_pointers_rejected_transitively() {
     // which is safe at the outer Named { name: "Vec", ... } shape but
     // unsafe at the inner arg's `*mut u8`. The walker's transitive
     // recursion catches this via the `Vec` arg position. The diagnostic
-    // renders the capture type via `type_display`, which uses Rust-
-    // style angle brackets — `Vec<*mut u8>` — rather than Kāra source
-    // brackets `Vec[*mut u8]` (a cross-codebase display convention
-    // separate from this slice's scope).
+    // renders the capture type via `type_display`, which spells generics
+    // with the language's own brackets — `Vec[*mut u8]` — since
+    // B-2026-08-17-15 (it used to print Rust's `Vec<*mut u8>`).
     let errors = typecheck_errors(
         "fn use_vec(v: Vec[*mut u8]) {
              let h: TaskHandle[i64] = spawn(|| v.len() as i64);
@@ -27161,7 +27160,7 @@ fn spawn_capturing_vec_of_raw_pointers_rejected_transitively() {
             .iter()
             .any(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture
                 && e.message.contains("`v`")
-                && e.message.contains("Vec<*mut u8>")
+                && e.message.contains("Vec[*mut u8]")
                 && e.message.contains("`Vec` arg")),
         "expected transitive CrossTaskUnsafeCapture through Vec[*mut u8], got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
@@ -29926,7 +29925,7 @@ fn main() {}
         .any(|m| m.contains("bad_owned") && m.contains("`Config` cannot cross the host boundary")));
     assert!(msgs
         .iter()
-        .any(|m| m.contains("bad_vec_ret") && m.contains("return type `Vec<i64>` cannot cross")));
+        .any(|m| m.contains("bad_vec_ret") && m.contains("return type `Vec[i64]` cannot cross")));
 }
 
 #[test]
@@ -31590,7 +31589,7 @@ fn test_tensor_iter_axis_item_shape_mismatch_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| e.message.contains("found 'Vec<Tensor<f64, [3]>>'")),
+            .any(|e| e.message.contains("found 'Vec[Tensor[f64, [3]]]'")),
         "{errors:?}",
     );
 }
@@ -33311,7 +33310,7 @@ fn main() reads(Store) {
     assert!(
         errs.iter().any(|e| e
             .to_string()
-            .contains("expected 'i64', found 'Option<ListNode>'")),
+            .contains("expected 'i64', found 'Option[ListNode]'")),
         "{errs:?}"
     );
 }
@@ -33410,7 +33409,7 @@ fn main() reads(Store) {
     assert!(
         errs.iter().any(|e| e
             .to_string()
-            .contains("expected 'i64', found 'Option<i64>'")),
+            .contains("expected 'i64', found 'Option[i64]'")),
         "{errs:?}"
     );
 }
@@ -33464,7 +33463,7 @@ fn main() reads(Store) {
     assert!(
         errs.iter().any(|e| e
             .to_string()
-            .contains("expected 'i64', found 'Option<i64>'")),
+            .contains("expected 'i64', found 'Option[i64]'")),
         "{errs:?}"
     );
 }
@@ -37039,7 +37038,7 @@ fn test_arith_with_option_operand_is_not_reported_as_float_mix() {
     // Accurate, and it names the fix: the wrapper and its payload.
     assert!(
         errs.iter()
-            .any(|e| e.message.contains("found 'Option<i64>'")
+            .any(|e| e.message.contains("found 'Option[i64]'")
                 && e.message.contains("unwrap it first")),
         "expected a wrapper-unwrap hint, got: {errs:?}"
     );
@@ -37056,7 +37055,7 @@ fn test_arith_wrapper_hint_absent_when_payload_still_mismatches() {
     );
     assert!(
         errs.iter()
-            .any(|e| e.message.contains("found 'Option<String>'")),
+            .any(|e| e.message.contains("found 'Option[String]'")),
         "expected the plain mismatch, got: {errs:?}"
     );
     assert!(
@@ -37743,7 +37742,7 @@ fn owned_closure_param_annotation_over_borrowed_payload_is_rejected() {
             "heap-aggregate payload",
             "let out: Vec[Vec[i64]] = vec![vec![1, 2]];",
             "out.first().map(|x: Vec[i64]| x.len())",
-            "ref Vec<i64>",
+            "ref Vec[i64]",
         ),
         (
             "`.get(i)` mints the same borrow as `.first()`",

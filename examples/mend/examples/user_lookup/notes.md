@@ -19,12 +19,12 @@
 the lookup result directly as the function's tail — fails to compile:
 
 ```
-error[E0200]: expected 'String', found 'Option<String>'
+error[E0200]: expected 'String', found 'Option[String]'
    --> solution.kara:2:5
 ```
 
 The compiler names both types in the error: *expected `String`*,
-*found `Option<String>`*. The LLM's revision is a `match` (or
+*found `Option[String]`*. The LLM's revision is a `match` (or
 `unwrap_or`, or `?` propagation) at the lookup site.
 
 ## Demo loop on this task

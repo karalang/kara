@@ -1524,16 +1524,19 @@ mod gat_slice5_assoc_projection_resolution_tests {
     // ── type_display with receiver_args ──
 
     #[test]
-    fn type_display_with_receiver_args_renders_angle_brackets() {
-        // Slice 5 changes `type_display` for AssocProjection to
-        // render `param<receiver_args>.assoc[args]` when
-        // receiver_args is non-empty. Pin the formatting choice so
-        // diagnostic snapshots are stable.
+    fn type_display_with_receiver_args_renders_bracket_args() {
+        // `type_display` for AssocProjection renders
+        // `param[receiver_args].assoc[args]` when receiver_args is
+        // non-empty. Pin the formatting choice so diagnostic snapshots
+        // are stable. The receiver args originally rendered `<...>`
+        // (Rust's spelling, inconsistent with the projection's own args
+        // one slot over) — B-2026-08-17-15 aligned every generic
+        // rendering on the language's `[...]`.
         let bare = proj("F", "Item", vec![], vec![]);
         assert_eq!(type_display(&bare), "F.Item");
 
         let recv_only = proj("Wrapper", "Item", vec![], vec![Type::Str]);
-        assert_eq!(type_display(&recv_only), "Wrapper<String>.Item");
+        assert_eq!(type_display(&recv_only), "Wrapper[String].Item");
 
         let gat_only = proj("F", "Mapped", vec![Type::Int(IntSize::I64)], vec![]);
         assert_eq!(type_display(&gat_only), "F.Mapped[i64]");
@@ -1544,7 +1547,7 @@ mod gat_slice5_assoc_projection_resolution_tests {
             vec![Type::Int(IntSize::I64)],
             vec![Type::Str],
         );
-        assert_eq!(type_display(&both), "Wrapper<String>.Mapped[i64]");
+        assert_eq!(type_display(&both), "Wrapper[String].Mapped[i64]");
     }
 
     // ── End-to-end: typechecking a program with GAT resolution ──

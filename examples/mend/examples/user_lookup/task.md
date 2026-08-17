@@ -19,7 +19,7 @@ discipline**. The LLM's natural mistake under this prompt is to write
 would write `users[user_id]` or `users.get(user_id)` in Python or
 JavaScript — pretending the lookup is total when it isn't. The
 compiler catches this with `E0200` *"expected 'String', found
-'Option<String>'"* at the function's tail expression.
+'Option[String]'"* at the function's tail expression.
 
 The `Option[T]` return type from `Map.get` is not a stylistic choice;
 it's a contract enforced at compile time. The LLM can satisfy the

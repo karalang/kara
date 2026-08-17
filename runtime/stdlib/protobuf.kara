@@ -319,12 +319,13 @@ impl ProtoReader {
 // methods that drive the slice-1 wire codec. Field numbers are the 1-based
 // declaration order (proto3 v1; per-field `#[field(N)]` overrides aren't in
 // reflection yet). Each helper below maps a reflected field-type name (as
-// produced by `Field.ty.name()` — note generics render with angle brackets,
-// e.g. `Vec<u8>`) to the matching code fragment.
+// produced by `Field.ty.name()` — generics render with the language's own
+// brackets, e.g. `Vec[u8]`, since B-2026-08-17-15) to the matching code
+// fragment.
 
 // True when `tn` is a proto3 scalar this derive can codegen for.
 comptime fn proto_supported(tn: String) -> bool {
-    tn == "String" or tn == "Vec<u8>" or tn == "bool" or tn == "u64" or tn == "i64"
+    tn == "String" or tn == "Vec[u8]" or tn == "bool" or tn == "u64" or tn == "i64"
         or tn == "i32" or tn == "u32"
 }
 
@@ -342,7 +343,7 @@ comptime fn proto_is_float(tn: String) -> bool {
 comptime fn proto_default(tn: String) -> String {
     if tn == "String" {
         "\"\""
-    } else if tn == "Vec<u8>" {
+    } else if tn == "Vec[u8]" {
         "Vec.new()"
     } else if tn == "bool" {
         "false"
@@ -366,7 +367,7 @@ comptime fn proto_default(tn: String) -> String {
 comptime fn proto_read_expr(tn: String) -> String {
     if tn == "String" {
         "reader.read_string()"
-    } else if tn == "Vec<u8>" {
+    } else if tn == "Vec[u8]" {
         "reader.read_len_delim()"
     } else if tn == "bool" {
         "reader.read_varint() != 0u64"
@@ -394,7 +395,7 @@ comptime fn proto_encode_field(idx: i64, fname: String, tn: String) -> String {
         "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
             + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(self." + fname
             + ".bytes().len() as u64)); out.extend_from_slice(self." + fname + ".bytes());"
-    } else if tn == "Vec<u8>" {
+    } else if tn == "Vec[u8]" {
         "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
             + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(self." + fname
             + ".len() as u64)); out.extend_from_slice(self." + fname + ");"
@@ -513,7 +514,7 @@ comptime fn proto_encode_repeated(
         hdr + "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
             + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(" + elem
             + ".bytes().len() as u64)); out.extend_from_slice(" + elem + ".bytes());" + step
-    } else if etn == "Vec<u8>" {
+    } else if etn == "Vec[u8]" {
         hdr + "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
             + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(" + elem
             + ".len() as u64)); out.extend_from_slice(" + elem + ");" + step
@@ -563,7 +564,7 @@ comptime fn proto_decode_repeated(
         target + ".push(" + etn + ".decode(reader.read_len_delim()));"
     } else if etn == "String" {
         target + ".push(reader.read_string());"
-    } else if etn == "Vec<u8>" {
+    } else if etn == "Vec[u8]" {
         target + ".push(reader.read_len_delim());"
     } else if etn == "f64" {
         // Accept the packed form (wire 2, a blob of fixed64s) or a lone unpacked
@@ -598,7 +599,7 @@ comptime fn proto_encode_scalar_one(buf: String, fnum: i64, expr: String, tn: St
         buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 2)); " + buf
             + ".extend_from_slice(ProtoBuf.encode_varint(" + expr + ".bytes().len() as u64)); " + buf
             + ".extend_from_slice(" + expr + ".bytes());"
-    } else if tn == "Vec<u8>" {
+    } else if tn == "Vec[u8]" {
         buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 2)); " + buf
             + ".extend_from_slice(ProtoBuf.encode_varint(" + expr + ".len() as u64)); " + buf
             + ".extend_from_slice(" + expr + ");"
@@ -631,7 +632,7 @@ comptime fn proto_encode_scalar_one(buf: String, fnum: i64, expr: String, tn: St
 comptime fn proto_read_scalar_one(rn: String, tn: String) -> String {
     if tn == "String" {
         rn + ".read_string()"
-    } else if tn == "Vec<u8>" {
+    } else if tn == "Vec[u8]" {
         rn + ".read_len_delim()"
     } else if tn == "bool" {
         rn + ".read_varint() != 0u64"
@@ -813,7 +814,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
     // target with an actionable diagnostic rather than emitting a struct-shaped
     // body that fails to typecheck (a `T { … }` constructor on a non-struct and
     // an un-inferred empty `Vec.new()` encode — `'T' is not a struct` /
-    // `Vec<?T0>`). See docs bug-ledger B-2026-07-09-5.
+    // `Vec[?T0]`). See docs bug-ledger B-2026-07-09-5.
     if T.is_enum() {
         compiler.error(
             "derive(Message): `" + n + "` is an enum, but #[derive(Message)] applies to a struct "
@@ -837,9 +838,9 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
         let fname = f.name;
         let tn = f.ty.name();
         // A `Vec[T]` field (element other than `u8`) is a repeated field.
-        let repeated = tn.starts_with("Vec<") and tn != "Vec<u8>";
+        let repeated = tn.starts_with("Vec[") and tn != "Vec[u8]";
         // A `Map[K, V]` field is a proto3 map (repeated key/value entries).
-        let is_map = tn.starts_with("Map<");
+        let is_map = tn.starts_with("Map[");
         // `f64` / `f32` are proto3 `double` / `float` — fixed-width fields.
         let is_float = tn == "f64" or tn == "f32";
         // A struct-typed field is a nested message — encoded as a length-

@@ -22,26 +22,31 @@ use crate::ast::CallArg;
 use crate::token::Span;
 
 /// Peel the `n`th generic argument out of a type's display name, splitting on
-/// top-level commas so nested generics are respected: `nth_type_arg("Map<String,
-/// Vec<i64>>", 1)` → `Some("Vec<i64>")`. Returns `None` if the name has no
-/// `<…>` or fewer than `n+1` arguments.
+/// top-level commas so nested generics are respected: `nth_type_arg("Map[String,
+/// Vec[i64]]", 1)` → `Some("Vec[i64]")`. Returns `None` if the name has no
+/// `[…]` or fewer than `n+1` arguments.
 fn nth_type_arg(name: &str, n: usize) -> Option<String> {
-    let lt = name.find('<')?;
-    let gt = name.rfind('>')?;
-    if gt <= lt + 1 {
+    // Generics render `Name[args]` since B-2026-08-17-15 (`type_display`
+    // aligned on the language's own `[T]` spelling), so this parser peels
+    // square brackets. The reflected name is the API surface a comptime
+    // derive string-matches against (runtime/stdlib/protobuf.kara), so this
+    // function and `type_display` must agree on the rendering.
+    let lb = name.find('[')?;
+    let rb = name.rfind(']')?;
+    if rb <= lb + 1 {
         return None;
     }
-    let inner = &name[lt + 1..gt];
+    let inner = &name[lb + 1..rb];
     let mut depth = 0i32;
     let mut parts: Vec<String> = Vec::new();
     let mut cur = String::new();
     for c in inner.chars() {
         match c {
-            '<' => {
+            '[' => {
                 depth += 1;
                 cur.push(c);
             }
-            '>' => {
+            ']' => {
                 depth -= 1;
                 cur.push(c);
             }
@@ -156,13 +161,13 @@ impl Interpreter<'_> {
                 Value::Bool(has)
             }
             // `T.element_type()` peels one generic argument from the type's
-            // display name (`Vec<i64>` → `i64`, `Vec<Vec<u8>>` → `Vec<u8>`),
+            // display name (`Vec[i64]` → `i64`, `Vec[Vec[u8]]` → `Vec[u8]`),
             // returning it as a `Type` pseudovalue. A non-generic name is
             // returned unchanged, so a derive can call it unconditionally and
             // then dispatch on the result's `name()` / `is_struct()`.
             // `key_type()` / `value_type()` peel the 1st / 2nd top-level
-            // argument of a two-parameter type like `Map<K, V>` (commas inside
-            // nested `<…>` are respected, so `Map<String, Vec<i64>>` works).
+            // argument of a two-parameter type like `Map[K, V]` (commas inside
+            // nested `[…]` are respected, so `Map[String, Vec[i64]]` works).
             "element_type" => Value::TypeVal(nth_type_arg(type_name, 0).unwrap_or(type_name.to_string())),
             "key_type" => Value::TypeVal(nth_type_arg(type_name, 0).unwrap_or(type_name.to_string())),
             "value_type" => Value::TypeVal(nth_type_arg(type_name, 1).unwrap_or(type_name.to_string())),
