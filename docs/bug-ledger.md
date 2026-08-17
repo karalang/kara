@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 128 | 5 |
 | codegen-gap | 114 | 0 |
 | missing-feature | 102 | 4 |
-| perf | 77 | 2 |
+| perf | 77 | 1 |
 | false-positive | 77 | 4 |
 | diagnostics | 71 | 5 |
 | crash | 50 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 909 | 9 |
+| codegen | 909 | 8 |
 | typecheck | 191 | 11 |
 | interp | 149 | 3 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1292 surfaced · 24 open · 1253 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1292 surfaced · 23 open · 1253 fixed · 6 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (24)
+### Open (23)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -153,11 +153,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1292 surfaced
 | B-2026-08-17-37 | 2026-08-17 | cli | medium | The `must_use` lint NEVER RUNS under `karac check` or `karac build` -- it fires only under `karac run`, so the entire surface is invisible to `karac check --output=json` and therefore to the Mend loop. `fn main() { let mut m: Map[i64, i64] = Map.new(); m.insert(1, 10); m.get(1); }` -- a discarded `Option` from a LOOKUP, the exact case design.md § must_use exists to catch ("lookups, parses, fallible operations, where the `Option` IS the result") -- gets `warning[must_use]: discarded 'Option' value` under `karac run --interp` AND `karac run`, while `karac check` reports "All checks passed." and `karac build` reports only "Built: mu2.bin". `karac check --output=json` on the same file emits `"diagnostics":[]`. design.md describes must_use as a COMPILE warning ("silently dropping it is a compile warning"), and CLAUDE.md's Mend loop is built on `karac check --output=json` as its diagnostics feed -- so a lint the spec mandates across six stdlib categories reaches neither the compile path nor the AI-facing feed. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-17-39 | 2026-08-17 | typecheck | low | Five iterator-adaptor diagnostics print types with Rust's `{:?}` Debug formatter, leaking internal AST structs into user-facing messages -- and one of them spells a Kara generic with ANGLE BRACKETS. `v.iter().flat_map(|x| [x, x])` reports `Iterator.flat_map() closure must return Iterator[U], found Named { name: "Vec", args: [Int(I64)] }`; with a String element it reports `found Str`. Every other diagnostic in the compiler uses the display form -- the control one line away in the same probe reads `expected 'Set[i64]', found 'Vec[i64]'`. The five sites are all in src/typechecker/stdlib_iter.rs: line 149 (`filter_map`), 615 (`find_map`), 834 (`flat_map`), 1032 (`scan`), 1191 (`zip`), each formatting the offending type with `{:?}` instead of `type_display`. Line 1032 additionally writes the expected type as `Option<(A, U)>` -- Rust turbofish-style angle brackets in a language whose spec opens with "**Generics syntax:** `[T]` not `<T>` -- no turbofish". | roadmap.md |
-| B-2026-08-17-40 | 2026-08-17 | codegen | medium | Kāra-only ~14.5% regression on kata 236's recursive tree walk between 2026-07-27 and 689dadd6 — data and machine drift both ruled out, unbisected | roadmap.md |
 
-### Wontfix (5)
+### Wontfix (6)
 
-<details><summary>5 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
+<details><summary>6 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
 
 | id | date | surface | sev | title |
 |---|---|---|---|---|
@@ -166,6 +165,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1292 surfaced
 | B-2026-08-15-31 | 2026-08-15 | codegen | medium | MECHANISM PINNED (was: not pinned). Kata #246's 1.57x deficit to `clang -O3` on arm64 is ENTIRELY LOOP UNROLLING, and karac is at `clang -O2` PARITY. Dynamic counts: kara 527.4M instrs / 66.2M cycles, clang -O3 370.7M / 42.0M, clang -O2 500.5M / 74.4M, clang -O3 -fno-unroll-loops 500.6M / 63.7M. So kara vs equal-treatment C is 1.05x on instructions and 1.06x on wall time, and kara is 11% AHEAD of clang -O2 on cycles. karac's own full-unroll hint machinery is live and working but declines this loop, and THREE ways of making it fire were then built and measured -- hint the converging guard (LLVM refuses and warns), canonicalise to a counted loop + full unroll (works, #246 -> 1.08x of clang -O3, but unbounded: kata #189's million-iteration reverse took `karac build` from 0.6s to killed at 300s), and canonicalise + bounded partial unroll (safe, but a corpus NET REGRESSION -- 10 rows better, 11 worse). WONTFIX: the blocker is that a converging loop's trip count has NO COMPILE-TIME BOUND, and until that changes every unroll strategy either misfires or over-applies. |
 | B-2026-08-15-33 | 2026-08-15 | codegen | medium | `karac build` IS NOT REPRODUCIBLE: the SAME karac binary, on the SAME source, emits DIFFERENT executables across runs. Three consecutive builds of kata #253's min_meeting_rooms.kara gave two distinct sha256s (c909a866 / 76932c29 / c909a866); #252, #16 and #18 were stable across the same test, so it is program-dependent rather than universal. Sinks are unaffected -- the binaries are equivalent, not wrong -- so this is a build-reproducibility defect, not a miscompile. UPSTREAM: reproduces in stock `opt` 18.1.8 on a fixed .ll, so karac is not in the loop; the varying thing is the pass manager's FUNCTION VISIT ORDER (slot 513 names a different function per run), first diverging among the 66 identical `__karac_panic_site_*` cold leaves. |
 | B-2026-08-16-11 | 2026-08-16 | codegen | medium | The default integer overflow check is emitted inside the loop, blocking auto-vectorisation of EVERY integer reduction |
+| B-2026-08-17-40 | 2026-08-17 | codegen | medium | Kata 236's 14.5% kāra-only slowdown is CODE PLACEMENT, not a codegen regression — hot code byte-identical, moved 152 bytes; instructions flat to 0.002% |
 
 </details>
 
