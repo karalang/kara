@@ -100,9 +100,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 98 | 0 |
 | perf | 76 | 2 |
 | false-positive | 71 | 0 |
-| diagnostics | 65 | 0 |
+| diagnostics | 66 | 1 |
 | soundness | 49 | 1 |
-| crash | 49 | 1 |
+| crash | 49 | 0 |
 | other | 35 | 1 |
 | use-after-free | 20 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 900 | 3 |
-| typecheck | 179 | 1 |
-| interp | 146 | 1 |
+| codegen | 900 | 2 |
+| typecheck | 180 | 1 |
+| interp | 146 | 0 |
 | ownership | 55 | 1 |
 | other | 49 | 1 |
 | autopar | 48 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1266 surfaced · 6 open · 1245 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1267 surfaced · 6 open · 1246 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -133,9 +133,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1266 surfaced
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort; the residual is now a pure work-count gap at IPC parity | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
-| B-2026-08-17-10 | 2026-08-17 | typecheck+interp+codegen | medium | INDEXING AN ITERATOR TYPECHECKS, THEN EVERY BACKEND IMPROVISES DIFFERENTLY: `karac check` passes `w.chars()[0]` and `v.iter()[0]`; the interpreter dies on an `unreachable!()` INTERNAL ERROR, while codegen either compiles it correctly (let-bound `chars`) or fails the build (`iter`, or `chars` indexed inline). The typechecker should reject the index. | The typechecker's index-expression rule admits an `Iterator` operand. `src/interpreter/eval_expr.rs:747` then hits `unreachable!()` — and its own panic text names the two candidate causes, the second of which is the right one: "the typechecker accepted an unindexable operand pair". |
 | B-2026-08-17-13 | 2026-08-17 | ownership | high | READING AN UNINITIALIZED BINDING IS NOT REJECTED: `let x: i64; println(f"{x}")` passes `karac check`, the interpreter prints `()` -- the UNIT value in an `i64` slot -- and both compiled backends fail with `codegen failed: Undefined variable 'x'`. design.md calls this "always a DA error". Every flow-sensitive definite-assignment rule the spec specifies is unenforced; the `ValueState::Uninit` machinery exists and drives the init-vs-reassign rule, but no read is ever checked against it. | src/ownership.rs -- `ValueState::Uninit`, `snapshot_uninit`, `restore_uninit_after_loop` (whose own doc comment cites "the 'loop body might run zero times' invariant for definite-assignment"). The state exists and is maintained; the READ check is what is missing. Lead, not a conclusion -- I did not trace every consumer. |
 | B-2026-08-17-14 | 2026-08-17 | autopar+codegen | medium | A `#[par_order_free]` COLLECT LOOP REPORTS `fanned_out: true` AND RUNS AT 101% CPU — the B-2026-08-15-23 SIGNATURE AGAIN, on a compiler that already carries that fix. 48 branches, ~6 ms of work each, and the par build is 1.03x SLOWER than its sequential twin. Five isolations reproducing the loop's individual features all fan out correctly, so the trigger is still unidentified. | Unknown. NOT the B-2026-08-15-23 chunker floor: that fix is present and verified in the same binary (kata 276's 16-iteration loop fans out at 384% on it). The query reports `lowering: parallel_fanout, fanned_out: true, cost_gate: fanout` for the loop that does not parallelize, so whatever declines it is downstream of the reporting again. |
+| B-2026-08-17-15 | 2026-08-17 | typecheck | low | `type_display` renders a generic `Type::Named` with ANGLE brackets -- `Option<i64>`, `Vec<i64>` -- while every sibling arm in the same function uses Kara's `[...]` (`Slice[T]`, `Rc[T]`, `Arc[T]`). CLAUDE.md's first language rule is `[T]` not `<T>`, so every diagnostic naming a generic prints syntax that is not the language's. | src/typechecker/types.rs — `type_display`'s `Type::Named` arm formats `{}<{}>`; its `Slice` / `Rc` / `Arc` siblings format `{}[{}]`. Fixing it means updating every assertion that pins the old rendering (10+ in tests/typechecker.rs alone). |
 
 ### Wontfix (5)
 
@@ -151,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1266 surfaced
 
 </details>
 
-### Fixed (1245)
+### Fixed (1246)
 
-<details><summary>1245 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1246 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10014,6 +10014,95 @@ runs 1110 fixtures where it ran 1105 before. The five regex/Arrow fixtures were
 not failing previously — they were SKIPPING, which the leg reported as a pass.
 That is the vacuity the require-archive flag exists to expose, and it is worth
 setting it deliberately rather than trusting a bare green. |
+| B-2026-08-17-10 | typecheck+interp+codegen | medium | INDEXING AN ITERATOR TYPECHECKS, THEN EVERY BACKEND IMPROVISES DIFFERENTLY: `karac check` passes `w.chars()[0]` and `v.iter()[0]`; the interpreter di… | FIXED by b1871c96, in the index rule of the typechecker (src/typechecker/exprs.rs),
+and the row's three defects collapse into that one place.
+
+THE ROOT IS A SILENT FALLTHROUGH, not a missing feature. `Iterator[T]` is a
+`Type::Named` that matches no arm of the index rule's element match, and the tail
+arm was a bare `_ => Type::Error` with NO diagnostic. `Type::Error` is what a
+reported error also returns, so the program typechecked clean — "All checks
+passed" — and each backend was left to improvise on an operand pair the front end
+had blessed.
+
+THE LANGUAGE DECISION THE ROW LEFT OPEN IS SETTLED BY IN-REPO PRECEDENT, not by
+this session's taste. Directly above the new code sits the `String` rejection, and
+its comment describes THIS BUG, one type over: "Without this rejection the
+(String, Int) operand pair falls through to `_ => Type::Error` *silently* — no
+diagnostic — so the program typechecks and reaches the interpreter, where
+`Value::String[Value::Int]` trips an `unreachable!`". Same hole, same symptom,
+already answered: reject at the phase that owns it, and name a remedy. So codegen's
+let-bound `chars()` success is an accident of representation, not an implemented
+feature — which its own inline-form BUILD FAILURE already argued.
+
+IT IS A CLASS, AND THE ROW FOUND ONE MEMBER. Probed on the parent, these all
+printed "All checks passed" and then tripped the SAME `unreachable!`:
+
+    s[0]  where s is a struct        panic
+    b[0]  where b is a bool          panic
+    n[0]  where n is an i64          panic
+    o[0]  where o is an Option[i64]  panic
+    f[0]  where f is a closure       panic
+
+So the tail arm now diagnoses too, naming the type and listing what IS indexable.
+Fixing only `Iterator` would have left five crashing shapes behind and called the
+crash row closed.
+
+RUN-FATAL IS WHAT FIXES DEFECT 2. Both new kinds join `is_run_fatal()`, for the
+exact reason `StringNotIndexable` is already there: a soft type error downgrades
+so `karac run` can still execute, and executing is precisely what reaches the
+`unreachable!`. With it set, `--interp` prints the diagnostic instead of panicking
+— measured 0 panics across all eight shapes. The `unreachable!` itself is left in
+place, as its String sibling was: it is a defensive assertion, and its own text
+already names "the typechecker accepted an unindexable operand pair" as a cause.
+
+DEFECT 3 GOES AWAY BY CONSEQUENCE. The backends never see these programs, so
+there is nothing left for them to disagree about — including codegen disagreeing
+with itself between the let-bound and inline forms.
+
+THE REMEDIES WERE COMPILED BEFORE THEY WERE NAMED. `.to_vec()` was the obvious
+suggestion and does NOT exist on `Iterator`; `.collect()` and `.nth(i)` do, and
+both were run on check / --interp / build, for `chars()` AND `iter()`, before
+going in the message. The message also names the element type it worked out
+(`Vec[char]`, `Option[i64]`), so the help is concrete rather than a gesture. This
+matters more than usual here: the immediately preceding row in this ledger existed
+because a spec prescribed a spelling that did not work.
+
+MEASURED, before and after, all on the built compiler:
+
+    shape                          parent check  parent interp  now
+    let c = w.chars(); c[0]        passes        PANIC          E0274 at check
+    w.chars()[0]  (inline)         passes        PANIC          E0274 at check
+    let it = v.iter(); it[0]       passes        PANIC          E0274 at check
+    struct / bool / i64 / Option /
+      closure indexed              passes        PANIC          E0275 at check
+    let b = w.bytes(); b[0]        passes        97             unchanged, 97
+    xs[0] in fn first[T](Vec[T])   passes        3              unchanged, 3
+    Array / Map index              passes        ok             unchanged
+
+THE UNRESOLVED-TYPE EXCLUSION IS LOAD-BEARING. Mid-inference the operand can
+still be a metavariable — a generic body is checked before instantiation — so the
+general arm stays silent when `contains_type_var` holds. Without it,
+`fn first[T](xs: Vec[T]) -> T { xs[0] }` would be rejected. `Type::Error` keeps
+its own arm so an upstream failure does not cascade into a second diagnostic.
+
+TESTS. `iterator_index_rejected_with_a_remedy_that_compiles` covers all three
+Iterator shapes plus the run-fatal property and the `bytes()` control;
+`unindexable_operands_are_diagnosed_rather_than_left_to_the_backend` covers the
+class plus the three must-still-work forms (generic body, Array, Map). Both
+verified FAILING on the parent.
+
+FOUND AND FILED SEPARATELY, not fixed here: `type_display` renders
+`Type::Named` generics with ANGLE brackets — `Option<i64>`, `Vec<i64>` — while
+every sibling arm in the same function uses Kāra's `[...]` (`Slice[T]`, `Rc[T]`).
+CLAUDE.md's first language rule is `[T]` not `<T>`, so every diagnostic naming a
+generic prints non-Kāra syntax. Changing it is a one-line edit that broke 10
+assertions in tests/typechecker.rs alone, so it wants its own pass rather than
+riding along in a crash fix. The new messages here use `type_display` like every
+other diagnostic does, and will improve with it.
+
+GATES: fmt, clippy --all --all-targets --features llvm, the full `--features llvm`
+suite. No ASAN leg: the change is typechecker-only and every program it newly
+rejects fails to typecheck, so none reaches codegen. |
 | B-2026-08-17-11 | typecheck+cli | medium | E0200'S SUGGESTED REPAIR IS THE UNSAFE ONE: `cannot mix 'u8' and 'i64' .. | BOTH HALVES SHIPPED, in the order the row required: the direction was corrected first, and only then was the diagnostic made machine-applicable -- so the edit `karac fix` now applies is the value-preserving one, never the trap.
 
 DIRECTION. The old example always named the LEFT operand's type ("the operand as 'u8'" for `u8 - i64`) -- the narrowing steer half the time, with no direction argument ever. E0200 now computes the value-preserving direction explicitly (`int_cast_preserves_all_values`, src/typechecker/expr_ops.rs): same signedness needs the destination at least as wide, unsigned->signed needs strictly wider, signed->unsigned never preserves. `usize` is modeled as the width RANGE [32, 64] because wasm32 is a first-class target -- so `u32 -> usize` and `usize -> u64` are safe on every target while `u64 -> usize` and `usize -> i64` are not. When exactly one direction preserves every value, the message names it concretely ("cast the 'u8' operand up to 'i64' with `as` -- widening preserves every value, while the cast down to 'u8' can overflow at runtime"). The row's open question -- what to do when NO direction is safe -- is answered: a signed/unsigned pair of equal width (i64/u64, i8/u8, and i64/usize by the range rule) stays advisory ("choosing the direction deliberately: neither type can represent every value of the other") and carries no replacement, because naming either side would be the same wrong steer this row measured.
