@@ -829,6 +829,72 @@ impl<'ctx> super::Codegen<'ctx> {
                                         },
                                     )
                                 }
+                                // Struct-destructuring param — e.g.
+                                // `v.iter().map(|P { x, y }| x + y)`
+                                // (B-2026-08-17-24, the struct sibling of the
+                                // tuple arm above). Same desugaring, with a
+                                // FIELD access where the tuple form uses a
+                                // `TupleIndex`: `|__dp| { let x = __dp.x; let y
+                                // = __dp.y; <body> }`. Shorthand (`{ x }`) and
+                                // renaming (`{ x: x1 }`) differ only in the
+                                // bound NAME — the field read is keyed off
+                                // `f.name` either way. As in the tuple arm,
+                                // only all-`Binding`/`_` sub-patterns lower; a
+                                // nested sub-pattern bails to the loud
+                                // dispatch-fail rather than miscompiling. A
+                                // `..` rest is irrelevant here: unlisted fields
+                                // simply bind nothing.
+                                PatternKind::Struct { fields, .. } => {
+                                    let dp = format!(
+                                        "__dp_{}_{}",
+                                        self.indexed_elem_counter,
+                                        steps.len()
+                                    );
+                                    let mut stmts = Vec::new();
+                                    for f in fields {
+                                        // `{ x }` shorthand binds `x`; `{ x: y }`
+                                        // binds `y`; `{ x: _ }` binds nothing.
+                                        let bind_name = match f.pattern.as_ref().map(|p| &p.kind) {
+                                            None => f.name.clone(),
+                                            Some(PatternKind::Binding(n)) => n.clone(),
+                                            Some(PatternKind::Wildcard) => continue,
+                                            _ => return Ok(None),
+                                        };
+                                        stmts.push(Stmt {
+                                            kind: StmtKind::Let {
+                                                is_mut: false,
+                                                pattern: Pattern {
+                                                    kind: PatternKind::Binding(bind_name),
+                                                    span: f.span,
+                                                },
+                                                ty: None,
+                                                value: Expr {
+                                                    kind: ExprKind::FieldAccess {
+                                                        object: Box::new(Expr {
+                                                            kind: ExprKind::Identifier(dp.clone()),
+                                                            span: f.span,
+                                                        }),
+                                                        field: f.name.clone(),
+                                                    },
+                                                    span: f.span,
+                                                },
+                                            },
+                                            span: f.span,
+                                        });
+                                    }
+                                    let block = Block {
+                                        stmts,
+                                        final_expr: Some(Box::new((**body).clone())),
+                                        span: body.span,
+                                    };
+                                    (
+                                        dp,
+                                        Expr {
+                                            kind: ExprKind::Block(block),
+                                            span: body.span,
+                                        },
+                                    )
+                                }
                                 // Wildcard param — `map(|_| 7)` / `filter(|_| ..)`.
                                 // The body ignores the element, so bind it to a
                                 // fresh throwaway name (the interpreter already
@@ -2956,6 +3022,90 @@ impl<'ctx> super::Codegen<'ctx> {
         match &pat.kind {
             PatternKind::Binding(n) => Some(n.clone()),
             PatternKind::Wildcard => Some(wildcard_seed.to_string()),
+            _ => None,
+        }
+    }
+
+    /// Widened twin of [`closure_param_name`] for terminals that can wrap
+    /// their closure body: returns the name to bind the element to, plus the
+    /// `let` statements that re-create a DESTRUCTURING param's bindings from
+    /// it (B-2026-08-17-24).
+    ///
+    /// `|P { x, y }| <body>` becomes `|<fresh>| { let x = <fresh>.x; let y =
+    /// <fresh>.y; <body> }` and `|(a, b)| <body>` the `TupleIndex` equivalent
+    /// — the same desugaring the `map`/`filter` peel does inline, so both
+    /// paths lower destructuring params identically instead of drifting.
+    /// Callers that cannot wrap the body must keep using `closure_param_name`.
+    ///
+    /// `None` for anything not lowerable (a nested sub-pattern, a literal),
+    /// preserving the fail-closed contract: the caller falls through to its
+    /// loud dispatch-fail rather than miscompiling.
+    pub(super) fn destructuring_closure_param(
+        pat: &Pattern,
+        fresh: &str,
+    ) -> Option<(String, Vec<Stmt>)> {
+        let bind_from = |name: String, value_kind: ExprKind, span| Stmt {
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name),
+                    span,
+                },
+                ty: None,
+                value: Expr {
+                    kind: value_kind,
+                    span,
+                },
+            },
+            span,
+        };
+        match &pat.kind {
+            PatternKind::Binding(n) => Some((n.clone(), Vec::new())),
+            PatternKind::Wildcard => Some((fresh.to_string(), Vec::new())),
+            PatternKind::Tuple(subs) => {
+                let mut stmts = Vec::new();
+                for (k, sub) in subs.iter().enumerate() {
+                    match &sub.kind {
+                        PatternKind::Wildcard => {}
+                        PatternKind::Binding(name) => stmts.push(bind_from(
+                            name.clone(),
+                            ExprKind::TupleIndex {
+                                object: Box::new(Expr {
+                                    kind: ExprKind::Identifier(fresh.to_string()),
+                                    span: sub.span,
+                                }),
+                                index: k as u64,
+                            },
+                            sub.span,
+                        )),
+                        _ => return None,
+                    }
+                }
+                Some((fresh.to_string(), stmts))
+            }
+            PatternKind::Struct { fields, .. } => {
+                let mut stmts = Vec::new();
+                for f in fields {
+                    let bind_name = match f.pattern.as_ref().map(|p| &p.kind) {
+                        None => f.name.clone(),
+                        Some(PatternKind::Binding(n)) => n.clone(),
+                        Some(PatternKind::Wildcard) => continue,
+                        _ => return None,
+                    };
+                    stmts.push(bind_from(
+                        bind_name,
+                        ExprKind::FieldAccess {
+                            object: Box::new(Expr {
+                                kind: ExprKind::Identifier(fresh.to_string()),
+                                span: f.span,
+                            }),
+                            field: f.name.clone(),
+                        },
+                        f.span,
+                    ));
+                }
+                Some((fresh.to_string(), stmts))
+            }
             _ => None,
         }
     }

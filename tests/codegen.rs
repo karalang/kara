@@ -16960,6 +16960,61 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_pattern_iterator_closure_param() {
+        // B-2026-08-17-24 — the struct sibling of B-2026-07-14-21's tuple fix.
+        // `v.iter().map(|P { x, y }| x + y).collect()` bailed out of the chain
+        // peel, and the fallthrough MISATTRIBUTED it to the terminal method
+        // ("no handler for method 'collect' on non-identifier receiver"), which
+        // pointed a fixer at the wrong dispatcher entirely. Covers the shapes
+        // the row measured plus the shorthand/rename/wildcard field forms, and
+        // `fold`, whose element param goes through the widened helper.
+        let src = "struct P { x: i64, y: i64 }\n\
+                   fn main() {\n\
+                       let mut v: Vec[P] = Vec.new();\n\
+                       v.push(P { x: 1, y: 2 });\n\
+                       v.push(P { x: 3, y: 6 });\n\
+                       let a: Vec[i64] = v.iter().map(|P { x, y }| x + y).collect();\n\
+                       println(a[0]);\n\
+                       println(a[1]);\n\
+                       println(v.iter().fold(0, |acc, P { x, y }| acc + x + y));\n\
+                       let r: Vec[i64] = v.iter().map(|P { x: x1, y: y1 }| x1 * y1).collect();\n\
+                       println(r[0]);\n\
+                       println(r[1]);\n\
+                       let w: Vec[i64] = v.iter().map(|P { x, y: _ }| x).collect();\n\
+                       println(w[0]);\n\
+                       let ft: Vec[i64] = v.iter().filter(|P { x, y }| x + y > 5)\n\
+                           .map(|P { x, y }| x + y).collect();\n\
+                       println(ft[0]);\n\
+                   }";
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "3\n9\n12\n2\n18\n1\n9\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_tuple_pattern_fold_closure_param() {
+        // The tuple form through `fold` — unsupported before B-2026-08-17-24
+        // too, since `fold` fails closed on any destructuring element param;
+        // the shared helper covers both pattern kinds, so this shape came
+        // along with the struct one and is pinned so it cannot regress.
+        let src = "fn main() {\n\
+                       let mut v: Vec[(i64, i64)] = Vec.new();\n\
+                       v.push((1, 2));\n\
+                       v.push((3, 6));\n\
+                       println(v.iter().fold(0, |acc, (a, b)| acc + a + b));\n\
+                   }";
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "12\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_destructuring_function_parameters() {
         // B-2026-08-17-23 — design.md § Destructuring in Function and Closure
         // Parameters opens with "Any irrefutable pattern may appear in

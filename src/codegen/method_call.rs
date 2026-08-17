@@ -7162,10 +7162,31 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Closure { params, body, .. } = &args[1].value.kind {
                 if params.len() == 2 {
-                    if let (Some(acc_p), Some(x_p)) = (
+                    // B-2026-08-17-24: the ELEMENT param may destructure
+                    // (`fold(0, |acc, P { x, y }| acc + x + y)`), which
+                    // `closure_param_name` fails closed on. `fold` can wrap its
+                    // closure body, so it takes the widened helper and prepends
+                    // the pattern's `let`s — the same desugaring the map/filter
+                    // peel uses. The ACCUMULATOR param keeps the narrow helper:
+                    // it is not an element and never carries a pattern.
+                    if let (Some(acc_p), Some((x_p, pat_stmts))) = (
                         Self::closure_param_name(&params[0].pattern, "__fwa"),
-                        Self::closure_param_name(&params[1].pattern, "__fwx"),
+                        Self::destructuring_closure_param(&params[1].pattern, "__fwx"),
                     ) {
+                        let wrapped;
+                        let body: &Expr = if pat_stmts.is_empty() {
+                            body
+                        } else {
+                            wrapped = Expr {
+                                kind: ExprKind::Block(crate::ast::Block {
+                                    stmts: pat_stmts,
+                                    final_expr: Some(Box::new((**body).clone())),
+                                    span: body.span,
+                                }),
+                                span: body.span,
+                            };
+                            &wrapped
+                        };
                         self.register_iter_body_retarget(body);
                         {
                             if let Some(v) = self.try_compile_iter_chain_fold(
