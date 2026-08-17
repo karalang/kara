@@ -25920,6 +25920,62 @@ fn test_uppercase_modbind_const_method_dispatch() {
 }
 
 #[test]
+fn test_uppercase_binding_field_then_method_dispatch() {
+    // B-2026-08-17-21 — the FIELD-then-method shape. The parser greedily
+    // roots `ORIGIN.x.to_string()` as `Call(Path([ORIGIN, x, to_string]))`
+    // because `ORIGIN` starts uppercase; the 2-segment-only disambiguation
+    // let 3+-segment paths fall through to "type 'Point' is not callable",
+    // naming the CONSTANT'S TYPE as the thing being called. Since
+    // E_MODULE_BINDING_NAMING forces every module-level `let` to be
+    // SCREAMING_SNAKE, every `CONST.field.method()` in the language hit it.
+    typecheck_ok(
+        "struct Point { x: i64, y: i64 }\n\
+         let ORIGIN: Point = Point { x: 5, y: 9 };\n\
+         fn main() {\n\
+             println(ORIGIN.x.to_string());\n\
+             println(ORIGIN.y.to_string());\n\
+         }",
+    );
+    // The axis is the receiver name's first letter, not its scope — a
+    // function-local uppercase binding takes the same parser route.
+    typecheck_ok(
+        "struct Point { x: i64, y: i64 }\n\
+         fn main() {\n\
+             let Origin = Point { x: 1, y: 2 };\n\
+             println(Origin.x.to_string());\n\
+         }",
+    );
+    // Deeper field chains resolve too (codegen defers the chained-receiver
+    // shape itself — `chained_field_receiver` reports that separately).
+    typecheck_ok(
+        "struct Inner { v: i64 }\n\
+         struct Outer { inner: Inner }\n\
+         let CFG: Outer = Outer { inner: Inner { v: 3 } };\n\
+         fn main() {\n\
+             let _ = CFG.inner.v;\n\
+         }",
+    );
+}
+
+#[test]
+fn test_enum_variant_method_call_still_resolves() {
+    // Regression guard for widening the dispatch to 3+ segments
+    // (B-2026-08-17-21): `Dir.North.code()` is a 3-segment path whose ROOT
+    // is a type, not a value binding, so it must keep its enum-literal
+    // receiver route (B-2026-07-13-4) rather than being rewritten into a
+    // field access on a nonexistent `Dir` binding.
+    typecheck_ok(
+        "enum Dir { North, South }\n\
+         impl Dir {\n\
+             fn code(self) -> i64 { 1 }\n\
+         }\n\
+         fn main() {\n\
+             let _: i64 = Dir.North.code();\n\
+         }",
+    );
+}
+
+#[test]
 fn test_unknown_type_method_rejection_still_fires() {
     // Regression guard for `db573a4`. When the leading path segment IS a
     // known type but the method doesn't exist, the

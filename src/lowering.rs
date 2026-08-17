@@ -1499,16 +1499,31 @@ impl<'a> Lowerer<'a> {
         let ExprKind::Path { segments, .. } = &callee.kind else {
             return None;
         };
-        if segments.len() != 2 {
+        if segments.len() < 2 {
             return None;
         }
-        let object = Box::new(Expr {
+        // B-2026-08-17-21: middle segments (3+-segment paths — the
+        // `ORIGIN.x.to_string()` field-then-method shape) become a
+        // `FieldAccess` chain on the receiver, mirroring the synthesized
+        // object the typechecker routed through `infer_method_call`. Only
+        // spans the typechecker flagged reach here, so Type-rooted paths
+        // (`Dir.North.code()`, `Vec.new()`) are never rewritten.
+        let mut object = Expr {
             span: callee.span,
             kind: ExprKind::Identifier(segments[0].clone()),
-        });
+        };
+        for field in &segments[1..segments.len() - 1] {
+            object = Expr {
+                span: callee.span,
+                kind: ExprKind::FieldAccess {
+                    object: Box::new(object),
+                    field: field.clone(),
+                },
+            };
+        }
         Some(ExprKind::MethodCall {
-            object,
-            method: segments[1].clone(),
+            object: Box::new(object),
+            method: segments[segments.len() - 1].clone(),
             turbofish: None,
             args: args.to_vec(),
             // Synthetic lowering — no real `)` to point at. Placeholder

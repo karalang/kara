@@ -1155,6 +1155,75 @@ fn takeu(n: usize) -> usize { return n; }
     }
 }
 
+/// B-2026-08-17-21 — the chained-receiver lint must see LOWERED shapes.
+///
+/// `ORIGIN.inner.v.to_string()` parses as a 4-segment `Call(Path)` because the
+/// receiver starts uppercase, and only becomes a chained `FieldAccess`
+/// receiver after `rewrite_path_call_to_method_call` runs in `lower()`. The
+/// lint's predicate mirrors codegen's `lower_field_access_ptr`, which sees the
+/// lowered AST — so running the lint pre-lower under-fired on exactly the
+/// shape the B-2026-08-17-21 widening introduced: `check` clean, `build`
+/// refused. Moving it post-lower restores parity; this pins the shape whose
+/// diagnostic that move recovered.
+#[test]
+fn test_chained_field_receiver_sees_lowered_uppercase_path() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-chained-lowered-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("chained_const.kara");
+    let src = r#"
+struct Inner { v: i64 }
+struct Outer { inner: Inner }
+
+let CFG: Outer = Outer { inner: Inner { v: 3 } };
+
+fn main() {
+    println(CFG.inner.v.to_string());
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+    let file = path.to_str().unwrap();
+
+    let out = karac_bin().args(["check", file]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "check must fail on a shape `build` refuses; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("chained field receivers"),
+        "check must name the FR4 deferral for the lowered shape; stderr={stderr}",
+    );
+
+    // The one-level sibling is NOT chained and must stay clean at check —
+    // guards the widened dispatch against the lint over-firing on it.
+    let ok_path = tmp.join("one_level_const.kara");
+    std::fs::write(
+        &ok_path,
+        "struct Point { x: i64, y: i64 }\n\
+         let ORIGIN: Point = Point { x: 5, y: 9 };\n\
+         fn main() {\n\
+             println(ORIGIN.x.to_string());\n\
+         }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args(["check", ok_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "`CONST.field.method()` builds and must check clean; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
 /// B-2026-08-16-13 — codegen's `E_ESCAPING_CLOSURE_NOT_YET` deferral surfaces
 /// at CHECK time, via codegen's OWN escape analysis (`crate::closure_escape` —
 /// one predicate shared with the build gate, so the two can never drift; the

@@ -1161,21 +1161,6 @@ impl Pipeline {
             );
             typed.warnings.extend(extra);
         }
-        // B-2026-08-13-12 — surface codegen's FR4 chained-field-receiver
-        // deferral at CHECK time. Runs off the parsed program alone (the shape
-        // is syntactic), so unlike the lint above it does not need the source
-        // text and is not sidelined in project mode.
-        if let (true, Some(typed)) = (self.codegen_bound, self.typed.as_mut()) {
-            let (extra, deny) = crate::chained_receiver_lint::check_chained_field_receivers(
-                &self.parsed.program,
-                &self.lint_overrides,
-            );
-            if deny {
-                typed.errors.extend(extra);
-            } else {
-                typed.warnings.extend(extra);
-            }
-        }
     }
 
     /// Apply the operator-lowering pass. Runs after typecheck (uses inferred
@@ -1216,6 +1201,28 @@ impl Pipeline {
             self.comptime_errors
                 .get_or_insert_with(Vec::new)
                 .extend(fold_errors);
+        }
+        // B-2026-08-13-12 — surface codegen's FR4 chained-field-receiver
+        // deferral at CHECK time. The shape is syntactic, so this needs
+        // neither the source text nor typecheck output and is not sidelined
+        // in project mode — but it MUST run post-lower (B-2026-08-17-21):
+        // the predicate mirrors `lower_field_access_ptr`, which codegen
+        // reaches on the LOWERED AST, and lowering synthesizes chained field
+        // receivers of its own. `ORIGIN.inner.v.to_string()` parses as a
+        // 4-segment `Call(Path)` and only becomes a chained `FieldAccess`
+        // receiver once `rewrite_path_call_to_method_call` runs, so a
+        // pre-lower placement under-fired on exactly the shape that widening
+        // introduced: check clean, build refused.
+        if let (true, Some(typed)) = (self.codegen_bound, self.typed.as_mut()) {
+            let (extra, deny) = crate::chained_receiver_lint::check_chained_field_receivers(
+                &self.parsed.program,
+                &self.lint_overrides,
+            );
+            if deny {
+                typed.errors.extend(extra);
+            } else {
+                typed.warnings.extend(extra);
+            }
         }
         // B-2026-08-16-13 — surface codegen's E_ESCAPING_CLOSURE_NOT_YET
         // deferral at CHECK time by running codegen's OWN escape analysis

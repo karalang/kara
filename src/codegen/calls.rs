@@ -444,16 +444,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some(t) => t,
                     None => return Ok(None),
                 };
-                let slot = self
-                    .variables
-                    .get(outer_name.as_str())
-                    .copied()
-                    .ok_or_else(|| {
-                        format!(
-                            "codegen: field-receiver {} — outer '{}' has no slot",
-                            ctx, outer_name
-                        )
-                    })?;
+                // B-2026-08-17-21: a MODULE-LEVEL binding has no entry in
+                // `variables` — it lives in a program-lifetime LLVM global,
+                // and `reseed_module_binding_side_tables` registers only its
+                // TYPE tables per function. Its global pointer is the
+                // receiver pointer the field GEP hangs off, exactly as a
+                // local's alloca slot is (module bindings are never `shared`
+                // handles or `ref` params, so neither deref case applies).
+                // Without this, `let ORIGIN: Point = …; ORIGIN.x.to_string()`
+                // — the shape E_MODULE_BINDING_NAMING forces every module
+                // constant into — reached codegen only to die on "no slot".
+                let slot = match self.variables.get(outer_name.as_str()).copied() {
+                    Some(slot) => slot,
+                    None => match self.mod_bindings.module_bindings.get(outer_name.as_str()) {
+                        Some(info) => VarSlot {
+                            ptr: info.global.as_pointer_value(),
+                            ty: info.llvm_ty,
+                        },
+                        None => {
+                            return Err(format!(
+                                "codegen: field-receiver {} — outer '{}' has no slot",
+                                ctx, outer_name
+                            ))
+                        }
+                    },
+                };
                 // For shared structs, the slot stores the heap-pointer
                 // handle; load it to get the receiver-pointer the field
                 // GEP indexes into. For plain structs, the slot itself

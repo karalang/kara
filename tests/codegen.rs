@@ -16960,6 +16960,44 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_module_const_field_then_method_receiver() {
+        // B-2026-08-17-21 — `let ORIGIN: Point = …; ORIGIN.x.to_string()`,
+        // the shape E_MODULE_BINDING_NAMING forces every module constant
+        // into. It used to fail `karac check` with "type 'Point' is not
+        // callable" (the parser's greedy uppercase-Path rooting fell past a
+        // 2-segment-only rescue); widening the rescue exposed a second
+        // layer here in codegen, where the field-receiver path looked the
+        // outer name up in `variables` and a module binding has no slot —
+        // its storage is a program-lifetime LLVM global. Both halves are
+        // pinned by this test: it must check clean AND run.
+        let src = "struct Point { x: i64, y: i64 }\n\
+                   let ORIGIN: Point = Point { x: 5, y: 9 };\n\
+                   fn main() {\n\
+                       println(ORIGIN.x.to_string());\n\
+                       println(ORIGIN.y.to_string());\n\
+                       println(f\"{ORIGIN.x.to_string()}\");\n\
+                       let LOCAL = Point { x: 1, y: 2 };\n\
+                       println(LOCAL.x.to_string());\n\
+                   }";
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "`CONST.field.method()` must typecheck clean, got: {:?}",
+            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "5\n9\n5\n1\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_module_global_oncelock_config_pattern() {
         // The canonical late-bound global: `let CONFIG: OnceLock[T] =
         // OnceLock.new()` at module scope, `set` once in `main`, `get` from a

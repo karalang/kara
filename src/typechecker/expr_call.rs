@@ -684,28 +684,51 @@ impl<'a> super::TypeChecker<'a> {
         // lookup fires before the env-constants + not-type-name guard,
         // so `let Foo = ...; Foo.bar()` (a local shadow of struct Foo)
         // routes to method dispatch on the local. Generic-args (UFCS)
-        // and longer paths are deliberately excluded so `Vec[i64].new()`,
-        // `module.Sub.fn()`, and similar stay on their existing paths.
+        // stay excluded so `Vec[i64].new()` keeps its existing path, and a
+        // Type-class or module root fails the value-binding guard, so
+        // `module.Sub.fn()` and enum-literal receivers (`Dir.North.code()`,
+        // the arm below) are untouched.
         // Effect resources (`Clock`, `UserDB`, etc.) are not in
         // `env.constants` and so naturally fall through to their
         // ambient-resource dispatch — see `expr_ops.rs::resolve_path_type`.
+        //
+        // B-2026-08-17-21: LONGER paths with a value-binding root are the
+        // FIELD-then-method shape — `ORIGIN.x.to_string()` parses as
+        // `Call(Path([ORIGIN, x, to_string]))` — and were excluded by the
+        // original `len() == 2` gate, falling through to the same misleading
+        // "type 'Point' is not callable" this arm exists to prevent. (Module-
+        // level bindings are FORCED uppercase by E_MODULE_BINDING_NAMING, so
+        // every `CONST.field.method()` hit it.) The middle segments become a
+        // synthesized `FieldAccess` chain: exactly the receiver the working
+        // parenthesized spelling `(ORIGIN.x).to_string()` produces, so every
+        // downstream phase is already proven on the lowered shape.
         if let ExprKind::Path {
             segments,
             generic_args: None,
         } = &callee.kind
         {
-            if segments.len() == 2 && self.path_first_segment_is_value_binding(&segments[0]) {
-                let synth_object = Expr {
+            if segments.len() >= 2 && self.path_first_segment_is_value_binding(&segments[0]) {
+                let mut synth_object = Expr {
                     span: callee.span,
                     kind: ExprKind::Identifier(segments[0].clone()),
                 };
+                for field in &segments[1..segments.len() - 1] {
+                    synth_object = Expr {
+                        span: callee.span,
+                        kind: ExprKind::FieldAccess {
+                            object: Box::new(synth_object),
+                            field: field.clone(),
+                        },
+                    };
+                }
                 // No distinct close-paren leaf is reconstructed on this
                 // synthesized-`MethodCall` route (`local.method()` where `local`
                 // shadows a type name); `span` stands in for `args_close_span`.
                 // Integer receivers reach `pow` / the bit intrinsics through the
                 // postfix `MethodCall` path (with a real close-paren span), not
-                // this two-segment Path route, so the width stash is unaffected.
-                let result = self.infer_method_call(&synth_object, &segments[1], args, span, span);
+                // this Path route, so the width stash is unaffected.
+                let method = &segments[segments.len() - 1];
+                let result = self.infer_method_call(&synth_object, method, args, span, span);
                 self.path_call_method_dispatch
                     .insert(SpanKey::from_span(span));
                 return result;
