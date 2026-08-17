@@ -3399,6 +3399,54 @@ fn test_pipe_chained() {
     );
 }
 
+// ── `??` (nil coalescing) ──────────────────────────────────────
+
+/// B-2026-08-17-27 — the interpreter's `??` was wrong on three of its four
+/// legs. It recognized only a unit `None`, returning the operand UNCHANGED for
+/// everything else: `Some(7) ?? -1` gave `Some(7)` where design.md line 782
+/// says the wrapper is stripped, and `Err("bad") ?? -1` propagated the error
+/// instead of taking the fallback. Only `None` was right.
+///
+/// All four legs, both wrappers, scalar and heap payloads.
+#[test]
+fn test_nil_coalesce_strips_the_wrapper_on_every_leg() {
+    let prelude = "fn find(k: i64) -> Option[i64] { if k == 7 { return Some(7); } return None; }\n\
+                   fn name(k: i64) -> Option[String] { if k == 1 { return Some(\"hit\"); } return None; }\n\
+                   fn res(k: i64) -> Result[i64, String] { if k == 1 { return Ok(12); } return Err(\"bad\"); }\n\
+                   fn sres(k: i64) -> Result[String, String] { if k == 1 { return Ok(\"fine\"); } return Err(\"bad\"); }\n";
+    for (expr, want) in [
+        ("find(7) ?? -1", "7\n"),  // Option/Some — used to print `Some(7)`
+        ("find(3) ?? -1", "-1\n"), // Option/None — the one leg that was right
+        ("res(1) ?? -1", "12\n"),  // Result/Ok   — used to print `Ok(12)`
+        ("res(2) ?? -1", "-1\n"),  // Result/Err  — used to print `Err(bad)`
+        ("name(1) ?? \"miss\"", "hit\n"),
+        ("name(2) ?? \"miss\"", "miss\n"),
+        ("sres(1) ?? \"fell\"", "fine\n"),
+        ("sres(2) ?? \"fell\"", "fell\n"),
+    ] {
+        assert_eq!(
+            run(&format!("{prelude}fn main() {{ println({expr}); }}")),
+            want,
+            "`{expr}`"
+        );
+    }
+}
+
+/// The stripped payload must be a usable `T`, not merely one that prints
+/// right. This is the shape the row reported dying on: with the wrapper left
+/// in place, `+ 1` hit "operator 'Add' is not defined for operands of type
+/// 'EnumVariant' and 'Int'" at runtime, on a program `karac check` had passed.
+#[test]
+fn test_nil_coalesce_result_is_the_bare_payload() {
+    assert_eq!(
+        run(
+            "fn find(k: i64) -> Option[i64] { if k == 7 { return Some(7); } return None; }\n\
+             fn main() { println((find(7) ?? -1) + 1); println((find(3) ?? -1) + 1); }"
+        ),
+        "8\n0\n"
+    );
+}
+
 // ── Integer Overflow ───────────────────────────────────────────
 
 #[test]

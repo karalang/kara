@@ -1497,7 +1497,7 @@ impl<'a> super::Interpreter<'a> {
             }
 
             // Pipe
-            ExprKind::Pipe { left, right } => self.eval_pipe(left, right),
+            ExprKind::Pipe { left, right } => self.eval_pipe(left, right, &expr.span),
 
             // Question mark (? operator)
             // On Err(e) → return Err(e) from enclosing function
@@ -1617,17 +1617,20 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
 
-            // NilCoalesce (??)
+            // NilCoalesce (??) — `left.unwrap_or(right)`, per design.md line
+            // 782 and `ast::desugar_nil_coalesce`.
+            //
+            // B-2026-08-17-27 — the hand-rolled evaluation this replaces was
+            // wrong on three of `??`'s four legs. It returned the operand
+            // UNCHANGED on success, so `find(v, 7) ?? -1` produced `Some(7)`
+            // where the spec says `7` (and adding 1 to it then died on
+            // "operator 'Add' is not defined for 'EnumVariant' and 'Int'"),
+            // and it recognized only a unit `None`, so an `Err` skipped the
+            // fallback and propagated the error instead. `unwrap_or` already
+            // had all four legs right; `??` is the same operation, so it is
+            // now spelled as that one rather than re-derived.
             ExprKind::NilCoalesce { left, right } => {
-                let l = self.eval_expr_inner(left);
-                match &l {
-                    Value::EnumVariant {
-                        variant,
-                        data: EnumData::Unit,
-                        ..
-                    } if variant == "None" => self.eval_expr_inner(right),
-                    _ => l,
-                }
+                self.eval_expr_inner(&desugar_nil_coalesce(left, right, expr.span))
             }
 
             ExprKind::Unsafe(block) => match self.eval_block_inner(block) {

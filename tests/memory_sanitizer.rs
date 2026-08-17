@@ -43257,6 +43257,57 @@ fn main() {
     }
 
     #[test]
+    fn asan_nil_coalesce_heap_fallbacks_clean() {
+        // B-2026-08-17-27 — `??` is lowered to `unwrap_or`, so it inherits that
+        // path's ownership machinery: the moved-binding cap-zeroing (leg 1), the
+        // present-path free of a collection literal (leg 2), and the f-string
+        // `acc` cleanup suppression (leg 3) of B-2026-07-16-23. Inheriting is
+        // the POINT of the lowering — a second implementation of `??` would have
+        // had to re-derive all three, and the hand-rolled interpreter version it
+        // replaced got the plain semantics wrong on three of four legs, never
+        // mind the memory.
+        //
+        // This is the `??` twin of the two fixtures below it: same three default
+        // shapes, spelled with `??`, plus a `Result` receiver that the old
+        // typechecker never even admitted. If the desugar introduced an extra
+        // copy or lost a suppression, the double-free aborts here and any
+        // per-iteration leak accumulates over 200 iterations for LSan.
+        assert_clean_asan_run(
+            r#"
+fn opt_s(i: i64) -> Option[String] {
+    if i % 2 == 0 { Some("even-payload".to_string()) } else { None }
+}
+fn opt_v(i: i64) -> Option[Vec[i64]] {
+    if i % 3 == 0 { Some([i, i + 1]) } else { None }
+}
+fn res_s(i: i64) -> Result[String, String] {
+    if i % 2 == 0 { Ok("ok-payload".to_string()) } else { Err("bad") }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let ds = "string-fallback".to_string();
+        let s = opt_s(i) ?? ds;
+        total = total + (s.len() as i64);
+        let dv: Vec[i64] = [7, 7, 7];
+        let v = opt_v(i) ?? dv;
+        total = total + (v.len() as i64);
+        let f: String = opt_s(i) ?? f"def-{i}";
+        total = total + (f.len() as i64);
+        let r: String = res_s(i) ?? "err-fallback";
+        total = total + (r.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["7278"],
+            "nil_coalesce_heap_fallbacks_clean",
+        );
+    }
+
+    #[test]
     fn asan_unwrap_or_literal_and_fstring_default_clean() {
         // B-2026-07-16-23 legs 2 + 3: `Option[T].unwrap_or(<default>)` where the
         // default is a DIRECT literal, not a binding.

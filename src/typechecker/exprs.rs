@@ -3803,17 +3803,7 @@ impl<'a> super::TypeChecker<'a> {
 
             // Infix
             ExprKind::NilCoalesce { left, right } => {
-                let l_ty = self.infer_expr(left);
-                let r_ty = self.infer_expr(right);
-                if l_ty != Type::Error && r_ty != Type::Error {
-                    if let Type::Named { name, args } = &l_ty {
-                        if name == "Option" && args.len() == 1 {
-                            self.check_assignable(&args[0], &r_ty, right.span);
-                            return args[0].clone();
-                        }
-                    }
-                }
-                Type::Error
+                self.infer_nil_coalesce(left, right, &expr.span)
             }
 
             ExprKind::Call { callee, args } => self.infer_call(callee, args, &expr.span),

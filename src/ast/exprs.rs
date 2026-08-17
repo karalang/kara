@@ -449,6 +449,122 @@ pub struct CallArg {
     pub span: Span,
 }
 
+/// Desugar one pipe stage `left |> right` into the call it stands for, per
+/// design.md § Pipe Operator: `a |> f` is `f(a)`, `a |> f(b)` is `f(a, b)`,
+/// and `a |> f(b, _)` is `f(b, a)` — the `_` placeholder naming where the
+/// piped value lands instead of the default leading position. Returns `None`
+/// for a right-hand side that is neither a name nor a call, which the
+/// typechecker rejects (`E_PIPE_RHS_NOT_CALLABLE`).
+///
+/// B-2026-08-17-25 — this exists so the three phases cannot disagree about
+/// what a pipe MEANS. The typechecker and the interpreter each grew their own
+/// copy of this rewrite and had already drifted apart (they disagreed on the
+/// synthesized call's span, and on whether a `mut _` placeholder keeps its
+/// marker); codegen had no copy at all, so `ExprKind::Pipe` fell through
+/// `compile_expr`'s catch-all and every compiled pipe evaluated to 0. A pipe
+/// is defined by its rewrite, so the rewrite is written once, here, and the
+/// evaluators share it.
+///
+/// The synthesized call carries the PIPE's span, not the right-hand side's.
+/// The typechecker records per-call facts — generic instantiations, narrow
+/// integer types, `?`-payload types — keyed by the call expression's span,
+/// and it types a pipe by inferring this same call at the pipe's span. An
+/// evaluator that rebuilt the call at `right.span` would look those facts up
+/// under a key nothing was ever recorded at.
+pub fn desugar_pipe(left: &Expr, right: &Expr, span: Span) -> Option<Expr> {
+    let piped = |label: Option<String>, mut_marker: bool| CallArg {
+        label,
+        mut_marker,
+        // Synthesized: there is no `mut` token in the source to point at.
+        mut_marker_span: None,
+        value: left.clone(),
+        span: left.span,
+    };
+
+    let (callee, args) = match &right.kind {
+        // `a |> f` => `f(a)`
+        ExprKind::Identifier(_) | ExprKind::Path { .. } => {
+            (Box::new(right.clone()), vec![piped(None, false)])
+        }
+
+        // `a |> f(args...)` => `f(a, args...)`, or `f(args...)` with the
+        // piped value substituted for the `_` placeholder when one is written.
+        ExprKind::Call { callee, args } => {
+            let has_placeholder = args
+                .iter()
+                .any(|arg| matches!(arg.value.kind, ExprKind::PipePlaceholder));
+
+            let desugared = if has_placeholder {
+                args.iter()
+                    .map(|arg| {
+                        if matches!(arg.value.kind, ExprKind::PipePlaceholder) {
+                            piped(arg.label.clone(), arg.mut_marker)
+                        } else {
+                            arg.clone()
+                        }
+                    })
+                    .collect()
+            } else {
+                let mut prepended = vec![piped(None, false)];
+                prepended.extend(args.iter().cloned());
+                prepended
+            };
+
+            (callee.clone(), desugared)
+        }
+
+        _ => return None,
+    };
+
+    Some(Expr {
+        span,
+        kind: ExprKind::Call { callee, args },
+    })
+}
+
+/// Desugar `left ?? right` into `left.unwrap_or(right)`, per design.md line
+/// 782: "`expr ?? fallback` — short-circuits to `fallback` if `expr` is `None`
+/// (for `Option`) or `Err(_)` (for `Result`). The result type ... is the inner
+/// `T` — the wrapper is stripped." That is `unwrap_or`'s contract exactly, so
+/// `??` is spelled as sugar for it rather than given its own evaluation.
+///
+/// B-2026-08-17-27 — `??` had a hand-rolled implementation in the interpreter
+/// and none at all in codegen, and it was wrong on three of its four legs: it
+/// returned `Some(7)` where the spec says `7`, skipped the fallback entirely
+/// on `Err`, and compiled to a constant 0. Every one of those legs was already
+/// correct in `unwrap_or`, which carries hardened payload reconstruction and
+/// three separate double-free fixes for heap fallbacks (B-2026-07-16-23).
+/// Routing `??` through it inherits all of that instead of re-deriving it — a
+/// second implementation of one semantics is what produced the divergence.
+///
+/// The caller must have established that `left` is an `Option`/`Result`; on
+/// any other receiver this yields a method-not-found error naming `unwrap_or`,
+/// a method the author never wrote. The typechecker checks that first and
+/// reports against `??` itself.
+pub fn desugar_nil_coalesce(left: &Expr, right: &Expr, span: Span) -> Expr {
+    Expr {
+        span,
+        kind: ExprKind::MethodCall {
+            object: Box::new(left.clone()),
+            method: "unwrap_or".to_string(),
+            turbofish: None,
+            args: vec![CallArg {
+                label: None,
+                mut_marker: false,
+                mut_marker_span: None,
+                value: right.clone(),
+                span: right.span,
+            }],
+            // Method-call side tables are keyed on the (call, args-close) span
+            // pair so chained calls sharing a receiver span stay distinct. The
+            // fallback's span plays that role here: it is what distinguishes
+            // the two `??` sites in `a ?? b ?? c`, and every phase derives it
+            // from the same node, so the keys agree.
+            args_close_span: right.span,
+        },
+    }
+}
+
 // ── Struct Literal Fields ────────────────────────────────────────
 
 #[derive(Debug, Clone)]

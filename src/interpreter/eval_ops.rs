@@ -904,71 +904,14 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    pub(crate) fn eval_pipe(&mut self, left: &Expr, right: &Expr) -> Value {
-        match &right.kind {
-            // a |> f => f(a)
-            ExprKind::Identifier(_) | ExprKind::Path { .. } => {
-                let desugared = Expr {
-                    span: right.span,
-                    kind: ExprKind::Call {
-                        callee: Box::new(right.clone()),
-                        args: vec![CallArg {
-                            label: None,
-                            mut_marker: false,
-                            mut_marker_span: None,
-                            value: left.clone(),
-                            span: left.span,
-                        }],
-                    },
-                };
-                self.eval_expr_inner(&desugared)
-            }
-
-            // a |> f(args...) => f(a, args...) or f(args with _ replaced)
-            ExprKind::Call { callee, args } => {
-                let has_placeholder = args
-                    .iter()
-                    .any(|arg| matches!(arg.value.kind, ExprKind::PipePlaceholder));
-
-                let desugared_args: Vec<CallArg> = if has_placeholder {
-                    args.iter()
-                        .map(|arg| {
-                            if matches!(arg.value.kind, ExprKind::PipePlaceholder) {
-                                CallArg {
-                                    label: arg.label.clone(),
-                                    mut_marker: false,
-                                    mut_marker_span: None,
-                                    value: left.clone(),
-                                    span: left.span,
-                                }
-                            } else {
-                                arg.clone()
-                            }
-                        })
-                        .collect()
-                } else {
-                    let mut new_args = vec![CallArg {
-                        label: None,
-                        mut_marker: false,
-                        mut_marker_span: None,
-                        value: left.clone(),
-                        span: left.span,
-                    }];
-                    new_args.extend(args.iter().cloned());
-                    new_args
-                };
-
-                let desugared = Expr {
-                    span: right.span,
-                    kind: ExprKind::Call {
-                        callee: callee.clone(),
-                        args: desugared_args,
-                    },
-                };
-                self.eval_expr_inner(&desugared)
-            }
-
-            _ => unreachable!(
+    pub(crate) fn eval_pipe(&mut self, left: &Expr, right: &Expr, span: &Span) -> Value {
+        // Shared with the typechecker and codegen (B-2026-08-17-25) — see
+        // `ast::desugar_pipe`. The synthesized call carries the PIPE's span,
+        // which is where the typechecker recorded this call's facts; the
+        // hand-rolled copy this replaced built it at `right.span` instead.
+        match desugar_pipe(left, right, *span) {
+            Some(desugared) => self.eval_expr_inner(&desugared),
+            None => unreachable!(
                 "invalid pipe right-hand side at {}:{}; should be caught by parser/typechecker",
                 right.span.line, right.span.column
             ),

@@ -97217,6 +97217,183 @@ fn main() {
             assert_eq!(out, "5\n", "{name}: shadowing struct read wrong");
         }
     }
+
+    /// B-2026-08-17-25 — `ExprKind::Pipe` had no arm in `compile_expr`, so
+    /// every compiled pipe fell to the catch-all's constant 0 while `--interp`
+    /// evaluated it correctly. Silent for a scalar; fatal for a String, whose
+    /// zero was read back as a header pointer (SIGSEGV, exit 139).
+    ///
+    /// Each case pins the COMPILED answer against the value the direct call
+    /// spelling produces, because that equivalence is the whole definition of
+    /// `|>`: `a |> f` is `f(a)`. A test that only pinned literals would still
+    /// pass if the desugar drifted in a way that broke the correspondence.
+    #[test]
+    fn pipe_compiles_to_the_call_it_desugars_to() {
+        let prelude = "fn dbl(n: i64) -> i64 { n * 2 }\n\
+                       fn add(a: i64, b: i64) -> i64 { a + b }\n\
+                       fn tag(s: String) -> String { \"[\" + s + \"]\" }\n\
+                       fn pair(a: String, b: i64) -> String { a + b.to_string() }\n\
+                       fn ident[T](x: T) -> T { x }\n";
+        // (piped spelling, equivalent direct call) — both compiled, compared.
+        for (piped, direct) in [
+            // The row's minimal repro: a let-bound scalar pipe printed 0.
+            ("5 |> dbl", "dbl(5)"),
+            // Expression position — the row measured this separately.
+            ("(5 |> dbl) + 1", "dbl(5) + 1"),
+            // Chained stages are left-associative.
+            ("5 |> dbl |> dbl", "dbl(dbl(5))"),
+            // Extra args land AFTER the piped value.
+            ("5 |> add(10)", "add(5, 10)"),
+            // The `_` hole moves the piped value to the marked position.
+            ("5 |> add(10, _)", "add(10, 5)"),
+            // `|>` binds looser than `+`, so the sum is what gets piped.
+            ("2 + 1 |> dbl", "dbl(2 + 1)"),
+            // A generic stage: the desugared call must reach the same
+            // instantiation the direct spelling does.
+            ("3 |> ident", "ident(3)"),
+        ] {
+            let src = |e: &str| format!("{prelude}fn main() {{ println({e}); }}\n");
+            let Some(got) = run_program(&src(piped)) else {
+                return;
+            };
+            let want = run_program(&src(direct)).expect("direct-call control must build");
+            assert_eq!(got, want, "`{piped}` must compile to what `{direct}` does");
+            assert_ne!(got, "0\n", "`{piped}` returned the catch-all's zero");
+        }
+
+        // The String legs, kept separate because their failure was a SEGFAULT
+        // rather than a wrong number: `run_program` returns None on a crash, so
+        // an `assert_eq!` against the expected text is what proves it survived.
+        for (piped, want) in [
+            ("\"x\" |> tag", "[x]\n"),
+            ("\"y\" |> tag |> tag", "[[y]]\n"),
+            ("7 |> pair(\"v\", _)", "v7\n"),
+            ("\"g\" |> ident", "g\n"),
+        ] {
+            let Some(got) = run_program(&format!(
+                "{prelude}fn main() {{ let a = {piped}; println(a); }}\n"
+            )) else {
+                return;
+            };
+            assert_eq!(got, want, "String-typed pipe `{piped}`");
+        }
+    }
+
+    /// B-2026-08-17-27 — `??` fell to the same catch-all, so all four of its
+    /// legs compiled to 0. It is lowered to `unwrap_or` now, and the point of
+    /// this test is that the two spellings agree: `??` IS `unwrap_or`, so any
+    /// future divergence between them is a bug in the lowering.
+    #[test]
+    fn nil_coalesce_compiles_to_unwrap_or() {
+        let prelude = "fn find(k: i64) -> Option[i64] { if k == 7 { return Some(7); } return None; }\n\
+                       fn name(k: i64) -> Option[String] { if k == 1 { return Some(\"hit\"); } return None; }\n\
+                       fn res(k: i64) -> Result[i64, String] { if k == 1 { return Ok(12); } return Err(\"bad\"); }\n\
+                       fn sres(k: i64) -> Result[String, String] { if k == 1 { return Ok(\"fine\"); } return Err(\"bad\"); }\n";
+        // (receiver, fallback, expected) across all four legs of the matrix the
+        // row measured — Option/Some, Option/None, Result/Ok, Result/Err — in
+        // both a scalar and a heap payload.
+        for (recv, fallback, want) in [
+            ("find(7)", "-1", "7\n"),
+            ("find(3)", "-1", "-1\n"),
+            ("res(1)", "-1", "12\n"),
+            ("res(2)", "-1", "-1\n"),
+            ("name(1)", "\"miss\"", "hit\n"),
+            ("name(2)", "\"miss\"", "miss\n"),
+            ("sres(1)", "\"fell\"", "fine\n"),
+            ("sres(2)", "\"fell\"", "fell\n"),
+        ] {
+            let Some(got) = run_program(&format!(
+                "{prelude}fn main() {{ println({recv} ?? {fallback}); }}\n"
+            )) else {
+                return;
+            };
+            assert_eq!(got, want, "`{recv} ?? {fallback}`");
+            let via_method = run_program(&format!(
+                "{prelude}fn main() {{ println({recv}.unwrap_or({fallback})); }}\n"
+            ))
+            .expect("the unwrap_or control must build");
+            assert_eq!(
+                got, via_method,
+                "`{recv} ?? {fallback}` must equal `{recv}.unwrap_or({fallback})`"
+            );
+        }
+
+        // The stripped payload has to be USABLE as `T`, not just printable.
+        // The interpreter's old `??` returned the wrapper untouched, and
+        // `(find(3) ?? 5) + 1` was where that showed: it died on "operator
+        // 'Add' is not defined for 'EnumVariant' and 'Int'".
+        let Some(arith) = run_program(&format!(
+            "{prelude}fn main() {{ println((find(3) ?? 5) + 1); }}\n"
+        )) else {
+            return;
+        };
+        assert_eq!(arith, "6\n", "the `??` result must be the bare payload");
+    }
+
+    /// B-2026-08-17-25 fallout — a RANGE subscript passed by `ref` to a
+    /// trait-bound generic used to reach `ref_arg_index_borrow_ptr`, which
+    /// borrows ONE ELEMENT. It compiled the range as the subscript, got the
+    /// catch-all's 0, and produced `&v[0]`: the correct address for a slice
+    /// starting at 0 and the wrong one for any other. The existing fixture
+    /// only ever passed `v[0..2]` to an impl that returns a literal, so
+    /// neither half of that was observable.
+    ///
+    /// Pinned on the header's LENGTH, which is the part a bare element
+    /// pointer cannot carry: two ranges of DIFFERENT length over the same Vec
+    /// must report their own, and the `--interp` oracle agrees.
+    #[test]
+    fn a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer() {
+        let src = "trait Sized2 { fn size(ref self) -> i64; }\n\
+                   impl Sized2 for Slice[i64] { fn size(ref self) -> i64 { return self.len(); } }\n\
+                   fn show[T: Sized2](x: ref T) -> i64 { return x.size(); }\n\
+                   fn main() {\n\
+                       let mut v: Vec[i64] = Vec.new();\n\
+                       v.push(10); v.push(20); v.push(30); v.push(40);\n\
+                       println(show(v[0..2]));\n\
+                       println(show(v[1..4]));\n\
+                   }\n";
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(
+            out, "2\n3\n",
+            "each range must carry its own length — a one-element borrow has none"
+        );
+    }
+
+    /// B-2026-08-17-25 / -27 — the catch-all itself. Three bugs were filed
+    /// against one silently-zero-returning line, and the reason each was
+    /// expensive is that a missing arm produced a RUNNING program with a wrong
+    /// answer. `Range`-as-a-value and `?.` are two more kinds with no arm; both
+    /// used to build and print the wrong thing, and both must now name
+    /// themselves at build time. (They are separately filed as gaps — this
+    /// test pins the FAILURE MODE, not their absence: implementing either one
+    /// should flip its case to a passing build, which is a deliberate edit
+    /// here, not a silent regression.)
+    #[test]
+    fn an_unhandled_expression_kind_fails_the_build_by_name() {
+        for (src, kind) in [
+            (
+                "fn main() { let r = 0..4; for i in r { println(i); } }\n",
+                "Range",
+            ),
+            (
+                "struct P { x: i64 }\n\
+                 fn get(k: i64) -> Option[P] { if k == 1 { return Some(P { x: 5 }); } return None; }\n\
+                 fn main() { let v = get(1)?.x; println(v); }\n",
+                "OptionalChain",
+            ),
+        ] {
+            let err = ir_result(src).expect_err(
+                "an expression kind with no `compile_expr` arm must fail the build, \
+                 not compile to a constant",
+            );
+            assert!(
+                err.contains("no handler for expression kind") && err.contains(kind),
+                "the bail must name the kind it could not compile; got: {err}"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]

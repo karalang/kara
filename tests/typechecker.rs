@@ -5680,6 +5680,126 @@ fn test_pipe_type_mismatch() {
     assert!(errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch));
 }
 
+// ── Category: `??` (nil coalescing) ────────────────────────────
+
+/// B-2026-08-17-27 — design.md line 782 gives `??` both wrappers: it yields
+/// the payload of a `Some`/`Ok` and the fallback for a `None`/`Err`, and the
+/// expression's type is the stripped `T`. Only `Option` was ever implemented.
+///
+/// A BARE `typecheck_ok` CANNOT TEST THIS, and the reason is the bug. The
+/// `Result` arm fell through to `Type::Error`, which is universally
+/// assignable and reported nothing — so `let r: i64 = parse(s) ?? -1` passed
+/// `karac check` on the broken compiler exactly as it does on the fixed one.
+/// Pinning the type therefore has to go through a use that a real `T` would
+/// REJECT: below, each stripped payload is bound to the wrong annotation, and
+/// the mismatch is what proves `??` produced a type at all.
+#[test]
+fn nil_coalesce_strips_either_wrapper() {
+    let decls = "
+        fn find(k: i64) -> Option[i64] { if k == 7 { return Some(7); } return None; }
+        fn name(k: i64) -> Option[String] { if k == 1 { return Some(\"hit\"); } return None; }
+        fn parse_it(s: String) -> Result[i64, String] { if s == \"ok\" { return Ok(12); } return Err(\"bad\"); }
+        fn sres(k: i64) -> Result[String, String] { if k == 1 { return Ok(\"fine\"); } return Err(\"bad\"); }
+    ";
+    // (expression, the payload it strips to, an annotation of the OTHER type)
+    for (expr, want_ty, wrong_ty) in [
+        ("find(7) ?? -1", "i64", "String"),
+        ("parse_it(\"ok\") ?? -1", "i64", "String"),
+        ("name(1) ?? \"miss\"", "String", "i64"),
+        ("sres(1) ?? \"fell\"", "String", "i64"),
+    ] {
+        typecheck_ok(&format!(
+            "{decls} fn main() {{ let r: {want_ty} = {expr}; }}"
+        ));
+        let errors = typecheck_errors(&format!(
+            "{decls} fn main() {{ let r: {wrong_ty} = {expr}; }}"
+        ));
+        assert!(
+            errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+            "`{expr}` must have type {want_ty}, so binding it to {wrong_ty} must be \
+             rejected — an unreported `Type::Error` would be accepted here; got: {errors:?}"
+        );
+    }
+}
+
+/// The fallback has to be assignable to the payload — `??` cannot widen the
+/// type of the expression it stands in for. The `Result` half of this is the
+/// detector: pre-fix it never reached the assignability check at all, so a
+/// nonsense fallback was accepted.
+#[test]
+fn nil_coalesce_fallback_must_match_the_payload() {
+    for recv in ["find(7)", "parse_it(\"ok\")"] {
+        let errors = typecheck_errors(&format!(
+            "
+            fn find(k: i64) -> Option[i64] {{ if k == 7 {{ return Some(7); }} return None; }}
+            fn parse_it(s: String) -> Result[i64, String] {{ if s == \"ok\" {{ return Ok(12); }} return Err(\"bad\"); }}
+            fn main() {{ let r = {recv} ?? \"nope\"; }}
+        "
+        ));
+        assert!(
+            errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+            "a String fallback for `{recv}`'s i64 payload must be rejected, got: {errors:?}"
+        );
+    }
+}
+
+/// The silent-fallthrough half. An operand that is not a wrapper has nothing
+/// for `??` to strip, and every such program used to pass `karac check` and
+/// then run — which is how the interpreter and the two compiled backends came
+/// to disagree three different ways about the same expression.
+#[test]
+fn nil_coalesce_on_an_unwrapped_operand_is_diagnosed_and_run_fatal() {
+    for operand in ["5", "true", "\"s\"", "(1, 2)"] {
+        let src = format!("fn main() {{ let r = {operand} ?? 0; }}");
+        let errors = typecheck_errors(&src);
+        let e = errors
+            .iter()
+            .find(|e| e.kind == TypeErrorKind::NilCoalesceNotWrapped)
+            .unwrap_or_else(|| {
+                panic!("expected NilCoalesceNotWrapped for `{operand} ?? 0`, got: {errors:?}")
+            });
+        assert!(
+            e.message.contains("`Option`") && e.message.contains("`Result`"),
+            "the message must name both wrappers for `{operand}`: {}",
+            e.message
+        );
+        assert!(
+            e.kind.is_run_fatal(),
+            "NilCoalesceNotWrapped must be run-fatal: the evaluators lower `??` to \
+             `unwrap_or`, which has no meaning on `{operand}`, so a downgraded error \
+             would reach them instead of being printed"
+        );
+    }
+}
+
+/// The counterweight: the diagnostic must not fire on a wrapper reached
+/// through inference rather than an annotation, and a generic body — where the
+/// operand type is still an unsolved metavar when the rule runs — must stay
+/// clean. Over-rejecting here would break working code to fix a crash.
+#[test]
+fn nil_coalesce_accepts_inferred_and_generic_operands() {
+    typecheck_ok(
+        "
+        fn find(k: i64) -> Option[i64] { if k == 7 { return Some(7); } return None; }
+        fn main() { let r = find(7) ?? -1; let s = r + 1; }
+    ",
+    );
+    typecheck_ok(
+        "
+        fn pick[T](o: Option[T], d: T) -> T { return o ?? d; }
+        fn main() { let r: i64 = pick(Some(3), 0); }
+    ",
+    );
+    // Chained: the left `??` yields a bare `T`, so the second needs a wrapper
+    // of its own rather than the first's result.
+    typecheck_ok(
+        "
+        fn find(k: i64) -> Option[i64] { if k == 7 { return Some(7); } return None; }
+        fn main() { let r: i64 = find(1) ?? (find(7) ?? -1); }
+    ",
+    );
+}
+
 #[test]
 fn test_pipe_wrong_arity() {
     let errors = typecheck_errors(

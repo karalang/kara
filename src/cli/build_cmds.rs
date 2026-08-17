@@ -2669,6 +2669,7 @@ pub(super) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'sta
         K::StringNotIndexable => "E0268",
         K::IteratorNotIndexable => "E0274",
         K::TypeNotIndexable => "E0275",
+        K::NilCoalesceNotWrapped => "E0276",
         K::SharedFieldNotMut => "E0269",
         K::AtomicMissingOrdering => "E0270",
         K::AtomicInvalidInnerType => "E0272",

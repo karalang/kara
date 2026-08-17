@@ -4568,6 +4568,23 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &Expr,
     ) -> Result<Option<inkwell::values::PointerValue<'ctx>>, String> {
         if let ExprKind::Index { object, index } = &arg.kind {
+            // A RANGE subscript is a slice, not an element borrow. `v[0..2]`
+            // yields a `Slice[T]` — a {ptr, len} header — where this path
+            // returns a pointer to one element, so the two are not
+            // interchangeable and the range has to go the ordinary
+            // slice-materializing route.
+            //
+            // Uncovered by B-2026-08-17-25's loud `compile_expr` bail. Before
+            // it, the range fell through the catch-all to a constant 0, this
+            // path read that as the subscript, and the result was `&v[0]` —
+            // which is the right ADDRESS for a slice that starts at 0 and the
+            // wrong one for every other slice. `show(v[0..2])` in
+            // `test_e2e_user_trait_bound_call_over_builtin_containers_dispatches`
+            // is a 0-start range whose impl never reads through the pointer,
+            // so nothing caught it.
+            if matches!(index.kind, ExprKind::Range { .. }) {
+                return Ok(None);
+            }
             if let ExprKind::Identifier(vec_var) = &object.kind {
                 // Plain Vec variables only — slices / maps / array-slot
                 // bindings have their own representations (mirror the

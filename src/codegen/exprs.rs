@@ -16,6 +16,22 @@ use inkwell::AddressSpace;
 
 use super::state::{SoaGroup, SoaLayout, VarSlot};
 
+/// The variant name of an `ExprKind`, for the "no handler for expression kind"
+/// bail at the end of `compile_expr`.
+///
+/// Read off `Debug` rather than written as a match. A match would need a `_`
+/// fallback (55 variants and growing), and a stale fallback that mislabels the
+/// node would blunt exactly the diagnostic this exists to sharpen — the same
+/// silent-default failure the bail replaced. `Debug` for an enum always leads
+/// with the variant's own name, so this cannot go out of date. Only ever
+/// called on the error path, so its cost does not matter.
+fn expr_kind_name(kind: &ExprKind) -> String {
+    format!("{:?}", kind)
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect()
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
         // Level 2 crash diagnostics: record the span of the expression being
@@ -1487,7 +1503,59 @@ impl<'ctx> super::Codegen<'ctx> {
             // constant 0: the body was never emitted, so a compiled program
             // printed NOTHING and exited 0 while `--interp` ran it correctly.
             ExprKind::Providers { bindings, body } => self.compile_providers_block(bindings, body),
-            _ => Ok(self.context.i64_type().const_int(0, false).into()),
+
+            // B-2026-08-17-25 — `a |> f`. Same shape as `Providers` above: no
+            // arm meant the catch-all's constant 0, so EVERY compiled pipe
+            // evaluated to zero while `--interp` was correct, and a
+            // String-typed pipe segfaulted when that zero was read back as a
+            // String header. The rewrite is `ast::desugar_pipe`, shared with
+            // the typechecker and the interpreter so the three cannot drift;
+            // it carries the pipe's own span, which is where the typechecker
+            // recorded this call's facts.
+            ExprKind::Pipe { left, right } => {
+                let desugared = desugar_pipe(left, right, expr.span).ok_or_else(|| {
+                    format!(
+                        "codegen: pipe right-hand side at {}:{} is neither a function name nor a \
+                         call; the typechecker should have rejected this — this is a codegen bug",
+                        right.span.line, right.span.column
+                    )
+                })?;
+                let ExprKind::Call { callee, args } = &desugared.kind else {
+                    unreachable!("desugar_pipe always yields a Call")
+                };
+                self.compile_call(callee, args, &expr.span)
+            }
+
+            // B-2026-08-17-27 — `a ?? b`, lowered to `a.unwrap_or(b)` per
+            // design.md line 782. Also fell to the catch-all's constant 0.
+            // Routing it through `unwrap_or` inherits that path's payload
+            // reconstruction and its heap-fallback ownership handling rather
+            // than starting a second implementation of the same operation.
+            ExprKind::NilCoalesce { left, right } => {
+                self.compile_expr(&desugar_nil_coalesce(left, right, expr.span))
+            }
+
+            // B-2026-08-17-25 / -27 — this arm USED TO RETURN `Ok(0)`.
+            //
+            // A missing arm is a codegen gap, and a gap that yields a constant
+            // is the worst way to report one: the program builds, runs, and
+            // prints a wrong answer. Three separate bugs were filed against
+            // this one line — `providers` blocks compiled to a body that never
+            // ran (B-2026-07-31-9), then `|>` and `??` each to zero — and in
+            // all three the fix was mechanical once someone noticed. Noticing
+            // was the whole cost, and the silent zero is what made it
+            // expensive: `karac check` passed, the interpreter was right, and
+            // only the compiled backends were wrong.
+            //
+            // Everything else in this subsystem already fails loudly on an
+            // unimplemented node ("no handler for method 'X' ... this is a
+            // codegen bug"). This now matches, so the next unhandled kind
+            // costs a build error naming itself instead of a bug hunt.
+            other => Err(format!(
+                "codegen: no handler for expression kind {}; this is a codegen bug — \
+                 the expression typechecked, so the gap is in `compile_expr`",
+                expr_kind_name(other)
+            )),
         }
     }
 

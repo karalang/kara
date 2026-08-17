@@ -502,6 +502,16 @@ pub enum TypeErrorKind {
     /// instead of a diagnostic. Run-fatal for the same reason as its two
     /// siblings above (B-2026-08-17-10).
     TypeNotIndexable,
+    /// `x ?? fallback` where `x` is neither an `Option` nor a `Result`.
+    /// `??` strips a wrapper, so an unwrapped operand has nothing for it to
+    /// do. The rule used to accept `Option` only and fall through to a
+    /// SILENT `Type::Error` for everything else — including the `Result`
+    /// design.md specs — so `karac check` passed and each backend improvised
+    /// (B-2026-08-17-27). Run-fatal for the same reason as the three
+    /// not-indexable kinds: the evaluators lower `??` to `unwrap_or`, which
+    /// has no meaning on an unwrapped receiver, so a downgraded error would
+    /// reach them instead of being printed.
+    NilCoalesceNotWrapped,
     /// An `Atomic[T]` operation (`load` / `store` / `fetch_add` /
     /// `fetch_sub` / `fetch_and` / `fetch_or` / `fetch_xor` / `swap`) was
     /// called without its required explicit `MemoryOrdering` argument.
@@ -957,6 +967,7 @@ impl TypeErrorKind {
                 | TypeErrorKind::StringNotIndexable
                 | TypeErrorKind::IteratorNotIndexable
                 | TypeErrorKind::TypeNotIndexable
+                | TypeErrorKind::NilCoalesceNotWrapped
                 | TypeErrorKind::SharedFieldNotMut
                 | TypeErrorKind::AtomicMissingOrdering
                 | TypeErrorKind::AtomicInvalidInnerType
@@ -993,6 +1004,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::StringNotIndexable
         | TypeErrorKind::IteratorNotIndexable
         | TypeErrorKind::TypeNotIndexable
+        | TypeErrorKind::NilCoalesceNotWrapped
         | TypeErrorKind::LabelMismatch
         | TypeErrorKind::NonContiguousLabels
         | TypeErrorKind::PatternScrutineeMismatch

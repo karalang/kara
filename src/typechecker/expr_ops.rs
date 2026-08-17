@@ -2511,86 +2511,124 @@ impl<'a> super::TypeChecker<'a> {
     // ── Pipe Desugaring ──────────────────────────────────────────
 
     pub(super) fn infer_pipe(&mut self, left: &Expr, right: &Expr, span: &Span) -> Type {
-        match &right.kind {
-            // a |> f => f(a)
-            ExprKind::Identifier(_) | ExprKind::Path { .. } => {
-                let synthetic_arg = CallArg {
-                    label: None,
-                    mut_marker: false,
-                    mut_marker_span: None,
-                    value: left.clone(),
-                    span: left.span,
-                };
-                self.infer_call(right, &[synthetic_arg], span)
-            }
-
-            // a |> f(args...) => f(a, args...) or f(args with _ replaced)
-            ExprKind::Call { callee, args } => {
-                // Count _ placeholders in args
-                let placeholder_count = args
-                    .iter()
-                    .filter(|arg| matches!(arg.value.kind, ExprKind::PipePlaceholder))
-                    .count();
-
-                if placeholder_count > 1 {
-                    self.type_error(
-                        "at most one '_' placeholder allowed per pipe stage".to_string(),
-                        right.span,
-                        TypeErrorKind::InvalidPipePlaceholder,
-                    );
-                    self.infer_expr(callee);
-                    for arg in args {
-                        if !matches!(arg.value.kind, ExprKind::PipePlaceholder) {
-                            self.infer_expr(&arg.value);
-                        }
-                    }
-                    return Type::Error;
-                }
-
-                // Build the desugared argument list
-                let desugared_args: Vec<CallArg> = if placeholder_count == 1 {
-                    // Replace _ with the left-hand value
-                    args.iter()
-                        .map(|arg| {
-                            if matches!(arg.value.kind, ExprKind::PipePlaceholder) {
-                                CallArg {
-                                    label: arg.label.clone(),
-                                    mut_marker: arg.mut_marker,
-                                    mut_marker_span: None,
-                                    value: left.clone(),
-                                    span: left.span,
-                                }
-                            } else {
-                                arg.clone()
-                            }
-                        })
-                        .collect()
-                } else {
-                    // No placeholder — prepend left as first argument
-                    let mut new_args = vec![CallArg {
-                        label: None,
-                        mut_marker: false,
-                        mut_marker_span: None,
-                        value: left.clone(),
-                        span: left.span,
-                    }];
-                    new_args.extend(args.iter().cloned());
-                    new_args
-                };
-
-                self.infer_call(callee, &desugared_args, span)
-            }
-
-            _ => {
+        // More than one `_` per stage has no defined meaning — the piped value
+        // can only land in one place. Diagnosed before desugaring, because the
+        // shared rewrite would substitute into every placeholder and silently
+        // duplicate the left-hand expression.
+        if let ExprKind::Call { callee, args } = &right.kind {
+            let placeholder_count = args
+                .iter()
+                .filter(|arg| matches!(arg.value.kind, ExprKind::PipePlaceholder))
+                .count();
+            if placeholder_count > 1 {
                 self.type_error(
-                    "right-hand side of pipe must be a function name or function call".to_string(),
+                    "at most one '_' placeholder allowed per pipe stage".to_string(),
                     right.span,
-                    TypeErrorKind::NotCallable,
+                    TypeErrorKind::InvalidPipePlaceholder,
                 );
-                self.infer_expr(right);
-                Type::Error
+                self.infer_expr(callee);
+                for arg in args {
+                    if !matches!(arg.value.kind, ExprKind::PipePlaceholder) {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                return Type::Error;
             }
         }
+
+        // The rewrite itself is shared with the interpreter and codegen so the
+        // three phases cannot disagree about what a pipe means (B-2026-08-17-25).
+        let Some(desugared) = desugar_pipe(left, right, *span) else {
+            self.type_error(
+                "right-hand side of pipe must be a function name or function call".to_string(),
+                right.span,
+                TypeErrorKind::NotCallable,
+            );
+            self.infer_expr(right);
+            return Type::Error;
+        };
+
+        let ExprKind::Call { callee, args } = &desugared.kind else {
+            unreachable!("desugar_pipe always yields a Call")
+        };
+        self.infer_call(callee, args, span)
+    }
+
+    // ── ?? operator ─────────────────────────────────────────────
+
+    /// Typecheck `left ?? right` (design.md line 782): the operand must be an
+    /// `Option[T]` or a `Result[T, E]`, the fallback must be assignable to
+    /// `T`, and the expression's type is `T` — the wrapper is stripped.
+    ///
+    /// B-2026-08-17-27 — two defects lived here. `Result` was never handled,
+    /// so `parse(s) ?? -1` fell to a bare `Type::Error`; and because a
+    /// *reported* error returns `Type::Error` too, that fallthrough was
+    /// SILENT — `karac check` said "All checks passed" and left the two
+    /// evaluators to improvise. Same shape as the index rule's silent tail
+    /// (B-2026-08-17-10): the fix is to make every rejected operand say so.
+    ///
+    /// The evaluators lower `??` to `left.unwrap_or(right)`, which is the same
+    /// operation and is already hardened. That lowering reads the payload type
+    /// from `method_unwrap_inner_types`, so this records the entry under the
+    /// key the desugared call will present.
+    pub(super) fn infer_nil_coalesce(&mut self, left: &Expr, right: &Expr, span: &Span) -> Type {
+        let l_ty = resolve_type_var_top(&self.infer_expr(left), &self.env.substitutions);
+
+        // `Option[T]` -> (T, no error payload); `Result[T, E]` -> (T, E).
+        let wrapped = match &l_ty {
+            Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                Some((args[0].clone(), None))
+            }
+            Type::Named { name, args } if name == "Result" && args.len() == 2 => {
+                Some((args[0].clone(), Some(args[1].clone())))
+            }
+            _ => None,
+        };
+
+        let Some((payload, err_ty)) = wrapped else {
+            // Still type the fallback: it may hold errors of its own, and
+            // reporting only the operand would send the author back for a
+            // second round on the same line.
+            self.infer_expr(right);
+            // An operand that is already `Error`, or still an unsolved
+            // metavar, has nothing to say here — the first would double-report
+            // and the second is not yet knowable.
+            if l_ty != Type::Error && !matches!(l_ty, Type::TypeVar(_)) {
+                self.type_error(
+                    format!(
+                        "'??' requires an `Option` or a `Result` on the left, found '{}'\n  \
+                         '??' supplies the value to use when a wrapped value is absent, so it\n  \
+                         needs a wrapper to unwrap: it yields the payload of a `Some`/`Ok` and\n  \
+                         the right-hand fallback for a `None`/`Err`.\n  \
+                         help: an unwrapped value needs no fallback — drop the '?? ...'",
+                        type_display(&l_ty)
+                    ),
+                    *span,
+                    TypeErrorKind::NilCoalesceNotWrapped,
+                );
+            }
+            return Type::Error;
+        };
+
+        let r_ty = self.infer_expr(right);
+        if r_ty != Type::Error {
+            self.check_assignable(&payload, &r_ty, right.span);
+        }
+
+        // Feed the evaluators' `unwrap_or` lowering. The key must match what
+        // `ast::desugar_nil_coalesce` builds: the `??` span as the receiver
+        // span, the fallback's span standing in for the args-close span.
+        let key = SpanKey::for_method_call(span, &right.span);
+        let payload_resolved = resolve_type_var_top(&payload, &self.env.substitutions);
+        self.method_unwrap_inner_types
+            .insert(key, Self::type_to_type_expr(&payload_resolved));
+        if let Some(e) = err_ty {
+            let e_resolved = resolve_type_var_top(&e, &self.env.substitutions);
+            self.method_unwrap_err_types
+                .insert(key, Self::type_to_type_expr(&e_resolved));
+        }
+
+        payload
     }
 
     // ── ? operator ──────────────────────────────────────────────
