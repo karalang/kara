@@ -12657,3 +12657,72 @@ fn a_once_callable_local_shadowing_a_repeatable_parameter_is_reported() {
         errors
     );
 }
+
+// ── copy-out of a slice chain ends the borrow (B-2026-08-17-16) ──
+
+#[test]
+fn slice_chain_copied_out_does_not_borrow_the_source() {
+    // `.to_vec()` materializes an independent owned Vec, so the mut-slice
+    // borrow of `m` has no live use past the binding statement. The parser
+    // aliases the chain's span to `m`'s, so before the fix the let arm
+    // attributed the `as_slice_mut` borrow to `mc` and every later read of
+    // `mc` mis-fired CrossBorrowConflict against `m` (two reads, two
+    // errors — measured pre-existing before the f-string walk of
+    // B-2026-08-17-13 made the harness see it).
+    ownership_ok(
+        "fn main() {\n\
+             let mut m: Vec[i64] = [7i64, 8i64];\n\
+             let mc = m.as_slice_mut().to_vec();\n\
+             println(mc.len());\n\
+             println(mc.len());\n\
+         }",
+    );
+    // The ended borrow also unblocks a FRESH borrow of the source: `r`
+    // would have conflicted with the stale creation-site MutSlice entry.
+    ownership_ok(
+        "fn main() {\n\
+             let mut m: Vec[i64] = [7i64, 8i64];\n\
+             let mc = m.as_slice_mut().to_vec();\n\
+             let r = m.as_slice();\n\
+             println(mc.len());\n\
+             println(r.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn slice_binding_and_ref_carrying_chain_still_conflict() {
+    // The two counterweights the copy-out gate must not loosen. A binding
+    // that IS the slice keeps the full conflict surface…
+    let errors = ownership_errors(
+        "fn main() {\n\
+             let mut m: Vec[i64] = [7i64, 8i64];\n\
+             let s = m.as_slice_mut();\n\
+             let r = m.as_slice();\n\
+             println(s.len());\n\
+             println(r.len());\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, OwnershipErrorKind::SliceBorrowConflict { .. })),
+        "a live mut-slice binding must still conflict with a new slice: {errors:?}"
+    );
+    // …and a chain whose value CARRIES a borrow (`Option[ref i64]` from
+    // `.first()`) is not a copy-out — the deeply-owned gate must decline it
+    // and keep the conservative error.
+    let errors = ownership_errors(
+        "fn main() {\n\
+             let mut m: Vec[i64] = [7i64, 8i64];\n\
+             let x = m.as_slice_mut().first();\n\
+             let r = m.as_slice();\n\
+             println(r.len());\n\
+             match x { Some(v) => println(v), None => println(0) }\n\
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "a ref-carrying chain result must keep the source borrowed: {errors:?}"
+    );
+}

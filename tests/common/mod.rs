@@ -99,17 +99,6 @@ pub fn output_with_hang_watchdog(mut cmd: Command, timeout: Duration) -> Option<
 /// exists to shrink: fix the bug (or the test program), remove the
 /// entry.
 pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
-    // B-2026-08-17-16 — CrossBorrowConflict FALSE POSITIVE: `let mc =
-    // m.as_slice_mut().to_vec();` registers a mut-slice borrow of `m` that
-    // stays live for `mc`'s whole lifetime, but `.to_vec()` COPIES out and
-    // ends the borrow — `mc` is an independent owned Vec, and any later read
-    // near it mis-fires the conflict. Pre-existing in plain positions
-    // (measured: the plain-println spelling of this test's step 12 was
-    // already 2x mis-rejected before the f-string walk fix); newly VISIBLE
-    // here because B-2026-08-17-13 made the ownership walk see f-string
-    // holes, which is where this test reads `mc`. The test pins real codegen
-    // surface (mut-slice → to_vec), so it stays; remove with the row's fix.
-    "test_e2e_string_bytes_round_trip_and_slice_to_vec",
     // ── Escaping-closure corpus (RefCaptureEscapesScope, E0508) ─────
     // design.md § Closures Rule 2 sub-case (iv): a ref-captured value
     // escaping its scope IS a compile error by design; `karac build` /

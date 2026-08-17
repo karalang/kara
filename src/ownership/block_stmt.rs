@@ -134,16 +134,40 @@ impl<'a> super::OwnershipChecker<'a> {
                     .get(&SpanKey::from_span(&value.span))
                     .cloned()
                 {
-                    for name in pattern.binding_names() {
-                        self.slice_binding_sources
-                            .insert(name.clone(), entry.clone());
-                        // Slice 2 — record the scope at which this slice
-                        // binding lives, keyed by the source's root. Used
-                        // by drop-of-borrowed detection at the source's
-                        // scope-exit drain.
-                        self.slice_binding_scope_depth
-                            .insert(entry.0.root.clone(), self.current_scope_depth);
-                        let _ = name;
+                    // B-2026-08-17-16 — the span-keyed hit cannot tell "the
+                    // RHS IS the slice" from "the RHS passed through a
+                    // slice and copied out of it": the parser aliases a
+                    // postfix chain's span to its receiver's, so `let mc =
+                    // m.as_slice_mut().to_vec();` carries the same key as
+                    // `let s = m.as_slice_mut();`. Discriminate on the
+                    // RHS's recorded type (span-keyed too, and the
+                    // OUTERMOST expression's record wins — exactly the
+                    // value the binding receives): a deeply-owned type
+                    // means `.to_vec()`-style copy-out, so the binding is
+                    // independent of the source and the creation-site
+                    // borrow ends here instead of extending to scope exit.
+                    // Anything borrow-carrying (`mut Slice[T]` itself, or
+                    // `Option[ref T]` from `.first()`) keeps the
+                    // conservative propagation.
+                    let copied_out = self
+                        .typecheck_result
+                        .expr_types
+                        .get(&SpanKey::from_span(&value.span))
+                        .is_some_and(crate::ownership::type_is_deeply_owned);
+                    if copied_out {
+                        self.end_copied_out_slice_borrow(&SpanKey::from_span(&value.span));
+                    } else {
+                        for name in pattern.binding_names() {
+                            self.slice_binding_sources
+                                .insert(name.clone(), entry.clone());
+                            // Slice 2 — record the scope at which this slice
+                            // binding lives, keyed by the source's root. Used
+                            // by drop-of-borrowed detection at the source's
+                            // scope-exit drain.
+                            self.slice_binding_scope_depth
+                                .insert(entry.0.root.clone(), self.current_scope_depth);
+                            let _ = name;
+                        }
                     }
                 }
 
@@ -293,7 +317,19 @@ impl<'a> super::OwnershipChecker<'a> {
                         .get(&SpanKey::from_span(&value.span))
                         .cloned()
                     {
-                        if let Some(&lhs_depth) = self.binding_scope_depth.get(name) {
+                        // Same copy-out gate as the `Let` arm
+                        // (B-2026-08-17-16): a deeply-owned RHS type means
+                        // the chain copied out of the slice, so the
+                        // binding is independent and the creation borrow
+                        // ends at this statement.
+                        let copied_out = self
+                            .typecheck_result
+                            .expr_types
+                            .get(&SpanKey::from_span(&value.span))
+                            .is_some_and(crate::ownership::type_is_deeply_owned);
+                        if copied_out {
+                            self.end_copied_out_slice_borrow(&SpanKey::from_span(&value.span));
+                        } else if let Some(&lhs_depth) = self.binding_scope_depth.get(name) {
                             self.slice_binding_sources
                                 .insert(name.clone(), entry.clone());
                             self.slice_binding_scope_depth

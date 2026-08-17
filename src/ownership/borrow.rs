@@ -331,6 +331,28 @@ impl<'a> super::OwnershipChecker<'a> {
         }
     }
 
+    /// B-2026-08-17-16 — end a statement-scoped slice borrow whose value
+    /// was COPIED OUT of before binding. The parser aliases a postfix
+    /// chain's span to its receiver's, so at `let mc =
+    /// m.as_slice_mut().to_vec();` the creation entry recorded for the
+    /// inner `as_slice_mut()` is keyed by the same span as the whole RHS —
+    /// indistinguishable, by key, from `let s = m.as_slice_mut();`. When
+    /// the let arm determines (from the RHS's recorded type) that the
+    /// bound value is deeply owned, the borrow's last live use was inside
+    /// the statement: remove the creation entry and its `ActiveBorrow` so
+    /// neither later reads of the binding nor scope-exit drains treat the
+    /// source as still borrowed.
+    pub(crate) fn end_copied_out_slice_borrow(&mut self, key: &SpanKey) {
+        if let Some((place, _)) = self.slice_borrow_sources.remove(key) {
+            if let Some(borrows) = self.active_borrows.get_mut(&place.root) {
+                borrows.retain(|b| !(b.kind.is_slice() && SpanKey::from_span(&b.span) == *key));
+                if borrows.is_empty() {
+                    self.active_borrows.remove(&place.root);
+                }
+            }
+        }
+    }
+
     /// `impl Trait` slice 4 — at a `Call` site whose callee has captured
     /// input borrows (per `callee_existential_capture_indices`), register
     /// each captured argument as a slice-borrow source keyed by the

@@ -905,6 +905,46 @@ pub struct OwnershipCheckResult {
 
 // ── Copy Type Detection ─────────────────────────────────────────
 
+/// `true` when NO borrow form (`ref` / `mut ref` / `Slice` / `weak` / raw
+/// pointer / closure) appears anywhere in `ty` — the value is an
+/// independent owned tree, so a binding holding it cannot be keeping a
+/// borrow of its producer alive. The copy-out gate for the span-aliased
+/// slice-chain false positive (B-2026-08-17-16): `let mc =
+/// m.as_slice_mut().to_vec();` yields a deeply-owned `Vec[i64]`, so the
+/// mut-slice borrow of `m` dies inside the statement rather than
+/// extending through `mc`'s lifetime. Conservative on anything it cannot
+/// see through (type params, unresolved vars, projections, closures —
+/// which may capture borrows): those return `false`, keeping the
+/// pre-existing propagate-the-borrow behavior.
+pub(crate) fn type_is_deeply_owned(ty: &Type) -> bool {
+    match ty {
+        Type::Int(_)
+        | Type::UInt(_)
+        | Type::Float(_)
+        | Type::Bool
+        | Type::Char
+        | Type::Str
+        | Type::Unit
+        | Type::Never
+        | Type::Shape(_)
+        | Type::Shared(_) => true,
+        Type::Named { args, .. } => args.iter().all(type_is_deeply_owned),
+        Type::Tuple(elems) => elems.iter().all(type_is_deeply_owned),
+        Type::Array { element, .. } | Type::Vector { element, .. } => type_is_deeply_owned(element),
+        Type::Rc(inner) | Type::Arc(inner) => type_is_deeply_owned(inner),
+        Type::Ref(_)
+        | Type::MutRef(_)
+        | Type::Weak(_)
+        | Type::Slice { .. }
+        | Type::Pointer { .. }
+        | Type::Function { .. }
+        | Type::OnceFunction { .. } => false,
+        // Type params, inference vars, projections, existentials, errors,
+        // and anything future: not provably owned — stay conservative.
+        _ => false,
+    }
+}
+
 fn is_copy_type_basic(ty: &Type) -> bool {
     matches!(
         ty,
