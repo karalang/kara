@@ -95,12 +95,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 257 | 3 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
-| run-vs-build | 127 | 4 |
+| run-vs-build | 128 | 5 |
 | codegen-gap | 114 | 0 |
-| missing-feature | 99 | 1 |
+| missing-feature | 100 | 2 |
 | false-positive | 77 | 4 |
 | perf | 76 | 1 |
-| diagnostics | 68 | 2 |
+| diagnostics | 69 | 3 |
 | crash | 50 | 1 |
 | soundness | 49 | 0 |
 | other | 35 | 1 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 907 | 7 |
-| typecheck | 187 | 7 |
+| codegen | 908 | 8 |
+| typecheck | 188 | 8 |
 | interp | 149 | 3 |
 | ownership | 57 | 0 |
-| other | 50 | 2 |
+| other | 51 | 3 |
 | autopar | 48 | 0 |
 | cli | 36 | 2 |
 | runtime | 22 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1284 surfaced · 17 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1287 surfaced · 20 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (17)
+### Open (20)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -147,6 +147,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1284 surfaced
 | B-2026-08-17-30 | 2026-08-17 | typecheck+cli | low | E0218 TELLS YOU THE EXACT TEXT TO INSERT AND `karac fix` STILL DECLINES IT: the call-site `mut`-marker diagnostic ends with ``Write `mut <expr>`.`` but carries no `replacement`, while its EXACT INVERSE E0219 ("drop the `mut` marker") does carry one and is applied automatically. Same marker, opposite directions, adjacent codes, one fixable and one not. | E0218's diagnostic construction: it has no `replacement` field where E0219 emits `replacement: {offset, length, text}`. The repair is a single insertion at a known offset. |
 | B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
 | B-2026-08-17-32 | 2026-08-17 | typecheck+interp | medium | Calling a PLAIN REFINEMENT TYPE as a constructor -- `ValidPort(80)` where `type ValidPort = u16 where self >= 1 and self <= 65535;` -- is ACCEPTED by `karac check` even though the language has no such form, and the two backends then disagree with one of them silent. `karac run --interp` dies with `runtime error: internal: name 'ValidPort' resolved but has no binding at run time. This is a compiler bug (the resolver should have rejected or bound it) -- please report it with the source.` `karac run` (JIT) prints `q = 0`. `karac check` reports "All checks passed." The `T(value)` constructor belongs to `distinct type` (design.md § Distinct Types: "Wrap: `UserId(42)` -- constructor syntax"), NOT to a plain refinement, whose § Refinement Types construction paragraph offers only `Refined.try_from(value)`, `value as Refined`, and the const-eval binding-site elision. The two declaration forms differ by one keyword, so reaching for the wrong constructor is an easy and likely mistake -- and it compiles. | roadmap.md |
+| B-2026-08-17-33 | 2026-08-17 | typecheck | medium | Derive dependency auto-resolution is implemented for the `Ord` chain but NOT for `Copy` or `Hash`, and design.md states the behaviour unconditionally. § Derive: "The compiler resolves derive dependencies automatically regardless of the order items appear in `#[derive(...)]`. Writing `#[derive(Hash)]` when `PartialEq` and `Eq` are not yet derived causes the compiler to auto-derive them in dependency order (`PartialEq` -> `Eq` -> `Hash`). Listing dependencies explicitly is valid and idiomatic; omitting them is also allowed. `#[derive(Copy)]` auto-derives `Clone` if not already present -- **`Copy` without `Clone` is NEVER a compile error, because the compiler fills in the missing dependency.**" Measured: `#[derive(Copy)] struct C { a: i64 }` is EXACTLY that compile error -- `error[typecheck]: struct 'C' derives Copy but not Clone; Copy requires Clone`. `#[derive(Hash)] struct K { a: i64 }` used as a Map key fails with `Map[K, ...]: key type does not implement 'Eq'; only hashable equality-comparable types (... or structs/enums with '#[derive(Hash, Eq)]') can be Map keys`. In BOTH cases the diagnostic names the very dependency the compiler was supposed to fill in, and recommends the manual spelling the spec says is optional. The discriminator that makes this a partial implementation rather than an absent one: `#[derive(Ord)] struct S { a: i64 }` + `x < y` passes `karac check` clean, so the `Ord -> PartialOrd + Eq -> PartialEq` chain IS resolved. | roadmap.md |
+| B-2026-08-17-34 | 2026-08-17 | codegen | medium | `#[derive(Display)]` on an enum works under `--interp` and is REFUSED by both compiled backends when the interpolated expression is an enum-variant PATH -- which is exactly the form design.md teaches. § derive(Display) on enums shows `println(f"{Direction.Up}")` -> "Up" and `println(f"{Status.Closed}")` -> "Closed" as the canonical usage; transcribed verbatim, `karac check` passes, `--interp` prints Up / Closed, and `karac run` / `karac build` both die with `codegen failed: Display of a struct in an f-string is supported when the interpolated expression is a variable or field access (e.g. f"{x}"); bind a struct literal or call result to a `let` first (user-struct Display, subtask-5 follow-on)`. The `#[derive(Display(snake_case))]` variant fails the same way. The diagnostic MISNAMES what the user wrote: the operand is neither a struct literal nor a call result, it is a unit enum-variant path, so the prescribed repair does not describe the program in front of it. | roadmap.md |
+| B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 
 ### Wontfix (5)
 
