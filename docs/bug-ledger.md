@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 256 | 2 |
+| miscompile | 257 | 3 |
 | leak | 182 | 0 |
 | double-free | 130 | 0 |
 | run-vs-build | 126 | 3 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 906 | 6 |
+| codegen | 907 | 7 |
 | typecheck | 185 | 5 |
 | interp | 148 | 2 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1280 surfaced · 13 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1281 surfaced · 14 open · 1252 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (14)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -143,6 +143,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1280 surfaced
 | B-2026-08-17-26 | 2026-08-17 | typecheck | low | A closure literal as the pipe RHS is rejected -- "right-hand side of pipe must be a function name or function call" -- even though design.md prescribes exactly that form as the workaround for its own `_` restrictions. § Pipe Operator's `_` rule says: "The correct form is `let d = data |> g; d |> |d| f(d, extra)` or `data |> |d| f(g(d), extra)`", and the multi-use rule adds "Workaround for multi-use: wrap in a closure -- `data |> |d| f(d, d)`". Both prescribed forms fail `karac check` verbatim, each with the not-a-function-name error plus a cascaded `expected 'i64', found '?T0'` on the closure's own parameter (the closure body is typed against an uninstantiated var once the pipe arm bails). So the spec's escape hatch for the at-most-one-`_`-per-stage and no-`_`-in-a-nested-subexpression rules does not exist, leaving those two restrictions with no documented way out. | roadmap.md |
 | B-2026-08-17-27 | 2026-08-17 | codegen+interp | high | The `??` operator is wrong on BOTH backends, in three different ways, with `karac check` clean throughout. design.md line 782: "`??` provides a default: `expr ?? fallback` -- short-circuits to `fallback` if `expr` is `None` (for `Option`) or `Err(_)` (for `Result`). The result type of `expr ?? fallback` is the inner `T` -- the wrapper (`Option`/`Result`) is stripped." (1) CODEGEN, silent wrong answer: every `??` expression evaluates to 0 under JIT and AOT alike -- `let a: i64 = find(v, 7) ?? -1; println(a.to_string())` prints 0 where the fallback path alone should print -1 and the success path 7; the Result form prints 0 0 the same way. (2) INTERPRETER, wrapper not stripped on the SUCCESS path: `find(v, 7) ?? -1` yields `Some(7)`, not 7, so `let a: i64 = find(v, 7) ?? -1; a + 1` dies at runtime with "operator 'Add' is not defined for operands of type 'EnumVariant' and 'Int'" -- and that message's own parenthetical ("this is a type error the typechecker reports as a hard error; it reached the interpreter only because `karac run` executes despite typecheck errors") is FALSE here: `karac check` reports "All checks passed." (3) INTERPRETER, fallback NOT APPLIED on the `Err` path: `parse("xx") ?? -1` where `parse` returns `Err("bad")` yields `Err(bad)`, printing the error instead of -1. The one leg that is correct is Option/`None`, which does return the fallback. | roadmap.md |
 | B-2026-08-17-28 | 2026-08-17 | codegen+interp | high | Optional chaining `?.` ICEs the interpreter at one shape and silently returns the wrong answer at another, and is not lowered by codegen at all -- `karac check` says "All checks passed" for every case. design.md line 782: "`user.address?.city?.name` short-circuits to `None` if any level is absent." (1) INTERPRETER ICE: `match u.address?.city { Some(c) => println("L2 some: " + c.name), None => ... }` panics with `internal error: entered unreachable code: field access at 7:42: receiver was Value::EnumVariant not Struct/SharedStruct; either an interpreter codepath produced the wrong variant or the typechecker accepted field access on a non-struct` (src/interpreter.rs:2252) -- the Some-arm binding `c` holds an unstripped enum value rather than the `City` struct, the same wrapper-not-stripped shape as B-2026-08-17-27's `??` legs. (2) INTERPRETER SILENT WRONG ANSWER: the spec's own three-level example `u.address?.city?.name`, built with EVERY level `Some`, takes the `None` arm and prints "L3 none". (3) CODEGEN: not lowered -- both compiled backends refuse the same programs (`codegen failed: Undefined variable 's'`, and `no handler for method 'to_string' on variable 'z'` for the one-level form). | roadmap.md |
+| B-2026-08-17-29 | 2026-08-17 | codegen | high | A range bound to a `let` and then iterated compiles to a ZERO-ITERATION loop -- silent wrong answer under both compiled backends, `karac check` clean, interpreter correct. `let r = 0..5; let mut n = 0; for i in r { n = n + 1; } println(f"iterations={n}")` prints iterations=5 under `--interp` and iterations=0 under `karac run` (JIT) and `karac build` (AOT); the INLINE control in the same file (`for i in 0..5 { m = m + 1; }`) prints control=5 on all three, so the range itself and the loop lowering are both fine and only the binding indirection is lost. All three iterable range forms from design.md § Loops' range-literal table fail identically: exclusive `let r = 0..5` (0 instead of 5), inclusive `let r = 0..=4` (0 instead of 5), and variable endpoints `let a = 2; let b = 6; let r2 = a..b` (sum 0 instead of 14). design.md line 2616 types these as first-class library values (`Range[T]` / `RangeInclusive[T]`, "Iterable? Yes"), so binding one is ordinary use, not an exotic shape. | roadmap.md |
 
 ### Wontfix (5)
 
