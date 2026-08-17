@@ -1,8 +1,9 @@
 # Name interning — front-end name-handling cost, measured
 
-**Status:** Stages 0–3a DONE (2026-08-17). Stage 3a is the first slice of the
-`Symbol(u32)` interner proper: the effectchecker's full key space. Remaining
-stage-3 phases (ownership, typechecker, AST identifiers) scoped below. Origin:
+**Status:** Stages 0–3d DONE (2026-08-17). Stage 3a is the first slice of the
+`Symbol(u32)` interner proper (the effectchecker's full key space); 3b–3d are
+the DHAT-guided allocation/hashing tails that followed it. Remaining stage-3
+phases (ownership, typechecker, AST identifiers) scoped below. Origin:
 `docs/spikes/structural-debt.md` § "Name interning (review item 9c)".
 
 ## The question
@@ -225,10 +226,20 @@ Result (interleaved A/B, 3 rounds, synthetic): ownership
 instructions **0.630B → 0.593B (−5.9%)**. Same full verification
 battery.
 
+### Stage 3d — FxHash on rc_predicate/cfg working sets (LANDED)
+
+Tail cleanup: the candidate passes' BFS visited-sets, natural-loop
+block sets, the shared use-sites map, and the CFG builder's
+binding/name sets were still std RandomState — `BlockId` (a usize)
+hashed through SipHash per edge probe. Internal-only swap per the
+stage-2 seam rule; public witness-map signatures unchanged.
+Instructions **0.593B → 0.588B (−0.75%)**, wall within noise; the
+module's last per-process-random iteration order is now deterministic.
+
 ### Remaining stage-3 phases (not started)
 
-Post-3c: session net front end **240.8 → ~125 ms (−48%), instructions
-1.62B → 0.593B (−63%), allocations 3.14M → 0.73M (−77%)**. What
+Post-3d: session net front end **240.8 → ~130 ms (−46%), instructions
+1.62B → 0.588B (−64%), allocations 3.14M → 0.73M (−77%)**. What
 remains, per DHAT: parse (token/`Expr` allocs, ~18% of bytes — the "AST
 identifiers" leg), typecheck (`infer_expr`/`infer_binary`/`Type`
 clones), ownership's residual (`check_function` binding tables — the
