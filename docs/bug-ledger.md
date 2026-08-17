@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 63 | 0 |
 | soundness | 48 | 0 |
 | crash | 48 | 0 |
-| other | 35 | 2 |
+| other | 35 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 177 | 1 |
 | interp | 145 | 0 |
 | ownership | 53 | 0 |
-| other | 48 | 2 |
+| other | 48 | 1 |
 | autopar | 47 | 0 |
 | cli | 34 | 1 |
 | runtime | 22 | 0 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1259 surfaced · 5 open · 1239 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1259 surfaced · 4 open · 1240 fixed · 5 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-16-9 | 2026-08-16 | codegen | low | Shuffled `sort_by` is ~1.30x driftsort; the residual is now a pure work-count gap at IPC parity | mono sort_by lowering (emit_sort_partition_body / emit_sort_isort_body) |
 | B-2026-08-16-13 | 2026-08-16 | cli | low | The ESCAPING-CLOSURE deferral (`E_ESCAPING_CLOSURE_NOT_YET`, epic B-2026-06-22-2) is invisible to `karac check` -- storing a returned capturing closure in a struct field held in a `Vec` passes check, `--targets=native`, and `--output=json` with no diagnostic, runs correctly under `--interp`, and is then refused by `karac build`. Same check-time gap B-2026-08-13-12 was filed and fixed for, one deferral over. | extract the escape analysis (closures.rs validators + 4 fixpoints) into a plain-AST module consumed by BOTH codegen and check — NOT a hand-mirrored lint; see 2026-08-17 append |
 | B-2026-08-16-14 | 2026-08-16 | other | medium | A 31-bit LCG shifted by 16 gives 15-bit keys, so `% 1000000` never fires — 'shuffled-uniform' benchmark data has 32768 distinct keys | kara-katas bench data generators |
-| B-2026-08-17-4 | 2026-08-17 | other | low | design.md line 4299 states a rule the spec CONTRADICTS 1,500 lines later: "omitting `allocates` from a public function's declaration is the commitment that the function does not allocate, and the effect checker verifies it statically against the body". The dedicated effects section (5778 / 5784 / 5792) says `allocates(Heap)` is DEFAULT-PERMITTED and need not be declared, which is what the compiler implements. One sentence needs a qualifier; the implementation is correct. | docs/design.md:4299 (§ Contracts do not constrain effects) vs 5778 / 5784 / 5792 (§ effect verbs). Implementation: `is_default_permitted_effect`, src/effectchecker.rs:1764. |
 | B-2026-08-17-7 | 2026-08-17 | typecheck | low | DESIGN CALL, not a defect report: should a bare `Span(...)` resolve to the USER's enum variant when the colliding prelude name has no bare-callable form? The same bare name already binds that variant in PATTERN position, so the two positions disagree today. Its sibling row fixed only the diagnostic; the resolution rule is untouched and wants an owner's decision. | resolve_identifier_type (src/typechecker/expr_ops.rs) — the `if is_prelude_type_or_module_name(name) { continue; }` in the variant fallback; decide whether the skip should be narrowed, and to what |
 
 ### Wontfix (5)
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1259 surfaced
 
 </details>
 
-### Fixed (1239)
+### Fixed (1240)
 
-<details><summary>1239 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1240 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -9742,6 +9741,29 @@ unchanged (a warning is not an error, and the `All checks passed.` verdict
 still prints, matching the ownership-warning convention). Pinned by
 `test_typed_warnings_render_in_text_mode` (tests/cli.rs): warning present in
 stderr, lint name in the bracket, exit 0, verdict line intact. |
+| B-2026-08-17-4 | other | low | design.md line 4299 states a rule the spec CONTRADICTS 1,500 lines later: "omitting `allocates` from a public function's declaration is the commitmen… | FIXED by 2e53d69. Line 4299's canonical-mechanism example now uses
+`writes(R)` (no permit exists for it) and carries a parenthetical giving the
+real default-profile answer for "does not allocate": a permit-removing
+profile or `#[no_effect(allocates(Heap))]` at the boundary — the two
+mechanisms § effect verbs already names.
+
+SCOPE WIDENED while verifying: the "`allocates` as a real-time guarantee"
+paragraph (the row cited 5778/5784/5792 as the CORRECT side; the guarantee
+paragraph sits directly below them) made the same overclaim in stronger words
+— "a public function whose declared effect set omits `allocates` is
+compiler-proven allocation-free" is false under the default profile for
+exactly the permit's reason. It now states the guarantee under its actual
+preconditions, notes that default-profile omission deliberately stays quiet,
+and its game-loop / audio bullets name the `#[no_effect]` boundary form
+instead of bare omission. The embedded / kernel bullets already cited
+profiles and are untouched.
+
+NOTE FOR THE SPEC'S FUTURE SELF: `#[no_effect(allocates(Heap))]` is spec
+vocabulary (5792 names it) but grep finds no implementation in
+effectchecker.rs — only the profile half (`check_profile_compat`) exists.
+The corrected prose is right per the spec; when someone reaches for the
+attribute and finds it missing, that is a missing-feature row for the
+implementation, not a new spec contradiction. |
 | B-2026-08-17-5 | typecheck | medium | A user enum variant whose name collides with a scope-0 prelude type cannot be constructed BARE -- correct by design -- but the diagnostic advises `Sp… | FIXED by ae4a01b5, in `type_name_in_value_position_message` (src/typechecker/expr_ops.rs), by
 adding a user-declared-variant arm AHEAD of the per-family arms.
 
