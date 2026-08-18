@@ -450,3 +450,101 @@ fn non_terminator_allow_list_entries_all_still_fire() {
         );
     }
 }
+
+// ── spec claims checked against the compiler ────────────────────
+
+/// B-2026-08-17-35 — two design.md sections described a language other than the
+/// one the compiler implements, in opposite directions. Both are now pinned to
+/// the compiler rather than to prose, because prose is what drifted.
+///
+/// (1) § `#[derive(Display)]` wrote its data-carrying example as
+/// `Circle(radius: f64)` — a tuple variant with NAMED fields, a third spelling
+/// that exists nowhere in the language (`error[parse]: Expected RightParen,
+/// found Colon`). Transcribing the section that teaches the derive produced a
+/// block where the enum itself would not parse.
+///
+/// (2) § Display then claimed the opposite of what ships: "`#[derive(Display)]`
+/// on an enum is restricted to all-unit-variant enums (a data variant requires
+/// a manual `impl Display`)". Measured on both backends, a data variant derives
+/// and renders `Circle(2.5)` — the interpreter's own test for it carries a
+/// comment saying that restriction "was stale", which is how long the sentence
+/// had been wrong.
+///
+/// The example's output comment was wrong too, in a third direction:
+/// `Shape.Rect(3.0, 4.0)` renders `Rect(3, 4)`, because a whole-valued `f64`
+/// prints without a trailing `.0` in both backends.
+#[test]
+fn design_md_derive_display_data_variant_example_compiles() {
+    let block = kara_blocks(DESIGN_MD)
+        .into_iter()
+        .find(|(_, b)| b.contains("enum Shape") && b.contains("derive(Display)"))
+        .map(|(_, b)| b)
+        .expect(
+            "§ derive(Display)'s data-carrying `Shape` example has moved or been \
+             renamed — re-anchor this test rather than deleting it",
+        );
+    let parsed = karac::parse(block);
+    assert!(
+        parsed.errors.is_empty(),
+        "the derive(Display) data-variant example must be transcribable; it is \
+         the section teaching the feature, and it previously used a \
+         tuple-variant-with-named-fields form the language does not have:\n{:?}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+    // The rendered output is asserted end-to-end by
+    // `test_enum_display_payload_variants_to_string` (interpreter) and its
+    // codegen sibling; what this pins is that the SPEC's spelling is one the
+    // parser accepts.
+}
+
+/// B-2026-08-17-35 leg (2) — § Subscript Trait opened "User-defined types
+/// support `[]` indexing by implementing two standard traits" with no v1
+/// caveat, while the resolver rejects a user impl outright. The neighbouring
+/// § Operator Traits DOES carry the caveat, so the two sections disagreed with
+/// each other about the same v1 boundary.
+///
+/// This ties the prose to the compiler in both directions. If v1 ever admits
+/// user-defined operator impls, the rejection below stops firing and this test
+/// fails — which is the point: the caveat would then be the stale claim, and
+/// the failure is the reminder to remove it.
+#[test]
+fn design_md_subscript_trait_v1_caveat_matches_the_resolver() {
+    let src = "struct Grid { cells: Vec[i64] }\n\
+               impl Index[i64] for Grid {\n\
+                   type Output = i64;\n\
+                   fn index(ref self, idx: i64) -> ref Self.Output { self.cells[idx] }\n\
+               }\n\
+               fn main() { println(1); }\n";
+    let mut parsed = karac::parse(src);
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    karac::prepare_for_resolve(&mut parsed.program);
+    let resolved = karac::resolve(&parsed.program);
+    let rejected = resolved
+        .errors
+        .iter()
+        .any(|e| e.message.contains("operator traits are stdlib-only"));
+    assert!(
+        rejected,
+        "v1 no longer rejects a user-defined `impl Index`; § Subscript Trait's \
+         v1 caveat has become the stale claim and must be removed"
+    );
+    let section = DESIGN_MD
+        .split("### Subscript Trait")
+        .nth(1)
+        .expect("§ Subscript Trait heading has moved — re-anchor this test");
+    let intro = &section[..section.len().min(1200)];
+    assert!(
+        intro.contains("stdlib types only") || intro.contains("stdlib-only"),
+        "§ Subscript Trait must state the v1 boundary the resolver enforces, as \
+         its sibling § Operator Traits does; without it a reader transcribes an \
+         impl the compiler refuses"
+    );
+}
