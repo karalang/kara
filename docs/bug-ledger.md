@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 261 | 1 |
+| miscompile | 261 | 0 |
 | leak | 184 | 0 |
 | double-free | 133 | 0 |
 | run-vs-build | 129 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 926 | 3 |
+| codegen | 926 | 2 |
 | typecheck | 199 | 1 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced · 7 open · 1301 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced · 6 open · 1302 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
-| B-2026-08-18-26 | 2026-08-18 | codegen | high | A READ METHOD called directly on a returned `Set`/`Map` temp reads GARBAGE under `karac build` while `--interp` is correct: `mk_set().len()` gives 0 for a 3-element set, `mk_map().len()` gives 152 for a 2-element map, `mk_set().is_empty()` prints raw bytes, and six such calls in one program SEGFAULT. `contains` / `contains_key` on the same receiver are correct, and `Vec` is unaffected -- so it is `len`/`is_empty` specifically. | `try_compile_freshtemp_mapset_method` in src/codegen/method_call.rs and the method roster it gates on; compare against the Vec fresh-temp path. The receiver reaches it as a non-Identifier `Call`, so the identifier-keyed `compile_map_method` / `compile_set_method` never see it. |
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-28 | 2026-08-18 | cli | low | NO lint diagnostic code is registered in `karac explain`'s CODE_TABLE, so `karac explain E0278` (must_use) and `karac explain E0259` (the four compile-path lints) both answer "not in the catalogue yet" -- for codes the compiler actively emits under `-D <lint>`. | roadmap.md |
 
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced
 
 </details>
 
-### Fixed (1301)
+### Fixed (1302)
 
-<details><summary>1301 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1302 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11697,6 +11696,28 @@ MEASURED AFTER, all four lanes:
     unstable_api               -> warning[unstable_api]: ... (one prefix)
 
 The suppression route survives in the message body ("suppress with `#[allow(deprecated)]` on the enclosing item"), which the test pins alongside the prefix count -- the point of the fix is to stop repeating the label, not to drop the guidance. |
+| B-2026-08-18-26 | codegen | high | A READ METHOD called directly on a returned `Set`/`Map` temp reads GARBAGE under `karac build` while `--interp` is correct: `mk_set().len()` gives 0… | FIXED by c347908. TWO defects, and the second only became visible once the first was fixed — the row as filed described only the first.
+
+DEFECT 1, THE WRONG VALUES. The typechecker's fresh-temp Map/Set side-table roster (`method_temp_receiver.rs`) listed `get`/`contains_key`/`iter`/`keys`/`values`/`entries` for Map and `contains`/`iter` for Set — precisely the methods that answered correctly — while `len` and `is_empty` were absent from both. With no entry recorded, codegen's `try_compile_freshtemp_mapset_read_method` declined and the receiver fell through to a lowering that reads the HANDLE, a plain pointer, as an inline aggregate. That is why 0 and 152 rather than noise: they are whatever word sat where a length was expected, and why `is_empty` — reading the same place as a bool — emitted raw bytes. Adding the two names to both rosters fixes the values.
+
+DEFECT 2, THE RECEIVER EVALUATED TWICE, which the first fix exposed rather than caused. `mk_set(3).len()` ran `mk_set` TWICE under `karac build` against once under `--interp`. A producer with side effects therefore performed them twice — a semantic bug in its own right — and only the second handle was drop-tracked, stranding the first (216 bytes for a 3-element `Set`, 604 for a 2-entry `Map[String, i64]`).
+
+The cause was already documented a few lines above the offending code, in B-2026-07-11-14: the `len`/`is_empty`/`count` collection intercept SPECULATIVELY `compile_expr`s the receiver and, finding the value is not a Vec/String/slice struct, falls through WITHOUT freeing it while the real dispatch re-evaluates `object`. Its guard skips the intercept when the receiver's type declares its own `len` — but a builtin `Map`/`Set` declares none, so the guard did not fire. The skip now also keys on the typechecker's recorded fresh-temp Map/Set type, which decides it BEFORE any emission; returning `Ok(None)` after `compile_expr` cannot un-emit a producer.
+
+A WRONG FIX WAS TRIED FIRST AND REVERTED, recorded because it looks right. Hoisting `try_compile_freshtemp_mapset_read_method` to sit beside `try_compile_ref_return_receiver_method` — whose comment gives exactly this rationale, "placed HERE, ahead of every arm that compiles the receiver" — fixes the plain spelling and BREAKS the chained one: `mk_set(3).contains(1).to_string()` goes from one evaluation to two, because the hoist lands above the chained-call span-collision guard, and `contains` had been correct before. Position is not the fix; guarding the speculative compile is. Caught only because the E2E fixture uses the chained spelling while the hand probes did not.
+
+MEASURED, `--interp` vs `karac build`, before -> after:
+  * mk_set().len()                    3  -> 0        ...now 3
+  * mk_map().len()                    2  -> 152      ...now 2
+  * mk_set().is_empty()           false  -> raw bytes ...now false
+  * six such calls in one program        -> SEGV      ...now correct, rc 0
+  * receiver evaluations per call     1  -> 2         ...now 1, in chained AND split spellings
+  * mk_set().contains(2) / mk_map().contains_key(k) / iteration — correct throughout, and still are
+`karac run` (JIT) agrees with both other backends on every line.
+
+Tests: `asan_freshtemp_mapset_len_frees_its_handle` pins the handle accounting at zero leaked bytes, in a loop and with a `Map[String, i64]` whose String keys give the handle per-entry heap of its own, plus a bound-receiver control for the spelling that always worked. `test_freshtemp_mapset_read_methods_oracle` (interpreter) and `freshtemp_mapset_read_methods_answer_and_evaluate_once` (codegen E2E) pin the values AND print one marker per producer call, so a regression in either defect fails on its own line.
+
+Gates: cargo fmt clean, clippy clean on both feature sets, full suite green. |
 
 </details>
 
