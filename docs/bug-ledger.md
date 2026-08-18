@@ -103,30 +103,30 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 77 | 4 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 38 | 1 |
+| other | 40 | 3 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 924 | 2 |
+| codegen | 925 | 3 |
 | typecheck | 197 | 2 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
-| cli | 43 | 2 |
+| cli | 44 | 3 |
 | runtime | 22 | 0 |
-| parser | 20 | 1 |
+| parser | 21 | 2 |
 | resolver | 19 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1319 surfaced · 8 open · 1294 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1321 surfaced · 10 open · 1294 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1319 surfaced
 | B-2026-08-18-19 | 2026-08-18 | cli | medium | PROJECT-mode `karac build` still renders no warning-level diagnostic. B-2026-08-18-1 gave the SINGLE-FILE build path a warning surface; a `karac build` run inside a project directory takes a different function entirely and prints only its module banner and `Built: <exe>`. | roadmap.md |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-22 | 2026-08-18 | codegen | medium | A STRING range subscript used as a METHOD RECEIVER reaches codegen only for `to_string` / `clone`: `s[0..5].len()` fails the build with "indexed-receiver method 'len' on 's' -- element TypeExpr unknown" while `karac check` accepts it and `--interp` prints 5. The non-owning readers the String-slice arm defers. | The `method == "to_string" || method == "clone"` gate at the head of `compile_indexed_receiver_method` in src/codegen/calls.rs. A wider set needs the borrowed-slice path (`try_compile_borrowed_string_slice`, already used for `push_str` and map-key lookups) or owned-temp tracking for the materialized slice. |
+| B-2026-08-18-23 | 2026-08-18 | cli | medium | `cargo clippy --all --all-targets -- -D warnings` is RED on main: `collect_warning_diagnostics_json` and `render_text_warning_diagnostics` in src/cli.rs are never used. CI runs exactly this gate, so the default-feature lint job fails on a clean checkout. The `--features llvm` leg is green, which is why it can be missed locally. | src/cli.rs:1746 and src/cli.rs:1754. Reproduce with `cargo clippy --all --all-targets -- -D warnings` (no `--features llvm`) on a clean tree. |
+| B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
 
 ### Wontfix (7)
 
