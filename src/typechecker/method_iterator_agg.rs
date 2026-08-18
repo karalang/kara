@@ -44,7 +44,6 @@ impl<'a> super::TypeChecker<'a> {
         method: &str,
         args: &[CallArg],
         span: &Span,
-        args_close_span: &Span,
         obj_ty: &Type,
     ) -> Option<Type> {
         // Iterator-source methods: `iter()` / `into_iter()` on any iterable
@@ -209,7 +208,7 @@ impl<'a> super::TypeChecker<'a> {
                 // Keyed on the closing paren, which is a leaf span no outer
                 // expression aliases.
                 self.direct_iter_terminals
-                    .insert(SpanKey::for_method_call(&object.span, args_close_span));
+                    .insert(SpanKey::from_span(&object.span));
                 return Some(self.infer_iterator_method(&item_ty, method, args, span, false));
             }
         }

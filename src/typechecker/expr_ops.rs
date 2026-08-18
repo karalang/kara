@@ -2618,7 +2618,7 @@ impl<'a> super::TypeChecker<'a> {
         // Feed the evaluators' `unwrap_or` lowering. The key must match what
         // `ast::desugar_nil_coalesce` builds: the `??` span as the receiver
         // span, the fallback's span standing in for the args-close span.
-        let key = SpanKey::for_method_call(span, &right.span);
+        let key = SpanKey::from_span(span);
         let payload_resolved = resolve_type_var_top(&payload, &self.env.substitutions);
         self.method_unwrap_inner_types
             .insert(key, Self::type_to_type_expr(&payload_resolved));

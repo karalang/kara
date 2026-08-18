@@ -2197,7 +2197,6 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
         call_span: &crate::token::Span,
-        args_close_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         // Pull the inner `T` from the typechecker-populated side-table.
         // Without it we don't know how to shape the payload reconstruction
@@ -2212,7 +2211,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // and unwrap_or share `call_span` — doesn't read the outer call's
         // `method_unwrap_*` entry. Matches the typechecker's
         // `SpanKey::for_method_call` insert. Span-collision fix, Slice 1.
-        let key = crate::token::method_call_key(call_span, args_close_span);
+        let key = (call_span.offset, call_span.length);
         let inner_te = match self
             .span_tables
             .method_unwrap_inner_types

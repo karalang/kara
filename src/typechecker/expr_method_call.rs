@@ -1383,9 +1383,7 @@ impl<'a> super::TypeChecker<'a> {
         // `make_map().get(k)`, a `TupleIndex` place). Extracted to
         // `method_temp_receiver.rs`; the records must be written before any
         // later arm consumes them, so this keeps its chain position.
-        if let Some(t) =
-            self.record_temp_receiver_types(object, method, args, span, args_close_span, &obj_ty)
-        {
+        if let Some(t) = self.record_temp_receiver_types(object, method, args, span, &obj_ty) {
             return t;
         }
 
@@ -1432,9 +1430,7 @@ impl<'a> super::TypeChecker<'a> {
         // broadcast forms). Extracted to `method_column_elementwise.rs`; it
         // keeps this position in the first-match-wins chain — before the
         // generic iterator surface — and the block order within it.
-        if let Some(t) =
-            self.try_column_elementwise_method(method, args, span, args_close_span, &obj_ty)
-        {
+        if let Some(t) = self.try_column_elementwise_method(method, args, span, &obj_ty) {
             return t;
         }
 
@@ -1442,9 +1438,7 @@ impl<'a> super::TypeChecker<'a> {
         // batches (B-2026-07-14-6). Extracted to
         // `method_optres_combinator.rs`; it keeps this position in the
         // first-match-wins chain and the batch order within it.
-        if let Some(t) =
-            self.try_option_result_combinator(method, args, span, args_close_span, &obj_ty)
-        {
+        if let Some(t) = self.try_option_result_combinator(method, args, span, &obj_ty) {
             return t;
         }
 
@@ -1465,14 +1459,7 @@ impl<'a> super::TypeChecker<'a> {
         // load/store/compare_exchange/fetch_* family. Extracted to
         // `method_iterator_agg.rs`; it keeps this position in the
         // first-match-wins chain and the block order within it.
-        if let Some(t) = self.try_iterator_agg_atomic_method(
-            object,
-            method,
-            args,
-            span,
-            args_close_span,
-            &obj_ty,
-        ) {
+        if let Some(t) = self.try_iterator_agg_atomic_method(object, method, args, span, &obj_ty) {
             return t;
         }
 

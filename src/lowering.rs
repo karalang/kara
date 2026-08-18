@@ -964,10 +964,8 @@ impl<'a> Lowerer<'a> {
                 object,
                 args,
                 method,
-                args_close_span,
                 ..
             } => {
-                let args_close_span = *args_close_span;
                 self.lower_expr(object);
                 for a in args {
                     self.lower_expr(&mut a.value);
@@ -1011,7 +1009,7 @@ impl<'a> Lowerer<'a> {
                     let recv_is_iterable_collection = self
                         .tc
                         .direct_iter_terminals
-                        .contains(&SpanKey::for_method_call(&object.span, &args_close_span));
+                        .contains(&SpanKey::from_span(&object.span));
                     if recv_is_iterable_collection {
                         let recv_span = object.span;
                         let inner = std::mem::replace(

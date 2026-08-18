@@ -4220,17 +4220,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // without this arm the reconstructed i32 prints as its
                 // integer codepoint (90 instead of 'Z') while the let-bound
                 // form renders the glyph (via `pattern_binding_types`).
-                if matches!(method.as_str(), "unwrap" | "expect") {
-                    if let ExprKind::MethodCall {
-                        args_close_span, ..
-                    } = &expr.kind
-                    {
-                        let key = crate::token::method_call_key(&expr.span, args_close_span);
-                        if let Some(te) = self.span_tables.method_unwrap_inner_types.get(&key) {
-                            if let TypeKind::Path(p) = &te.kind {
-                                if p.segments.last().map(|s| s.as_str()) == Some("char") {
-                                    return true;
-                                }
+                if matches!(method.as_str(), "unwrap" | "expect")
+                    && matches!(&expr.kind, ExprKind::MethodCall { .. })
+                {
+                    let key = (expr.span.offset, expr.span.length);
+                    if let Some(te) = self.span_tables.method_unwrap_inner_types.get(&key) {
+                        if let TypeKind::Path(p) = &te.kind {
+                            if p.segments.last().map(|s| s.as_str()) == Some("char") {
+                                return true;
                             }
                         }
                     }
@@ -4406,12 +4403,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `make_impl_method_function`); resolve the receiver's
             // type name and look the qualified key up. Same -56 print
             // symptom as the free-fn arm, method shape (2026-06-06).
-            ExprKind::MethodCall {
-                object,
-                method,
-                args_close_span,
-                ..
-            } => {
+            ExprKind::MethodCall { object, method, .. } => {
                 // Option/Result value-unwrap family (`unwrap` / `expect` /
                 // `unwrap_or` / `unwrap_or_else` / `unwrap_or_default`) returns
                 // the payload type `T`, so the result's signedness IS the inner
@@ -4429,7 +4421,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(inner_te) = self
                         .span_tables
                         .method_unwrap_inner_types
-                        .get(&crate::token::method_call_key(&expr.span, args_close_span))
+                        .get(&(expr.span.offset, expr.span.length))
                     {
                         return super::tensor::type_expr_is_unsigned_int(inner_te);
                     }

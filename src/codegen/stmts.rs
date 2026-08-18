@@ -13650,7 +13650,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 && self
                     .span_tables
                     .method_unwrap_inner_types
-                    .contains_key(&crate::token::method_call_key(&expr.span, args_close_span)) =>
+                    .contains_key(&(expr.span.offset, expr.span.length)) =>
             {
                 // A borrowed-Option `.unwrap()` extracts an ALIAS of the
                 // receiver's payload, so the let-site must rc_inc to own it —
@@ -13946,13 +13946,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// for exactly these Vec/Slice accessors (Map.get is by-value `Option[V]`),
     /// so a leading `ref`/`mut ref` is both the discriminator and what we peel.
     fn borrowed_vec_get_unwrap_inner(&self, value: &Expr) -> Option<TypeExpr> {
-        let ExprKind::MethodCall {
-            method,
-            object,
-            args_close_span,
-            ..
-        } = &value.kind
-        else {
+        let ExprKind::MethodCall { method, object, .. } = &value.kind else {
             return None;
         };
         if !matches!(method.as_str(), "unwrap" | "expect") {
@@ -13970,7 +13964,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let te = self
             .span_tables
             .method_unwrap_inner_types
-            .get(&crate::token::method_call_key(&value.span, args_close_span))?;
+            .get(&(value.span.offset, value.span.length))?;
         match &te.kind {
             TypeKind::Ref(i) | TypeKind::MutRef(i) => Some(i.as_ref().clone()),
             _ => None,

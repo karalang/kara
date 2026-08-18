@@ -427,8 +427,27 @@ impl super::Parser {
                 }
                 self.advance();
                 let rhs = self.parse_expr_bp(nil_bp + 1)?;
+                // B-2026-08-18-33 — span the whole expression (lhs start -> past
+                // the fallback) rather than copying `lhs.span`. Same defect the
+                // five postfix arms carried: without a key of its own, both
+                // nodes of `a ?? b ?? c` land on `a`'s span, and the two
+                // `method_unwrap_inner_types` entries collide. `??` lowers to
+                // `unwrap_or`, whose payload type comes from that table, so the
+                // outer read the INNER's payload.
+                //
+                // That collision is currently survivable only because
+                // `desugar_nil_coalesce` passes the FALLBACK's span in the
+                // args-close slot and `method_call_key` prefers it — the
+                // workaround B-2026-08-18-30 tried to delete. With a real span
+                // here the workaround is no longer load-bearing.
+                let end = rhs.span.offset + rhs.span.length;
                 lhs = Expr {
-                    span: lhs.span,
+                    span: Span {
+                        line: lhs.span.line,
+                        column: lhs.span.column,
+                        offset: lhs.span.offset,
+                        length: end.saturating_sub(lhs.span.offset),
+                    },
                     kind: ExprKind::NilCoalesce {
                         left: Box::new(lhs),
                         right: Box::new(rhs),

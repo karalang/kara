@@ -2545,13 +2545,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_container_elem_bodies_for_var(&recv);
                 }
             }
-            if let Some(value) = self.try_compile_option_result_method(
-                object,
-                method,
-                args,
-                call_span,
-                args_close_span,
-            )? {
+            if let Some(value) =
+                self.try_compile_option_result_method(object, method, args, call_span)?
+            {
                 return Ok(value);
             }
         }

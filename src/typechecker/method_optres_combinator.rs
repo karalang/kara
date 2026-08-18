@@ -46,7 +46,6 @@ impl<'a> super::TypeChecker<'a> {
         method: &str,
         args: &[CallArg],
         span: &Span,
-        args_close_span: &Span,
         obj_ty: &Type,
     ) -> Option<Type> {
         // ── Option / Result combinators, non-closure batch (B-2026-07-14-6) ──
@@ -86,10 +85,8 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 let record_src = |s: &mut Self, ty: &Type| {
                     let resolved = resolve_type_var_top(ty, &s.env.substitutions);
-                    s.method_unwrap_inner_types.insert(
-                        SpanKey::for_method_call(span, args_close_span),
-                        Self::type_to_type_expr(&resolved),
-                    );
+                    s.method_unwrap_inner_types
+                        .insert(SpanKey::from_span(span), Self::type_to_type_expr(&resolved));
                 };
                 let result = match method {
                     // `Result[T, E].ok() -> Option[T]` / `.err() -> Option[E]`.
@@ -320,7 +317,7 @@ impl<'a> super::TypeChecker<'a> {
                     resolve_type_var_top(&t_ty, &self.env.substitutions)
                 };
                 self.method_unwrap_inner_types.insert(
-                    SpanKey::for_method_call(span, args_close_span),
+                    SpanKey::from_span(span),
                     Self::type_to_type_expr(&recorded_payload),
                 );
                 // The RESULT forms of the absent-closure combinators pass the
@@ -330,7 +327,7 @@ impl<'a> super::TypeChecker<'a> {
                 if is_result && matches!(method, "unwrap_or_else" | "map_or_else" | "or_else") {
                     let e_resolved = resolve_type_var_top(&e_ty, &self.env.substitutions);
                     self.method_unwrap_err_types.insert(
-                        SpanKey::for_method_call(span, args_close_span),
+                        SpanKey::from_span(span),
                         Self::type_to_type_expr(&e_resolved),
                     );
                 }

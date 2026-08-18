@@ -43,7 +43,6 @@ impl<'a> super::TypeChecker<'a> {
         method: &str,
         args: &[CallArg],
         span: &Span,
-        args_close_span: &Span,
         obj_ty: &Type,
     ) -> Option<Type> {
         // Column[T] result-typed methods (phase-11 Arrow): `iter` ->
@@ -300,7 +299,7 @@ impl<'a> super::TypeChecker<'a> {
                 // to feed the mapper; the RESULT `R` is read off the mapper's
                 // compiled SSA value, so only the SOURCE `T` needs recording.
                 self.method_unwrap_inner_types.insert(
-                    SpanKey::for_method_call(span, args_close_span),
+                    SpanKey::from_span(span),
                     Self::type_to_type_expr(&t_resolved),
                 );
                 // B-2026-08-09-6 — `Result[T, E].map(f)` also needs `E`. The
@@ -319,7 +318,7 @@ impl<'a> super::TypeChecker<'a> {
                     if let Some(e) = &e_ty {
                         let e_resolved = resolve_type_var_top(e, &self.env.substitutions);
                         self.method_unwrap_err_types.insert(
-                            SpanKey::for_method_call(span, args_close_span),
+                            SpanKey::from_span(span),
                             Self::type_to_type_expr(&e_resolved),
                         );
                     }

@@ -8794,19 +8794,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `method_unwrap_inner_types` entry), so a shape this family does not
     /// lower keeps today's behaviour rather than changing owner on a guess.
     pub(super) fn map_lowers_via_match_synthesis(&self, value: &Expr) -> bool {
-        let ExprKind::MethodCall {
-            method,
-            args,
-            args_close_span,
-            ..
-        } = &value.kind
-        else {
+        let ExprKind::MethodCall { method, args, .. } = &value.kind else {
             return false;
         };
         if method != "map" || args.len() != 1 {
             return false;
         }
-        let key = crate::token::method_call_key(&value.span, args_close_span);
+        let key = (value.span.offset, value.span.length);
         self.span_tables
             .method_unwrap_inner_types
             .get(&key)
