@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 258 | 1 |
 | leak | 182 | 0 |
-| double-free | 131 | 1 |
+| double-free | 132 | 1 |
 | run-vs-build | 128 | 1 |
 | codegen-gap | 115 | 0 |
 | missing-feature | 103 | 4 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 913 | 4 |
+| codegen | 914 | 4 |
 | typecheck | 193 | 6 |
 | interp | 150 | 3 |
 | ownership | 57 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced · 14 open · 1269 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1301 surfaced · 14 open · 1270 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (14)
 
@@ -140,10 +140,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-17-43 | 2026-08-17 | codegen | high | DUPLICATE OF B-2026-08-17-28 -- `?.` OPTIONAL CHAINING has no codegen and produced a SILENT WRONG ANSWER. `let v = get(1)?.x; println(v);` where `get -> Option[P]` printed `Some(5)` under `--interp` and `0` under both `karac run` (JIT) and `karac build` (AOT), with `karac check` clean. roadmap.md line 241 carries a CHECKED box claiming `?.` optional chaining is done. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::OptionalChain` arm; roadmap.md line 241. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure. |
 | B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
-| B-2026-08-17-45 | 2026-08-18 | codegen | high | Moving an `Option`-TYPED FIELD out of a matched struct payload DOUBLE FREES under both compiled backends, on a program `karac check` passes clean and `--interp` runs correctly. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C] }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- `free(): double free detected in tcache 2`, abort, under both `karac run` (JIT) and `karac build` (AOT). The interpreter prints the right answer. No `?.`, no closure, no generic involved. | src/codegen/control_flow_match.rs (arm-tail move site, ~line 868 after `compile_tail_final_expr`; the admission classes at `place_optres_field_move_info_ex`), src/codegen/param_own.rs (`suppress_struct_field_move_into_literal`), and wherever an arm binding is deboxed — `deboxed_payload_box_ptrs` must be populated for a LOCAL enum scrutinee, not just an owned param, before any suppression can mirror through the box. |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
 | B-2026-08-18-3 | 2026-08-18 | interp+codegen | medium | Indexing by a `let`-BOUND range crashes the interpreter with an internal `unreachable!()`, and does not compile under either compiled backend. `let v = [10, 20, 30, 40]; let r = 1..3; let s = v[r]; println(s.len())` is `karac check`-clean, then panics under `--interp` with "internal error: entered unreachable code: index expression at 4:13: obj=Value::Array, index=Value::Iterator" (src/interpreter/eval_expr.rs:747), and fails both `karac run` (JIT) and `karac build` (AOT) with "codegen failed: Undefined variable 'r'". The INLINE form `let s = v[1..3]` works on all three backends and prints 2, so this is the binding indirection alone, on the indexing path. | roadmap.md |
+| B-2026-08-18-4 | 2026-08-18 | codegen | high | The user-`Drop` spelling of B-2026-08-17-45 still DOUBLE FREES: moving an `Option`-typed field out of a matched struct payload aborts under both compiled backends when the payload struct carries an `impl Drop`. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C], other: String } impl Drop for A { fn drop(mut ref self) { println("dropping A"); } }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- ASAN reports `attempting double-free`, and plain `karac run` / `karac build` abort. `karac check` passes and `--interp` is correct, same as the parent row. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -161,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced
 
 </details>
 
-### Fixed (1269)
+### Fixed (1270)
 
-<details><summary>1269 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1270 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10929,6 +10929,21 @@ says so. One `grep '"status": "open"' docs/bug-ledger.jsonl` before filing would
 have caught it. The same session-window collision produced -43/-28. Worth
 pairing with the id-allocation hazard in CLAUDE.md § Claiming a bug: compute the
 next id late, and grep the subject before spending one. |
+| B-2026-08-17-45 | codegen | high | Moving an `Option`-TYPED FIELD out of a matched struct payload DOUBLE FREES under both compiled backends, on a program `karac check` passes clean and… | FIXED by 1cc6efd. THE ROW'S OWN INVESTIGATION NAMED THREE MISSING PIECES; TWO OF THEM WERE NOT MISSING, which is why the landed diff is one condition rather than a new suppressor. Finding (1) said no suppression site exists for an arm-tail field move: a panic-backtrace off the emitting site shows the arm body is a BLOCK, so `suppress_block_tail_cleanup` -> `suppress_source_vec_cleanup_for_arg_ex` -> `zero_struct_field_move_cap_inst` already fires on this exact shape. Finding (2) said the admission class declines it and a `base_override` would be needed to reach the box: that site already carries B-2026-08-06-10's box mirror, wired and waiting. Only finding (3) held -- `deboxed_payload_box_ptrs` was empty, so the mirror had no box pointer to write through.
+
+ROOT CAUSE, confirmed against the emitted IR before any change. `match.body0` deboxes the payload into `%x`, a private load of the box `%a` still owns. The neutralizing `store i64 0, ptr %opt.move.tag` lands in `%x`; the drop that frees the field is `__karac_drop_struct_A(%a_box_ptr)`, which reads the box and cannot see the copy. So the field is freed by the box's drop AND by the binding the move handed it to.
+
+THE FIX is in `record_deboxed_payload_box`, which recorded the box ONLY for an owned-param scrutinee. Its reasoning was that an in-frame owner is a `BoxedEnumDrop` this frame can RETRACT (B-2026-08-04-2) -- true, but retraction is WHOLE-ACTION, so it covers the whole payload escaping and nothing else. A single-field move has no action to retract, because the box's drop must still run for every field the move did not take. Record for an in-frame owner too and the existing mirror does the rest.
+
+THE REFUSAL'S MEASUREMENT IS PRESERVED, NOT OVERRIDDEN, and this is the part worth reading before touching it again. That comment records that the box's words are also what a re-homed payload-BODIES walk reads, and that zeroing them once turned a double free into a user Drop body printing an EMPTY STRING -- a memory bug traded for a silent wrong value. The widening is therefore gated on the flag the codebase already computes for exactly that condition, `pattern_binding_scrutinee_payload_bodies_src`, which is `Some` only when the payload runs a user Drop. With it `None` the box's only reader is a compiler-generated MEMORY drop and a per-field zero is neutralization rather than corruption; with it `Some`, nothing is recorded and the shape stays byte-identical.
+
+THE USER-`Drop` SPELLING IS STILL BROKEN and is NOT closed by this row. Measured with the fix reverted and applied: byte-identical `AddressSanitizer: attempting double-free` both times, so it is pre-existing rather than a regression, and it is precisely the shape the gate above excludes. Filed as its own row -- closing it needs a channel that narrows the OWNER's walk rather than overwriting the box's data, which is bookkeeping neither channel has today.
+
+THE LEAK SIDE IS MEASURED, NOT ASSUMED, because every neighbouring suppressor's doc records having traded a double free for a leak at least once. The ASAN fixture carries three legs: the MOVED field, a KEPT leg over a struct with a SECOND owning field the move does not take (a too-wide zero surfaces there as a leak rather than a crash), and a `None` source (the direction where an over-eager zero strands a payload). LSan is clean on all three, and the full `memory_sanitizer` corpus went 1116 -> 1118 passed with 0 failed.
+
+TESTS: `asan_boxed_option_local_scrutinee_field_move_out_no_leak_no_double_free` (tests/memory_sanitizer.rs) plus a value twin `test_e2e_local_scrutinee_option_field_move_out_runs` (tests/codegen.rs) -- the defect ABORTED rather than printing a wrong answer, so the value assertion catches the opposite failure mode, a neutralizer firing too widely and printing empty while ASAN stays quiet. Coverage is stronger than the sibling B-2026-08-06-10 fixture's, which only bites at `-O0`: against the pre-fix compiler this one SEGVs under ASAN at BOTH `-O2` and `KARAC_OPT_LEVEL=0`. Full `--features llvm` suite green (106 targets, 13962 passed, 0 failed) with `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`.
+
+UNBLOCKS B-2026-08-17-28 leg (3): `?.`'s flatten case lowers to exactly this shape, and that leg was deferred solely because implementing it would have traded a loud build error for this runtime double free. |
 
 </details>
 
