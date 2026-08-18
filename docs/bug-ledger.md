@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 129 | 0 |
 | codegen-gap | 117 | 0 |
 | missing-feature | 106 | 1 |
-| diagnostics | 79 | 3 |
+| diagnostics | 79 | 2 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
 | crash | 51 | 0 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 199 | 1 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
-| other | 51 | 2 |
+| other | 51 | 1 |
 | autopar | 48 | 0 |
 | cli | 45 | 1 |
 | runtime | 22 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced · 6 open · 1302 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced · 5 open · 1303 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced
 
 </details>
 
-### Fixed (1302)
+### Fixed (1303)
 
-<details><summary>1302 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1303 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10705,6 +10704,13 @@ passes with the wrong anchor. `invalid_mut_marker_keeps_its_deletion_fix_it`
 is the counterweight -- E0219 is the other half of the pair and must keep its
 own edit. The insertion test was verified failing on the pre-fix source; the
 E0219 one passes both ways, as a counterweight should. |
+| B-2026-08-17-31 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` al… | FIXED by e5699b17. Fixed the DOCUMENT, not the grammar. The `;` form is what the parser implements, what roadmap.md documents as shipped, and what a dozen of design.md's own blocks already use. 77 declarations gained their terminator: 39 bodyless trait `fn`s, 10 trait associated `type`s, 6 impl associated `type`s, 9 top-level `type` aliases, and 13 single-line trait bodies (`trait Add { fn add(self, rhs: Self) -> Self; }`).
+
+Each of the four shapes was checked against the real parser rather than assumed: `trait C { type Item` -> `Expected Semicolon, found Fn`; `trait C { fn first(ref self) -> i64 }` -> `Expected Semicolon, found RightBrace`; `type Alias = i64` and `type Positive = i64 where self > 0` -> `Expected Semicolon, found Fn`; every one checks clean with the `;` added. Both transcription repros the row names now run end to end: the § Associated Types `CountUp` example prints 40 and the § Operator Traits block -- the one the row called "a trait block where EVERY line is a parse error" -- prints 42, on the interpreter and the JIT alike.
+
+`tests/design_md_code_blocks.rs` (new) keeps it fixed. Deliberately a targeted lint rather than an "every block parses" gate: most blocks are fragments (`{ ... }` elisions, `where` clauses shown alone) that cannot compile standalone, so it checks the one rule that has actually gone wrong, which keeps it precise enough to be actionable when it fires. It tracks the enclosing block kind on a stack -- `trait` admits bodyless `fn` and `type`, `impl` and top level admit `type` only, since an `impl` full of bodyless signatures is an API sketch (design.md labels one "(sketch)") that a `;` would not rescue -- and skips any signature whose next non-empty line continues it: `with`, `where`, a contract's `requires` / `ensures` / `invariant`, a wrapped `->`, or the body's own brace.
+
+Non-vacuity: the lint reports exactly 77 offenders on the pre-fix document and none on the fixed one. Its counterweight test feeds the scanner the shapes it exists to catch AND their fixed twins, plus a marker trait, an elision, a bodied method and a contract, so a matcher that silently stops matching cannot pass as a clean document -- the one failure mode that would let this rot. |
 | B-2026-08-17-32 | typecheck+interp | medium | Calling a PLAIN REFINEMENT TYPE as a constructor -- `ValidPort(80)` where `type ValidPort = u16 where self >= 1 and self <= 65535;` -- is ACCEPTED by… | FIXED by feb79b2. The call is now rejected in `infer_call`
 (src/typechecker/expr_call.rs), immediately after the distinct-type
 constructor arm and told apart from it by exactly one map: a name in
