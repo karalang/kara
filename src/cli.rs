@@ -1758,6 +1758,46 @@ fn render_text_warning_diagnostics(pipeline: &Pipeline) -> Vec<String> {
         .collect()
 }
 
+/// The rendered blocks for `TypeCheckResult::warnings` — the channel every
+/// `type_lint_warning` lint rides (`deprecated`, `unstable_api`, …) plus the
+/// CLI-attached `map_value_clone_reinsert`.
+///
+/// Extracted so `karac run` can render the SAME blocks (B-2026-08-18-20). It
+/// had its own lint block for `must_use` and nothing at all for this channel,
+/// so `karac run` and `karac run --interp` were both silent on `#[deprecated]`
+/// while `check` reported it — an inconsistency inside one lane, since the two
+/// lints differ only in which channel they ride. `run` cannot simply call
+/// `render_text_diagnostics`: that also renders `must_use`, which `run` already
+/// prints through its own block with its own continuation lines, so it would
+/// double-print.
+///
+/// The bracket names the LINT when there is one — that is what `-A <name>`
+/// takes, so it is the actionable label — and falls back to the phase, matching
+/// the `error[typecheck]` convention.
+pub(crate) fn render_typecheck_warning_blocks(
+    typed: &crate::typechecker::TypeCheckResult,
+    filename: &str,
+    source: Option<&str>,
+) -> Vec<String> {
+    typed
+        .warnings
+        .iter()
+        .map(|warn| {
+            let label = warn.lint_name.as_deref().unwrap_or("typecheck");
+            with_snippet(
+                format!(
+                    "warning[{label}]: {}:{}:{}: {}",
+                    filename, warn.span.line, warn.span.column, warn.message
+                ),
+                source,
+                warn.span.line,
+                warn.span.column,
+                warn.span.length,
+            )
+        })
+        .collect()
+}
+
 fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     let filename = &pipeline.filename;
     let source = pipeline.source.as_deref();
@@ -1809,19 +1849,7 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
         // same program. The bracket names the LINT when there is one — that is
         // what `-A <name>` takes, so it is the actionable label — and falls
         // back to the phase, matching the `error[typecheck]` convention above.
-        for warn in &t.warnings {
-            let label = warn.lint_name.as_deref().unwrap_or("typecheck");
-            out.push(with_snippet(
-                format!(
-                    "warning[{label}]: {}:{}:{}: {}",
-                    filename, warn.span.line, warn.span.column, warn.message
-                ),
-                source,
-                warn.span.line,
-                warn.span.column,
-                warn.span.length,
-            ));
-        }
+        out.extend(render_typecheck_warning_blocks(t, filename, source));
     }
     // B-2026-08-17-37 — `must_use` on the COMPILE path. The lint ran only
     // from `cmd_run`, so `karac check` printed "All checks passed." and

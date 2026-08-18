@@ -651,6 +651,26 @@ pub(super) fn cmd_run(
                 }
             }
         }
+        // B-2026-08-18-20 — `TypeCheckResult::warnings`, the channel
+        // `deprecated` / `unstable_api` / `map_value_clone_reinsert` ride.
+        // `cmd_run` had a block for `must_use` (just below) and nothing for
+        // this one, so a `#[deprecated]` call was reported by `karac check`
+        // and silent under BOTH `karac run` and `karac run --interp` — an
+        // inconsistency inside one lane, since the two lints differ only in
+        // which channel carries them.
+        //
+        // Rendered through the same helper `check` and `build` use rather than
+        // a third hand-rolled block, so the three lanes cannot word one
+        // warning differently. Not `render_text_diagnostics` wholesale: that
+        // also renders `must_use`, which this path already prints below with
+        // its own `note`/`help` continuation lines, so it would double-print.
+        if let Some(ref t) = pipeline.typed {
+            for block in
+                crate::cli::render_typecheck_warning_blocks(t, filename, pipeline.source.as_deref())
+            {
+                eprintln!("{block}");
+            }
+        }
         // Lint: undocumented_unsafe
         for diag in crate::unsafe_lint::check_undocumented_unsafe(
             &pipeline.parsed.program,

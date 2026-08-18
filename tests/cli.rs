@@ -26576,3 +26576,114 @@ fn build_json_carries_warnings_only_when_there_are_some() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// B-2026-08-18-20 — `karac run` renders `TypeCheckResult::warnings`.
+///
+/// It rendered `must_use` (through its own lint block) and nothing from that
+/// channel, so a `#[deprecated]` call was reported by `karac check` and silent
+/// under BOTH run backends — an inconsistency inside one lane, since the two
+/// lints differ only in which channel carries them.
+///
+/// All four lanes are compared against each other rather than against a
+/// literal: the fix is that they share one renderer, so a warning that drifts
+/// in wording between them is the regression this has to catch.
+#[test]
+fn every_lane_renders_the_deprecated_warning_identically() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-run-warnings-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let src = tmp.join("dep.kara");
+    std::fs::write(
+        &src,
+        "#[deprecated(note: \"use `next_way` instead\")]\n\
+         fn old_way() -> i64 { return 1; }\n\
+         fn next_way() -> i64 { return 2; }\n\
+         fn main() { println(old_way().to_string()); }\n",
+    )
+    .unwrap();
+    let path = src.to_str().unwrap().to_string();
+
+    let warning_line = |stderr: &str| -> String {
+        stderr
+            .lines()
+            .find(|l| l.starts_with("warning[deprecated]"))
+            .unwrap_or_default()
+            .to_string()
+    };
+
+    let check = karac_bin().args(["check", &path]).output().unwrap();
+    let expected = warning_line(&String::from_utf8_lossy(&check.stderr));
+    assert!(
+        !expected.is_empty(),
+        "the control lane must warn, else this test proves nothing"
+    );
+
+    for lane in [vec!["run", "--interp", &path], vec!["run", &path]] {
+        let label = lane.join(" ");
+        let out = karac_bin().args(&lane).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert_eq!(
+            warning_line(&stderr),
+            expected,
+            "`karac {label}` must render the same warning `check` does; got: {stderr}"
+        );
+        // The program still runs — the warning is advisory, not a gate.
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains('1'),
+            "`karac {label}` must still execute the program"
+        );
+    }
+
+    // `-A <lint>` suppresses it in the run lane exactly as in check.
+    let out = karac_bin()
+        .args(["run", "--interp", "-A", "deprecated", &path])
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("warning[deprecated]"),
+        "`-A deprecated` must suppress the warning under run"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The counterweight: `must_use` must still print EXACTLY ONCE under `karac
+/// run`. That lane already had its own `must_use` block with `note`/`help`
+/// continuation lines, so wiring the shared warning channel in wholesale —
+/// rather than the one channel that was missing — would have double-printed it.
+#[test]
+fn run_prints_must_use_exactly_once() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-run-mustuse-once-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let src = tmp.join("mu.kara");
+    std::fs::write(
+        &src,
+        "#[must_use]\n\
+         fn compute() -> i64 { return 7; }\n\
+         fn main() { compute(); println(f\"done\"); }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args(["run", "--interp", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert_eq!(
+        stderr.matches("warning[must_use]").count(),
+        1,
+        "must_use must print once, not once per channel: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
