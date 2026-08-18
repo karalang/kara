@@ -12,6 +12,12 @@ The measured findings below are the point of this document. The options section
 prices what they imply; the recommendation is a scoped next spike, not a
 commitment.
 
+> **Updated 2026-08-18 (later, same day).** Added **finding 6** and **Option 4**
+> — whether a SPIRV-enabled LLVM could feed the wgpu launcher we already ship,
+> keeping Metal and the browser. Measured answer: no, the two ends speak
+> different SPIR-V dialects. Also marked **finding 4 historical**: the
+> single-expression kernel-body floor it documents was lifted the same day.
+
 > **Sourcing caveat.** `phoronix.com`, `arxiv.org`, `news.ycombinator.com` and
 > `rust-lang.github.io` are all blocked by this container's egress proxy. The
 > paper's claims here come from search-result summaries and its abstract — the
@@ -56,6 +62,8 @@ PowerPC RISCV Sparc SystemZ VE WebAssembly X86 XCore M68k Xtensa
 `Target::initialize_amd_gpu` alongside the `initialize_native` /
 `initialize_webassembly` we already call. **Note: no SPIRV** in that list — so
 "emit SPIR-V and keep feeding wgpu" is not available from this toolchain.
+(SPIRV *can* be enabled in a custom LLVM build, which looks like the way out of
+this — finding 6 measures why it is not.)
 
 **2. Both GPU backends emit real device code through our stock toolchain.**
 `examples/nvptx_probe.rs` (added by this assessment; run
@@ -128,6 +136,17 @@ so every intermediate must be hand-inlined. Slice-0 documented its *signature*
 contract (`fn k(x:T)->U` over `[T]`→`[U]`) but not this *body* restriction.
 Filed as **B-2026-08-18-40**.
 
+> **Finding 4 is now HISTORICAL (superseded 2026-08-18, same day).** The
+> single-expression floor was lifted by B-2026-08-18-40 (locals, `while` +
+> mutable locals + assignment, `for`-over-range, value `match`) and
+> B-2026-08-18-49 (statement-form `if`, and value-`if` branches carrying
+> locals). A scalar kernel is now a statement sequence, so the accumulator
+> shape every reduction needs compiles and runs. What finding 4 says about the
+> *mechanism* still stands and is the point that matters here: each construct
+> costs a hand-written arm in a text emitter. Six increments in one day is
+> evidence both that the emitter is tractable to extend AND that extending it
+> is the recurring cost an IR-level backend would retire.
+
 **5. No offload runtime, no CUDA, no GPU in this container.** `/usr/lib/llvm-18/lib`
 carries only `libLLVMFrontendOffloading.a` — the *compiler-side* helper for
 building offload entries — not `libomptarget`/`liboffload`, which ships
@@ -135,6 +154,31 @@ separately. No `nvcc`, no `nvidia-smi`, no `/usr/local/cuda`. **Any CG-5 work
 done here can be validated only up to "emits valid PTX/HSA".** Execution
 validation needs real hardware; note the owner's Mac is Metal-only, so a CUDA
 box or CI runner is a prerequisite for closing CG-5 for real.
+
+**6. LLVM's SPIR-V and wgpu's SPIR-V are DIFFERENT DIALECTS — the obvious
+escape hatch does not exist.** The tempting fifth option is "build LLVM with
+its SPIR-V backend, feed the wgpu launcher we already ship, keep Metal and the
+browser." Both halves were checked, and they do not meet:
+
+- *wgpu side, verified:* naga 29.0.3 does have a SPIR-V **frontend**
+  (`naga/src/front/spv/`), reachable via `wgpu-core`'s `spirv = ["naga/spv-in"]`
+  feature. So consuming SPIR-V is a feature flag away — this half is fine.
+- *The dialect, verified:* that frontend accepts exactly five execution models
+  — `Vertex`, `Fragment`, `GLCompute`, `TaskEXT`, `MeshEXT` — and returns
+  `Error::UnsupportedExecutionModel` for everything else
+  (`front/spv/mod.rs:1934-1939`, the `_ =>` arm). It also assumes the
+  **Logical** memory model.
+- *LLVM side:* the SPIRV backend is an OpenCL/compute target — `Kernel`
+  execution model, `Physical32/Physical64` addressing. `Kernel` is precisely
+  what that `_ =>` arm rejects.
+
+So a hypothetical SPIRV-enabled LLVM would emit SPIR-V that naga refuses to
+parse, and the cost of getting there (a custom pinned LLVM build, since SPIRV
+is opt-in at LLVM build time and not in our `--targets-built`) buys nothing.
+Bridging the dialects means an OpenCL-flavor→Vulkan-flavor translation layer —
+addressing model, capabilities, entry-point decoration — which is a compiler
+project of its own, not a build flag. Recorded because this option *reads* as
+the obvious best of both worlds and is the one a reviewer will reach for first.
 
 ## The architectural read
 
@@ -170,8 +214,14 @@ information, and one already consumed by the layout/SoA machinery
 **The unobvious payoff of axis (A):** an LLVM-IR kernel path would inherit
 codegen's *full* expression coverage — loops, `match`, the lot — instead of
 requiring each construct to be re-implemented in the WGSL text emitter (finding
-4). Over time that makes it the more capable kernel backend even on hardware
-where wgpu works fine. WGSL remains mandatory for the browser/WebGPU target
+4). **That cost is no longer hypothetical: it was paid on 2026-08-18.** Locals,
+`while` + mutable locals, `for`-over-range, value `match`, statement-form `if`
+and value-`if`-with-locals took six increments across B-2026-08-18-40 and
+-49, each a hand-written arm plus its own tests. The work went fine — the point
+is that an IR-level backend would have needed none of it, and the next construct
+(nested `if` inside a larger expression, still unsupported) is another such
+increment. Over time that makes it the more capable kernel backend even on
+hardware where wgpu works fine. WGSL remains mandatory for the browser/WebGPU target
 regardless, so this is "second backend", never "replacement".
 
 ## Options
@@ -205,7 +255,35 @@ already gives us Metal + Vulkan + DX12 + WebGPU portability.
 
 **Option 3 — decouple (A) from (B): LLVM-IR kernels, existing wgpu launch.**
 Not available. wgpu consumes WGSL or SPIR-V, and finding 1 shows this LLVM has
-no SPIR-V backend.
+no SPIR-V backend. See Option 4 for why *adding* one does not rescue this.
+
+**Option 4 — build LLVM with its SPIR-V backend, keep the wgpu launcher.**
+The version of Option 3 that a reviewer reaches for once finding 1 lands, and
+the only option that would keep **Metal and the browser** while retiring the
+hand-written text emitter. It is the most attractive option on paper and it
+does not work, for a reason that is about dialects rather than effort
+(finding 6):
+
+- Getting there costs a **custom pinned LLVM build** — SPIRV is opt-in at LLVM
+  build time and absent from our `--targets-built`. Bad but survivable for a
+  language that already pins its toolchain.
+- The fatal part is what comes out. LLVM's SPIRV backend is an OpenCL/compute
+  target (`Kernel` execution model, physical addressing). naga's SPIR-V
+  frontend accepts `Vertex`/`Fragment`/`GLCompute`/`TaskEXT`/`MeshEXT` and
+  returns `UnsupportedExecutionModel` for anything else, assuming the Logical
+  memory model. The two ends speak different dialects of the same format.
+
+Rescuing it means writing an OpenCL-flavor→Vulkan-flavor translator
+(addressing model, capabilities, entry-point decoration) — a compiler project
+in its own right, and one whose output would then be re-translated by naga into
+MSL/HLSL/SPIR-V per backend. **Not recommended**, and recorded at length
+precisely because it reads like the obvious answer: anyone re-deriving this
+should find the measurement rather than repeat the reasoning.
+
+*If this option is ever revisited*, the thing to re-check first is whether
+naga's frontend has gained `Kernel`/physical-addressing support (it had not as
+of naga 29.0.3) — that single fact is what makes the difference between a build
+flag and a compiler project.
 
 ## Recommendation
 
@@ -223,7 +301,7 @@ second-target pattern, which already proves multi-target codegen works here —
 and report (a) whether it verifies and emits, (b) what had to change
 (address spaces on pointer params, kernel calling convention, the `tid` builtin,
 `memcpy`/intrinsic lowering), and (c) whether loops and `match` come through for
-free. **Ends at emitted PTX** — this container cannot execute it (finding 5).
+free — a question that now has a **price tag on the other side of the ledger**, since the WGSL emitter got them by hand in six increments on 2026-08-18. **Ends at emitted PTX** — this container cannot execute it (finding 5).
 
 Only after that does the Option 1 vs 2 choice have a real cost attached. My
 current lean, stated as a lean and not a finding: **Option 1**, because it is
