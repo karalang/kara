@@ -2065,6 +2065,48 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         index: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-08-18-3 — the same slice through a `let`-BOUND range:
+        // `let r = 1..3; v[r]`. The block below matches an `ExprKind::Range`
+        // syntactically, so a range arriving through a binding never reached
+        // it and the identifier fell through to "Undefined variable 'r'" —
+        // codegen has no runtime `Range` value to hand it.
+        //
+        // It does have the bounds, though: B-2026-08-17-29 spills them to two
+        // allocas at the `let` and records them in `range_let_bindings`, whose
+        // own doc names this use ("Every other use of the binding (`v[r]`, …)
+        // still fails LOUDLY"). This is that use, reading the same captured
+        // bounds the for-loop position reads — so `let mut a = 2; let r = a..4;
+        // a = 10; v[r]` slices 2..4, matching `--interp` and the value
+        // semantics design.md gives a range.
+        if let ExprKind::Identifier(idx_name) = &index.kind {
+            if let Some(rl) = self
+                .var_types
+                .range_let_bindings
+                .get(idx_name.as_str())
+                .copied()
+            {
+                if let Some(elem_ty) = self.infer_elem_from_source(object) {
+                    let start_val = self
+                        .builder
+                        .build_load(rl.int_ty, rl.start, "idx.rlet.start")
+                        .map_err(|e| format!("codegen: load range-let start: {:?}", e))?
+                        .into_int_value();
+                    let end_val = self
+                        .builder
+                        .build_load(rl.int_ty, rl.end, "idx.rlet.end")
+                        .map_err(|e| format!("codegen: load range-let end: {:?}", e))?
+                        .into_int_value();
+                    return self.compile_range_slice_values(
+                        object,
+                        start_val,
+                        Some(end_val),
+                        rl.inclusive,
+                        elem_ty,
+                    );
+                }
+            }
+        }
+
         // Range indexing (`v[a..b]`): produces a Slice[T] value regardless
         // of whether `v` is an Array, Vec, or Slice. The source element
         // type is inferred from the object variable.

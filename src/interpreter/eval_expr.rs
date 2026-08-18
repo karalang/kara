@@ -433,6 +433,56 @@ impl<'a> super::Interpreter<'a> {
                 // at runtime). Mutation through a mutable slice in the
                 // interpreter does not propagate back to the source — the
                 // compiled codegen has full aliasing semantics.
+                // B-2026-08-18-3 — the same slice through a BOUND range:
+                // `let r = 1..3; v[r]`. The block below reads its bounds
+                // SYNTACTICALLY, off an `ExprKind::Range` node, so a range
+                // reaching the index through a binding never entered it: `r`
+                // evaluated to the `Value::Iterator` a range value is modelled
+                // as, and the pair `(Array, Iterator)` fell to this arm's
+                // `unreachable!()` — an internal-error backtrace on a program
+                // `karac check` had just passed.
+                //
+                // The typechecker is right about all of this and needs no
+                // change: `1..3` is `Range[i64]`, `v[r]` is `Slice[i64]`, and
+                // a non-contiguous iterator index (`(1..9).step_by(2)`) is
+                // already rejected with a span. So every `Value::Iterator`
+                // that can reach here came from a range and its remaining
+                // items are contiguous and ascending — which is what makes
+                // recovering the bounds from them exact rather than a guess.
+                //
+                // Recovered into a SYNTHETIC `ExprKind::Range` so the block
+                // below runs unchanged: it handles Array, Slice, String and
+                // Vec receivers, and a second copy of that would be a second
+                // place for the two spellings to drift apart.
+                //
+                // Only an IDENTIFIER index is looked up, and deliberately
+                // through `env.get` rather than by evaluating: reading a
+                // binding cannot have side effects, so the object still gets
+                // evaluated exactly once, in its original order, by the block
+                // below. A computed range receiver is left alone.
+                let bound_range: Option<Expr> = match &index.kind {
+                    ExprKind::Identifier(name) => self
+                        .env
+                        .get(name)
+                        .as_ref()
+                        .and_then(Self::range_value_bounds)
+                        .map(|(lo, hi)| Expr {
+                            span: index.span,
+                            kind: ExprKind::Range {
+                                start: Some(Box::new(Expr {
+                                    span: index.span,
+                                    kind: ExprKind::Integer(lo, None),
+                                })),
+                                end: Some(Box::new(Expr {
+                                    span: index.span,
+                                    kind: ExprKind::Integer(hi, None),
+                                })),
+                                inclusive: false,
+                            },
+                        }),
+                    _ => None,
+                };
+                let index: &Expr = bound_range.as_ref().unwrap_or(index);
                 if let ExprKind::Range {
                     start,
                     end,

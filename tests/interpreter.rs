@@ -3399,6 +3399,63 @@ fn test_pipe_chained() {
     );
 }
 
+// ── range values in index position ─────────────────────────────
+
+/// B-2026-08-18-3 — `let r = 1..3; v[r]` panicked with an internal
+/// `unreachable!()`: "index expression at 4:13: obj=Value::Array,
+/// index=Value::Iterator". The index path read its bounds SYNTACTICALLY off an
+/// `ExprKind::Range`, so a range arriving through a binding never entered it,
+/// and an internal-error backtrace was the answer to a program `karac check`
+/// had just passed.
+///
+/// The typechecker was right throughout — `1..3` is `Range[i64]`, `v[r]` is
+/// `Slice[i64]`, and a non-contiguous iterator index is rejected with a span —
+/// so the fix belonged in the evaluator, not in a new rejection.
+#[test]
+fn test_index_by_a_let_bound_range() {
+    // The row's repro, and the inline spelling it must agree with.
+    assert_eq!(
+        run(
+            "fn main() { let v = [10, 20, 30, 40]; let r = 1..3; let s = v[r]; println(s.len()); }"
+        ),
+        "2\n"
+    );
+    assert_eq!(
+        run("fn main() { let v = [10, 20, 30, 40]; let s = v[1..3]; println(s.len()); }"),
+        "2\n"
+    );
+    // The slice is the right WINDOW, not merely the right length.
+    assert_eq!(
+        run("fn main() { let v = [10, 20, 30, 40]; let r = 1..3; let s = v[r]; println(s[0]); println(s[1]); }"),
+        "20\n30\n"
+    );
+    // Inclusive, and empty.
+    assert_eq!(
+        run("fn main() { let v = [10, 20, 30, 40]; let r = 1..=2; let s = v[r]; println(s.len()); println(s[1]); }"),
+        "2\n30\n"
+    );
+    assert_eq!(
+        run(
+            "fn main() { let v = [10, 20, 30, 40]; let r = 2..2; let s = v[r]; println(s.len()); }"
+        ),
+        "0\n"
+    );
+}
+
+/// A range is a VALUE, so its bounds are fixed where it is bound — the rule
+/// B-2026-08-17-29 settled for the loop position, holding here too. Mutating
+/// the source binding afterwards must not move the window.
+#[test]
+fn test_let_bound_range_index_captures_its_bounds() {
+    assert_eq!(
+        run(
+            "fn main() { let v = [10, 20, 30, 40]; let mut a = 1; let r = a..3; a = 0;\n\
+             let s = v[r]; println(s.len()); println(s[0]); }"
+        ),
+        "2\n20\n"
+    );
+}
+
 // ── `?.` (optional chaining) ───────────────────────────────────
 
 /// B-2026-08-17-28 — design.md line 782: "`user.address?.city?.name`

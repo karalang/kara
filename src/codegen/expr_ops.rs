@@ -8681,9 +8681,6 @@ impl<'ctx> super::Codegen<'ctx> {
         elem_ty: BasicTypeEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let slice_ty = self.slice_struct_type();
-
         let start_val = if let Some(s) = start {
             self.compile_expr(s)?.into_int_value()
         } else {
@@ -8697,6 +8694,28 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
+        self.compile_range_slice_values(object, start_val, compiled_end, inclusive, elem_ty)
+    }
+
+    /// [`compile_range_slice`] with the bounds already compiled.
+    ///
+    /// B-2026-08-18-3 — split out for `v[r]`, where `r` is a `let`-bound
+    /// range: its bounds live in the two allocas B-2026-08-17-29 spills at the
+    /// binding site, not in source expressions this function could compile. The
+    /// loop position needed the identical split for the identical reason
+    /// (`compile_for_range_values`), so this is the second consumer of the same
+    /// captured bounds rather than a new mechanism.
+    pub(super) fn compile_range_slice_values(
+        &mut self,
+        object: &Expr,
+        start_val: inkwell::values::IntValue<'ctx>,
+        compiled_end: Option<inkwell::values::IntValue<'ctx>>,
+        inclusive: bool,
+        elem_ty: BasicTypeEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let slice_ty = self.slice_struct_type();
 
         // Resolve the object to (base_ptr, length).
         let (base_ptr, src_len) = if let ExprKind::Identifier(name) = &object.kind {

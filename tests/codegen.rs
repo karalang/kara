@@ -97729,6 +97729,54 @@ fn main() {
         assert_eq!(arith, "6\n", "the `??` result must be the bare payload");
     }
 
+    /// B-2026-08-18-3 — indexing by a `let`-bound range. The interpreter ICE'd
+    /// and both compiled backends refused the program with "Undefined variable
+    /// 'r'", because codegen has no runtime `Range` value to hand the index.
+    /// It does have the BOUNDS: B-2026-08-17-29 spills them at the `let`, and
+    /// this reads the same captured pair the for-loop position reads.
+    ///
+    /// Pinned against the inline spelling, which is the same slice written the
+    /// way that always worked.
+    #[test]
+    fn indexing_by_a_let_bound_range_slices_like_the_inline_form() {
+        for (bound, inline) in [
+            (
+                "let r = 1..3; let s = v[r]; println(s.len());",
+                "let s = v[1..3]; println(s.len());",
+            ),
+            (
+                "let r = 1..3; let s = v[r]; println(s[0]); println(s[1]);",
+                "let s = v[1..3]; println(s[0]); println(s[1]);",
+            ),
+            (
+                "let r = 1..=2; let s = v[r]; println(s.len()); println(s[1]);",
+                "let s = v[1..=2]; println(s.len()); println(s[1]);",
+            ),
+            (
+                "let r = 2..2; let s = v[r]; println(s.len());",
+                "let s = v[2..2]; println(s.len());",
+            ),
+        ] {
+            let src = |body: &str| format!("fn main() {{ let v = [10, 20, 30, 40]; {body} }}\n");
+            let Some(got) = run_program(&src(bound)) else {
+                return;
+            };
+            let want = run_program(&src(inline)).expect("the inline control must build");
+            assert_eq!(got, want, "`{bound}` must slice as `{inline}` does");
+        }
+
+        // A range is a value: its bounds are fixed at the `let`, so mutating
+        // the source binding afterwards must not move the window
+        // (B-2026-08-17-29's rule, in the index position).
+        let Some(out) = run_program(
+            "fn main() { let v = [10, 20, 30, 40]; let mut a = 1; let r = a..3; a = 0;\n\
+             let s = v[r]; println(s.len()); println(s[0]); }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "2\n20\n", "the bounds are captured at the binding");
+    }
+
     /// B-2026-08-17-26 — design.md § Pipe Operator prescribes a closure RHS as
     /// the escape hatch from its `_` restrictions, and all three prescribed
     /// forms were rejected at typecheck. They are transcribed verbatim here

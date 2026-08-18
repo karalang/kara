@@ -960,6 +960,46 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// The `[lo, hi)` bounds a `Range` VALUE stands for, or `None` if the
+    /// value is not one.
+    ///
+    /// B-2026-08-18-3 — a range value is modelled as an eagerly materialized
+    /// `Value::Iterator`, so it carries its elements rather than its bounds.
+    /// The index path needs bounds, and the elements determine them exactly:
+    /// the typechecker admits only a contiguous ascending range as an index
+    /// (a stepped or filtered iterator is rejected with a span), so the first
+    /// remaining element is the start and one past the last is the end.
+    ///
+    /// `cursor` is respected, so a partially consumed range slices from where
+    /// it now stands rather than from where it began. An exhausted or empty
+    /// range yields an empty half-open pair, which slices to nothing — the
+    /// right answer for `3..3` and for a descending `3..1` alike.
+    pub(crate) fn range_value_bounds(v: &Value) -> Option<(i64, i64)> {
+        let Value::Iterator {
+            source: super::value::IteratorSource::Eager { items, cursor },
+            steps,
+        } = v
+        else {
+            return None;
+        };
+        // An adaptor chain (`.map`, `.filter`, …) no longer stands for a
+        // contiguous span, and the typechecker rejects such a value in index
+        // position anyway — decline rather than invent bounds for it.
+        if !steps.is_empty() {
+            return None;
+        }
+        let rest = items.get(*cursor..)?;
+        let mut bounds: Option<(i64, i64)> = None;
+        for item in rest {
+            let Value::Int(n) = item else { return None };
+            bounds = Some(match bounds {
+                None => (*n, *n + 1),
+                Some((lo, _)) => (lo, *n + 1),
+            });
+        }
+        Some(bounds.unwrap_or((0, 0)))
+    }
+
     pub(crate) fn eval_pipe(&mut self, left: &Expr, right: &Expr, span: &Span) -> Value {
         // Shared with the typechecker and codegen (B-2026-08-17-25) — see
         // `ast::desugar_pipe`. The synthesized call carries the PIPE's span,

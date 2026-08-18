@@ -958,6 +958,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 if matches!(&index.kind, ExprKind::Range { .. }) {
                     return self.infer_elem_from_source(object);
                 }
+                // B-2026-08-18-3 — the `let`-BOUND spelling of that same
+                // range index (`let r = 1..3; let s = v[r];`). The gate above
+                // reads the range syntactically, so `s` was never registered
+                // as a slice and its first method call reported "no handler
+                // for method 'len' on variable 's'" — the index itself having
+                // compiled correctly by then.
+                if let ExprKind::Identifier(idx_name) = &index.kind {
+                    if self
+                        .var_types
+                        .range_let_bindings
+                        .contains_key(idx_name.as_str())
+                    {
+                        return self.infer_elem_from_source(object);
+                    }
+                }
                 // B-2026-08-14-9 — a scalar index into a `Vec[Slice[T]]` binds
                 // a SLICE, so `let c = chunks[0]` has to register `c` as one or
                 // its `.len()` finds no dispatcher. The container's element
