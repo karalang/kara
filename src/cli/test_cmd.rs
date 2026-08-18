@@ -548,7 +548,7 @@ pub(super) fn cmd_test(filter: Option<String>, all: bool, interp: bool) {
     module_lint_overrides.apply_manifest_lints(&mf.lints);
     let type_errors: Vec<ModuleTypeErrors> =
         if parse_errors.is_empty() && cycles.is_empty() && resolve_errors.is_empty() {
-            typecheck_modules(&tree, &module_lint_overrides)
+            typecheck_modules(&tree, &module_lint_overrides).errors
         } else {
             Vec::new()
         };

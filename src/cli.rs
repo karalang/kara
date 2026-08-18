@@ -387,6 +387,10 @@ pub enum Command {
         /// `-o <path>` — see `Build.out_path`. Names the library artifact
         /// for a project library build; omitted → `dist/lib<name>.<ext>`.
         out_path: Option<String>,
+        /// `-A` / `-W` / `-D` lint levels — see `Build.lint_overrides`.
+        /// This variant did not carry them (B-2026-08-18-19), so a project
+        /// build silently ignored every lint flag the invocation named.
+        lint_overrides: crate::lints::CliLintOverrides,
     },
     Query {
         kind: QueryKind,
@@ -836,6 +840,7 @@ pub fn execute(cmd: Command) {
             release,
             crate_type,
             out_path,
+            lint_overrides,
         } => cmd_build_project(
             output,
             offline,
@@ -849,6 +854,7 @@ pub fn execute(cmd: Command) {
             release,
             crate_type,
             out_path.as_deref(),
+            lint_overrides,
         ),
         Command::Query {
             kind,

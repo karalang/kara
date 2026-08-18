@@ -641,6 +641,7 @@ fn parse_build_command(args: &[String]) -> Command {
                 release,
                 crate_type,
                 out_path,
+                lint_overrides,
             }
         }
     }

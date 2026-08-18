@@ -1013,6 +1013,14 @@ pub(super) fn cmd_build_project(
     release: bool,
     crate_type: NativeCrateType,
     out_path: Option<&str>,
+    // B-2026-08-18-19 — the CLI's `-A` / `-W` / `-D` levels. This function did
+    // not take them at all: it built its per-module overrides from
+    // `CliLintOverrides::default()` plus the manifest, so a project build
+    // ignored every lint flag the invocation carried. Harmless-looking while
+    // the only project-mode consumer was error-severity, and immediately wrong
+    // once project builds started rendering WARNINGS — `karac build -A
+    // deprecated` printed the warning anyway.
+    lint_overrides: crate::lints::CliLintOverrides,
 ) {
     // Phase-10: v1 target names are classified the same way as in
     // single-file mode. A wasm name selects the project-mode WASM build:
@@ -1315,14 +1323,29 @@ pub(super) fn cmd_build_project(
     // project-build typecheck honors the global opt-in. Today this
     // is the only manifest-driven lint override; future fields land
     // beside it.
-    let mut module_lint_overrides = crate::lints::CliLintOverrides::default();
+    //
+    // Seeded from the CLI overrides, not from `default()`. Starting empty threw
+    // away every `-A` / `-W` / `-D` the invocation carried, so a project build
+    // ignored them outright — invisible while the only project-mode lint
+    // consumer was error-severity, and immediately visible once B-2026-08-18-19
+    // made project builds RENDER warnings: `karac build -A deprecated` printed
+    // the warning anyway, which is worse than not printing it. `cmd_run` and
+    // `cmd_check` already compose them in this order, and
+    // `apply_manifest_lints` is written for it — it uses `or_insert`, so an
+    // explicit CLI level for a lint wins over the manifest's opt-in.
+    let mut module_lint_overrides = lint_overrides;
     module_lint_overrides.apply_manifest_lints(&mf.lints);
-    let type_errors: Vec<ModuleTypeErrors> =
-        if parse_errors.is_empty() && cycles.is_empty() && resolve_errors.is_empty() {
-            typecheck_modules(&tree, &module_lint_overrides)
-        } else {
-            Vec::new()
-        };
+    let module_diags = if parse_errors.is_empty() && cycles.is_empty() && resolve_errors.is_empty()
+    {
+        typecheck_modules(&tree, &module_lint_overrides)
+    } else {
+        ModuleTypeDiagnostics {
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        }
+    };
+    let type_errors = module_diags.errors;
+    let type_warnings = module_diags.warnings;
 
     // Theme 4 (2026-05-10) — multi-file project-mode codegen. Per-module
     // resolve + typecheck above produce per-file diagnostics; once those
@@ -1395,6 +1418,18 @@ pub(super) fn cmd_build_project(
             for w in &mf.warnings {
                 eprintln!("warning[manifest]: {}", w.message);
             }
+            // B-2026-08-18-19 — per-module typecheck warnings. The single-file
+            // path gained this in B-2026-08-18-1; here the warnings had been
+            // discarded one layer earlier, in `typecheck_modules`, so a project
+            // build printed its banner and `Built: …` and nothing else.
+            //
+            // Rendered alongside the manifest warnings rather than through the
+            // shared `render_text_warning_diagnostics`: that helper takes a
+            // single-file `Pipeline`, and this path has no such thing at this
+            // point — it holds per-module results, each with its OWN file, which
+            // is exactly the context a project build has to carry and the
+            // single-file one does not.
+            print_type_warnings_text(&type_warnings);
             print_parse_errors_text(&parse_errors);
             print_cycles_text(&cycles, &tree);
             print_resolve_errors_text(&resolve_errors);
@@ -1480,6 +1515,11 @@ pub(super) fn cmd_build_project(
                 })
                 .collect();
             let mut diags = warnings;
+            // B-2026-08-18-19 — per-module typecheck warnings join the array
+            // the manifest warnings already ride. The key exists on this path
+            // (unlike the single-file one, where B-2026-08-18-1 had to add it),
+            // so a consumer's shape does not change at all.
+            diags.extend(type_warnings_json(&type_warnings));
             diags.extend(parse_errors_json(&parse_errors));
             diags.extend(cycles_json(&cycles, &tree));
             diags.extend(resolve_errors_json(&resolve_errors));
@@ -2647,11 +2687,25 @@ pub(super) struct ModuleTypeErrors {
 /// the CR-24 slice-6 cross-module `E0221` + field-access rules can fire.
 /// A fresh resolver pass per module provides the `ResolveResult` the
 /// typechecker still consumes internally.
+/// Per-module typecheck output: the errors that gate the build, and the
+/// WARNINGS that do not.
+///
+/// The two are separated rather than merged because `type_errors.is_empty()`
+/// is the project build's gate — folding warning-carrying modules into that
+/// vector would abort a build over a `#[deprecated]` call. B-2026-08-18-19.
+pub(super) struct ModuleTypeDiagnostics {
+    pub(super) errors: Vec<ModuleTypeErrors>,
+    /// Same per-file shape, carrying `TypeCheckResult::warnings` — the channel
+    /// `deprecated` / `unstable_api` ride.
+    pub(super) warnings: Vec<ModuleTypeErrors>,
+}
+
 pub(super) fn typecheck_modules(
     tree: &ProgramTree,
     lint_overrides: &crate::lints::CliLintOverrides,
-) -> Vec<ModuleTypeErrors> {
+) -> ModuleTypeDiagnostics {
     let mut out = Vec::new();
+    let mut warn_out = Vec::new();
     for (id, m) in tree.modules.iter().enumerate() {
         // Skip the compiler-injected `std.prelude` placeholder — its stubs
         // would clash with `register_builtin_types` if pushed through the
@@ -2670,6 +2724,16 @@ pub(super) fn typecheck_modules(
             .with_tree(tree, id as ModuleId)
             .with_cli_lint_overrides(lint_overrides.clone())
             .check();
+        // B-2026-08-18-19 — the warnings used to be DROPPED here: `result`
+        // carries them and only `.errors` was read, so a project build was
+        // structurally incapable of reporting `deprecated` no matter what the
+        // render path did.
+        if !result.warnings.is_empty() {
+            warn_out.push(ModuleTypeErrors {
+                file: m.file.clone(),
+                errors: result.warnings,
+            });
+        }
         if !result.errors.is_empty() {
             out.push(ModuleTypeErrors {
                 file: m.file.clone(),
@@ -2677,7 +2741,10 @@ pub(super) fn typecheck_modules(
             });
         }
     }
-    out
+    ModuleTypeDiagnostics {
+        errors: out,
+        warnings: warn_out,
+    }
 }
 
 pub(super) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'static str {
@@ -2712,6 +2779,24 @@ pub(super) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'sta
     }
 }
 
+/// The warning-severity twin of [`print_type_errors_text`]. Same layout, with
+/// the severity word and the lint label a `-A <name>` invocation would take —
+/// matching what `karac check` prints for the same finding.
+pub(super) fn print_type_warnings_text(per_module: &[ModuleTypeErrors]) {
+    for te in per_module {
+        for warn in &te.errors {
+            let label = warn.lint_name.as_deref().unwrap_or("typecheck");
+            eprintln!(
+                "warning[{label}]: {}:{}:{}: {}",
+                te.file.display(),
+                warn.span.line,
+                warn.span.column,
+                warn.message,
+            );
+        }
+    }
+}
+
 pub(super) fn print_type_errors_text(per_module: &[ModuleTypeErrors]) {
     for te in per_module {
         for err in &te.errors {
@@ -2725,6 +2810,31 @@ pub(super) fn print_type_errors_text(per_module: &[ModuleTypeErrors]) {
             );
         }
     }
+}
+
+/// The warning-severity twin of [`type_errors_json`]. Carries `lint_name` so a
+/// consumer can offer the `-A <name>` the human renderer names, matching what
+/// `karac check --output=json` emits for the same finding.
+pub(super) fn type_warnings_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {
+    let mut out = Vec::new();
+    for te in per_module {
+        let file = te.file.display().to_string();
+        for warn in &te.errors {
+            let mut record = format!(
+                "{{\"severity\":\"warning\",\"phase\":\"typecheck\",\"file\":{},\"line\":{},\"column\":{},\"message\":{}",
+                json_string(&file),
+                warn.span.line,
+                warn.span.column,
+                json_string(&warn.message),
+            );
+            if let Some(lint) = warn.lint_name.as_deref() {
+                record.push_str(&format!(",\"lint_name\":{}", json_string(lint)));
+            }
+            record.push('}');
+            out.push(record);
+        }
+    }
+    out
 }
 
 pub(super) fn type_errors_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {

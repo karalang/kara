@@ -26687,3 +26687,99 @@ fn run_prints_must_use_exactly_once() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// B-2026-08-18-19 — PROJECT-mode `karac build` renders warnings too.
+///
+/// B-2026-08-18-1 gave the single-file path a warning surface; the project path
+/// still printed its banner and `Built: …` and nothing else. The cause was one
+/// layer further up than the render: `typecheck_modules` computed each module's
+/// `TypeCheckResult` and kept only `.errors`, so the warnings were discarded
+/// before any renderer could see them.
+///
+/// The suppression half is asserted in the same test on purpose. Rendering a
+/// warning that `-A` cannot turn off is worse than not rendering it, and this
+/// path could not: `cmd_build_project` never received the CLI lint levels at
+/// all, building its per-module overrides from `default()` plus the manifest.
+#[test]
+fn project_build_renders_and_suppresses_typecheck_warnings() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-proj-warnings-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"warnproj\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("src/main.kara"),
+        "#[deprecated(note: \"use `next_way` instead\")]\n\
+         fn old_way() -> i64 { return 1; }\n\
+         fn next_way() -> i64 { return 2; }\n\
+         fn main() { println(old_way().to_string()); }\n",
+    )
+    .unwrap();
+
+    let out = karac_bin().arg("build").current_dir(&tmp).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    if !stdout.contains("Built:") {
+        eprintln!("skipping: project build produced no binary ({stderr})");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        stderr.contains("warning[deprecated]"),
+        "a project build must surface the warning: {stderr}"
+    );
+    // The file named must be the MODULE's, which is the context a project build
+    // carries and the single-file path does not.
+    assert!(
+        stderr.contains("main.kara"),
+        "the warning must name the module it came from: {stderr}"
+    );
+
+    // `-A` reaches project mode.
+    let out = karac_bin()
+        .args(["build", "-A", "deprecated"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("warning[deprecated]"),
+        "`-A deprecated` must suppress it in project mode too: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // JSON carries it on the array the manifest warnings already ride.
+    let out = karac_bin()
+        .args(["build", "--output=json"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        stdout.contains("\"severity\":\"warning\"")
+            && stdout.contains("\"lint_name\":\"deprecated\""),
+        "project build JSON must carry the warning: {stdout}"
+    );
+
+    // A clean project stays silent, so this adds no noise to every build.
+    std::fs::write(
+        tmp.join("src/main.kara"),
+        "fn main() { println(f\"hi\"); }\n",
+    )
+    .unwrap();
+    let out = karac_bin().arg("build").current_dir(&tmp).output().unwrap();
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("warning["),
+        "a warning-free project must build silently: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
