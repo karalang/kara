@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 129 | 0 |
 | codegen-gap | 117 | 0 |
-| missing-feature | 106 | 2 |
+| missing-feature | 106 | 1 |
 | diagnostics | 79 | 3 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 926 | 3 |
-| typecheck | 199 | 2 |
+| typecheck | 199 | 1 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced · 8 open · 1300 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced · 7 open · 1301 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
-| B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
 | B-2026-08-18-26 | 2026-08-18 | codegen | high | A READ METHOD called directly on a returned `Set`/`Map` temp reads GARBAGE under `karac build` while `--interp` is correct: `mk_set().len()` gives 0 for a 3-element set, `mk_map().len()` gives 152 for a 2-element map, `mk_set().is_empty()` prints raw bytes, and six such calls in one program SEGFAULT. `contains` / `contains_key` on the same receiver are correct, and `Vec` is unaffected -- so it is `len`/`is_empty` specifically. | `try_compile_freshtemp_mapset_method` in src/codegen/method_call.rs and the method roster it gates on; compare against the Vec fresh-temp path. The receiver reaches it as a non-Identifier `Call`, so the identifier-keyed `compile_map_method` / `compile_set_method` never see it. |
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced
 
 </details>
 
-### Fixed (1300)
+### Fixed (1301)
 
-<details><summary>1300 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1301 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10909,6 +10908,19 @@ SIBLING GAP ALSO LEFT OPEN: the four other lints in the same `cmd_run` block
 change repaired for must_use. Not switched on together, because making four
 lints newly fire on `karac check` risks breaking existing check-output
 expectations; filed as B-2026-08-18-2 with a per-lint blast-radius prior. |
+| B-2026-08-17-38 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's un… | FIXED by f49ed9fc. The row asked which direction to settle the naming and left it open. The counts settle it, and the deciding evidence is INSIDE design.md rather than in the implementation: the spec writes the sorted SET as `SortedSet` 14 times and `TreeSet` zero times, and it pairs `TreeMap` with `SortedSet` in single sentences -- "uses `TreeMap[K, V]` / `SortedSet[T]`", "`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`, and `SortedSet` implement `Clone`". A `TreeMap`/`SortedSet` pair is incoherent whichever way you read it, so the spec was inconsistent with ITSELF, not merely ahead of the compiler. The implementation's `SortedMap`/`SortedSet` is the coherent pair, and it is what 325 source and 190 test references already say. So: the map is `SortedMap`, and design.md's 12 `TreeMap` mentions were the erratum.
+
+THREE PARTS, one root:
+
+1. THE FUNCTIONAL DEFECT. `displaced_value_exempt` spelled the receiver `"TreeMap"`, so the arm was DEAD -- no such type exists -- and `SortedMap.insert` / `.remove` warned while `Map`, `Vec`, `VecDeque` and `SortedSet` were all exempt. One word. A counterweight test pins that a USER type's `insert` returning `Option` still warns, so widening to the right name did not widen to everything.
+
+2. THE DOCUMENT. 15 bare `TreeMap` occurrences -> `SortedMap`, with the two `BTreeMap` occurrences preserved (the Rust-comparison column should name Rust's type, and `BTreeMap` CONTAINS the substring `TreeMap` -- a naive replace corrupts it, which is why the edit used a negative lookbehind and asserted the `BTreeMap` count was unchanged). Added a dated naming erratum beside the method table, matching the `Bf16`/`BF16` erratum already in the document.
+
+3. THE DIAGNOSTIC, which is the part that matters after the document is corrected. Fixing the spec does not fix what has already been READ from it: anyone -- or any model -- working from the old text writes `TreeMap` and got a bare "undefined type" with no route to the real name, and edit distance cannot bridge `TreeMap` -> `SortedMap`. `renamed_stdlib_type` maps `TreeMap` -> `SortedMap` and `TreeSet` -> `SortedSet` and rides the existing suggestion channel, so the diagnostic NAMES the type and `karac fix` REPAIRS it. Measured end to end: a spec-spelled program goes from two hard resolve errors to a working `SortedMap` program under one `karac fix`.
+
+A HAZARD THIS EXPOSED AND FIXED, found only by running the fix rather than trusting the diagnostic: the `replacement` edits these suggestions carry used the DIAGNOSTIC's span, and those spans are not identifier-sized. A type position spans `TreeMap[i64, i64]` and an associated call spans `TreeMap.new()`, so the first `karac fix` run produced `let mut m: SortedMap = SortedMap;` -- syntactically valid, semantically nonsense, and it does not compile. Every such span starts at the name, so the edit is now clamped to the name's length; a test asserts the edit length is exactly `"TreeMap".len()`. The pre-existing typo path (`helpr(41)` -> `helper(41)`) spans exactly the identifier and is unaffected -- pinned as a control.
+
+NOT DONE: `SortedMap` is still absent from `collect()`'s `FromIterator` targets (B-2026-08-17-36 / -18 / -27 territory) -- the row noted the type could not even be NAMED there, which is no longer true, but the collect-target gap itself is upstream of this row and unchanged by it. |
 | B-2026-08-17-39 | typecheck | low | Five iterator-adaptor diagnostics print types with Rust's `{:?}` Debug formatter, leaking internal AST structs into user-facing messages -- and one o… | Fixed in fbc42214. All the sites, plus one the row did not list.
 
 SIX, NOT FIVE. Alongside filter_map (149), find_map (615), flat_map (834),
