@@ -26411,3 +26411,168 @@ fn test_fix_applies_edit_from_inside_an_fstring_hole() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// B-2026-08-18-1 — `karac build` renders warning-level diagnostics on a
+/// SUCCESSFUL build.
+///
+/// It rendered none: `cmd_build` calls the diagnostic renderer only when
+/// `has_fatal_errors()`, so the path that actually produces a binary dropped
+/// the whole stream. A build-only workflow saw nothing the compiler had
+/// computed — `Built: …` and silence.
+///
+/// Asserted against `karac check` on the SAME source rather than against a
+/// hardcoded string: the point of the fix is that the two lanes read one
+/// renderer, so a warning that drifts in wording between them is the
+/// regression, and only a comparison can catch it.
+#[test]
+fn build_renders_warnings_on_a_successful_build() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-build-warnings-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let src = tmp.join("dep.kara");
+    std::fs::write(
+        &src,
+        "#[deprecated(note: \"use `next_way` instead\")]\n\
+         fn old_way() -> i64 { return 1; }\n\
+         fn next_way() -> i64 { return 2; }\n\
+         fn main() { println(old_way().to_string()); }\n",
+    )
+    .unwrap();
+
+    let check = karac_bin()
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let check_err = String::from_utf8_lossy(&check.stderr).to_string();
+    assert!(
+        check_err.contains("warning[deprecated]"),
+        "the control lane must warn, else this test proves nothing: {check_err}"
+    );
+
+    let build = karac_bin()
+        .args([
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            tmp.join("dep.bin").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let build_out = String::from_utf8_lossy(&build.stdout).to_string();
+    let build_err = String::from_utf8_lossy(&build.stderr).to_string();
+    // A build that failed for an unrelated reason (no LLVM feature, no linker)
+    // has nothing to say about warnings — skip rather than assert on it.
+    if !build_out.contains("Built:") {
+        eprintln!("skipping: build did not produce a binary ({build_err})");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        build_err.contains("warning[deprecated]"),
+        "a successful build must surface the warning `check` reports: {build_err}"
+    );
+    // Same renderer, so the message line itself must match, not merely the
+    // lint name.
+    let line_of = |s: &str| -> String {
+        s.lines()
+            .find(|l| l.starts_with("warning[deprecated]"))
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert_eq!(
+        line_of(&build_err),
+        line_of(&check_err),
+        "build and check must word one warning identically"
+    );
+
+    // A clean program stays silent — the fix must not add noise to every build.
+    let clean = tmp.join("clean.kara");
+    std::fs::write(&clean, "fn main() { println(f\"hi\"); }\n").unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            clean.to_str().unwrap(),
+            "-o",
+            tmp.join("clean.bin").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !err.contains("warning["),
+        "a warning-free program must build silently: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The JSON lane of the same fix. Warnings ride the SUCCESS object under
+/// `diagnostics`, and only when there are some — a consumer reading
+/// `status`/`output` sees no new key on a clean build, which is what keeps the
+/// kata corpus and the Mend baselines reading this exactly as before.
+#[test]
+fn build_json_carries_warnings_only_when_there_are_some() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-build-warnings-json-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let src = tmp.join("dep.kara");
+    std::fs::write(
+        &src,
+        "#[deprecated(note: \"use `next_way` instead\")]\n\
+         fn old_way() -> i64 { return 1; }\n\
+         fn next_way() -> i64 { return 2; }\n\
+         fn main() { println(old_way().to_string()); }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            "--output=json",
+            src.to_str().unwrap(),
+            "-o",
+            tmp.join("dep.bin").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    if !stdout.contains("\"status\":\"ok\"") {
+        eprintln!("skipping: build did not succeed ({stdout})");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        stdout.contains("\"severity\":\"warning\"")
+            && stdout.contains("\"lint_name\":\"deprecated\""),
+        "build JSON must carry the warning on the success object: {stdout}"
+    );
+
+    let clean = tmp.join("clean.kara");
+    std::fs::write(&clean, "fn main() { println(f\"hi\"); }\n").unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            "--output=json",
+            clean.to_str().unwrap(),
+            "-o",
+            tmp.join("clean.bin").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        stdout.contains("\"status\":\"ok\"") && !stdout.contains("diagnostics"),
+        "a clean build's JSON must gain no `diagnostics` key: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

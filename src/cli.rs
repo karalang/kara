@@ -1713,6 +1713,51 @@ fn render_lint_block_text(
     )
 }
 
+/// The WARNING-severity subset of [`render_text_diagnostics`], for the build
+/// path (B-2026-08-18-1).
+///
+/// `karac build` rendered no warning at all on a successful build: it calls
+/// `print_text_diagnostics` only when `has_fatal_errors()`, so on the path that
+/// actually produces a binary the whole diagnostic stream was dropped. A
+/// build-only workflow therefore never saw `deprecated`, `must_use`, or any
+/// other lint the compiler had already computed — measured on `#[deprecated]`,
+/// which `karac check` reports and `karac build` did not.
+///
+/// Filtered out of the SHARED renderer rather than re-derived, so `check` and
+/// `build` cannot drift in wording, span, or lint label — the same reason
+/// B-2026-08-05-17 fixed the effect-gate version of this class with one shared
+/// classifier. The filter reads the severity word each block already opens
+/// with, which is safe because every block in that function is built with its
+/// severity first (`error[`, `warning[`, `note[`, or the `{severity}[`
+/// interpolation the lint helpers use); `build_warnings_are_the_warning_blocks`
+/// pins that invariant.
+///
+/// `note[…]` is deliberately NOT included. Those are advisory hints (FFI lint
+/// notes, the wasm-tools note) rather than findings about the program's
+/// correctness, and printing them on every build is noise this row did not ask
+/// for. Extending to them is a separate decision.
+/// The JSON twin of [`render_text_warning_diagnostics`]: the warning-severity
+/// entries of the same `collect_diagnostics` the check path emits
+/// (B-2026-08-18-1).
+///
+/// Filtered out of the shared collector for the same reason the text version
+/// is — one producer, so a warning cannot say one thing under `karac check
+/// --output=json` and another under `karac build --output=json`.
+fn collect_warning_diagnostics_json(pipeline: &Pipeline) -> Vec<String> {
+    diag_json::collect_diagnostics(pipeline)
+        .entries
+        .into_iter()
+        .filter(|entry| entry.contains("\"severity\":\"warning\""))
+        .collect()
+}
+
+fn render_text_warning_diagnostics(pipeline: &Pipeline) -> Vec<String> {
+    render_text_diagnostics(pipeline)
+        .into_iter()
+        .filter(|block| block.starts_with("warning["))
+        .collect()
+}
+
 fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     let filename = &pipeline.filename;
     let source = pipeline.source.as_deref();

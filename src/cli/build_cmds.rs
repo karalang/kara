@@ -220,6 +220,28 @@ pub(super) fn cmd_build(
             }
         }
 
+        // B-2026-08-18-1 — the SUCCESS path's warnings. Everything above only
+        // renders when the build is about to fail, so a build that produced a
+        // binary printed nothing but `Built: …` no matter how many warnings the
+        // compiler had computed. Measured on `#[deprecated]`: `karac check`
+        // reports it, `karac build` did not.
+        //
+        // Read out of the same renderer `check` uses, so the two lanes cannot
+        // word a warning differently. Text goes to stderr here; the JSON lane
+        // carries them on the success object instead (see `build_warnings_json`
+        // at the emit site), because a build's JSON is a single object and a
+        // second one would break every consumer that reads one.
+        let build_warnings_json = match output {
+            OutputMode::Text => {
+                for block in render_text_warning_diagnostics(&pipeline) {
+                    eprintln!("{block}");
+                }
+                Vec::new()
+            }
+            OutputMode::Json => collect_warning_diagnostics_json(&pipeline),
+            OutputMode::Jsonl => Vec::new(),
+        };
+
         // `#[require_simd]` guarantee (phase-7-codegen.md line 308, slice 5a):
         // a function annotated `#[require_simd]` must not contain any
         // `Vector[T, N]` op that would scalarize on the target. Checked after
@@ -658,6 +680,17 @@ pub(super) fn cmd_build(
                         let mut fields = format!("{{\"status\":\"ok\",\"output\":\"{exe_path}\"");
                         for (key, path) in &companions {
                             fields.push_str(&format!(",\"{key}\":\"{path}\""));
+                        }
+                        // B-2026-08-18-1 — warnings ride the success object,
+                        // and ONLY when there are some. A consumer that reads
+                        // `status`/`output` is untouched by an absent key,
+                        // which is what keeps the kata corpus and the Mend
+                        // baselines reading this exactly as they did.
+                        if !build_warnings_json.is_empty() {
+                            fields.push_str(&format!(
+                                ",\"diagnostics\":[{}]",
+                                build_warnings_json.join(",")
+                            ));
                         }
                         fields.push('}');
                         println!("{fields}");
