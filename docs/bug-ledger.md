@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 43 | 3 |
+| other | 43 | 2 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 929 | 3 |
+| codegen | 929 | 2 |
 | typecheck | 199 | 1 |
 | interp | 151 | 1 |
 | ownership | 58 | 1 |
@@ -118,15 +118,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 48 | 0 |
 | cli | 45 | 0 |
 | runtime | 22 | 0 |
-| parser | 22 | 1 |
+| parser | 22 | 0 |
 | resolver | 19 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1329 surfaced · 6 open · 1306 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1329 surfaced · 5 open · 1307 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1329 surfaced
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
 | B-2026-08-18-30 | 2026-08-18 | codegen | low | `compile_method_call`'s `args_close_span` parameter is now a REDUNDANT second key: it exists only to disambiguate side-table reads across a chain, and B-2026-08-18-24 made `call_span` unique per chain step, which is the job it was hired for. | src/codegen/method_call.rs (the `args_close_span` parameter and its ~12 call sites); `method_call_key`; `try_compile_freshtemp_user_method`. |
-| B-2026-08-18-31 | 2026-08-18 | parser+codegen | low | `FieldAccess` nodes still copy their object's span -- a FIFTH postfix arm with the identical defect the four-row family (`?.`, `?`, `Index`, `MethodCall`) just finished closing. `v[0]` and `v[0].second` share one SpanKey. | src/parser/exprs.rs (the `Token::Dot` field-access arm, `span: lhs.span`); selfhost/src/parser.kara `finish_dot`; src/codegen/expr_ops.rs `receiver_struct_inst` for the consumer that already compensates. |
 | B-2026-08-18-32 | 2026-08-18 | ownership+codegen+interp | low | THE OWNERSHIP CHECKER AND BOTH BACKENDS DISAGREE ABOUT WHETHER `String + ` CONSUMES ITS LEFT OPERAND. design.md gives `+` the signature `fn add(self, other: ref String)` — bare `self`, i.e. OWNED — so the checker warns "value moved here, used again here" on a second use. Neither the interpreter nor codegen enforces the move: the value is intact and correct afterward. The suggested `.clone()` is a real cost for a problem that does not exist at runtime. | The `+` operator's declared receiver mode. design.md:1821 says `fn add(self, other: ref String) -> String`; the ownership checker reads that as a move, and neither backend implements it as one. One of the two is wrong and it is a language call, not a bug-fix call. |
 
 ### Wontfix (7)
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1329 surfaced
 
 </details>
 
-### Fixed (1306)
+### Fixed (1307)
 
-<details><summary>1306 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1307 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11809,6 +11808,19 @@ correct either way.
 
 Gates: fmt clean, clippy --all --all-targets --features llvm clean, 14,056
 passed / 0 failed / 18 ignored across 107 suites. |
+| B-2026-08-18-31 | parser+codegen | low | `FieldAccess` nodes still copy their object's span -- a FIFTH postfix arm with the identical defect the four-row family (`?.`, `?`, `Index`, `MethodC… | FIXED by 399c7a68. The FIFTH and final postfix arm. `FieldAccess` now spans lhs-start -> past the field name, joining `?.` (B-2026-08-18-7), `?` (B-2026-08-18-9), `Index` (B-2026-08-18-21) and `MethodCall` (B-2026-08-18-24). No postfix node in the seed parser copies its object's span any more.
+
+TWELVE FAILURES, against 42 for the `MethodCall` arm -- and the shape of the difference is the useful part. `MethodCall`'s fallout was spread across four unrelated mechanisms (fresh-temp dispatch, for-loop ownership, generic field resolution, slice borrows). This one was a SINGLE mechanism, hit through three doors: 6 codegen + 4 memory_sanitizer tests, all in the B-2026-08-13-14 use-after-move defensive-copy family, plus the customary 2 self-host oracles.
+
+ONE PRODUCER, THREE READERS, ONE WRONG KEY. `use_classifier`'s `record_place_at_root` states its contract in its own name and doc -- a place consume is recorded "against the ROOT identifier's span", so `let t = b.a;` records at `b`, not at `b.a`. All three place-shaped readers in `src/codegen/runtime.rs` -- `uam_defensive_copy_field`, `uam_reclone_source_field`, `uam_defensive_copy_tuple_elem` -- looked the site up at their OWN node's span instead, which resolved only because `FieldAccess` and `TupleIndex` copy their object's. Separate them and every lookup misses: no defensive copy is made, the source disarm still fires, and the reused field is a stale alias. Measured on `test_e2e_field_bound_out_of_local_is_a_copy`: `hi1 hi1 1 1 x1 1 0 panic: vec index out of bounds` against an expected `... 1 y1 7`.
+
+The fix is one shared helper, `uam_consume_root_span`, walking a place to its root, plus `uam_consume_site_at_root` wrapping the lookup -- so all three readers ask the question the producer answers, and none can drift back onto the node's span. The IDENTIFIER reader needed no change: its `expr.span` already IS the root's, which is why that arm never broke and why the defect stayed invisible. Per-use-site precision is unaffected: each mention of a root is its own span, so `let t = b.a;` and a later `let u = b.n;` still key separately.
+
+`uam_copied_sites` -- the sibling table the source-disarm skip keys on -- is written AND read at the node's span, entirely inside codegen, so it is self-consistent either way and was left alone. Worth noting because the two tables sit next to each other and only one of them crosses a phase boundary; that is the whole difference.
+
+THE TUPLE ARM IS FIXED THOUGH `TupleIndex` WAS NOT WIDENED. `uam_defensive_copy_tuple_elem` reads through the same helper now, so it is correct whether or not `TupleIndex` ever gets a span of its own -- and `test_e2e_tuple_elem_bound_out_of_local_is_a_copy` was among the twelve, because a tuple index over a field access (`b.a.0`) inherits the widened span through its object. Fixing the reader rather than only the arm that happened to break is what makes the remaining arm's future widening a non-event here.
+
+`receiver_struct_inst` needed nothing: B-2026-08-18-24 already reordered it to ask the structural walk before the span table, which was the compensation filed on this row. That prediction held. |
 
 </details>
 
