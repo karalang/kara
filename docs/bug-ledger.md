@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 104 | 3 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
-| diagnostics | 73 | 4 |
+| diagnostics | 75 | 5 |
 | crash | 52 | 1 |
 | soundness | 50 | 0 |
 | other | 37 | 0 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
-| cli | 39 | 2 |
+| cli | 41 | 3 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 19 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1312 surfaced · 10 open · 1285 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1314 surfaced · 11 open · 1286 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,11 +135,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1312 surfaced
 | B-2026-08-17-36 | 2026-08-17 | typecheck | medium | `collect()` can only ever produce `Vec[T]` -- every other `FromIterator` target design.md promises is rejected at typecheck. § Iterator Adaptors: "Every standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`, `String`) implements `FromIterator` for its natural element type. `collect` infers the target type from context or requires annotation." Measured, one target per file: `let up: String = s.chars().map(|c| c.to_uppercase()).collect()` -> "expected 'String', found 'Vec[char]'"; `let j: String = v.iter().map(|s| s.to_uppercase()).collect()` -> "expected 'String', found 'Vec[String]'"; `let s: Set[i64] = ... .collect()` -> "expected 'Set[i64]', found 'Vec[i64]'"; `let d: VecDeque[i64] = ... .collect()` -> "expected 'VecDeque[i64]', found 'Vec[i64]'"; `let m: Map[i64, i64] = v.iter().map(|x| (x, x * 10)).collect()` -> "expected 'Map[i64, i64]', found 'Vec[(i64, i64)]'". The sixth target, `TreeMap`, cannot even be named -- see B-2026-08-17-38. In every case the annotation is ignored and the chain's type is fixed to `Vec` of the element type, so the diagnostic reads as a mismatch the user caused rather than a target the compiler does not support. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
-| B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
 | B-2026-08-18-12 | 2026-08-18 | codegen | medium | `self.len()` inside an `impl Trait for Map[K, V]` or `impl Trait for Set[T]` body has NO codegen dispatcher -- "no handler for method 'len' on non-identifier receiver" -- on BOTH receiver modes. The identical body over a `Vec[i64]` or `Slice[i64]` head compiles and runs. The interpreter answers correctly in every case, so this is a `karac check` / `karac build` divergence, not a language rule. | roadmap.md |
 | B-2026-08-18-13 | 2026-08-18 | typecheck | medium | A method declared by `impl Trait for Array[i64, 3]` CANNOT BE CALLED: the call site reports "no method 'g' on type 'Array'" even though the impl block itself now checks. Every other builtin container head measured (Vec, VecDeque, Slice, Map, Set, SortedMap, SortedSet, Option, Result, Column, Tensor) dispatches; `Array[T, N]` is the one that does not. | roadmap.md |
 | B-2026-08-18-14 | 2026-08-18 | codegen | medium | A RANGE SUBSCRIPT used directly as a METHOD RECEIVER -- `v[0..3].first_or(-1)` -- has no codegen: "no handler for expression kind Range". The same slice passed as an ARGUMENT works (`show(v[0..2])`), and binding it first works (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`), so it is the receiver position specifically. | roadmap.md |
 | B-2026-08-18-15 | 2026-08-18 | codegen | high | `let c = match k % 2 { 0 => v[k].city, _ => None };` SEGVs under ASAN -- binding a match whose arm tail INDEXES a container for a boxed `Option` field registers a box drop over storage the container still owns, and the double free lands as a segfault. The SCRUTINEE-position spelling of the same program is clean, which is the reverse of every other pairing in this family. | The `let`-binding boxed-payload registration in src/codegen/stmts.rs (the `boxed_enum_payload_variants` loop, ~line 6011) does not discriminate an INDEX-rooted initializer from an owned move. `match_result_scrutinee_owns_box` in src/codegen/control_flow_match.rs already excludes index chains for this reason and documents the measurement; the `let` site needs the same exclusion, or an element deep-clone like the one `clone_owned_vec_index_element` performs for a direct `match v[i]` scrutinee. |
+| B-2026-08-18-16 | 2026-08-18 | cli | medium | `missing_must_use` and `missing_track_caller` render BAKED-STDLIB findings against the USER's filename with the stdlib item's own span, producing diagnostics whose line numbers do not exist in the file named. `examples/autograd_training.kara` is 88 LINES LONG and draws `stdlib `pub fn TensorVar.value` has `panics` ... but lacks `#[track_caller]`` at line 378 and 387; `examples/fathom/mandelbrot.kara` draws `stdlib `fn animation_frames` returns a new value but is not annotated `#[must_use]`` at line 94, where `animation_frames` is not defined at all -- it is IMPORTED from `std.web.time` (line 50). The finding is real stdlib hygiene; the LOCATION is another file's. Both lints are therefore unfit for `karac check` / the JSON feed until the span carries its own file. | roadmap.md |
+| B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -157,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1312 surfaced
 
 </details>
 
-### Fixed (1285)
+### Fixed (1286)
 
-<details><summary>1285 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1286 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11081,6 +11082,66 @@ THE LEAK SIDE IS MEASURED, NOT ASSUMED, because every neighbouring suppressor's 
 TESTS: `asan_boxed_option_local_scrutinee_field_move_out_no_leak_no_double_free` (tests/memory_sanitizer.rs) plus a value twin `test_e2e_local_scrutinee_option_field_move_out_runs` (tests/codegen.rs) -- the defect ABORTED rather than printing a wrong answer, so the value assertion catches the opposite failure mode, a neutralizer firing too widely and printing empty while ASAN stays quiet. Coverage is stronger than the sibling B-2026-08-06-10 fixture's, which only bites at `-O0`: against the pre-fix compiler this one SEGVs under ASAN at BOTH `-O2` and `KARAC_OPT_LEVEL=0`. Full `--features llvm` suite green (106 targets, 13962 passed, 0 failed) with `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`.
 
 UNBLOCKS B-2026-08-17-28 leg (3): `?.`'s flatten case lowers to exactly this shape, and that leg was deferred solely because implementing it would have traded a loud build error for this runtime double free. |
+| B-2026-08-18-2 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONL… | FIXED by f8f10ac — three of the four lints wired onto the compile path, the
+other one excluded on measured evidence, and a false positive fixed as the
+prerequisite for wiring the first of them.
+
+THE ROW ASKED FOR A MEASUREMENT PASS BEFORE ANY WIRING, and that is what
+decided the outcome. Sweep: `karac check` over all 955 `.kara` files in
+examples/ + kara-katas with all five `cmd_run`-only lints temporarily wired,
+diffed against a 74-diagnostic baseline. 70 new diagnostics, splitting the set
+cleanly:
+
+    undocumented_unsafe       2   wired (1 real, 1 false positive — fixed)
+    unsafe_op_in_unsafe_fn    0   wired (silent across the corpus)
+    ffi_float_eq              0   wired (silent across the corpus)
+    missing_must_use         49   NOT wired
+    missing_track_caller     19   NOT wired
+
+THE TWO EXCLUSIONS ARE EVIDENCE, NOT CAUTION. Both render real stdlib-hygiene
+findings against the USER's filename carrying the baked stdlib item's own span:
+`examples/autograd_training.kara` is 88 lines and drew diagnostics at lines 378
+and 387; `examples/fathom/mandelbrot.kara` was told `fn animation_frames` lacks
+`#[must_use]` at line 94, where that function is not defined — it is IMPORTED
+from `std.web.time`. Putting 68 nonexistent locations on the Mend loop's feed is
+worse than omitting them, which is the harm this row existed to prevent. Filed
+as B-2026-08-18-16; the exclusion should hold until that row closes.
+
+THIS ROW'S OWN PRIOR WAS WRONG, and the correction is the useful part. It
+predicted `missing_must_use` would be a no-op on user code and "the cheapest of
+the four to land"; it is the LOUDEST of the five and its output is unusable. The
+prediction was read off the lint's doc comment instead of run. Wiring by
+predicted blast radius would have shipped the worst of the five first.
+
+THE FALSE POSITIVE HAD TO GO FIRST. `check_unsafe_span` read only the single
+line directly above the block, so a MULTI-LINE `// Safety:` comment — the shape
+a real justification takes — was reported as undocumented, punishing the author
+for explaining more rather than less. Wiring a false positive onto `karac check`
+is exactly the "breaking existing expectations" risk the row named, so the scan
+now walks up the contiguous comment run and stops at the first non-comment line
+(a `Safety:` comment cannot be borrowed across intervening code).
+
+STRUCTURAL FIX, not just three more call sites: text and JSON both iterate ONE
+shared list, `lint_entries_for_compile_path`, so a lint added later reaches both
+feeds or neither. That is what the row was really about — `must_use` stayed
+invisible to the JSON feed for exactly as long as its call site lived in one
+command rather than one shared place, and adding three more per-command call
+sites would have rebuilt the same trap.
+
+W0259/E0259 rather than reusing must_use's W0250/E0250, because `E0250` is
+already the typechecker's `ModuleBindingEffectfulInit`. Filed as
+B-2026-08-18-17 rather than compounded here.
+
+VERIFIED: corpus 74 -> 75 after wiring, the single addition being the genuinely
+undocumented `unsafe` block in the interleave-string kata. Text and JSON agree
+on the same lint; `-A undocumented_unsafe` silences both. Gates: fmt clean,
+clippy --all --all-targets --features llvm clean, 14,001 passed / 0 failed / 18
+ignored across 106 suites.
+
+REMAINING, deliberately: `unsafe_op_in_unsafe_fn` and `ffi_float_eq` are wired
+but were silent on the whole corpus, so their check-path behaviour is unproven
+by measurement rather than confirmed by it. They are covered by the shared
+collector's test, not by a corpus observation. |
 | B-2026-08-18-3 | interp+codegen | medium | Indexing by a `let`-BOUND range crashes the interpreter with an internal `unreachable!()`, and does not compile under either compiled backend | Fixed in a587e325, on both evaluators. The row's "either index by a bound range
 or reject it with a span" is answered by the first: the TYPECHECKER IS ALREADY
 RIGHT and rejecting would have contradicted it.
