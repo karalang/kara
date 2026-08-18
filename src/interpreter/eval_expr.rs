@@ -661,6 +661,26 @@ impl<'a> super::Interpreter<'a> {
                 }
                 let obj = self.eval_expr_inner(object);
                 let idx = self.eval_expr_inner(index);
+                // B-2026-08-18-37 — the INNER subscript of a nested index can fault
+                // (`m[missing_key][0]`). `record_runtime_error` returns
+                // `Value::Unit` and sets `pending_cf`, so with no check here the
+                // outer subscript resolves the pair `(Unit, Unit)` and falls to
+                // this arm's `unreachable!()` — an internal-error backtrace
+                // printed on top of the user's real "key not found in map"
+                // diagnostic, on a program `karac check` had just passed. Both
+                // compiled backends fault cleanly on the same program, so this
+                // was interpreter-only divergence.
+                //
+                // Same arm B-2026-08-18-3 reached through a bound range, and the
+                // same fix shape: the `unreachable!()` is only sound for operand
+                // pairs produced by SUCCESSFUL evaluation, so an already-pending
+                // ControlFlow has to short-circuit before the match. Placed after
+                // BOTH operands are evaluated rather than between them, so a
+                // faulting object still evaluates the index and preserves
+                // left-to-right evaluation order.
+                if self.pending_cf.is_some() {
+                    return Value::Unit;
+                }
                 // Phase-11 Tensor multi-dim indexing — `t[i, j, k]`
                 // arrives as a tuple index (parser desugar); rank-1
                 // accepts a bare Int. Row-major offset + runtime bounds

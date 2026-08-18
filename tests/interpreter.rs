@@ -34458,3 +34458,97 @@ fn test_freshtemp_mapset_read_methods_oracle() {
     );
     assert_eq!(out, "B\n3\nB\nfalse\nB\ntrue\n2\ntrue\n");
 }
+
+// ── nested subscript whose INNER index faults ───────────────────
+
+/// B-2026-08-18-37 — `m[missing_key][0]` panicked the interpreter with the same
+/// internal `unreachable!()` B-2026-08-18-3 reached: "index expression at
+/// 4:13: obj=Value::Unit, index=Value::Unit". A faulting subscript calls
+/// `record_runtime_error`, which returns `Value::Unit` and sets `pending_cf`;
+/// the OUTER subscript then read that `Unit` as a real operand and fell
+/// through every container arm to the catch-all.
+///
+/// So the user got an internal-error backtrace stacked on top of their own
+/// correct "key not found in map" diagnostic, on a program `karac check` had
+/// just passed — and both compiled backends faulted cleanly on the identical
+/// source, making it a run-vs-build divergence as well.
+///
+/// Not map-specific: any nested subscript works, because the fault is in how
+/// the outer index treats a failed inner one. The out-of-bounds Vec case below
+/// ICE'd identically before the fix.
+#[test]
+fn test_nested_index_with_a_faulting_inner_index_reports_the_real_error() {
+    // The row's repro: missing key, map through a struct FIELD.
+    let errors = runtime_errors(
+        "struct Holder { m: Map[i64, Vec[i64]] }\n\
+         fn main() {\n\
+             let mut h = Holder { m: Map.new() };\n\
+             h.m.insert(1, [43, 7]);\n\
+             println(h.m[99][0]);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("key not found in map: 99")),
+        "expected the real map-miss error, got: {errors:?}"
+    );
+
+    // Same miss through a LOCAL — the path the fix does not touch at all,
+    // pinned so the two spellings cannot drift apart.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut m: Map[i64, Vec[i64]] = Map.new();\n\
+             m.insert(1, [43, 7]);\n\
+             println(m[99][0]);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("key not found in map: 99")),
+        "expected the real map-miss error, got: {errors:?}"
+    );
+
+    // Not map-specific: a nested Vec whose OUTER index is out of bounds.
+    let errors =
+        runtime_errors("fn main() { let v: Vec[Vec[i64]] = [[1, 2], [3, 4]]; println(v[9][0]); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("index 9 out of bounds")),
+        "expected the real bounds error, got: {errors:?}"
+    );
+
+    // The error is reported ONCE, not compounded by the outer subscript
+    // re-reporting against the `Unit` placeholder.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut m: Map[i64, Vec[i64]] = Map.new();\n\
+             m.insert(1, [43, 7]);\n\
+             println(m[99][0]);\n\
+         }\n",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected exactly one error, got: {errors:?}"
+    );
+
+    // Anti-vacuity: the same shapes with a PRESENT key / in-range index still
+    // evaluate, so the short-circuit cannot be passing by refusing everything.
+    assert_eq!(
+        run("struct Holder { m: Map[i64, Vec[i64]] }\n\
+             fn main() {\n\
+                 let mut h = Holder { m: Map.new() };\n\
+                 h.m.insert(1, [43, 7]);\n\
+                 println(h.m[1][0]);\n\
+                 println(h.m[1][1]);\n\
+             }\n"),
+        "43\n7\n"
+    );
+    assert_eq!(
+        run("fn main() { let v: Vec[Vec[i64]] = [[1, 2], [3, 4]]; println(v[1][0]); }"),
+        "3\n"
+    );
+}
