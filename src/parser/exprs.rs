@@ -699,6 +699,43 @@ impl super::Parser {
                 // `!`. `vec![…]` is consumed on the postfix identifier path
                 // before prefix parsing, so it never reaches this arm either.
                 let bang_span = self.current_span();
+                // RUST MACRO SYNTAX FIRST — B-2026-08-18-46. `println!("hi")` is
+                // an `ident` `!` `(` with no gap between the name and the `!`,
+                // and the `not` swap is flatly wrong for it: the replacement
+                // needs a separator on the RIGHT (`not first`, never
+                // `notfirst`) but there is none on the LEFT, so `karac fix`
+                // silently rewrote `println!("hi");` to `printlnnot ("hi");` --
+                // neither valid nor closer to valid. Kāra has no macros, so the
+                // repair is to DELETE the `!` and leave an ordinary call.
+                //
+                // The abutment test is what separates the two: a real prefix
+                // negation is preceded by an operator or keyword (`if !b`,
+                // `= !b`), never by an identifier touching the `!`. `vec![…]`
+                // never reaches here at all -- the postfix identifier path
+                // consumes it before prefix parsing.
+                if let Some(name) = self.macro_call_name_before_bang(&bang_span) {
+                    self.error(&format!(
+                        "Kāra has no macros; `{name}!(...)` is Rust syntax -- call it as \
+                         `{name}(...)` and remove the `!`"
+                    ));
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&bang_span),
+                        crate::resolver::TextEdit {
+                            offset: bang_span.offset,
+                            length: bang_span.length,
+                            replacement: String::new(),
+                        },
+                    );
+                    self.advance();
+                    let operand = self.parse_expr_bp(24)?;
+                    return Some(Expr {
+                        span: self.span_from(&start),
+                        kind: ExprKind::Unary {
+                            op: UnaryOp::Not,
+                            operand: Box::new(operand),
+                        },
+                    });
+                }
                 self.error("the `!` operator is not used in Kāra; use `not` instead");
                 self.advance();
                 // `not` is a word operator, so it needs a separator that `!`

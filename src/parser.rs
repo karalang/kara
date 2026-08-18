@@ -736,12 +736,118 @@ impl Parser {
             self.advance();
             Some(())
         } else {
+            let found_span = self.current_span();
+            // A MACRO CALL IN VALUE POSITION stops here rather than in the
+            // prefix parser: `let s = format!("{}", 1);` parses `format` as the
+            // initializer and then wants its `;`, finding the `!`.
+            // B-2026-08-18-46. Reporting "Expected Semicolon, found Bang" for
+            // the same mistake the statement form names precisely would be a
+            // worse diagnostic for a harder-to-see case, so it is recognized
+            // here too and carries the same delete edit.
+            if matches!(expected, Token::Semicolon) && self.check(&Token::Bang) {
+                if let Some(name) = self.macro_call_name_before_bang(&found_span) {
+                    self.error_at(
+                        &format!(
+                            "Kāra has no macros; `{name}!(...)` is Rust syntax — call it as \
+                             `{name}(...)` and remove the `!`"
+                        ),
+                        found_span,
+                    );
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&found_span),
+                        crate::resolver::TextEdit {
+                            offset: found_span.offset,
+                            length: found_span.length,
+                            replacement: String::new(),
+                        },
+                    );
+                    return None;
+                }
+            }
             self.error_kind(
                 ParseErrorKind::UnexpectedToken,
                 &format!("Expected {:?}, found {:?}", expected, self.peek_token()),
             );
+            if matches!(expected, Token::Semicolon) {
+                self.record_missing_semicolon_insertion(&found_span);
+            }
             None
         }
+    }
+
+    /// If the `!` at `bang_span` is the `!` of a Rust MACRO CALL --
+    /// `ident!(`, `ident![`, `ident!{` with no gap between the name and the
+    /// `!` -- return the macro's name. B-2026-08-18-46.
+    ///
+    /// The no-gap requirement is the whole test. A genuine prefix negation is
+    /// preceded by an operator or a keyword (`if !b`, `x = !b`, `and !b`),
+    /// never by an identifier abutting it, so this cannot misfire on real
+    /// negation; and `foo !bar` (identifier, space, negation) is excluded by
+    /// the offsets not touching.
+    pub(crate) fn macro_call_name_before_bang(&self, bang_span: &Span) -> Option<String> {
+        let prev = self.tokens.get(self.pos.checked_sub(1)?)?;
+        let Token::Identifier { name, .. } = &prev.token else {
+            return None;
+        };
+        if prev.span.offset + prev.span.length != bang_span.offset {
+            return None;
+        }
+        matches!(
+            self.peek_token_ref_at(1),
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace
+        )
+        .then(|| name.clone())
+    }
+
+    /// Attach the machine-applicable `;` insertion to a missing-statement-
+    /// terminator diagnostic — B-2026-08-18-43.
+    ///
+    /// `Expected Semicolon` is the most common parse error in the corpus and
+    /// carried no `replacement`, so `karac fix` — the Mend loop's primary fix
+    /// path — reported it and changed nothing.
+    ///
+    /// THE OFFSET IS EXACT, NOT A HEURISTIC, and that is the whole reason this
+    /// belongs in the parser. The `;` goes immediately after the END of the
+    /// previous token, which is the last token of the statement that just
+    /// parsed. A text-level pass cannot recover that: B-2026-08-17-31's
+    /// line-based attempt was reverted because a `let` whose right-hand side
+    /// continues onto later lines has no end-of-line to append to, and brackets
+    /// balance on each line taken alone. Anchoring to the token also keeps a
+    /// trailing comment intact — comments are not tokens, so `let x = 1  // n`
+    /// becomes `let x = 1;  // n` rather than `let x = 1  // n;`.
+    ///
+    /// GUARDED, because not every `Expected Semicolon` wants a `;`. Rust habits
+    /// — `std::mem::swap(...)`, `println!(...)` — surface under this same
+    /// message, stopping the parser at `ColonColon` / `Bang` mid-expression;
+    /// inserting a `;` there produces `foo; ::bar()`, which is a WRONG fix, and
+    /// a wrong fix in the primary fix path is worse than none. So the edit is
+    /// emitted only when the offending token plausibly begins a new statement:
+    /// it starts on a LATER LINE than the previous token began, or it is the
+    /// `}` closing the block (`unsafe { *out = v }`, where the terminator goes
+    /// before the brace). Same-line mid-expression junk gets no edit and the
+    /// diagnostic stands alone, exactly as before.
+    fn record_missing_semicolon_insertion(&mut self, found_span: &Span) {
+        let Some(prev_span) = self
+            .pos
+            .checked_sub(1)
+            .and_then(|i| self.tokens.get(i))
+            .map(|t| t.span)
+        else {
+            return;
+        };
+        let begins_new_line = found_span.line > prev_span.line;
+        let closes_block = matches!(self.peek_token_ref(), Token::RightBrace);
+        if !begins_new_line && !closes_block {
+            return;
+        }
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(found_span),
+            crate::resolver::TextEdit {
+                offset: prev_span.offset + prev_span.length,
+                length: 0,
+                replacement: ";".to_string(),
+            },
+        );
     }
 
     fn expect_identifier(&mut self) -> Option<String> {

@@ -13200,6 +13200,205 @@ fn comma_separated_effect_clause_recovers_with_machine_fix() {
     );
 }
 
+/// Apply every edit in `fix_edits` to `src`, highest offset first, the way
+/// `cmd_fix` does. Lets a test assert on the REPAIRED TEXT rather than on
+/// offsets, which is what a reader actually needs to judge the fix.
+fn apply_parse_fixes(src: &str, result: &karac::parser::ParseResult) -> String {
+    let mut edits: Vec<_> = result.fix_edits.values().cloned().collect();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.offset));
+    let mut out = src.to_string();
+    for e in edits {
+        out.replace_range(e.offset..e.offset + e.length, &e.replacement);
+    }
+    out
+}
+
+/// B-2026-08-18-43 — `Expected Semicolon` is the most common parse error in
+/// the corpus and carried no machine-applicable `replacement`, so `karac fix`
+/// (the Mend loop's primary fix path) reported it and changed nothing.
+///
+/// The insertion point is the END OF THE PREVIOUS TOKEN, which is why this
+/// belongs in the parser: the multi-line `let` below is exactly the shape that
+/// forced B-2026-08-17-31's line-level predecessor to be reverted -- there is
+/// no end-of-line to append to, and the brackets balance on each line taken
+/// alone. The parser knows where the statement ended.
+#[test]
+fn missing_semicolon_carries_a_machine_applicable_insertion() {
+    let src = "fn add(a: i64, b: i64) -> i64 { return a + b; }\n\
+               fn main() {\n\
+               let x = add(\n\
+               1,\n\
+               2\n\
+               )\n\
+               println(x.to_string());\n\
+               }";
+    let result = karac::parse(src);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("Semicolon")),
+        "expected a missing-semicolon diagnostic; got: {:?}",
+        result.errors
+    );
+    assert_eq!(result.fix_edits.len(), 1, "edits: {:?}", result.fix_edits);
+    let edit = result.fix_edits.values().next().unwrap();
+    assert_eq!(
+        edit.length, 0,
+        "a terminator is an insertion, never a replace"
+    );
+    assert_eq!(edit.replacement, ";");
+    assert_eq!(
+        &src[edit.offset - 1..edit.offset],
+        ")",
+        "the `;` belongs immediately after the closing paren that ended the statement"
+    );
+    assert!(
+        karac::parse(&apply_parse_fixes(src, &result))
+            .errors
+            .is_empty(),
+        "the repaired source must parse"
+    );
+}
+
+/// The other half of B-2026-08-18-43, and the reason the edit is guarded
+/// rather than emitted at every `Expected Semicolon`.
+///
+/// Rust habits surface under this same message with the parser stopped
+/// MID-EXPRESSION -- here at the `::` of a qualified path. Inserting a `;` at
+/// the previous token's end would produce `let x = std; ::mem::size_of();`,
+/// which is a WRONG repair, and a wrong repair in the primary fix path is
+/// worse than none. The guard is that the offending token must plausibly begin
+/// a new statement: a later line, or the `}` closing the block.
+#[test]
+fn mid_expression_semicolon_error_carries_no_insertion() {
+    let src = "fn main() {\n\
+               let x = std::mem::size_of();\n\
+               println(x.to_string());\n\
+               }";
+    let result = karac::parse(src);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("Semicolon")),
+        "expected a missing-semicolon diagnostic; got: {:?}",
+        result.errors
+    );
+    assert!(
+        result.fix_edits.is_empty(),
+        "a mid-expression stop must not gain a `;`; got: {:?}",
+        result.fix_edits
+    );
+}
+
+/// The single-line-block shape, which the "later line" test alone would miss:
+/// `unsafe { *out = v }` needs its `;` BEFORE the closing brace, on the same
+/// line. Still a pure insertion at the previous token's end.
+#[test]
+fn missing_semicolon_before_a_closing_brace_is_inserted() {
+    let src = "fn set(out: mut ref i64, v: i64) {\n\
+               unsafe { *out = v }\n\
+               }";
+    let result = karac::parse(src);
+    assert_eq!(result.fix_edits.len(), 1, "edits: {:?}", result.fix_edits);
+    let edit = result.fix_edits.values().next().unwrap();
+    assert_eq!(edit.replacement, ";");
+    assert_eq!(
+        &src[edit.offset - 1..edit.offset],
+        "v",
+        "the `;` belongs after the assignment, before the brace"
+    );
+    assert!(
+        karac::parse(&apply_parse_fixes(src, &result))
+            .errors
+            .is_empty(),
+        "the repaired source must parse"
+    );
+}
+
+/// B-2026-08-18-46 — `println!("hi");` used to be REWRITTEN by `karac fix`
+/// into `printlnnot ("hi");`.
+///
+/// The `!` -> `not` swap (B-2026-07-31-31) inserts a separator on the RIGHT so
+/// `!first` does not become `notfirst`, but a macro call has no separator on
+/// the LEFT either, so the word operator fused to the callee name. The result
+/// was neither valid nor closer to valid -- a corrupting entry in the primary
+/// fix path.
+///
+/// Kāra has no macros, so the repair is to DELETE the `!`. The shape test is
+/// the abutment: a real prefix negation is preceded by an operator or keyword
+/// (`if !b`), never by an identifier touching the `!`.
+#[test]
+fn rust_macro_call_deletes_the_bang_rather_than_spelling_it_not() {
+    let src = "fn main() {\n\
+               println!(\"hi\");\n\
+               }";
+    let result = karac::parse(src);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("no macros")),
+        "expected the macro diagnostic; got: {:?}",
+        result.errors
+    );
+    assert_eq!(result.fix_edits.len(), 1, "edits: {:?}", result.fix_edits);
+    let edit = result.fix_edits.values().next().unwrap();
+    assert_eq!(edit.replacement, "", "the `!` is deleted, not respelled");
+    assert_eq!(&src[edit.offset..edit.offset + edit.length], "!");
+    assert!(
+        apply_parse_fixes(src, &result).contains("println(\"hi\")"),
+        "repaired: {}",
+        apply_parse_fixes(src, &result)
+    );
+}
+
+/// A macro in VALUE position stops the parser at `expect(Semicolon)` rather
+/// than in the prefix parser, so it needs its own recognition -- otherwise the
+/// same mistake reports "Expected Semicolon, found Bang" and carries no fix.
+#[test]
+fn rust_macro_in_value_position_is_recognized_too() {
+    let src = "fn main() {\n\
+               let s = format!(\"{}\", 1);\n\
+               println(s);\n\
+               }";
+    let result = karac::parse(src);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("no macros")),
+        "expected the macro diagnostic; got: {:?}",
+        result.errors
+    );
+    let edit = result
+        .fix_edits
+        .values()
+        .find(|e| e.replacement.is_empty() && e.length == 1)
+        .expect("a delete edit for the `!`");
+    assert_eq!(&src[edit.offset..edit.offset + edit.length], "!");
+}
+
+/// The guard on the macro recognition: an ordinary prefix negation must still
+/// become `not`, and must keep its separator.
+#[test]
+fn prefix_negation_still_becomes_not() {
+    let src = "fn main() {\n\
+               let b = true;\n\
+               if !b { println(\"no\"); }\n\
+               }";
+    let result = karac::parse(src);
+    assert_eq!(result.fix_edits.len(), 1, "edits: {:?}", result.fix_edits);
+    let edit = result.fix_edits.values().next().unwrap();
+    assert_eq!(edit.replacement, "not ");
+    assert!(
+        apply_parse_fixes(src, &result).contains("if not b"),
+        "repaired: {}",
+        apply_parse_fixes(src, &result)
+    );
+}
+
 #[test]
 fn comma_inside_verb_resource_list_is_not_a_stray_comma() {
     // `reads(A, B)` — comma INSIDE a verb's resource list — is valid and must
