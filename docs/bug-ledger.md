@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 259 | 2 |
+| miscompile | 259 | 1 |
 | leak | 182 | 0 |
 | double-free | 132 | 1 |
 | run-vs-build | 128 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 915 | 4 |
+| codegen | 915 | 3 |
 | typecheck | 194 | 5 |
 | interp | 150 | 1 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1303 surfaced · 13 open · 1273 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1303 surfaced · 12 open · 1274 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1303 surfaced
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
 | B-2026-08-18-4 | 2026-08-18 | codegen | high | The user-`Drop` spelling of B-2026-08-17-45 still DOUBLE FREES: moving an `Option`-typed field out of a matched struct payload aborts under both compiled backends when the payload struct carries an `impl Drop`. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C], other: String } impl Drop for A { fn drop(mut ref self) { println("dropping A"); } }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- ASAN reports `attempting double-free`, and plain `karac run` / `karac build` abort. `karac check` passes and `--interp` is correct, same as the parent row. | roadmap.md |
-| B-2026-08-18-5 | 2026-08-18 | codegen | high | A `distinct type` refinement predicate over an UNSIGNED base compiles its bound as SIGNED, so a valid value is rejected at run time on both compiled backends while the interpreter accepts it. `distinct type Port = u16 where self >= 1 and self <= 65535; let p = Port(80);` prints nothing and exits 0 under `--interp`, and PANICS under `karac run` (JIT) and `karac build` (AOT) with `contract violated: value does not satisfy refinement `Port``. 80 plainly satisfies 1..=65535. `karac check` is clean. The compiled backends reject a value the spec says is in range -- a false CONTRACT VIOLATION, which is worse than a missed check because the program dies on correct input. | roadmap.md |
 | B-2026-08-18-6 | 2026-08-18 | typecheck | medium | The `PartialEq` derive's FIELD validator is STRICTER than `Eq`'s, which is backwards: `#[derive(Eq)] struct A { v: Vec[i64] }` is accepted and its `==` lowering is pinned by a passing E2E test, while `#[derive(PartialEq)] struct B { v: Vec[i64] }` is REFUSED with "struct 'B' derives PartialEq but field 'v' has non-PartialEq type 'Vec[i64]'". `Eq` is the stronger trait -- anything comparable for `Eq` is comparable for `PartialEq` -- so a field type accepted by the former and rejected by the latter cannot both be right. The practical effect is that the weaker, more common derive is the one an author cannot use on a struct with a `Vec` field. | — |
 
 ### Wontfix (7)
@@ -160,9 +159,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1303 surfaced
 
 </details>
 
-### Fixed (1273)
+### Fixed (1274)
 
-<details><summary>1273 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1274 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11099,6 +11098,60 @@ Tests: `test_index_by_a_let_bound_range` and
 (tests/codegen.rs), which pins each bound spelling against the INLINE one it
 must equal rather than against a literal -- the two spellings meaning the same
 thing is the property. All verified failing on the pre-fix source. |
+| B-2026-08-18-5 | codegen | high | EVERY SYNTHESIZED predicate compared an UNSIGNED operand with the SIGNED comparison predicate, so a valid value was rejected at run time on both comp… | FIXED by dc42b14. One arm in `src/codegen/exprs.rs`'s `ExprKind::Binary`
+handler: when both operands are integers and either is unsigned, select
+`compile_binop_typed(.., is_unsigned = true)` instead of `compile_binop`,
+which hardcodes `false`.
+
+ROOT CAUSE, and why only predicates were affected. Lowering's `rewrite_binary`
+turns every PRIMITIVE scalar binop into `Call(Path([u16, le]), args)` before
+codegen sees it, and the receiver segment carries the signedness -- so ordinary
+user comparisons were always correct (verified as a control: `b.v <= 65535` on
+a `u16` field is right on every backend, before and after). A SYNTHESIZED
+predicate never goes through lowering: it is stashed as an AST in
+`contract_state` and compiled directly by `compile_bound_predicate`, so it
+arrived at the `Binary` arm as a raw node with no signedness context and fell
+to `compile_binop`'s hardcoded `false`. That is why the bug is invisible in
+normal code and universal across predicate forms.
+
+The fix is the SCALAR SIBLING of a recovery that already existed directly
+above it for vectors ("Vector binops aren't lowered to primitive method calls
+... so they reach here as raw `ExprKind::Binary` with no signedness context"),
+using the same `expr_is_unsigned_int` side-tables the print path uses -- which
+resolve the synthetic `__karac_refine_self` binding through the refinement's
+registered base type.
+
+SCOPE WIDER THAN FILED. The row was filed from the distinct-type constructor;
+measurement during the fix found the same defect at every enforcement site that
+shares the predicate path -- `x as Refined`, `Refined.try_from(x)`, and
+`requires` / `ensures` contracts. The contract case is the most serious of the
+four, since it needs no refinement type at all: any `fn f(p: u16) requires p <=
+65535` faulted on a valid argument. The title has been corrected to match.
+
+IR BEFORE:  %le = icmp sle i16 %__karac_refine_self2, -1
+IR AFTER:   uge / ule throughout; the bound's bits were never wrong.
+
+VERIFIED. All four surfaces agree with the interpreter on interp / JIT / AOT /
+AOT under KARAC_AUTO_PAR=0. The full boundary matrix passes (u8 127+128+255,
+u16 32767+32768+65535, u32 4294967295). Signed bases with identical predicates
+are unchanged.
+
+ANTI-VACUITY, which is the part worth keeping. The fix must select the right
+predicate, not weaken the check, and the obvious negative test does NOT prove
+that: a literal argument (`Small(200)` against `u8 where self <= 100`) is
+folded by the const-evaluable arm and rejected at COMPILE time with
+E_REFINEMENT_PREDICATE_VIOLATION, so it never reaches the runtime predicate
+where the bug lived. The check-gate in tests/common caught that when the test
+was first written. The negative test therefore routes the value through a
+PARAMETER (`fn make(x: u8) -> Small { Small(x) }`), which still faults, and its
+positive twin uses a runtime 40000 against `u16` -- in range unsigned, negative
+as i16 -- so both operands exercise the unsigned reading rather than only the
+bound.
+
+SIX TESTS in tests/codegen.rs: an IR test asserting the compare is never
+`sle`/`sge`; E2E acceptance for the constructor, for `as` + `try_from`, and for
+a `requires` contract; the parameter-routed anti-vacuity rejection; and the
+runtime-value positive twin. |
 
 </details>
 
