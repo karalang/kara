@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 103 | 4 |
 | perf | 77 | 0 |
 | false-positive | 77 | 2 |
-| diagnostics | 73 | 7 |
+| diagnostics | 73 | 6 |
 | crash | 51 | 2 |
 | soundness | 50 | 0 |
 | other | 35 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 913 | 7 |
-| typecheck | 193 | 9 |
+| typecheck | 193 | 8 |
 | interp | 150 | 3 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced · 21 open · 1262 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced · 20 open · 1263 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (21)
+### Open (20)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -143,7 +143,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced
 | B-2026-08-17-36 | 2026-08-17 | typecheck | medium | `collect()` can only ever produce `Vec[T]` -- every other `FromIterator` target design.md promises is rejected at typecheck. § Iterator Adaptors: "Every standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`, `String`) implements `FromIterator` for its natural element type. `collect` infers the target type from context or requires annotation." Measured, one target per file: `let up: String = s.chars().map(|c| c.to_uppercase()).collect()` -> "expected 'String', found 'Vec[char]'"; `let j: String = v.iter().map(|s| s.to_uppercase()).collect()` -> "expected 'String', found 'Vec[String]'"; `let s: Set[i64] = ... .collect()` -> "expected 'Set[i64]', found 'Vec[i64]'"; `let d: VecDeque[i64] = ... .collect()` -> "expected 'VecDeque[i64]', found 'Vec[i64]'"; `let m: Map[i64, i64] = v.iter().map(|x| (x, x * 10)).collect()` -> "expected 'Map[i64, i64]', found 'Vec[(i64, i64)]'". The sixth target, `TreeMap`, cannot even be named -- see B-2026-08-17-38. In every case the annotation is ignored and the chain's type is fixed to `Vec` of the element type, so the diagnostic reads as a mismatch the user caused rather than a target the compiler does not support. | roadmap.md |
 | B-2026-08-17-37 | 2026-08-17 | cli | medium | The `must_use` lint NEVER RUNS under `karac check` or `karac build` -- it fires only under `karac run`, so the entire surface is invisible to `karac check --output=json` and therefore to the Mend loop. `fn main() { let mut m: Map[i64, i64] = Map.new(); m.insert(1, 10); m.get(1); }` -- a discarded `Option` from a LOOKUP, the exact case design.md § must_use exists to catch ("lookups, parses, fallible operations, where the `Option` IS the result") -- gets `warning[must_use]: discarded 'Option' value` under `karac run --interp` AND `karac run`, while `karac check` reports "All checks passed." and `karac build` reports only "Built: mu2.bin". `karac check --output=json` on the same file emits `"diagnostics":[]`. design.md describes must_use as a COMPILE warning ("silently dropping it is a compile warning"), and CLAUDE.md's Mend loop is built on `karac check --output=json` as its diagnostics feed -- so a lint the spec mandates across six stdlib categories reaches neither the compile path nor the AI-facing feed. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
-| B-2026-08-17-39 | 2026-08-17 | typecheck | low | Five iterator-adaptor diagnostics print types with Rust's `{:?}` Debug formatter, leaking internal AST structs into user-facing messages -- and one of them spells a Kara generic with ANGLE BRACKETS. `v.iter().flat_map(|x| [x, x])` reports `Iterator.flat_map() closure must return Iterator[U], found Named { name: "Vec", args: [Int(I64)] }`; with a String element it reports `found Str`. Every other diagnostic in the compiler uses the display form -- the control one line away in the same probe reads `expected 'Set[i64]', found 'Vec[i64]'`. The five sites are all in src/typechecker/stdlib_iter.rs: line 149 (`filter_map`), 615 (`find_map`), 834 (`flat_map`), 1032 (`scan`), 1191 (`zip`), each formatting the offending type with `{:?}` instead of `type_display`. Line 1032 additionally writes the expected type as `Option<(A, U)>` -- Rust turbofish-style angle brackets in a language whose spec opens with "**Generics syntax:** `[T]` not `<T>` -- no turbofish". | roadmap.md |
 | B-2026-08-17-42 | 2026-08-17 | codegen | medium | DUPLICATE OF B-2026-08-17-29 -- A RANGE bound to a variable has no codegen. `let r = 0..4; for i in r { println(i); }` prints 0 1 2 3 under `--interp` and NOTHING under `karac run` (JIT) and `karac build` (AOT), exiting 0 either way, with `karac check` clean. The inline spelling (`for i in 0..4`) is correct on all three -- only the binding form is dead. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::Range` arm. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure; implementing this should flip that case, which is a deliberate edit to that test. |
 | B-2026-08-17-43 | 2026-08-17 | codegen | high | DUPLICATE OF B-2026-08-17-28 -- `?.` OPTIONAL CHAINING has no codegen and produced a SILENT WRONG ANSWER. `let v = get(1)?.x; println(v);` where `get -> Option[P]` printed `Some(5)` under `--interp` and `0` under both `karac run` (JIT) and `karac build` (AOT), with `karac check` clean. roadmap.md line 241 carries a CHECKED box claiming `?.` optional chaining is done. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::OptionalChain` arm; roadmap.md line 241. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure. |
 | B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
@@ -168,9 +167,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced
 
 </details>
 
-### Fixed (1262)
+### Fixed (1263)
 
-<details><summary>1262 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1263 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10639,6 +10638,44 @@ TESTS: a codegen E2E covering all five shapes in one program and its
 interpreter oracle twin, pinning byte-identical output. The E2E is
 baseline-red (verified by reverting the codegen change alone: the build
 fails with the misnaming diagnostic). |
+| B-2026-08-17-39 | typecheck | low | Five iterator-adaptor diagnostics print types with Rust's `{:?}` Debug formatter, leaking internal AST structs into user-facing messages -- and one o… | Fixed in fbc42214. All the sites, plus one the row did not list.
+
+SIX, NOT FIVE. Alongside filter_map (149), find_map (615), flat_map (834),
+scan (1032) and zip (1191), `scan` has a SECOND site at line 1020 --
+`found Option<{:?}>` -- taken when the closure returns an `Option` of a
+non-tuple. It renders as `found Option<Int(I64)>`, both defects in one string,
+and is reached by `v.iter().scan(0, |a, x| Some(a + x))` rather than the
+row's non-Option probe. Found by grepping the file for `{:?}` instead of
+working from the listed line numbers.
+
+Each now formats through the existing `type_display`, in the shape the rest of
+this same file already uses (`found '{}'`), and both `Option<(A, U)>`
+spellings are `Option[(A, U)]`. Measured before and after:
+
+    flat_map    found Named { name: "Vec", args: [Int(I64)] }  ->  found 'Vec[i64]'
+    flat_map    found Str                                      ->  found 'String'
+    filter_map  found Int(I64)                                 ->  found 'i64'
+    find_map    found Int(I64)                                 ->  found 'i64'
+    scan        found Int(I64)                                 ->  found 'i64'
+    scan        found Option<Int(I64)>                         ->  found 'Option[i64]'
+    zip         found Int(I64)                                 ->  found 'i64'
+
+THE COMMENTS TOO, three of them: `scan`'s signature was written twice as
+`Fn(A, T) -> Option<(A, U)>` and `peek`'s as `Option<T>`. They are not
+user-facing, but they document a KARA signature in Rust syntax inside the
+compiler for that language, which is the same mistake one level in and is what
+the message spellings were copied from.
+
+SWEPT FOR THE CLASS rather than assumed contained: every remaining `{:?}` in
+the typechecker is a test assertion or a comment, and `resolver` /
+`ownership` / `effectchecker` / `concurrency` have none at all. This file was
+the last leak.
+
+Test: `iterator_adaptor_diagnostics_render_types_as_kara_types`
+(tests/typechecker.rs) walks all six probes and asserts on the RENDERING, not
+the wording -- each message must name its type as `type_display` does, and NO
+message may contain a Debug-struct fragment (`Named {`, `Int(I64)`) or an
+angle-bracketed generic. Verified failing on the pre-fix source. |
 | B-2026-08-17-41 | typecheck | high | A QUALIFIED payload-free variant pattern (`Dir.North`) lowers to a WILDCARD in the exhaustiveness engine, so it silently covers the whole scrutinee:… | One-line lowering fix in `exhaustive::lower_pattern`'s `Binding` arm: take the
 LAST dotted segment of the binding name before testing it against the
 scrutinee enum's variant names, and use that segment as the ctor name.
