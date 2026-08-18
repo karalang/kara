@@ -19870,6 +19870,93 @@ fn main() {
 }
 
 #[test]
+fn test_collect_into_every_documented_from_iterator_target() {
+    // ORACLE for B-2026-08-17-36. design.md § Iterator Adaptors: "Every
+    // standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`,
+    // `String`) implements `FromIterator` for its natural element type."
+    // `collect()` used to produce `Vec[T]` and nothing else, so every one of
+    // these annotations was rejected as a mismatch the user had caused.
+    //
+    // The two `String` legs are the point of the uniform lowering: the element
+    // is a `char` in one and a `String` in the other, and a pre-typecheck
+    // desugar cannot tell them apart -- so both go through
+    // `push_str(it.to_string())`. `TreeMap`, the sixth target, cannot be named
+    // at all yet (B-2026-08-17-38) and so has no leg here.
+    //
+    // `Vec` is included to pin the NON-rewrite: it must still take the plain
+    // path, untouched by the desugar.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let s = "hi there";
+    let up: String = s.chars().map(|c| c.to_uppercase()).collect();
+    println(up);
+
+    let mut words: Vec[String] = Vec.new();
+    words.push("ab");
+    words.push("cd");
+    let joined: String = words.iter().map(|w| w.to_uppercase()).collect();
+    println(joined);
+
+    let mut raw: Vec[i64] = Vec.new();
+    raw.push(1); raw.push(2); raw.push(2); raw.push(3);
+
+    let plain: Vec[i64] = raw.iter().map(|x| x * 2).collect();
+    println(plain.len());
+
+    let st: Set[i64] = raw.iter().map(|x| x).collect();
+    println(st.len());
+
+    let dq: VecDeque[i64] = raw.iter().map(|x| x * 10).collect();
+    println(dq.len());
+    println(dq[0]);
+
+    let mp: Map[i64, i64] = raw.iter().map(|x| (x, x * 100)).collect();
+    println(mp.len());
+    println(mp[3]);
+
+    let empty: Vec[i64] = Vec.new();
+    let es: Set[i64] = empty.iter().map(|x| x).collect();
+    println(es.len());
+}
+"#,
+    );
+    // raw has 4 elements with one duplicate: Vec keeps 4, Set collapses to 3,
+    // VecDeque keeps 4 in order (first = 10), Map keys collapse to 3.
+    assert_eq!(output, "HI THERE\nABCD\n4\n3\n4\n10\n3\n300\n0\n");
+}
+
+#[test]
+fn test_collect_desugar_leaves_a_user_defined_collect_alone() {
+    // The guard on B-2026-08-17-36's desugar. `collect` is an ordinary method
+    // name, so a user type may define one returning a `Set`/`Map`/`String`.
+    // Rewriting that would re-iterate an ALREADY-BUILT collection into a fresh
+    // one -- silently wrong rather than loudly wrong. The desugar therefore
+    // fires only when the receiver is a recognized iterator source or adaptor;
+    // a plain identifier receiver like `b` below is not one.
+    let output = run_no_errors(
+        r#"
+struct Bag { n: i64 }
+
+impl Bag {
+    fn collect(self) -> Set[i64] {
+        let mut s: Set[i64] = Set.new();
+        s.insert(self.n);
+        return s;
+    }
+}
+
+fn main() {
+    let b = Bag { n: 7 };
+    let s: Set[i64] = b.collect();
+    println(s.len());
+}
+"#,
+    );
+    assert_eq!(output, "1\n");
+}
+
+#[test]
 fn test_let_bound_range_is_a_value_captured_at_the_binding() {
     // The ORACLE for B-2026-08-17-29, whose codegen twin lives in
     // tests/codegen.rs. The interpreter was already right here — the bug was

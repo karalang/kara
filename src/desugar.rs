@@ -23,7 +23,7 @@ pub fn desugar_program(program: &mut Program) {
     synthesize_trait_default_methods(program);
     propagate_codegen_hints(program);
     desugar_impl_trait_args_in_program(program);
-    desugar_multi_assign_in_program(program);
+    desugar_stmt_rewrites_in_program(program);
     desugar_multiversion_in_program(program);
     // Call-site default-parameter fill (B-2026-08-17-19). Runs LAST so calls
     // inside synthesized bodies (trait default methods, multiversion thunks)
@@ -1334,7 +1334,13 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
 // nodes. The formatter skips this pass, so it still sees — and round-trips —
 // the surface node.
 
-fn desugar_multi_assign_in_program(program: &mut Program) {
+/// The statement-level AST rewrites, sharing one walk of every block in the
+/// program (they are independent, and two walkers would have to be kept in
+/// sync with `ExprKind` forever):
+///
+///   * parallel / destructuring assignment (`a, b = b, a`), and
+///   * `collect()` into a non-`Vec` `FromIterator` target (B-2026-08-17-36).
+fn desugar_stmt_rewrites_in_program(program: &mut Program) {
     for item in &mut program.items {
         match item {
             Item::Function(f) => walk_block(&mut f.body),
@@ -1372,7 +1378,14 @@ fn walk_block(block: &mut Block) {
 
 fn walk_stmt(stmt: &mut Stmt) {
     match &mut stmt.kind {
-        StmtKind::Let { value, .. } => walk_expr(value),
+        StmtKind::Let { ty, value, .. } => {
+            // Recurse FIRST so a nested `let` inside the value (a closure body,
+            // a block expr) is rewritten before this one wraps the value.
+            walk_expr(value);
+            if let Some(ty) = ty {
+                desugar_collect_target(ty, value);
+            }
+        }
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {
             value, else_block, ..
@@ -1744,4 +1757,365 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
             });
         }
     }
+}
+
+// ── `collect()` into a non-`Vec` FromIterator target (B-2026-08-17-36) ──────
+
+/// The non-`Vec` `collect()` targets design.md § Iterator Adaptors promises:
+/// "Every standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`,
+/// `String`) implements `FromIterator` for its natural element type."
+///
+/// `TreeMap` is the sixth and has no arm here: it cannot be NAMED yet
+/// (B-2026-08-17-38), so a `TreeMap` annotation fails before this pass can see
+/// it. When that row lands, `TreeMap` joins `Map` below with the same body.
+#[derive(Clone, Copy)]
+enum CollectTarget {
+    Str,
+    Set,
+    VecDeque,
+    Map,
+}
+
+/// Recognize a supported `collect()` target from a `let`'s type annotation.
+/// Arity is part of the match so a malformed `Set[K, V]` falls through to the
+/// normal (unchanged) typecheck error rather than desugaring into nonsense.
+fn collect_target_of(ty: &TypeExpr) -> Option<CollectTarget> {
+    let TypeKind::Path(p) = &ty.kind else {
+        return None;
+    };
+    if p.segments.len() != 1 {
+        return None;
+    }
+    let nargs = p.generic_args.as_ref().map_or(0, |a| a.len());
+    match (p.segments[0].as_str(), nargs) {
+        ("String", 0) => Some(CollectTarget::Str),
+        ("Set", 1) => Some(CollectTarget::Set),
+        ("VecDeque", 1) => Some(CollectTarget::VecDeque),
+        ("Map", 2) => Some(CollectTarget::Map),
+        _ => None,
+    }
+}
+
+/// Synthesized-node span: zero LENGTH at a distinct offset.
+///
+/// Length zero is the load-bearing half. A `MethodCall`'s `Expr.span` covers
+/// only its RECEIVER, so every node of `v.iter().map(f).collect()` already
+/// shares one `SpanKey` — the base identifier's. Handing a synthesized node any
+/// non-zero length near that offset would risk landing on a real node's key and
+/// silently overwriting its recorded type (the collision class B-2026-08-18-7
+/// and B-2026-08-18-9 were both about). Real nodes always span at least one
+/// character, so a zero-length span cannot collide with one, and distinct `i`
+/// keeps the synthesized nodes distinct from each other.
+///
+/// The offset stays inside the file so diagnostic rendering (which slices
+/// `source[offset .. offset + length]`) stays in range and yields "".
+fn collect_synth_span(base: &Span, i: usize) -> Span {
+    Span {
+        line: base.line,
+        column: base.column,
+        offset: base.offset + i,
+        length: 0,
+    }
+}
+
+fn collect_ident(name: &str, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::Identifier(name.to_string()),
+        span,
+    }
+}
+
+fn collect_arg(value: Expr) -> CallArg {
+    let span = value.span;
+    CallArg {
+        label: None,
+        mut_marker: false,
+        mut_marker_span: None,
+        value,
+        span,
+    }
+}
+
+fn collect_method_call(object: Expr, method: &str, args: Vec<CallArg>, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::MethodCall {
+            object: Box::new(object),
+            method: method.to_string(),
+            turbofish: None,
+            args,
+            args_close_span: span,
+        },
+        span,
+    }
+}
+
+/// Methods that produce or transform an iterator, so a `collect()` on top of
+/// one is the `FromIterator` terminal rather than a same-named user method.
+/// Deliberately a name whitelist: this pass runs BEFORE typecheck and so has no
+/// types to consult, and being wrong in the permissive direction here would
+/// rewrite a user's own `collect()`.
+const ITER_CHAIN_METHODS: &[&str] = &[
+    // sources
+    "iter",
+    "iter_mut",
+    "into_iter",
+    "chars",
+    "bytes",
+    "lines",
+    "values",
+    "keys",
+    "entries",
+    "drain",
+    "windows",
+    "chunks",
+    "split",
+    "splitn",
+    "char_indices",
+    // adaptors
+    "chain",
+    "chunk_by",
+    "cycle",
+    "enumerate",
+    "filter",
+    "filter_map",
+    "flat_map",
+    "flatten",
+    "inspect",
+    "map",
+    "peekable",
+    "rev",
+    "scan",
+    "step_by",
+    "zip",
+    "take",
+    "take_while",
+    "skip",
+    "skip_while",
+    "copied",
+    "cloned",
+    "dedup",
+    "unique",
+    "sorted",
+];
+
+/// Is `e` the receiver of a `collect()` that is genuinely an iterator? A range
+/// (`(0..n).collect()`) is one directly; otherwise the receiver must itself be
+/// a call to a known iterator source or adaptor.
+fn is_iterator_chain(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Range { .. } => true,
+        ExprKind::MethodCall { method, .. } => ITER_CHAIN_METHODS.contains(&method.as_str()),
+        _ => false,
+    }
+}
+
+/// Rewrite `let x: T = <chain>.collect();` for a non-`Vec` target `T` into the
+/// accumulate-into-`T` block the language already supports:
+///
+/// ```text
+/// let x: Set[i64] = {
+///     let __karac_collect_src_N = <chain>.collect();      // still Vec[E]
+///     let mut __karac_collect_dst_N: Set[i64] = Set.new();
+///     for __karac_collect_it_N in __karac_collect_src_N {
+///         __karac_collect_dst_N.insert(__karac_collect_it_N);
+///     }
+///     __karac_collect_dst_N
+/// };
+/// ```
+///
+/// WHY A PRE-TYPECHECK DESUGAR rather than a `FromIterator` target inferred in
+/// the typechecker: every phase downstream — typecheck, effects, ownership, the
+/// interpreter, and codegen — then sees ordinary, already-supported code, so
+/// `--interp` and both compiled backends agree BY CONSTRUCTION instead of by
+/// three parallel implementations kept in sync. It also means no new span-keyed
+/// side table, which is the machinery that made this class of feature expensive
+/// before.
+///
+/// The `String` arm appends `it.to_string()` rather than branching on the
+/// element type, because a pre-typecheck pass cannot know whether the element
+/// is a `char` (`s.chars()....collect()`) or a `String`
+/// (`v.iter().map(|s| s.to_uppercase()).collect()`) — and `push_str` accepts
+/// the `to_string()` of both, while `+` accepts neither uniformly. The extra
+/// `to_string()` on an already-`String` element is a copy; correctness and
+/// backend parity are worth it here, and a later type-directed pass can drop it.
+fn desugar_collect_target(ty: &TypeExpr, value: &mut Expr) {
+    let Some(target) = collect_target_of(ty) else {
+        return;
+    };
+    // Only a bare zero-arg `collect()` whose RECEIVER is recognizably an
+    // iterator. `collect` is an ordinary method name, so a user type may define
+    // its own returning one of these very targets — rewriting that would
+    // silently re-iterate a finished collection instead of building one. Gating
+    // on the receiver keeps this closed: an unrecognized chain is left exactly
+    // as it is today (the annotation still fails to typecheck), which is a safe
+    // failure rather than a wrong one.
+    match &value.kind {
+        ExprKind::MethodCall {
+            method,
+            args,
+            object,
+            ..
+        } if method == "collect" && args.is_empty() && is_iterator_chain(object) => {}
+        _ => return,
+    }
+
+    let base = ty.span;
+    let src_name = format!("__karac_collect_src_{}", base.offset);
+    let dst_name = format!("__karac_collect_dst_{}", base.offset);
+    let it_name = format!("__karac_collect_it_{}", base.offset);
+
+    // The block itself takes the ANNOTATION's span: it is the node whose type
+    // is the target, so a diagnostic about the target points at the written
+    // target, and no EXPRESSION is recorded at a type annotation's span.
+    let block_span = base;
+    let s1 = collect_synth_span(&base, 1);
+    let s2 = collect_synth_span(&base, 2);
+    let s3 = collect_synth_span(&base, 3);
+    let s4 = collect_synth_span(&base, 4);
+    let s5 = collect_synth_span(&base, 5);
+    let s6 = collect_synth_span(&base, 6);
+    let s7 = collect_synth_span(&base, 7);
+    let s8 = collect_synth_span(&base, 8);
+
+    // `let __src = <the original collect call>;` — untouched, so the chain keeps
+    // its own spans and its `Vec[E]` typing.
+    let placeholder = Expr {
+        kind: ExprKind::Error,
+        span: value.span,
+    };
+    let original = std::mem::replace(value, placeholder);
+    let src_stmt = Stmt {
+        span: s1,
+        kind: StmtKind::Let {
+            is_mut: false,
+            pattern: Pattern {
+                kind: PatternKind::Binding(src_name.clone()),
+                span: s1,
+            },
+            ty: None,
+            value: original,
+        },
+    };
+
+    // `let mut __dst: T = <ctor>;`
+    let ctor = match target {
+        CollectTarget::Str => Expr {
+            kind: ExprKind::StringLit(String::new()),
+            span: s2,
+        },
+        CollectTarget::Set | CollectTarget::VecDeque | CollectTarget::Map => {
+            let coll = match target {
+                CollectTarget::Set => "Set",
+                CollectTarget::VecDeque => "VecDeque",
+                _ => "Map",
+            };
+            Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(Expr {
+                        kind: ExprKind::Path {
+                            segments: vec![coll.to_string(), "new".to_string()],
+                            generic_args: None,
+                        },
+                        span: s2,
+                    }),
+                    args: Vec::new(),
+                },
+                span: s2,
+            }
+        }
+    };
+    let dst_stmt = Stmt {
+        span: s3,
+        kind: StmtKind::Let {
+            is_mut: true,
+            pattern: Pattern {
+                kind: PatternKind::Binding(dst_name.clone()),
+                span: s3,
+            },
+            ty: Some(ty.clone()),
+            value: ctor,
+        },
+    };
+
+    // The per-element append.
+    let append = match target {
+        CollectTarget::Str => {
+            let as_string =
+                collect_method_call(collect_ident(&it_name, s4), "to_string", Vec::new(), s5);
+            collect_method_call(
+                collect_ident(&dst_name, s6),
+                "push_str",
+                vec![collect_arg(as_string)],
+                s7,
+            )
+        }
+        CollectTarget::Set => collect_method_call(
+            collect_ident(&dst_name, s6),
+            "insert",
+            vec![collect_arg(collect_ident(&it_name, s4))],
+            s7,
+        ),
+        CollectTarget::VecDeque => collect_method_call(
+            collect_ident(&dst_name, s6),
+            "push_back",
+            vec![collect_arg(collect_ident(&it_name, s4))],
+            s7,
+        ),
+        CollectTarget::Map => {
+            // The element is the `(K, V)` pair every `Map` FromIterator takes.
+            let k = Expr {
+                kind: ExprKind::TupleIndex {
+                    object: Box::new(collect_ident(&it_name, s4)),
+                    index: 0,
+                },
+                span: s4,
+            };
+            let v = Expr {
+                kind: ExprKind::TupleIndex {
+                    object: Box::new(collect_ident(&it_name, s5)),
+                    index: 1,
+                },
+                span: s5,
+            };
+            collect_method_call(
+                collect_ident(&dst_name, s6),
+                "insert",
+                vec![collect_arg(k), collect_arg(v)],
+                s7,
+            )
+        }
+    };
+
+    let for_stmt = Stmt {
+        span: s8,
+        kind: StmtKind::Expr(Expr {
+            kind: ExprKind::For {
+                label: None,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(it_name),
+                    span: s4,
+                },
+                iterable: Box::new(collect_ident(&src_name, s1)),
+                body: Block {
+                    stmts: vec![Stmt {
+                        span: s7,
+                        kind: StmtKind::Expr(append),
+                    }],
+                    final_expr: None,
+                    span: s8,
+                },
+                attributes: Vec::new(),
+            },
+            span: s8,
+        }),
+    };
+
+    *value = Expr {
+        kind: ExprKind::Block(Block {
+            stmts: vec![src_stmt, dst_stmt, for_stmt],
+            final_expr: Some(Box::new(collect_ident(&dst_name, s6))),
+            span: block_span,
+        }),
+        span: block_span,
+    };
 }

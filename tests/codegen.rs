@@ -32912,6 +32912,49 @@ fn main() {
     }
 
     #[test]
+    fn e2e_collect_into_every_documented_from_iterator_target() {
+        // Codegen twin of the interpreter oracle for B-2026-08-17-36
+        // (tests/interpreter.rs). `collect()` produced `Vec[T]` and nothing
+        // else, so every non-`Vec` target design.md promises was rejected at
+        // typecheck.
+        //
+        // This runs as an E2E rather than a typecheck test because the whole
+        // point of lowering it as a pre-typecheck desugar is that `--interp`
+        // and both compiled backends execute the SAME rewritten code -- so the
+        // check that matters is that a real binary prints what the interpreter
+        // prints. Same program and same expected output as the oracle.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s = \"hi there\";\n\
+                 let up: String = s.chars().map(|c| c.to_uppercase()).collect();\n\
+                 println(up);\n\
+                 let mut words: Vec[String] = Vec.new();\n\
+                 words.push(\"ab\");\n\
+                 words.push(\"cd\");\n\
+                 let joined: String = words.iter().map(|w| w.to_uppercase()).collect();\n\
+                 println(joined);\n\
+                 let mut raw: Vec[i64] = Vec.new();\n\
+                 raw.push(1); raw.push(2); raw.push(2); raw.push(3);\n\
+                 let plain: Vec[i64] = raw.iter().map(|x| x * 2).collect();\n\
+                 println(plain.len());\n\
+                 let st: Set[i64] = raw.iter().map(|x| x).collect();\n\
+                 println(st.len());\n\
+                 let dq: VecDeque[i64] = raw.iter().map(|x| x * 10).collect();\n\
+                 println(dq.len());\n\
+                 println(dq[0]);\n\
+                 let mp: Map[i64, i64] = raw.iter().map(|x| (x, x * 100)).collect();\n\
+                 println(mp.len());\n\
+                 println(mp[3]);\n\
+                 let empty: Vec[i64] = Vec.new();\n\
+                 let es: Set[i64] = empty.iter().map(|x| x).collect();\n\
+                 println(es.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "HI THERE\nABCD\n4\n3\n4\n10\n3\n300\n0\n");
+        }
+    }
+
+    #[test]
     fn e2e_question_struct_payload_survives_a_span_of_its_own() {
         // B-2026-08-18-9. `question_ok_payload_types` is WRITTEN by the
         // typechecker at the `?` node's span and READ by
