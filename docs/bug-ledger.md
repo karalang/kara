@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 262 | 1 |
-| leak | 184 | 0 |
+| miscompile | 262 | 0 |
+| leak | 185 | 1 |
 | double-free | 133 | 0 |
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 933 | 2 |
+| codegen | 934 | 2 |
 | typecheck | 200 | 1 |
 | interp | 153 | 0 |
 | ownership | 60 | 0 |
 | other | 55 | 3 |
-| autopar | 49 | 1 |
+| autopar | 49 | 0 |
 | cli | 46 | 1 |
 | parser | 26 | 1 |
 | runtime | 22 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1344 surfaced · 7 open · 1319 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1345 surfaced · 7 open · 1320 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -132,11 +132,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1344 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
-| B-2026-08-18-39 | 2026-08-18 | autopar+codegen | high | `?.` ON TWO LET-BOUND CALL RESULTS MISCOMPILES UNDER AUTO-PAR, RETURNING MEMORY THAT VARIES BETWEEN RUNS. Two independent `let`s from Option-returning calls, consumed by `?.`, print `Some(23092184781)` where the answer is `Some(5)` — a different value on every execution. `--interp` and `KARAC_AUTO_PAR=0` are correct; the JIT and the default build each give their own garbage. | Unknown. The SHAPE is B-2026-08-16-1's family — two independent `let`s form an auto-par fork group and a later expression reading them gets no return slot — but that row's cause (a missing `refs_in_expr` arm) is NOT it here: `ExprKind::OptionalChain` IS handled, at closure_escape.rs:2362, recursing into both `object` and `args`. Checked before filing so the next reader does not repeat it. |
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINING and now the only known gap: locals declared INSIDE an `if` branch, blocked on statement-form `if` — value-`if` lowers to WGSL `select()`, so both branches must stay expressions. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-18-41 | 2026-08-18 | parser | low | THREE `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket"), MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216, under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213), and PARAMETERIZED resources (`effect resource UserDB[user_id: i64];` -> the `[...]` is parsed as generic type params, so the diagnostic is the naming-convention error "`user_id` is Value-class but generic type parameters must be Type-class", spec'd at design.md:7124 under its own heading "### Parameterized Resources" at :7121). Only `effect resource X;` and `effect resource X: Trait;` parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
 | B-2026-08-18-42 | 2026-08-18 | other | low | EIGHT occurrences across SEVEN lines in design.md's kara blocks use Rust MACRO syntax (`name!(...)`), which Kara does not have -- the parser rejects `!` outright with "the `!` operator is not used in Kara". `panic!` (6, five of them in § Never type -- one line carries two -- plus § FFI callbacks), `matches!` (1, § peek-and-drop) and `format_into!` (1, § embedded formatting). Transcribing any of them fails to parse. Only `panic!` has a drop-in replacement -- `panic("x")` checks FULLY clean -- while `matches` resolves to nothing at all ("undefined name 'matches'") and `format_into!` is variadic over a format string, so two of the three need a language answer before the doc can be corrected. | docs/design.md:542, :543, :556, :557 (panic!), :5941 (panic!), :8419 (matches!), :12162 (format_into!); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR; cf. B-2026-08-17-35 for the same class |
 | B-2026-08-18-47 | 2026-08-18 | resolver+cli | medium | `karac fix` AUTO-APPLIES a `did you mean` rename to a SEMANTICALLY UNRELATED function: an undefined `format("{}", 1)` is rewritten to `forget("{}", 1)` -- `forget` being the memory intrinsic. `suggest_similar` accepts any candidate within Levenshtein distance 2 for a name of 3+ characters, and the winner is written straight into a machine-applicable `TextEdit` that `karac fix` applies without further checks. | roadmap.md |
+| B-2026-08-18-48 | 2026-08-18 | codegen | medium | A HEAP-BOXED enum payload that is MOVED into a by-value call is freed by nobody. The move-out sentinel zeroes the caller's slot so its `BoxedEnumDrop` no-ops, and a by-value enum PARAMETER does not adopt the box — `fn tail(o: Option[W])` emits no free at all. Measured 2000/2000 boxes leaked (64000 bytes) in a loop repro under auto-par. Sequentially the identical program is clean only because the box never escapes one function and LLVM deletes the allocation outright, so nothing frees it there either — the hole is the same, only unobservable. | the move-out sentinel at the by-value call site (src/codegen) vs `CleanupAction::BoxedEnumDrop`; by-value enum parameter cleanup registration in the callee prologue. Regression fixture deliberately excludes this shape — see `asan_par_slot_boxed_option_payload_freed_once` in tests/memory_sanitizer.rs, which documents the exclusion and points here. |
 
 ### Wontfix (7)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1344 surfaced
 
 </details>
 
-### Fixed (1319)
+### Fixed (1320)
 
-<details><summary>1319 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1320 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11948,6 +11948,21 @@ Third visit to this arm; B-2026-08-18-3 taught it one more legal operand shape (
 
 Verified: the map miss through a struct field, the same miss through a local, and a nested-Vec out-of-range now all report the real user-facing error with exit 1 under `--interp`, matching what JIT and AOT already did. The error is reported ONCE, not compounded by the outer subscript re-reporting against the `Unit` placeholder. Anti-vacuity pinned in the test: the present-key and in-range spellings still evaluate to the right elements, and the test fails with the original ICE when the fix is stashed. |
 | B-2026-08-18-38 | other | medium | The ENTIRE wasm E2E surface in `tests/cli.rs` passed VACUOUSLY on any machine whose default rustup toolchain is not the pinned one: 36 tests took the… | c3f5f3f |
+| B-2026-08-18-39 | autopar+codegen | high | `?.` ON TWO LET-BOUND CALL RESULTS MISCOMPILES UNDER AUTO-PAR, RETURNING MEMORY THAT VARIES BETWEEN RUNS | FIXED by f3fb56b. CAUSE. `SlotOwnership` — the branch→parent transfer for auto-par return slots — did not carry `BoxedEnumDrop`. The `retain` loop that lifts a branch's ownership-bearing cleanup actions out of its frame matched thirteen kinds and fell through to `_ => None` for that one, so the branch ran it on the value it had just written into the parent's return struct and the parent's first read was of a freed box. Identical in shape to `FreeColumn` (B-2026-07-03-32), `RcDec` / `FreeSharedElided` (B-2026-08-08-15) and `FreeClusterWalkOption` (B-2026-08-14-28) — the fourth time this loop has been found short an arm. Fixed by adding `SlotOwnership::BoxedEnum` and wiring both ends, keyed on the alloca like the other slot-reloading kinds.
+
+THREE OF THE ROW'S FINDINGS WERE WRONG, and each mattered to the diagnosis:
+
+(1) `?.` IS NOT AN INGREDIENT. The row inferred that from "`match` on the identical bindings is correct, which is what rules out the fork itself being the whole story". Measured: the `match` spelling PRODUCES NO PARALLEL GROUP AT ALL (`--concurrency-report`: `<no parallelization opportunities detected>`), so it never exercised the fork and ruled nothing out. An ordinary by-value function call — `first(a)` — keeps the group and was corrupted exactly like `?.`.
+
+(2) THE `Vec` FIELD IS NOT AN INGREDIENT EITHER; the trigger is PAYLOAD WIDTH. `Option`'s inline payload area is 3 words, and a payload wider than that spills behind a `malloc`'d box (`coerce_to_payload_words`) — only the box POINTER reaches the slot. Swept 1/2/3/4 `i64` fields: 1-3 correct, 4 corrupted. The row's `{val: i64, mut kids: Vec[i64]}` is i64 plus a 3-word Vec header = 4 words, so the `Vec` mattered only by making the struct one word too wide. A 4-field all-scalar struct with no heap anywhere reproduces it identically.
+
+(3) THE CORRUPTION IS PARTIAL, NOT TOTAL, and reading that pattern is what identified the mechanism. With sentinel field values the first TWO words come back as pointer-shaped noise while the rest are intact (`f0=Some(34344714240) f1=Some(-5908575129709856518) f2=Some(2222) f3=Some(3333)`). That is the free-list metadata an allocator writes over the head of a returned chunk — a use-after-free READ signature, not uninitialised memory.
+
+NOT REPRODUCIBLE, checked in the same pass: the sibling `NestedBoxedEnumDrop` (a box resting inside `Result[Option[T], E]`'s inline area) — correct before the fix and after.
+
+ASAN DOES NOT CATCH THE ORIGINAL DEFECT, which is worth recording before someone tries. The first ASAN run of the repro returned a wrong value and reported nothing, because the freed chunk is still mapped and the read lands inside it. The regression gate for the use-after-free is therefore an OUTPUT-VALUE assertion (tests/par_codegen.rs), with the ASAN fixture guarding only the "freed exactly once" half of the repair.
+
+LEAVES A LIVE REMAINDER, filed as B-2026-08-18-48 rather than buried here: if the joined binding is then MOVED into a by-value call, the move-out sentinel zeroes the parent's slot so the adopted drop no-ops, and a by-value enum parameter does not adopt the box — 2000/2000 boxes leak in a loop repro. That hole is older than this row and independent of it; sequentially the same program is clean only because the box never escapes a single function and LLVM deletes the allocation outright, so nothing was freeing it there either. Before this fix that program had a use-after-free instead of a leak, so the change is strictly an improvement, but it is not the whole story and the ASAN fixture deliberately uses a READING consumer and says so. |
 | B-2026-08-18-43 | parser | medium | `Expected Semicolon` -- the most common parse error in the whole corpus -- carries NO machine-applicable `replacement`, so `karac fix` reports it and… | FIXED by ce0ae03. `expect()` now attaches a machine-applicable `;` insertion whenever the expected token is `Semicolon`, so `karac fix` repairs the corpus's most common parse error instead of reporting it and changing nothing. Verified on the row's own repro: `karac fix fx.kara` reports "applied 1 fix(es)" and the file goes on to pass `karac check`.
 
 THE OFFSET IS EXACT, as the row said it would be: the `;` goes at the END OF THE PREVIOUS TOKEN, which is the last token of the statement that just parsed. The multi-line `let` in the regression test is precisely the shape that forced B-2026-08-17-31's line-level predecessor to be reverted -- there is no end-of-line to append to and the brackets balance on each line taken alone -- and the parser handles it without difficulty. Anchoring to the token also keeps a trailing comment intact for free, since comments are not tokens: `let x = 1  // n` becomes `let x = 1;  // n`.
