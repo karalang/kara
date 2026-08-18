@@ -97971,6 +97971,83 @@ fn main() {
         assert_eq!(arith, "6\n", "the `??` result must be the bare payload");
     }
 
+    /// B-2026-08-17-28 leg (3) — `?.` had no arm in `compile_expr`, so every
+    /// optional chain failed the build. It is lowered to the `match` design.md
+    /// line 782 describes it as, which is also the shape whose ownership
+    /// machinery already exists.
+    ///
+    /// Pinned against `--interp`, which was fixed first: the point is that all
+    /// three backends now agree on the same program, including design.md's own
+    /// three-level example at every level of absence.
+    #[test]
+    fn optional_chain_compiles_and_short_circuits() {
+        let decls = "struct City { name: String, zip: i64 }\n\
+                     struct Address { city: Option[City], zip: i64 }\n\
+                     struct User { address: Option[Address] }\n";
+        let full = "Some(Address { city: Some(City { name: \"Paris\", zip: 7 }), zip: 3 })";
+        for (addr, body, want) in [
+            // Single level, struct member — the shape that ICE'd the
+            // interpreter before this row's first commit.
+            (
+                full,
+                "match u.address?.city { Some(c) => { println(c.name); } None => { println(\"none\"); } }",
+                "Paris\n",
+            ),
+            // design.md's own chain, all present.
+            (
+                full,
+                "match u.address?.city?.name { Some(n) => { println(n); } None => { println(\"none\"); } }",
+                "Paris\n",
+            ),
+            // …absent at the inner level, and at the outer: both short-circuit.
+            (
+                "Some(Address { city: None, zip: 3 })",
+                "match u.address?.city?.name { Some(n) => { println(n); } None => { println(\"none\"); } }",
+                "none\n",
+            ),
+            (
+                "None",
+                "match u.address?.city?.name { Some(n) => { println(n); } None => { println(\"none\"); } }",
+                "none\n",
+            ),
+            // A NON-Option member wraps rather than flattening — the other
+            // half of the arm choice.
+            (
+                "Some(Address { city: None, zip: 9 })",
+                "match u.address?.zip { Some(z) => { println(z); } None => { println(\"none\"); } }",
+                "9\n",
+            ),
+        ] {
+            let src = format!(
+                "{decls}fn main() {{ let u = User {{ address: {addr} }};\n{body} }}\n"
+            );
+            let Some(got) = run_program(&src) else {
+                return;
+            };
+            assert_eq!(got, want, "optional chain: {body}");
+        }
+    }
+
+    /// The METHOD form, which the row did not name and which used to discard
+    /// its arguments entirely.
+    #[test]
+    fn optional_chain_method_form_compiles() {
+        let src = "struct City { name: String, zip: i64 }\n\
+                   impl City { fn label(ref self) -> String { return self.name; } }\n\
+                   fn mk(present: bool) -> Option[City] {\n\
+                       if present { return Some(City { name: \"Paris\", zip: 7 }); }\n\
+                       return None;\n\
+                   }\n";
+        for (arg, want) in [("true", "Paris\n"), ("false", "none\n")] {
+            let Some(got) = run_program(&format!(
+                "{src}fn main() {{ match mk({arg})?.label() {{ Some(s) => {{ println(s); }} None => {{ println(\"none\"); }} }} }}\n"
+            )) else {
+                return;
+            };
+            assert_eq!(got, want, "`mk({arg})?.label()`");
+        }
+    }
+
     /// B-2026-08-18-3 — indexing by a `let`-bound range. The interpreter ICE'd
     /// and both compiled backends refused the program with "Undefined variable
     /// 'r'", because codegen has no runtime `Range` value to hand the index.
@@ -98080,49 +98157,50 @@ fn main() {
         );
     }
 
-    /// B-2026-08-17-25 / -27 — the catch-all itself. Three bugs were filed
-    /// against one silently-zero-returning line, and the reason each was
-    /// expensive is that a missing arm produced a RUNNING program with a wrong
-    /// answer. `Range`-as-a-value and `?.` are two more kinds with no arm; both
-    /// used to build and print the wrong thing, and both must now name
-    /// themselves at build time. (They are separately filed as gaps — this
-    /// test pins the FAILURE MODE, not their absence: implementing either one
-    /// should flip its case to a passing build, which is a deliberate edit
-    /// here, not a silent regression.)
+    /// B-2026-08-17-25 / -27 — the catch-all at the end of `compile_expr`
+    /// USED TO RETURN `Ok(0)`. Three bugs were filed against that one line —
+    /// `providers` blocks compiling to a body that never ran
+    /// (B-2026-07-31-9), then `|>` and `??` each to zero — and each was
+    /// mechanical to fix once someone noticed. Noticing was the whole cost.
+    ///
+    /// It is a loud bail now, and this test USED TO ASSERT THAT by naming the
+    /// two kinds it immediately caught: a `Range` bound to a variable, and
+    /// `?.`. Both have since been implemented — B-2026-08-17-29 drives a
+    /// let-bound range from bounds captured at the binding, B-2026-08-18-3
+    /// indexes by one, and B-2026-08-17-28 lowers `?.` to its `match` — so
+    /// the assertion was flipped rather than deleted, exactly as its own doc
+    /// said would be required ("implementing either one should flip its case
+    /// to a passing build, which is a deliberate edit here").
+    ///
+    /// There is no source-reachable expression kind left for the bail to
+    /// catch, which is the state it exists to produce; a test cannot exercise
+    /// it without an unimplemented kind to feed it. What is worth pinning
+    /// instead is that these two no longer fall in — a regression to the
+    /// silent zero would show up here as a wrong answer rather than as a
+    /// build error nobody sees.
     #[test]
-    fn an_unhandled_expression_kind_fails_the_build_by_name() {
-        for (src, kind) in [
-            (
-                // The `Range` exemplar MOVED when B-2026-08-17-29 landed. A
-                // `let`-bound range in for-loop ITERABLE position is lowered
-                // now (its bounds are captured at the binding and drive the
-                // ordinary range loop), so the old `let r = 0..4; for i in r`
-                // spelling compiles and no longer reaches this bail — which is
-                // the point of that fix, not a weakening of this one.
-                // `compile_expr` still has no `ExprKind::Range` arm, and the
-                // loop position is the only thing that routes around it, so
-                // any OTHER use of a range value still lands here. Assignment
-                // is the smallest such use and keeps this case pinning the
-                // same kind name.
-                "fn main() { let mut r = 0..4; r = 1..3; for i in r { println(i); } }\n",
-                "Range",
-            ),
-            (
-                "struct P { x: i64 }\n\
-                 fn get(k: i64) -> Option[P] { if k == 1 { return Some(P { x: 5 }); } return None; }\n\
-                 fn main() { let v = get(1)?.x; println(v); }\n",
-                "OptionalChain",
-            ),
-        ] {
-            let err = ir_result(src).expect_err(
-                "an expression kind with no `compile_expr` arm must fail the build, \
-                 not compile to a constant",
-            );
-            assert!(
-                err.contains("no handler for expression kind") && err.contains(kind),
-                "the bail must name the kind it could not compile; got: {err}"
-            );
-        }
+    fn the_kinds_the_loud_catch_all_caught_now_compile() {
+        let Some(range_out) =
+            run_program("fn main() { let r = 0..4; for i in r { println(i); } }\n")
+        else {
+            return;
+        };
+        assert_eq!(
+            range_out, "0\n1\n2\n3\n",
+            "a let-bound range must drive the loop, not compile to a constant"
+        );
+
+        let Some(chain_out) = run_program(
+            "struct P { x: i64 }\n\
+             fn get(k: i64) -> Option[P] { if k == 1 { return Some(P { x: 5 }); } return None; }\n\
+             fn main() { match get(1)?.x { Some(v) => { println(v); } None => { println(\"none\"); } } }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            chain_out, "5\n",
+            "an optional chain must project, not compile to a constant"
+        );
     }
 }
 

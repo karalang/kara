@@ -1563,6 +1563,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.compile_call(callee, args, &expr.span)
             }
 
+            // B-2026-08-17-28 — `a?.f` / `a?.m(args)`. Lowered to the `match`
+            // design.md line 782 describes it as: absent short-circuits to
+            // `None`, present projects the member.
+            ExprKind::OptionalChain {
+                object,
+                field_or_method,
+                args,
+            } => self.compile_optional_chain(object, field_or_method, args, &expr.span),
+
             // B-2026-08-17-27 — `a ?? b`, lowered to `a.unwrap_or(b)` per
             // design.md line 782. Also fell to the catch-all's constant 0.
             // Routing it through `unwrap_or` inherits that path's payload

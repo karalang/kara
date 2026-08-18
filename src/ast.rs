@@ -272,6 +272,19 @@ pub type MethodCalleeTypesTable = std::collections::HashMap<(usize, usize), Stri
 pub type MethodImplDispatchTable = std::collections::HashMap<((usize, usize), String), String>;
 
 /// Side-table populated by the lowering pass from the typechecker's
+/// `optional_chain_lowering` map. Maps each `?.` expression's span to the
+/// pair `(payload, member)`: the receiver `Option`'s inner `T`, and the type
+/// the projected member has BEFORE flattening.
+///
+/// B-2026-08-17-28 — codegen lowers `a?.f` to the `match` it stands for and
+/// needs both. The payload types the synthesized `Some(<binding>)` pattern;
+/// the member type decides the arm body, since `?.` FLATTENS an already-
+/// `Option` member (`a?.city` is `Option[City]`, not `Option[Option[City]]`)
+/// and wraps anything else. Neither is recoverable from the LLVM types alone.
+pub type OptionalChainLoweringTable =
+    std::collections::HashMap<((usize, usize), String), (TypeExpr, TypeExpr)>;
+
+/// Side-table populated by the lowering pass from the typechecker's
 /// `method_unwrap_inner_types` map. Maps each `unwrap`/`expect`/`is_*`
 /// `MethodCall` expression's span to the inner `T` (for `Option[T]`) or
 /// success-`T` (for `Result[T, E]`) `TypeExpr`. Codegen consults this
@@ -708,6 +721,9 @@ pub struct Program {
     /// Set by the lowering pass from
     /// `TypeCheckResult.method_unwrap_inner_types`; empty otherwise.
     pub method_unwrap_inner_types: MethodUnwrapInnerTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.optional_chain_lowering`;
+    /// empty otherwise. See [`OptionalChainLoweringTable`].
+    pub optional_chain_lowering: OptionalChainLoweringTable,
     /// Set by the lowering pass from
     /// `TypeCheckResult.method_unwrap_err_types`; empty otherwise. The ERR
     /// (`E`) sibling of `method_unwrap_inner_types` (which records the present

@@ -129,6 +129,12 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // `?.` lowering facts — see `OptionalChainLoweringTable`.
+    program.optional_chain_lowering = tc
+        .optional_chain_lowering
+        .iter()
+        .map(|((k, m), v)| (((k.0, k.1), m.clone()), v.clone()))
+        .collect();
     // ERR (`E`) sibling — the Result forms of the absent-closure combinators
     // (`unwrap_or_else`/`map_or_else`/`or_else`) pass the `Err` value to their
     // closure, and codegen reconstructs it at this type. Same keying.

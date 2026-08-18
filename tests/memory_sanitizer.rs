@@ -43349,6 +43349,56 @@ fn main() {
     }
 
     #[test]
+    fn asan_optional_chain_heap_payload_clean() {
+        // B-2026-08-17-28 leg (3) — `?.` is lowered to the `match` it stands
+        // for, so it now emits that path's payload move-out and arm-body
+        // drops. This is the memory dimension of that lowering: a chain over
+        // a payload carrying a `String`, walked 200 times with the level
+        // alternating between present and absent, so a double free aborts
+        // immediately and any per-iteration leak accumulates for LSan.
+        //
+        // The alternation matters: the absent arm short-circuits without
+        // touching the payload, and the present arm projects a field out of
+        // it — the two arms have different ownership obligations and only
+        // running both exercises the pair.
+        //
+        // BOUND TO A `let` RATHER THAN MATCHED DIRECTLY, and the difference is
+        // not this row's: a match whose SCRUTINEE is itself a match producing
+        // a boxed `Option` payload leaks that box, which reproduces with no
+        // `?.` anywhere (`match (match u.address { Some(x) => { x.city } None
+        // => { None } }) { ... }` leaks the identical 3200 bytes / 100
+        // objects). Filed separately; `?.` inherits it in that position
+        // exactly as it inherits everything else about the shape it lowers to.
+        // Its own lowering is clean, which is what this pins.
+        assert_clean_asan_run(
+            r#"
+struct City { name: String, zip: i64 }
+struct Address { city: Option[City], tag: String }
+struct User { address: Option[Address] }
+
+fn mk(i: i64) -> User {
+    if i % 2 == 0 { return User { address: Some(Address { city: Some(City { name: "Paris", zip: 7 }), tag: "t" }) }; }
+    return User { address: None };
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 200 {
+        let u = mk(i);
+        let c = u.address?.city;
+        match c { Some(v) => { total = total + (v.name.len() as i64); } None => { total = total + 1; } }
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["600"],
+            "optional_chain_heap_payload_clean",
+        );
+    }
+
+    #[test]
     fn asan_nil_coalesce_heap_fallbacks_clean() {
         // B-2026-08-17-27 — `??` is lowered to `unwrap_or`, so it inherits that
         // path's ownership machinery: the moved-binding cap-zeroing (leg 1), the

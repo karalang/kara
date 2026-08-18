@@ -1809,7 +1809,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// payload TypeExpr. `type_to_type_expr` lowers `Type::Str` to the head
     /// `"str"`, but the pattern tables canonicalize String to `"String"`, so
     /// normalize that. Used by the `.map()`-over-heap match synthesis.
-    fn seed_synthetic_pattern_binding_type(&mut self, span: &crate::token::Span, te: &TypeExpr) {
+    pub(super) fn seed_synthetic_pattern_binding_type(
+        &mut self,
+        span: &crate::token::Span,
+        te: &TypeExpr,
+    ) {
         let key = (span.offset, span.length);
         match &te.kind {
             TypeKind::Path(p) => {
@@ -1949,6 +1953,136 @@ impl<'ctx> super::Codegen<'ctx> {
             arms: vec![present_arm, absent_arm],
         });
         self.compile_expr(&match_expr)
+    }
+
+    /// Lower `a?.f` / `a?.m(args)` by synthesizing the `match` it stands for
+    /// and compiling that.
+    ///
+    /// B-2026-08-17-28 — `ExprKind::OptionalChain` had no value-producing arm,
+    /// so every `?.` failed the build. design.md line 782 defines it as a
+    /// short-circuit — "`user.address?.city?.name` short-circuits to `None` if
+    /// any level is absent" — which is exactly
+    ///
+    /// ```text
+    /// match <object> { Some(x) => <arm>, None => None }
+    /// ```
+    ///
+    /// and the match codegen already owns the payload move-out, arm-body drop
+    /// and receiver-suppression machinery that shape needs. Synthesizing it is
+    /// how `Option.map` over a heap payload is lowered too
+    /// (`compile_map_via_match_synthesis`), for the same reason: a hand-rolled
+    /// second lowering would have to re-derive all of it.
+    ///
+    /// THE ARM DIFFERS BY WHETHER `?.` FLATTENS. An already-`Option` member is
+    /// the result as it stands (`a?.city` is `Option[City]`, never
+    /// `Option[Option[City]]` — that flattening is what lets `?.city?.name`
+    /// chain at all); anything else is wrapped in `Some`. That is a decision
+    /// about TYPES, so the typechecker records the member's type alongside the
+    /// payload in `optional_chain_lowering` and this reads it.
+    ///
+    /// Without the recorded facts — a `?.` the typechecker rejected, so
+    /// nothing was written — this declines rather than guessing a shape.
+    pub(super) fn compile_optional_chain(
+        &mut self,
+        object: &Expr,
+        member: &str,
+        args: &Option<Vec<CallArg>>,
+        span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Some((payload_te, member_te)) = self
+            .span_tables
+            .optional_chain_lowering
+            .get(&((span.offset, span.length), member.to_string()))
+            .cloned()
+        else {
+            return Err(format!(
+                "codegen: no recorded lowering for the `?.` at {}:{}; the typechecker \
+                 records one for every well-typed optional chain, so this is a codegen bug",
+                span.line, span.column
+            ));
+        };
+
+        // The member's type decides the arm: an `Option` member passes through
+        // (the chain flattens), anything else is wrapped.
+        let flattens = matches!(
+            &member_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Option")
+        );
+
+        let x_name = "__karac_optchain_x";
+        // The synthesized binding's type is seeded by SPAN, and a chained
+        // `a?.f?.g` gives both `OptionalChain` nodes the RECEIVER's span — so
+        // keying on `span` (nudged or not) makes the outer chain's seed
+        // overwrite the inner's, and the inner arm's `x.f` then resolves
+        // against the wrong struct. Measured as "cannot resolve field 'city'"
+        // on design.md's own `user.address?.city?.name`. A monotonic id keeps
+        // the two distinct regardless of what the parser did with the spans.
+        self.optional_chain_counter += 1;
+        let mut x_span = *span;
+        x_span.length += 4096 + self.optional_chain_counter as usize;
+        self.seed_synthetic_pattern_binding_type(&x_span, &payload_te);
+
+        let mk = |kind: ExprKind| Expr { kind, span: *span };
+        let recv = mk(ExprKind::Identifier(x_name.to_string()));
+        let projected = match args {
+            None => mk(ExprKind::FieldAccess {
+                object: Box::new(recv),
+                field: member.to_string(),
+            }),
+            Some(call_args) => mk(ExprKind::MethodCall {
+                object: Box::new(recv),
+                method: member.to_string(),
+                turbofish: None,
+                args: call_args.clone(),
+                args_close_span: *span,
+            }),
+        };
+        let present_body = if flattens {
+            projected
+        } else {
+            mk(ExprKind::Call {
+                callee: Box::new(mk(ExprKind::Identifier("Some".to_string()))),
+                args: vec![CallArg {
+                    label: None,
+                    mut_marker: false,
+                    mut_marker_span: None,
+                    span: projected.span,
+                    value: projected,
+                }],
+            })
+        };
+        let present_arm = MatchArm {
+            pattern: Pattern {
+                kind: PatternKind::TupleVariant {
+                    path: vec!["Some".to_string()],
+                    patterns: vec![Pattern {
+                        kind: PatternKind::Binding(x_name.to_string()),
+                        span: x_span,
+                    }],
+                },
+                span: *span,
+            },
+            guard: None,
+            body: present_body,
+            span: *span,
+        };
+        let absent_arm = MatchArm {
+            pattern: Pattern {
+                // Spelled as a `Binding` named `None`, matching the sibling
+                // synthesis above — a bare unit variant reaches the pattern
+                // compiler in that form.
+                kind: PatternKind::Binding("None".to_string()),
+                span: *span,
+            },
+            guard: None,
+            body: mk(ExprKind::Identifier("None".to_string())),
+            span: *span,
+        };
+        let synthesized = mk(ExprKind::Match {
+            scrutinee: Box::new(object.clone()),
+            arms: vec![present_arm, absent_arm],
+        });
+        self.compile_expr(&synthesized)
     }
 
     pub(super) fn try_compile_option_result_method(

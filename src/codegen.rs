@@ -1319,6 +1319,12 @@ pub(super) struct Codegen<'ctx> {
     /// registries pointing into the outer container's storage, dispatches the
     /// method through the existing identifier path, and cleans up after.
     pub(crate) indexed_elem_counter: u32,
+    /// Monotonic id for the synthetic pattern-binding spans `?.` lowering
+    /// mints. A chained `a?.b?.c` gives BOTH `OptionalChain` nodes the
+    /// receiver's span, so a span-derived key collides and the outer chain's
+    /// binding type overwrites the inner's — measured as "cannot resolve field
+    /// 'city'" on design.md's own three-level example (B-2026-08-17-28).
+    pub(crate) optional_chain_counter: u32,
     /// One-shot signal from an `Iterator.rev()` chain lowering (B-2026-07-18-41
     /// codegen leg): when set, the NEXT base-source for-loop (`compile_for_vec_var`
     /// / range / temp-Vec) iterates in REVERSE order and clears the flag. Set by
@@ -5441,6 +5447,7 @@ impl<'ctx> Codegen<'ctx> {
                 closure_capture_paths: FxHashMap::default(),
             },
             indexed_elem_counter: 0,
+            optional_chain_counter: 0,
             pending_reverse_iter: false,
             result_shared_nonescaping_let_spans: std::collections::HashSet::new(),
             result_shared_nonescaping_param_names: std::collections::HashSet::new(),
@@ -5574,6 +5581,7 @@ impl<'ctx> Codegen<'ctx> {
                 method_impl_dispatch: HashMap::new(),
                 call_effect_subs: crate::ast::CallEffectSubsTable::new(),
                 method_unwrap_inner_types: HashMap::new(),
+                optional_chain_lowering: HashMap::new(),
                 method_unwrap_err_types: HashMap::new(),
                 temp_recv_elem_types: HashMap::new(),
                 temp_recv_len_elem_types: HashMap::new(),
@@ -6898,6 +6906,7 @@ impl<'ctx> Codegen<'ctx> {
         // maps to the inner `TypeExpr`. Read by the codegen `unwrap` arm
         // to know how to reconstitute the payload back to a value of T.
         self.span_tables.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
+        self.span_tables.optional_chain_lowering = program.optional_chain_lowering.clone();
         self.span_tables.method_unwrap_err_types = program.method_unwrap_err_types.clone();
         self.span_tables.temp_recv_elem_types = program.temp_recv_elem_types.clone();
         self.mapset.temp_recv_mapset_types = program.temp_recv_mapset_types.clone();

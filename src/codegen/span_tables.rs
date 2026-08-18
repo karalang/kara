@@ -79,6 +79,9 @@ pub(crate) struct SpanTables {
     /// Codegen's `unwrap` arm uses this to lower the inner type to its
     /// LLVM shape and reconstitute the payload words back to a value.
     pub(crate) method_unwrap_inner_types: HashMap<(usize, usize), TypeExpr>,
+    /// Per-`?.` lowering facts `(payload, member)` — populated from
+    /// `Program.optional_chain_lowering`. See `compile_optional_chain`.
+    pub(crate) optional_chain_lowering: HashMap<((usize, usize), String), (TypeExpr, TypeExpr)>,
     /// ERR (`E`) sibling of `method_unwrap_inner_types` — the Result forms of
     /// the absent-closure combinators (`unwrap_or_else`/`map_or_else`/
     /// `or_else`, B-2026-07-14-6) reconstruct the `Err` value at this type to

@@ -2708,7 +2708,7 @@ impl<'a> super::TypeChecker<'a> {
         // the author wrote — it is not lexable as a Kara identifier.
         const RECV: &str = "__optional_chain_recv";
         self.local_scope.push();
-        self.local_scope.insert(RECV.to_string(), payload);
+        self.local_scope.insert(RECV.to_string(), payload.clone());
         let recv_expr = Expr {
             span: object.span,
             kind: ExprKind::Identifier(RECV.to_string()),
@@ -2731,6 +2731,42 @@ impl<'a> super::TypeChecker<'a> {
             }
             other => other.clone(),
         };
+
+        // Hand codegen the two facts it cannot recover from LLVM types: the
+        // payload, which types the synthesized `Some(<binding>)` pattern, and
+        // the member's type BEFORE flattening, which decides whether the arm
+        // body wraps (`Some(x.f)`) or passes through (`x.f`). See
+        // `compile_optional_chain`.
+        let payload_resolved = resolve_type_var_top(&payload, &self.env.substitutions);
+        // KEYED BY (span, member), not by span alone. The parser gives every
+        // postfix node in a chain the RECEIVER's span, so both `?.` nodes of
+        // `u.address?.city?.name` carry the same one — keying on it alone made
+        // the outer record overwrite the inner, and codegen then typed the
+        // inner arm's binding as `City` and refused to resolve `.city` on it.
+        //
+        // The member name separates them for every chain whose consecutive
+        // members differ, which is all of them in practice. A repeat
+        // (`x?.next?.next`) would still collide, so a conflicting re-insert
+        // REMOVES the entry rather than overwriting it: codegen then declines
+        // loudly ("no recorded lowering") instead of silently compiling one
+        // level against the other's types.
+        let key = (SpanKey::from_span(span), member.to_string());
+        let facts = (
+            Self::type_to_type_expr(&payload_resolved),
+            Self::type_to_type_expr(&projected),
+        );
+        // `TypeExpr` has no `PartialEq`; compare the rendered forms, which is
+        // what the ambiguity test actually needs (two chain levels agreeing on
+        // both types are interchangeable for the lowering).
+        let shape = |f: &(TypeExpr, TypeExpr)| format!("{:?}|{:?}", f.0.kind, f.1.kind);
+        match self.optional_chain_lowering.get(&key) {
+            Some(existing) if shape(existing) != shape(&facts) => {
+                self.optional_chain_lowering.remove(&key);
+            }
+            _ => {
+                self.optional_chain_lowering.insert(key, facts);
+            }
+        }
 
         Type::Named {
             name: "Option".to_string(),

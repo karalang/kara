@@ -1374,6 +1374,12 @@ pub struct TypeCheckResult {
     /// there does not apply here because we record the inner *element*
     /// type, not the receiver's whole type.
     pub method_unwrap_inner_types: FxHashMap<SpanKey, TypeExpr>,
+    /// Per-`?.`-expression lowering facts: `(payload, member)` — the
+    /// receiver `Option`'s inner `T`, and the member's type BEFORE
+    /// flattening. Codegen lowers `a?.f` to the `match` it stands for and
+    /// needs the first to type the synthesized binding and the second to
+    /// decide whether the arm wraps or passes through (B-2026-08-17-28).
+    pub optional_chain_lowering: FxHashMap<(SpanKey, String), (TypeExpr, TypeExpr)>,
     /// The ERR (`E`) sibling of `method_unwrap_inner_types`: populated for the
     /// Result forms of the closure combinators whose ABSENT-branch closure
     /// takes the `Err` value (`unwrap_or_else`/`map_or_else`/`or_else`,
@@ -1922,6 +1928,7 @@ pub struct TypeChecker<'a> {
     /// dispatch. See the public copy on `TypeCheckResult` for the full
     /// rationale.
     pub(super) method_unwrap_inner_types: FxHashMap<SpanKey, TypeExpr>,
+    pub(super) optional_chain_lowering: FxHashMap<(SpanKey, String), (TypeExpr, TypeExpr)>,
     /// MethodCall span → `Err` (`E`) `TypeExpr` for the Result forms of the
     /// absent-closure combinators. See the public copy on `TypeCheckResult`.
     pub(super) method_unwrap_err_types: FxHashMap<SpanKey, TypeExpr>,
@@ -2229,6 +2236,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: FxHashMap::default(),
             impl_trait_captures: FxHashMap::default(),
             method_unwrap_inner_types: FxHashMap::default(),
+            optional_chain_lowering: FxHashMap::default(),
             method_unwrap_err_types: FxHashMap::default(),
             pending_expected_call_return: None,
             pending_unwrap_receiver_expectation: None,
@@ -2440,6 +2448,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: self.fn_value_callee_types,
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,
+            optional_chain_lowering: self.optional_chain_lowering,
             method_unwrap_err_types: self.method_unwrap_err_types,
             temp_recv_elem_types: self.temp_recv_elem_types,
             tensor_index_recv_types: self.tensor_index_recv_types,
