@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 260 | 0 |
+| miscompile | 261 | 1 |
 | leak | 184 | 0 |
 | double-free | 133 | 0 |
 | run-vs-build | 129 | 0 |
 | codegen-gap | 117 | 0 |
-| missing-feature | 105 | 2 |
+| missing-feature | 106 | 2 |
 | false-positive | 78 | 0 |
 | diagnostics | 78 | 3 |
 | perf | 77 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 925 | 2 |
-| typecheck | 198 | 2 |
+| codegen | 926 | 3 |
+| typecheck | 199 | 2 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced · 7 open · 1298 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1324 surfaced · 8 open · 1299 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,9 +134,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
-| B-2026-08-18-18 | 2026-08-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let`. The other two positions design.md's "infers the target type from context" covers still fix the chain to `Vec`: `return <chain>.collect()` against a declared non-`Vec` return type -> "expected 'Set[i64]', found 'Vec[i64]'", and argument position `f(<chain>.collect())` against a non-`Vec` parameter -> the same. Measured AFTER B-2026-08-17-36 landed, so these are the residue of that fix rather than a restatement of it. | src/desugar.rs (desugar_collect_target); src/typechecker/exprs.rs (check_expr) |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
+| B-2026-08-18-26 | 2026-08-18 | codegen | high | A READ METHOD called directly on a returned `Set`/`Map` temp reads GARBAGE under `karac build` while `--interp` is correct: `mk_set().len()` gives 0 for a 3-element set, `mk_map().len()` gives 152 for a 2-element map, `mk_set().is_empty()` prints raw bytes, and six such calls in one program SEGFAULT. `contains` / `contains_key` on the same receiver are correct, and `Vec` is unaffected -- so it is `len`/`is_empty` specifically. | `try_compile_freshtemp_mapset_method` in src/codegen/method_call.rs and the method roster it gates on; compare against the Vec fresh-temp path. The receiver reaches it as a non-Identifier `Call`, so the identifier-keyed `compile_map_method` / `compile_set_method` never see it. |
+| B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 
 ### Wontfix (7)
 
@@ -154,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced
 
 </details>
 
-### Fixed (1298)
+### Fixed (1299)
 
-<details><summary>1298 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1299 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11587,6 +11588,27 @@ relocated, there is still nothing to wire -- the exclusion in
 `lint_entries_for_compile_path` stays correct and should not be revisited until
 a bundled-stdlib compile mode exists to give them a legitimate user-facing
 scope. |
+| B-2026-08-18-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let` | FIXED by 8eae11c for RETURN and TAIL position. Argument position is split into its own row, for the reason this row already anticipated.
+
+SAME DESUGAR, NEW TARGET. B-2026-08-17-36 lowers the annotated-`let` form as a PRE-TYPECHECK rewrite, which is what buys interpreter/JIT/AOT parity by construction. Return position turns out to be reachable exactly that way after all: the enclosing fn's declared return type is threaded through the statement walk and applied at an explicit `return` and at the function body's own tail. No `pending_collect_target` expectation, no span-keyed target table, no per-backend materialization — the machinery this row sketched is not needed for two of the three positions.
+
+THE CLOSURE TRAP THIS ROW NAMED IS REAL, and it is handled by dropping the target rather than tracking nesting depth. A `return` inside a closure returns from the CLOSURE, so the fn's type must not reach it; closures declare no return type of their own, so there is nothing to substitute and the target is simply cleared on entry to a closure body. A test pins it: a fn declared `-> Set[i64]` containing a closure whose `return ... .collect()` genuinely yields `Vec[i64]`. Aimed at the fn's type that rewrite would have looked correct until the closure's own type mattered.
+
+NESTED BLOCK TAILS ARE DELIBERATELY LEFT ALONE. Some are transitively returned — an `if` in tail position — but telling which is real tail-position analysis, and the value of this shape is that it stays syntactic. Those keep failing loudly at typecheck rather than silently building a `Vec`.
+
+ARGUMENT POSITION STAYS OUT, and the row's own reasoning is why: it needs the callee's parameter type, which a pre-typecheck pass does not have. A name-keyed lookup over top-level fns looks tempting and is not safe — a local binding shadowing the fn name (a closure, say) would be rewritten against the wrong signature, turning a working program into a typecheck error. Filed separately.
+
+MEASURED, all three backends byte-identical (`--interp`, `karac run` JIT, `karac build`):
+  * `return v.iter().map(...).collect()` -> `Set[i64]`        was "expected 'Set[i64]', found 'Vec[i64]'"  -> 3
+  * the same chain as a body TAIL -> `VecDeque[i64]`          same failure                                 -> 3
+  * `-> String` from a `Vec[String]` chain                    same failure                                 -> "ab"
+  * a closure `return ... .collect()` inside a `-> Set` fn    unchanged, still `Vec[i64]`                  -> 3
+
+FOUND WHILE TESTING, UNRELATED, FILED SEPARATELY: a read method called directly on a returned `Set`/`Map` temp reads garbage under `karac build` while `--interp` is correct -- `mk_set().len()` gives 0 for a 3-element set, `mk_map().len()` gives 152 for a 2-element map, `mk_set().is_empty()` prints raw bytes, and six such calls in one program segfault. Confirmed pre-existing on stock main with this row's changes stashed. It is why the fixtures here BIND each receiver before calling `.len()` rather than writing `build_ret(v).len()` — that spelling would have failed for a reason this row is not about.
+
+Tests: `test_collect_target_in_return_and_tail_position_oracle` (interpreter) and `collect_reaches_a_non_vec_target_in_return_and_tail_position` (codegen E2E). Both carry the closure guard alongside the two fixed positions.
+
+Gates: cargo fmt clean, clippy clean on both feature sets, typechecker 2292, interpreter 1551, parser 820, ownership 463, full suite green. |
 | B-2026-08-18-19 | cli | medium | PROJECT-mode `karac build` still renders no warning-level diagnostic | FIXED by 90112fc6. The row guessed the obstacle was `BuildCodegenStatus` having no success-side diagnostic channel. It is not: the warnings never reached any render path because `typecheck_modules` DISCARDED them one layer earlier. It computes each module's `TypeCheckResult` and keeps `.errors` alone, so a project build was structurally incapable of reporting `deprecated` no matter what the renderer did. The super-program `BuildCodegenStatus` path is not involved at all -- typecheck is per-module and happens before it.
 
 WHY THE WARNINGS ARE A SEPARATE VECTOR rather than folded into the existing `Vec<ModuleTypeErrors>`: `type_errors.is_empty()` IS the project build's gate (two call sites), so a warning-carrying module in that vector would abort the build over a `#[deprecated]` call. `ModuleTypeDiagnostics { errors, warnings }` keeps the gate reading exactly what it read before.
