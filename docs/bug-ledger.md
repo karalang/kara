@@ -95,8 +95,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 261 | 0 |
 | leak | 184 | 0 |
 | double-free | 133 | 0 |
-| run-vs-build | 130 | 1 |
-| codegen-gap | 117 | 0 |
+| run-vs-build | 130 | 0 |
+| codegen-gap | 118 | 1 |
 | missing-feature | 106 | 1 |
 | diagnostics | 80 | 2 |
 | false-positive | 78 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 930 | 1 |
+| codegen | 931 | 1 |
 | typecheck | 199 | 1 |
-| interp | 152 | 1 |
+| interp | 152 | 0 |
 | ownership | 58 | 0 |
 | other | 53 | 3 |
 | autopar | 48 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1332 surfaced · 5 open · 1309 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1333 surfaced · 5 open · 1310 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -133,8 +133,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1332 surfaced
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
-| B-2026-08-18-34 | 2026-08-18 | interp+codegen | high | `map.entry(k).or_insert(default).push(v)` FAILS ON ALL THREE BACKENDS when the map is a struct FIELD, while `karac check` accepts it: interpreter says "method 'push' not found on type 'unknown' (no interpreter dispatch arm)", codegen says "no handler for method 'push' on non-identifier receiver". The identical chain over a LOCAL map works everywhere. This is the idiomatic way to mutate a container nested in a container, and a struct holding a map is its common home. | The interpreter's method-dispatch arm for a borrow-returning builtin result (`src/interpreter/method_call.rs`), and codegen's `compile_method_call` non-identifier-receiver routing (`src/codegen/method_call.rs`) -- the same 'materialize the receiver and re-dispatch' family as `try_compile_freshtemp_mapset_read_method`, except here the receiver is a `mut ref` INTO the map and must not be copied, or the append lands on a temporary. |
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
+| B-2026-08-18-36 | 2026-08-18 | codegen | medium | A NESTED INDEXED READ through a struct field -- `h.buckets[3][1]` where `buckets: Map[i64, Vec[i64]]` -- fails codegen with "nested indexed read requires the outer container to be a named variable in v1 (got non-identifier inner expression)", while `--interp` returns the right element. `karac check` accepts it. Binding the inner container first (`let b = h.buckets[3]; b[1]`) works, so the gap is the CHAIN, not the types. | the nested indexed-read path in src/codegen (the 'nested indexed read requires the outer container to be a named variable in v1' diagnostic); cf. try_compile_field_rooted_entry_chain in src/codegen/calls.rs for the materialization pattern |
 
 ### Wontfix (7)
 
@@ -152,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1332 surfaced
 
 </details>
 
-### Fixed (1309)
+### Fixed (1310)
 
-<details><summary>1309 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1310 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11898,6 +11898,15 @@ IT DELIVERED B-2026-08-18-30 TOO. Widening `NilCoalesce` cost nothing and unbloc
 THE COST CURVE IS THE REUSABLE FINDING: 42 failures for `MethodCall`, 12 for `FieldAccess`, then 0/1/0/2/0/0. The drop is not luck and not diminishing scope. It is that B-2026-08-18-31 fixed the use-after-move readers by resolving a place to its ROOT rather than patching the one arm that broke, and B-2026-08-18-24 threaded the call span to the tables the typechecker keys on -- both of which put producer and consumer on keys that are right BY CONSTRUCTION. The later arms are cheap for exactly the reason the earlier ones were dear. A prediction that `Call` would be expensive (its span collides with its callee's, the shape behind every earlier row) was WRONG for this reason, and is recorded in that test's doc.
 
 THREE ZEROS WERE ABSENT WITNESSES, NOT PROOF, and each got a real test instead. `selfhost_parser_matches_rust_parser` compares the two parsers span-for-span and caught `TupleIndex` and `Call` -- so a clean run reads like coverage. It cannot see three of the arms: the self-hosted parser has NO `Cast` AST node (it parses the target type only to advance the cursor), its corpus contains NO `|>` input at all, and it lowers `..` to a port-local `Binary { op: Range }` rather than an `ExprKind::Range`. Every such arm now has a dedicated span test verified red-then-green, and for `Pipe`+`Range` each HALF was verified separately -- a combined test passes on one half while the other is vacuous, which is the failure mode being guarded against. |
+| B-2026-08-18-34 | interp+codegen | high | `map.entry(k).or_insert(default).push(v)` FAILS ON ALL THREE BACKENDS when the map is a struct FIELD, while `karac check` accepts it: interpreter say… | Fixed in 4e49246, both executors. `map.entry(k).or_insert(d).push(v)` now works with the map in a struct field, from `main` and from a `mut ref self` method alike, on `--interp`, JIT and AOT.
+
+ONE CAUSE, TWO SURFACES: every map reference the entry chain builds is keyed on a BINDING NAME, and a struct field has none. Codegen's `emit_entry_chain` needs a slot holding the handle plus the K/V LLVM types, all from per-binding registries; the interpreter's `Value::Entry` / `Value::MapSlotRef` carry a `map_var: String`. So both refused the same shape for the same reason, which is why the row correctly read it as a missing lowering rather than a divergence between them.
+
+CODEGEN — the fix is ONE rewrite, not three. Three separate places peel an entry chain down to an `ExprKind::Identifier` root (`try_compile_entry_chain` for the terminal, `compile_entry_chain_receiver_method` for the trailing `.push`, `entry_chain_or_insert_map_name` for deref-writes). The new arm binds the field's address to a synth identifier and rewrites the chain's root once, so all of them run unmodified. The synth slot is the field's OWN ADDRESS, never a materialized copy -- the hazard the row named; a copy would append to a temporary.
+
+INTERPRETER — map references resolve as a PLACE: a plain binding or a dotted field path (`h.buckets`, `self.buckets`). A dot cannot occur in a Kāra identifier nor in the `__`-prefixed synthetic names, so it unambiguously marks a path. Only value structs are walked: a `shared struct` field returns `None` and behaves exactly as before rather than being half-supported, since its fields carry interior mutability and the write would need to go through the cell. Resolving in place also removes the whole-map clone-and-write-back that `or_insert` performed on every call, including the local case.
+
+A DIVERGENCE THE FIX ITSELF EXPOSED, found by probing the sibling terminals rather than stopping at the filed repro: with the rest corrected, `and_modify` on a field gave `7 107` under codegen and `7 7` under `--interp` -- codegen applied the modification while the interpreter silently skipped it and left the `or_insert` default. That arm was still name-keyed. Both now agree with the local-map oracle. |
 
 </details>
 
