@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 105 | 2 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
-| diagnostics | 75 | 5 |
+| diagnostics | 75 | 4 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
 | other | 37 | 0 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
-| cli | 41 | 3 |
+| cli | 41 | 2 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 19 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced · 8 open · 1290 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced · 7 open · 1291 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-14 | 2026-08-18 | codegen | medium | A RANGE SUBSCRIPT used directly as a METHOD RECEIVER -- `v[0..3].first_or(-1)` -- has no codegen: "no handler for expression kind Range". The same slice passed as an ARGUMENT works (`show(v[0..2])`), and binding it first works (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`), so it is the receiver position specifically. | roadmap.md |
-| B-2026-08-18-16 | 2026-08-18 | cli | medium | `missing_must_use` and `missing_track_caller` render BAKED-STDLIB findings against the USER's filename with the stdlib item's own span, producing diagnostics whose line numbers do not exist in the file named. `examples/autograd_training.kara` is 88 LINES LONG and draws `stdlib `pub fn TensorVar.value` has `panics` ... but lacks `#[track_caller]`` at line 378 and 387; `examples/fathom/mandelbrot.kara` draws `stdlib `fn animation_frames` returns a new value but is not annotated `#[must_use]`` at line 94, where `animation_frames` is not defined at all -- it is IMPORTED from `std.web.time` (line 50). The finding is real stdlib hygiene; the LOCATION is another file's. Both lints are therefore unfit for `karac check` / the JSON feed until the span carries its own file. | roadmap.md |
 | B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
 | B-2026-08-18-18 | 2026-08-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let`. The other two positions design.md's "infers the target type from context" covers still fix the chain to `Vec`: `return <chain>.collect()` against a declared non-`Vec` return type -> "expected 'Set[i64]', found 'Vec[i64]'", and argument position `f(<chain>.collect())` against a non-`Vec` parameter -> the same. Measured AFTER B-2026-08-17-36 landed, so these are the residue of that fix rather than a restatement of it. | src/desugar.rs (desugar_collect_target); src/typechecker/exprs.rs (check_expr) |
 
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced
 
 </details>
 
-### Fixed (1290)
+### Fixed (1291)
 
-<details><summary>1290 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1291 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11502,6 +11501,54 @@ Verified on fifteen shapes, every one byte-identical to `--interp`, including th
 One fixture landed with a hand-computed expected value that was wrong (30 for 24); ASAN had already passed and only the arithmetic failed. Corrected from the interpreter rather than recomputed by hand.
 
 Gates: cargo fmt clean, clippy clean on both feature sets, memory_sanitizer 1126 passed, full suite green. |
+| B-2026-08-18-16 | cli | medium | `missing_must_use` and `missing_track_caller` render BAKED-STDLIB findings against the USER's filename with the stdlib item's own span, producing dia… | FIXED by bbbea03. `missing_must_use` and `missing_track_caller` no longer run
+on a user compile at all; the two call sites in `cmd_run` are gone, along with
+their now-dead renderers.
+
+WHY SUPPRESSION RATHER THAN A SPAN FIX, since the row left that open ("a
+channel ... so the renderer can name the stdlib file (or suppress on a user
+compile ...)"). Naming the stdlib file correctly would produce a locatable
+diagnostic that is still someone else's hygiene debt appearing in the author's
+build output: the finding is about karac's own stdlib, in a file they did not
+write and cannot edit from their program. There is no rendering that makes it
+actionable at that call site, so the right scope is the one the lints' own
+module docs already claim — karac's stdlib-hygiene tests.
+
+Both keep doing their real job. `tests/missing_must_use_lint.rs` (23 tests) and
+`tests/missing_track_caller_lint.rs` (14) run them against `STDLIB_PROGRAMS`
+directly, and the former's sentinel still asserts the lint finds >= 1 real
+candidate there — so this change constrains WHERE they surface, not WHETHER
+they work. A bundled-stdlib-source compile mode is where they would
+legitimately return to a command.
+
+THE CALL SITE'S OWN COMMENT ASSERTED THE BUG COULD NOT HAPPEN: "Today end-user
+compiles see no output from this pass because baked stdlib items aren't spliced
+into the user program AST." That premise had gone stale, and nothing detected
+it -- no test covered the claim, and the lints' output on a user compile was
+never looked at because `karac run` is not where anyone reads lint results. The
+corpus sweep in B-2026-08-18-2 is what caught it. The stale comment is now
+replaced by the measurement it was wrong about, which is the durable half of
+this fix: an assumption written as a comment and never tested is exactly how
+this class survives.
+
+VERIFIED. The six files that produced the 68 diagnostics -- autograd_training,
+semantic_search, mandelbrot, plume, and both host_wasm -- now emit zero. The
+regression test asserts silence across `check`, `check --output=json` and
+`run --interp`.
+
+NON-VACUITY IS MEASURED, and the IMPORT is the load-bearing part of the
+fixture: against the pre-fix compiler `import std.web.time.{animation_frames};`
+plus a `println` emits 2 diagnostics, while the identical program WITHOUT the
+import emits 0. The trigger is the splice the import pulls in, not the body --
+so a future "simplification" that drops the import line would silently make the
+test assert nothing. That is recorded in the test's own comment.
+
+FOLLOW-ON, unchanged by this: B-2026-08-18-2 excluded these two lints from the
+compile path pending this row. With the diagnostics now suppressed rather than
+relocated, there is still nothing to wire -- the exclusion in
+`lint_entries_for_compile_path` stays correct and should not be revisited until
+a bundled-stdlib compile mode exists to give them a legitimate user-facing
+scope. |
 
 </details>
 
