@@ -12161,6 +12161,73 @@ fn test_fstring_interp_spans_distinct_across_strings() {
     assert_eq!(&source[second.offset..second.offset + second.length], "p");
 }
 
+/// B-2026-08-18-7 — the same collision class one postfix operator over: every
+/// `?.` node used to be built with `span: lhs.span`, and `lhs` IS the previous
+/// chain step, so all of them collapsed onto the innermost object's span.
+/// Measured before the fix: both nodes of `u.address?.city?.name` reported the
+/// identical `(offset, length)`, which left any span-keyed side table with ONE
+/// slot per chain and the outer step silently overwriting the inner.
+///
+/// Asserts the two properties a SpanKey consumer depends on: the nodes are
+/// DISTINCT, and each covers its own step of the chain (`?.` spans from the
+/// object's start through the member, so the inner is a strict prefix of the
+/// outer). The method form is covered too because its span has to reach past
+/// the closing paren rather than stopping at the member name.
+#[test]
+fn test_optional_chain_nodes_have_distinct_spans() {
+    let source = "fn main() {\n  let n = u.address?.city?.name;\n  let m = u.address?.city?.label(\"/\");\n}";
+    let prog = parse(source).program;
+
+    // Every `?.` node in the program, outermost-first per chain.
+    fn collect(e: &Expr, out: &mut Vec<karac::token::Span>) {
+        if let ExprKind::OptionalChain { object, args, .. } = &e.kind {
+            out.push(e.span);
+            collect(object, out);
+            if let Some(args) = args {
+                for a in args {
+                    collect(&a.value, out);
+                }
+            }
+            return;
+        }
+        if let ExprKind::FieldAccess { object, .. } = &e.kind {
+            collect(object, out);
+        }
+    }
+    let mut spans = Vec::new();
+    for item in &prog.items {
+        if let Item::Function(f) = item {
+            for st in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &st.kind {
+                    collect(&value, &mut spans);
+                }
+            }
+        }
+    }
+    assert_eq!(spans.len(), 4, "expected four `?.` nodes, got {spans:?}");
+
+    let text = |s: &karac::token::Span| &source[s.offset..s.offset + s.length];
+    // Chain 1: outer then inner (collect pushes outermost first).
+    assert_eq!(text(&spans[0]), "u.address?.city?.name");
+    assert_eq!(text(&spans[1]), "u.address?.city");
+    // Chain 2: the method form's span must reach past the argument list.
+    assert_eq!(text(&spans[2]), "u.address?.city?.label(\"/\")");
+    assert_eq!(text(&spans[3]), "u.address?.city");
+
+    // The property every span-keyed table relies on: within a chain the steps
+    // do not share a key. (Across chains they differ by offset already.)
+    assert_ne!(
+        (spans[0].offset, spans[0].length),
+        (spans[1].offset, spans[1].length),
+        "nested `?.` steps must not share a SpanKey"
+    );
+    assert_ne!(
+        (spans[2].offset, spans[2].length),
+        (spans[3].offset, spans[3].length),
+        "nested `?.` steps must not share a SpanKey (method form)"
+    );
+}
+
 /// `Span.line`/`Span.column` of an interpolation sub-expression must point to
 /// its true position in the ORIGINAL source — not into the synthetic
 /// `fn __interp__() { … }` re-parse wrapper (B-2026-06-09-1a). Before the fix

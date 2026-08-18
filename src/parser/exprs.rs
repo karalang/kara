@@ -113,6 +113,22 @@ impl super::Parser {
             match self.peek_token_ref() {
                 Token::Question => {
                     self.advance();
+                    // B-2026-08-18-7 — this arm DELIBERATELY still copies
+                    // `lhs.span`, and the reason is measured rather than
+                    // conservative. Widening it the way the `?.` arm below is
+                    // widened breaks `question_ok_payload_types`: a
+                    // `let b = mk(n)?;` whose Some payload is a multi-word
+                    // struct stops resolving the binding's fields under codegen
+                    // ("cannot resolve field 'name'"), while `--interp` stays
+                    // correct. That table's producer and its consumer therefore
+                    // do NOT both key off this node — they agree today only
+                    // because this span happens to equal the operand's.
+                    //
+                    // So `?` carries the same latent collision `?.` had (nested
+                    // `a?` steps share one key) and cannot be fixed here alone;
+                    // it needs the table's two ends put on the same key first.
+                    // Left as-is, with the evidence, rather than traded for a
+                    // silent miscompile.
                     lhs = Expr {
                         span: lhs.span,
                         kind: ExprKind::Question(Box::new(lhs)),
@@ -121,17 +137,41 @@ impl super::Parser {
                 }
                 Token::QuestionDot => {
                     self.advance();
+                    let member_span = self.current_span();
                     let field_or_method = self.expect_identifier()?;
+                    let mut end = member_span.offset + member_span.length;
                     let args = if self.check(&Token::LeftParen) {
                         self.advance();
                         let a = self.parse_arg_list()?;
                         self.expect(&Token::RightParen)?;
+                        end = self.current_span().offset;
                         Some(a)
                     } else {
                         None
                     };
+                    // B-2026-08-18-7 — span the full chain step (lhs start ->
+                    // member end) instead of reusing `lhs.span`. The `Binary`
+                    // arm below already records why a node must not copy its
+                    // LHS's span: it then has no SpanKey of its own, and every
+                    // side-table keyed on expression spans collides.
+                    //
+                    // For `?.` the collision was TOTAL rather than partial.
+                    // Each step took `lhs.span` and `lhs` IS the previous step,
+                    // so every node in `a?.b?.c` collapsed onto the innermost
+                    // object's span — measured as `(267,1)` for BOTH nodes of
+                    // `u.address?.city?.name`. One slot per chain, with the
+                    // outer step silently overwriting the inner: that is what
+                    // blocked a span-keyed `?.` lowering, since the binding type
+                    // came back as the outer payload's and the inner projection
+                    // could not resolve its field.
+                    let span = Span {
+                        line: lhs.span.line,
+                        column: lhs.span.column,
+                        offset: lhs.span.offset,
+                        length: end.saturating_sub(lhs.span.offset),
+                    };
                     lhs = Expr {
-                        span: lhs.span,
+                        span,
                         kind: ExprKind::OptionalChain {
                             object: Box::new(lhs),
                             field_or_method,
