@@ -12285,6 +12285,63 @@ fn test_question_nodes_span_past_the_operator() {
     );
 }
 
+/// Sibling of the two above, for `Index` (B-2026-08-18-21). Third of the four
+/// postfix arms to stop copying its LHS's span; `MethodCall` is the last
+/// (B-2026-08-18-24).
+///
+/// A subscript must span its object PLUS the brackets, so a postfix CHAIN does
+/// not collapse onto its innermost receiver's key. Measured before the fix on
+/// `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held exactly ONE
+/// entry, `(256,1)` — the span of the `Vec[i64]` receiver `v` — because the
+/// chain's String-typed tail was recorded against it and won on last write.
+/// `compile_index`'s range branch then read that entry, compiled a `Vec`
+/// subscript as a fresh owned `String`, and the build died on "no handler for
+/// expression kind Range" (B-2026-08-18-14); splitting the same call across
+/// two statements built fine, which is the signature of a span collision
+/// rather than a missing lowering.
+#[test]
+fn test_index_nodes_span_past_the_closing_bracket() {
+    let source = "fn f(v: Vec[Vec[i64]]) -> i64 {\n  let a = v[0][1];\n  return a;\n}";
+    let prog = parse(source).program;
+
+    fn collect(e: &Expr, out: &mut Vec<karac::token::Span>) {
+        if let ExprKind::Index { object, index } = &e.kind {
+            out.push(e.span);
+            collect(object, out);
+            collect(index, out);
+        }
+    }
+    let mut spans = Vec::new();
+    for item in &prog.items {
+        if let Item::Function(f) = item {
+            for st in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &st.kind {
+                    collect(value, &mut spans);
+                }
+            }
+        }
+    }
+    assert_eq!(spans.len(), 2, "expected two `Index` nodes, got {spans:?}");
+
+    let text = |s: &karac::token::Span| &source[s.offset..s.offset + s.length];
+    // Outermost first: the whole subscript, then the inner one it is built on.
+    assert_eq!(text(&spans[0]), "v[0][1]");
+    assert_eq!(text(&spans[1]), "v[0]");
+
+    // The property every span-keyed table relies on: a subscript, the
+    // subscript it is built on, and the bare receiver are three distinct keys.
+    assert_ne!(
+        (spans[0].offset, spans[0].length),
+        (spans[1].offset, spans[1].length),
+        "a chained subscript must not share a SpanKey with its object"
+    );
+    assert_ne!(
+        (spans[1].offset, spans[1].length),
+        (spans[1].offset, 1),
+        "a subscript must not collapse onto its bare receiver `v`"
+    );
+}
+
 /// `Span.line`/`Span.column` of an interpolation sub-expression must point to
 /// its true position in the ORIGINAL source — not into the synthetic
 /// `fn __interp__() { … }` re-parse wrapper (B-2026-06-09-1a). Before the fix

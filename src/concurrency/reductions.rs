@@ -968,7 +968,26 @@ worker would write",
         // only the former; the local's refcount traffic is exactly the race
         // this gate exists to catch.
         let frozen = crate::iter_local::spans_rooted_at(body, frozen_params);
-        if unsafe_spans.iter().all(|key| frozen.contains(key)) {
+        // B-2026-08-18-21 — a third whitelist: places the body only ever
+        // reaches THROUGH, on the way to a scalar leaf. `out[j] = ps[j].v * 2`
+        // over `ps: Vec[P]` with `shared struct P` never holds a `P`; the
+        // projection is a GEP and a load, and the loop body emits no refcount
+        // traffic at all, so there is no non-atomic header to race. Neither
+        // sibling covers it — `ps` is an outer-scope name, not iteration-local,
+        // and not a `frozen` parameter.
+        //
+        // Explicit here because it USED to be accidental. While `Index` copied
+        // its object's span, `ps`, `ps[j]` and `ps[j].v` shared one SpanKey and
+        // the `i64` was merely the last write, so the sweep never saw
+        // `Vec[shared P]`. Giving the subscript its own span surfaced the type
+        // the gate always should have had, and the exemption had to be argued
+        // rather than inherited. `scalar_projection_bases` taints the whole
+        // root on any other use, so the fail-closed direction is unchanged.
+        let projected = crate::iter_local::scalar_projection_bases(body, tc);
+        if unsafe_spans
+            .iter()
+            .all(|key| frozen.contains(key) || projected.contains(key))
+        {
             return true;
         }
         let Some(local) = crate::iter_local::iteration_local_spans(body, tc) else {
@@ -976,7 +995,7 @@ worker would write",
         };
         unsafe_spans
             .iter()
-            .all(|key| local.contains(key) || frozen.contains(key))
+            .all(|key| local.contains(key) || frozen.contains(key) || projected.contains(key))
     }
 
     /// Classify a loop body as a reduction over a single outer-scope

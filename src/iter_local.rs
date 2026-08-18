@@ -612,6 +612,267 @@ pub fn spans_rooted_at(body: &Block, roots: &HashSet<String>) -> FxHashSet<SpanK
     c.out
 }
 
+/// Spans of the place expressions in `body` that are only ever reached
+/// THROUGH, on the way to a scalar — B-2026-08-18-21's precision pass.
+///
+/// A third whitelist for `loop_body_types_cross_task_safe`, consumed alongside
+/// [`iteration_local_spans`] and [`spans_rooted_at`]. It answers the one
+/// question the other two cannot: *is this cross-task-unsafe value ever a
+/// value at all, or only an address on the way to a scalar leaf?*
+///
+/// `out[j] = ps[j].v * 2` over `ps: Vec[P]` with `shared struct P` is the
+/// shape. `Vec[shared P]` is not cross-task-safe and `ps` is an outer-scope
+/// name, so neither sibling whitelist covers it — yet nothing in the body
+/// ever holds a `P`. The projection is address arithmetic and a load of an
+/// `i64`; measured on that fixture's IR, the loop body contains no refcount
+/// traffic at all, the program's only rc ops being the constructor's
+/// `store i64 1` and the Vec's element drop, both outside the loop. With no
+/// rc-inc/rc-dec on the header there is no lost update to race, which is the
+/// entire hazard B-2026-07-16-6's gate exists to catch.
+///
+/// This was load-bearing before it was written down. Until B-2026-08-18-21
+/// gave `Index` a span of its own, `ps`, `ps[j]` and `ps[j].v` shared ONE
+/// SpanKey and the `i64` was simply the last write — the gate never saw
+/// `Vec[shared P]`, and `test_disjoint_write_kept_for_scalar_projection_
+/// through_shared_handle` had been passing by accident. Separating the spans
+/// exposes the type the gate always should have seen, so the exemption has to
+/// become explicit and argued rather than emergent.
+///
+/// ## What it will not exempt
+///
+/// Fail-closed by ROOT, like `spans_rooted_at`, and on two axes at once:
+///
+///   * The projection's own type must be a SCALAR — an integer, float, bool
+///     or char. Not merely "cross-task-safe": a safe-typed projection can
+///     still be a value whose materialization does work (a `String` field is
+///     a copy, a tuple is an aggregate load), and a scalar leaf is the case
+///     where "GEP and load" is the whole lowering.
+///   * Every use of the root in the body must be such a projection. One use
+///     that binds, passes, or assigns the base taints the root and NOTHING
+///     rooted there is exempted — including the projections. A body that
+///     reads `ps[j].v` and also does `let p = ps[j]` gets no exemption at
+///     all, which is the conservative direction: the decline stands and the
+///     failure mode is a sequential loop.
+///
+/// Assignment TARGETS taint their root even when the target is a scalar
+/// projection. `ps[j].v = 5` writes through a handle that two iterations may
+/// alias — the disjoint-write proof covers the INDEX, not the identity of the
+/// objects the Vec holds — so a write is exactly the case this must not
+/// license. Reads of an aliased element are unaffected: two workers loading
+/// the same immutable scalar race on nothing.
+///
+/// ## What the root taint is worth TODAY, measured
+///
+/// It changes no answer in the current suite, and that is worth stating
+/// rather than implying otherwise. Disabling it outright leaves every
+/// concurrency test green, because a non-projection use of an unsafe-typed
+/// root carries its OWN unsafe span, which no whitelist exempts — so the
+/// sweep declines on that span whether or not the root was tainted. The two
+/// shapes that look like counterexamples both dissolve: `let p = ps[j]`
+/// records `shared P` at the binding, and `ps.len()`'s receiver currently
+/// reads as `i64` because `MethodCall` still copies its receiver's span
+/// (B-2026-08-18-24), so it is not seen as a non-projection use at all.
+///
+/// It is kept because it is the rule that carries the weight the moment that
+/// last arm is widened: `ps.len()`'s receiver will then carry
+/// `Vec[shared P]`, the projection whitelist would exempt the sibling `ps`
+/// under `ps[j].v`, and the root taint is what declines the loop. Writing the
+/// contract now — one use this pass cannot vouch for costs the whole root its
+/// exemption — is cheaper than discovering later that the whitelist had been
+/// fail-open along an axis nothing exercised.
+pub fn scalar_projection_bases(
+    body: &Block,
+    tc: &crate::typechecker::TypeCheckResult,
+) -> FxHashSet<SpanKey> {
+    struct Collect<'a> {
+        tc: &'a crate::typechecker::TypeCheckResult,
+        /// Spans proposed for exemption, grouped by the root they hang off.
+        candidates: HashMap<String, Vec<SpanKey>>,
+        /// Roots with a use this pass cannot vouch for. Fail-closed: a root
+        /// lands here on the FIRST such use and never leaves.
+        tainted: HashSet<String>,
+    }
+
+    impl Collect<'_> {
+        fn scalar_at(&self, expr: &Expr) -> bool {
+            self.tc
+                .expr_types
+                .get(&SpanKey::from_span(&expr.span))
+                .is_some_and(|ty| {
+                    matches!(
+                        ty,
+                        crate::typechecker::types::Type::Int(_)
+                            | crate::typechecker::types::Type::UInt(_)
+                            | crate::typechecker::types::Type::Float(_)
+                            | crate::typechecker::types::Type::Bool
+                            | crate::typechecker::types::Type::Char
+                    )
+                })
+        }
+
+        /// Walk the base spine of a projection, whitelisting each step and
+        /// descending into the index expressions hanging off it — a subscript
+        /// like `ps[f(k)]` is a place, but `f(k)` inside it is not part of
+        /// the spine and gets the ordinary treatment.
+        fn note_spine(&mut self, expr: &Expr, root: &str) {
+            self.candidates
+                .entry(root.to_string())
+                .or_default()
+                .push(SpanKey::from_span(&expr.span));
+            match &expr.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    self.note_spine(object, root)
+                }
+                ExprKind::Index { object, index } => {
+                    self.note_spine(object, root);
+                    self.walk_expr(index);
+                }
+                ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    operand,
+                } => self.note_spine(operand, root),
+                _ => {}
+            }
+        }
+
+        /// Taint the root and keep walking the index expressions, which are
+        /// ordinary sub-expressions with roots of their own.
+        fn taint(&mut self, expr: &Expr) {
+            if let Some(root) = place_root_name(expr) {
+                self.tainted.insert(root);
+            }
+            match &expr.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    self.taint(object)
+                }
+                ExprKind::Index { object, index } => {
+                    self.taint(object);
+                    self.walk_expr(index);
+                }
+                ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    operand,
+                } => self.taint(operand),
+                // A target this pass does not model as a place still has to
+                // reach every root it mentions, so the fallback keeps TAINTING
+                // rather than stopping — and never routes through `walk_expr`,
+                // which would whitelist an inner place instead of tainting it.
+                // Reached only for an odd write target (assignment targets are
+                // places today), and deliberately conservative: over-tainting
+                // costs a sequential loop, under-tainting is the fail-open
+                // direction this module exists to avoid.
+                _ => visit_children(expr, &mut TaintVisitor { c: self }),
+            }
+        }
+
+        fn walk_expr(&mut self, expr: &Expr) {
+            // A place expression reached here is MAXIMAL — the recursion
+            // below never descends into a place's own base, so the only way
+            // to arrive is from a non-place parent.
+            if let Some(root) = place_root_name(expr) {
+                if self.scalar_at(expr) {
+                    self.note_spine(expr, &root);
+                } else {
+                    self.taint(expr);
+                }
+                return;
+            }
+            visit_children(expr, &mut ExprVisitor { c: self });
+        }
+
+        /// EXHAUSTIVE over `StmtKind`, unlike its siblings in this module,
+        /// and the difference is a soundness one rather than a stylistic one.
+        /// `spans_rooted_at` and `iteration_local_spans` only ever ADD to a
+        /// whitelist, so a statement form they skip merely shrinks it and the
+        /// gate's decline stands. This pass also TAINTS, and a skipped form
+        /// would drop a taint — fail-OPEN. A use of the root inside a `defer`
+        /// body or on the left of a `MultiAssign` has to reach `taint`, so the
+        /// `match` has no catch-all and a statement form added later is a
+        /// compile error here.
+        fn walk_block(&mut self, block: &Block) {
+            for stmt in &block.stmts {
+                match &stmt.kind {
+                    StmtKind::Let { value, .. } => self.walk_expr(value),
+                    StmtKind::LetElse {
+                        value, else_block, ..
+                    } => {
+                        self.walk_expr(value);
+                        self.walk_block(else_block);
+                    }
+                    // No expression at all — a declaration and a type.
+                    StmtKind::LetUninit { .. } => {}
+                    StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                        self.walk_block(body)
+                    }
+                    StmtKind::Assign { target, value }
+                    | StmtKind::CompoundAssign { target, value, .. } => {
+                        // A write through a place is never exempt, however
+                        // scalar the target: see the doc comment.
+                        self.taint(target);
+                        self.walk_expr(value);
+                    }
+                    StmtKind::MultiAssign { targets, values } => {
+                        for t in targets {
+                            self.taint(t);
+                        }
+                        for v in values {
+                            self.walk_expr(v);
+                        }
+                    }
+                    StmtKind::Expr(e) => self.walk_expr(e),
+                }
+            }
+            if let Some(e) = &block.final_expr {
+                self.walk_expr(e);
+            }
+        }
+    }
+
+    /// Sink that taints instead of classifying — the conservative twin of
+    /// `ExprVisitor`, used only from `taint`'s fallback arm.
+    struct TaintVisitor<'a, 'b> {
+        c: &'a mut Collect<'b>,
+    }
+    impl<'e> Visit<'e> for TaintVisitor<'_, '_> {
+        fn on_expr(&mut self, expr: &'e Expr) {
+            self.c.taint(expr);
+        }
+        fn on_block(&mut self, block: &'e Block) {
+            self.c.walk_block(block);
+        }
+    }
+
+    /// Adapter so `visit_children` can drive `Collect`'s place-aware walk:
+    /// nested blocks and expressions must re-enter `walk_*`, not the default
+    /// traversal, or a place inside an `if` body would be visited as a bare
+    /// identifier chain and silently whitelisted a step at a time.
+    struct ExprVisitor<'a, 'b> {
+        c: &'a mut Collect<'b>,
+    }
+    impl<'e> Visit<'e> for ExprVisitor<'_, '_> {
+        fn on_expr(&mut self, expr: &'e Expr) {
+            self.c.walk_expr(expr);
+        }
+        fn on_block(&mut self, block: &'e Block) {
+            self.c.walk_block(block);
+        }
+    }
+
+    let mut c = Collect {
+        tc,
+        candidates: HashMap::new(),
+        tainted: HashSet::new(),
+    };
+    c.walk_block(body);
+    let mut out = FxHashSet::default();
+    for (root, spans) in c.candidates {
+        if !c.tainted.contains(&root) {
+            out.extend(spans);
+        }
+    }
+    out
+}
+
 fn place_root_name(expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::Identifier(name) => Some(name.clone()),

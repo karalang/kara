@@ -357,9 +357,23 @@ impl super::Parser {
                     } else {
                         first
                     };
+                    let close_span = self.current_span();
                     self.expect(&Token::RightBracket)?;
+                    // B-2026-08-18-21 — span the whole subscript (lhs start ->
+                    // past the `]`) rather than copying `lhs.span`. Third arm
+                    // in the family the `?` and `?.` arms above document: a
+                    // node that reuses its LHS's span has no SpanKey of its
+                    // own, so `v[0..3].first_or(-1)` writes the chain's types
+                    // into the SINGLE slot belonging to `v` and the last write
+                    // wins.
+                    let end = close_span.offset + close_span.length;
                     lhs = Expr {
-                        span: lhs.span,
+                        span: Span {
+                            line: lhs.span.line,
+                            column: lhs.span.column,
+                            offset: lhs.span.offset,
+                            length: end.saturating_sub(lhs.span.offset),
+                        },
                         kind: ExprKind::Index {
                             object: Box::new(lhs),
                             index: Box::new(index),

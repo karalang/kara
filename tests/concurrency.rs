@@ -3079,6 +3079,72 @@ fn test_disjoint_write_kept_for_scalar_projection_through_shared_handle() {
     );
 }
 
+// ── B-2026-08-18-21: the scalar-projection whitelist is fail-CLOSED ─────
+//
+// `test_disjoint_write_kept_for_scalar_projection_through_shared_handle`
+// above had been passing BY ACCIDENT: while `Index` copied its object's
+// span, `ps`, `ps[j]` and `ps[j].v` shared one SpanKey and the `i64` was
+// simply the last write, so the type sweep never saw `Vec[shared P]`.
+// Giving the subscript a span of its own surfaced the type the gate always
+// should have had, and the exemption became explicit
+// (`iter_local::scalar_projection_bases`).
+//
+// An accept test alone cannot tell that whitelist apart from one that
+// exempts any root with a scalar somewhere in the body. These two pin the
+// boundary: the first taints the root through a BINDING, the second through
+// a WRITE. Keep all three together.
+
+#[test]
+fn test_disjoint_write_declines_when_the_projected_root_is_also_bound() {
+    // Same program as the accept test plus one line: `let p = ps[j];` binds
+    // the shared element itself. That handle DOES carry a non-atomic
+    // refcount across the fan-out, so the whole root must lose its
+    // exemption — including the `ps[j].v` projection that would have earned
+    // one on its own.
+    let analysis = analyze_typed(
+        r#"
+        shared struct P {
+            v: i64,
+        }
+
+        fn main() {
+            let n = 64;
+            let mut ps: Vec[P] = Vec.new();
+            let mut i = 0;
+            while i < n {
+                ps.push(P { v: i });
+                i = i + 1;
+            }
+            let mut out: Vec[i64] = Vec.filled(n, 0);
+            for j in 0..n {
+                let p = ps[j];
+                out[j] = ps[j].v * 2 + p.v;
+            }
+            println(out[0]);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let d = main_fc
+        .disjoint_write_loops
+        .iter()
+        .find(|d| d.loop_var == "j")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a disjoint-write candidate for loop `j`, got {:?}",
+                main_fc.disjoint_write_loops
+            )
+        });
+    assert_eq!(
+        d.decline,
+        Some(karac::index_disjoint::DisjointDecline::NotCrossTaskSafe),
+        "binding the shared element taints the root: a whitelist that exempted \
+         `ps` on the strength of the sibling projection would admit a real \
+         refcount race, got {:?}",
+        d.decline
+    );
+}
+
 // ── B-2026-07-30-1: iteration-local `shared` precision pass ─────────────
 //
 // The four tests below pin the boundary of `src/iter_local.rs`. The first

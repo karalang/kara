@@ -1087,9 +1087,11 @@ impl Parser {
     // ── Postfix builders (slice 2a) ──
     //
     // Each takes the already-parsed left operand BY VALUE and returns the
-    // wrapped node. The postfix node's span is the operand's span (read by
-    // `ref` BEFORE the operand moves into the node) — exactly the seed's
-    // `lhs.span.clone()`; it is NOT extended to cover the call/index args.
+    // wrapped node. The operand's span is read BEFORE the operand moves into
+    // the node. Most builders reuse it verbatim — exactly the seed's
+    // `lhs.span.clone()`, not extended to cover the call args — but
+    // `finish_index` extends it past the `]`, mirroring the seed after
+    // B-2026-08-18-21; see the note there.
 
     // `callee(args)`.
     fn finish_call(mut ref self, callee: Expr) -> Expr {
@@ -1106,15 +1108,25 @@ impl Parser {
 
     // `object[index]` — single index (multi-dim `t[i, j]` desugaring lands with
     // the types/patterns slice).
+    //
+    // B-2026-08-18-21 — the ONE postfix builder here whose span is NOT the
+    // operand's: a subscript spans object-start -> past the `]`. The seed
+    // parser was widened for the same reason `?` and `?.` were before it (a
+    // node that copies its LHS's span has no SpanKey of its own, so a whole
+    // postfix chain collapses onto one key and the last write wins), and this
+    // oracle compares span-for-span, so the two must move together.
+    // `span_from` reads the token before `pos`, which `expect_rbracket` has
+    // just made the `]`.
     fn finish_index(mut ref self, object: Expr) -> Expr {
         let sp = expr_span(object);
         self.advance(); // consume [
         let index = self.parse_expr_bp(0);
         self.expect_rbracket();
+        let span = self.span_from(sp);
         Expr.Index(IndexExpr {
             object: object,
             index: index,
-            span: sp,
+            span: span,
         })
     }
 

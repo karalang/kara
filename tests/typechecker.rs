@@ -25799,6 +25799,58 @@ fn multiple_c_string_literals_typecheck() {
     typecheck_ok("fn main() {\n    let s = c\"abc\";\n    let t = c\"def\";\n}");
 }
 
+/// B-2026-08-18-21's headline measurement, pinned end to end: a postfix chain
+/// must not overwrite its innermost receiver's type-table entry.
+///
+/// The row measured `v[0..3].first_or(-1).to_string()` and found
+/// `string_typed_exprs` holding exactly ONE entry — `(256,1)`, the span of the
+/// `Vec[i64]` receiver `v` — because `Index` copied its object's span, the
+/// whole chain shared that one key, and the String-typed tail won on last
+/// write. (`first_or` is a `Vec` method, not a `Slice` one, so the fixture
+/// here reaches the same shape through `.len()`; the collision is a property
+/// of the chain, not of which method sits in it.) Downstream, `compile_index`'s range branch read the receiver's entry,
+/// believed a `Vec` subscript was a `String`, and the build died
+/// (B-2026-08-18-14).
+///
+/// This asserts the property rather than the symptom: `v` keeps its OWN entry,
+/// and it is the vector type. `MethodCall` still copies its receiver's span
+/// (B-2026-08-18-24), so the chain's two method steps continue to share the
+/// subscript's key — the assertion is deliberately about the receiver, which
+/// is the half this row fixed.
+#[test]
+fn chained_subscript_does_not_overwrite_its_receivers_type_entry() {
+    let src =
+        "fn main() {\n    let v: Vec[i64] = Vec.new();\n    let s = v[0..3].len().to_string();\n}";
+    let result = typecheck_ok(src);
+
+    // The bare receiver `v` in the chain — the second `v` in the source, one
+    // byte long, immediately followed by `[`.
+    let recv_offset = src.match_indices("v[0..3]").next().expect("receiver").0;
+    let recv = result
+        .expr_types
+        .get(&karac::resolver::SpanKey(recv_offset, 1))
+        .unwrap_or_else(|| {
+            panic!(
+                "the receiver `v` has no type entry of its own; the chain \
+                 collapsed onto it (B-2026-08-18-21)"
+            )
+        });
+    assert!(
+        matches!(recv, Type::Named { name, .. } if name == "Vec"),
+        "the receiver's own entry must still be the vector type, not the \
+         chain's String tail: {recv:?}"
+    );
+
+    // And the subscript is a separate key, not the receiver's.
+    let sub = result
+        .expr_types
+        .get(&karac::resolver::SpanKey(recv_offset, "v[0..3]".len()));
+    assert!(
+        sub.is_some(),
+        "the subscript `v[0..3]` must have a SpanKey of its own"
+    );
+}
+
 #[test]
 fn c_string_literal_expr_type_records_ref_cstr() {
     // Verifies the type-table entry directly — exposes the typed

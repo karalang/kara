@@ -4006,11 +4006,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 inclusive,
             } = &index.kind
             {
-                if self
-                    .span_tables
-                    .string_typed_exprs
-                    .contains(&(object.span.offset, object.span.length))
-                {
+                // Ask the static type walk, falling back to the span table
+                // only when it has no answer — the discriminator
+                // B-2026-08-18-14 established for `compile_index`'s range
+                // branch, applied here for the two reasons that branch names.
+                //
+                // A `ref String` PARAMETER is recorded as `Ref(Str)`, which
+                // `string_typed_exprs` filters out, so the span-table gate had
+                // only ever been answering `true` for one because the
+                // SUBSCRIPT node — typed plain `Str` — wrote over the object's
+                // key. B-2026-08-18-21 gave `Index` a span of its own, which
+                // separates the two ends: the gate then declines, the owning
+                // path allocates a fresh `String` nobody frees, and
+                // `asan_push_str_range_slice_temp_no_double_free` leaks 24
+                // bytes in 4 allocations out of `karac_string_slice`.
+                //
+                // The two sites decide opposite halves of ONE question —
+                // borrowed view vs owned copy — about the same expression, so
+                // they must use the same discriminator or the pair silently
+                // stops covering the allocation it makes.
+                let object_is_string = match self.type_name_of_expr(object).as_deref() {
+                    Some(name) => name == "String",
+                    None => self
+                        .span_tables
+                        .string_typed_exprs
+                        .contains(&(object.span.offset, object.span.length)),
+                };
+                if object_is_string {
                     return Ok(Some(
                         self.compile_string_slice_borrowed(object, start, end, *inclusive)?,
                     ));
