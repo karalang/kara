@@ -347,16 +347,19 @@ const NON_TERMINATOR: &[(&str, &str)] = &[
         "effect resource RequestCh: Channel[Request]",
         "B-2026-08-18-41: effect-resource declaration forms the spec defines and the parser rejects",
     ),
-    // Kara has no `!` -- the parser says so outright ("the `!` operator is not
-    // used in Kara"). After `matches` it surfaces as `Expected Semicolon, found
-    // Bang` instead, which is why it lands here. Rust macro syntax, not a
-    // terminator; eight sites across the document (`panic!`, `matches!`,
-    // `format_into!`).
-    (
-        "matches!(parent.left",
-        "B-2026-08-18-42: Rust macro syntax (`name!(...)`) in kara blocks",
-    ),
 ];
+
+// REMOVED, and the removal is exactly what the sibling test below exists to
+// force. `matches!` was listed here because it surfaced as `Expected Semicolon,
+// found Bang` -- the `!` follows an identifier, so the parser stopped at a token
+// that reads like a missing terminator. `ce0ae03` then gave that shape a
+// diagnostic of its own ("Kara has no macros; `matches!(...)` is Rust syntax --
+// call it as `matches(...)`"), so it no longer reaches this gate and the entry
+// had become a standing licence to regress that line unnoticed. The guard test
+// failed on the very next full run and named it.
+//
+// B-2026-08-18-42 STAYS OPEN: the document still carries eight Rust macro sites.
+// Only the diagnostic improved, not the corpus.
 
 /// No `kara` block in design.md is missing a statement terminator.
 ///
