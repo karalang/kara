@@ -168,6 +168,16 @@ enum KStmt<'a> {
         cond: &'a Expr,
         body: Vec<KStmt<'a>>,
     },
+    /// `for v in start..end { body }` → WGSL
+    /// `for (var v = start; v < end; v = v + 1) { … }`. The bound is `<=` when
+    /// the Kāra range is inclusive (`..=`).
+    ForRange {
+        var: &'a str,
+        start: &'a Expr,
+        end: &'a Expr,
+        inclusive: bool,
+        body: Vec<KStmt<'a>>,
+    },
 }
 
 /// Lexical scope for a scalar kernel body: a stack of (source name, WGSL name)
@@ -297,6 +307,54 @@ fn scalar_stmt_list(stmts: &[Stmt]) -> Result<Vec<KStmt<'_>>, WgslError> {
                 });
             }
             StmtKind::Expr(Expr {
+                kind:
+                    ExprKind::For {
+                        pattern,
+                        iterable,
+                        body,
+                        ..
+                    },
+                ..
+            }) => {
+                let PatternKind::Binding(var) = &pattern.kind else {
+                    return Err(WgslError::UnsupportedBody(
+                        "a GPU kernel `for` must bind a simple loop variable (no destructuring)"
+                            .to_string(),
+                    ));
+                };
+                // Only an integer range is iterable in a scalar kernel: there is
+                // no collection to walk — the buffer element is the parameter.
+                let ExprKind::Range {
+                    start,
+                    end,
+                    inclusive,
+                } = &iterable.kind
+                else {
+                    return Err(WgslError::UnsupportedBody(
+                        "a GPU kernel `for` must iterate a range (`for i in 0..n`) — there is no \
+                         collection to iterate inside a kernel"
+                            .to_string(),
+                    ));
+                };
+                let (Some(start), Some(end)) = (start.as_deref(), end.as_deref()) else {
+                    return Err(WgslError::UnsupportedBody(
+                        "a GPU kernel `for` needs both range bounds (`for i in 0..n`)".to_string(),
+                    ));
+                };
+                if body.final_expr.is_some() {
+                    return Err(WgslError::UnsupportedBody(
+                        "a GPU kernel `for` body must not produce a value".to_string(),
+                    ));
+                }
+                out.push(KStmt::ForRange {
+                    var: var.as_str(),
+                    start,
+                    end,
+                    inclusive: *inclusive,
+                    body: scalar_stmt_list(&body.stmts)?,
+                });
+            }
+            StmtKind::Expr(Expr {
                 kind: ExprKind::While {
                     condition, body, ..
                 },
@@ -400,6 +458,31 @@ fn emit_stmts<'a>(
                 out.push_str(&format!("{pad}while ({c}) {{\n"));
                 // A binding inside the loop body is scoped to it.
                 let depth = scope.depth();
+                emit_stmts(body, scope, helpers, indent + 1, out)?;
+                scope.truncate(depth);
+                out.push_str(&format!("{pad}}}\n"));
+            }
+            KStmt::ForRange {
+                var,
+                start,
+                end,
+                inclusive,
+                body,
+            } => {
+                // Both bounds are evaluated in the ENCLOSING scope, before the
+                // loop variable exists — `for i in 0..i` would otherwise read
+                // the variable being declared.
+                let lo = lower_expr(start, &scope.resolver(), helpers)?;
+                let hi = lower_expr(end, &scope.resolver(), helpers)?;
+                let depth = scope.depth();
+                // Kāra's loop variable is immutable, so it is bound non-mutable
+                // (assigning to it is rejected) even though WGSL needs a `var`
+                // to carry the increment.
+                let v = scope.bind(var, false);
+                let cmp = if *inclusive { "<=" } else { "<" };
+                out.push_str(&format!(
+                    "{pad}for (var {v} = {lo}; {v} {cmp} {hi}; {v} = {v} + 1) {{\n"
+                ));
                 emit_stmts(body, scope, helpers, indent + 1, out)?;
                 scope.truncate(depth);
                 out.push_str(&format!("{pad}}}\n"));
@@ -2778,6 +2861,100 @@ mod tests {
         let body = wgsl.split("while").nth(1).unwrap();
         assert!(body.contains("let step = (input[i] + 1.0);"), "{wgsl}");
         assert!(wgsl.contains("acc += step;"), "{wgsl}");
+    }
+
+    // ── `for` over a range (B-2026-08-18-40, increment 3) ──────────
+
+    #[test]
+    fn scalar_kernel_lowers_for_over_an_exclusive_range() {
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    for n in 0..4 {\n        acc = acc + x;\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(
+            wgsl.contains("for (var n = 0; n < 4; n = n + 1) {"),
+            "{wgsl}"
+        );
+        assert!(wgsl.contains("acc = (acc + input[i]);"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_lowers_inclusive_range_with_le() {
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    for n in 1..=3 {\n        acc = acc + x;\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(
+            wgsl.contains("for (var n = 1; n <= 3; n = n + 1) {"),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn scalar_kernel_nests_for_loops_and_renames_the_wrapper_collision() {
+        // The outer counter is `i` — the wrapper's thread index — so it renames;
+        // the inner `k` does not. The param still reads the THREAD element.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    for i in 0..4 {\n        for k in 1..=2 {\n            acc = acc + x;\n        }\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(
+            wgsl.contains("for (var i_k = 0; i_k < 4; i_k = i_k + 1) {"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("for (var k = 1; k <= 2; k = k + 1) {"),
+            "{wgsl}"
+        );
+        assert!(wgsl.contains("acc = (acc + input[i]);"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_scopes_the_loop_variable_to_its_loop() {
+        // Two sequential loops may reuse a name: the first binding is popped at
+        // the end of its loop, so the second gets the same WGSL name rather than
+        // an ever-growing suffix.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    for n in 0..2 {\n        acc = acc + x;\n    }\n    for n in 0..3 {\n        acc = acc + x;\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(
+            wgsl.contains("for (var n = 0; n < 2; n = n + 1) {"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("for (var n = 0; n < 3; n = n + 1) {"),
+            "{wgsl}"
+        );
+        // No renamed sibling was minted (`var n_ = …`). Matching on the
+        // declaration, not a bare `n_`, because `global_invocation_id` in the
+        // entry-point signature contains that substring.
+        assert!(
+            !wgsl.contains("var n_"),
+            "the loop name must not accumulate suffixes:\n{wgsl}"
+        );
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_assignment_to_the_loop_variable() {
+        // Kāra's loop variable is immutable, even though WGSL needs a `var` to
+        // carry the increment.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    for n in 0..4 {\n        n = n + 1;\n    }\n    acc\n}",
+        );
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("immutable local"), "{msg}");
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_for_over_a_non_range() {
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    for n in x {\n        acc = acc + x;\n    }\n    acc\n}",
+        );
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("must iterate a range"), "{msg}");
     }
 
     #[test]

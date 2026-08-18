@@ -56332,6 +56332,48 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_gpu_scalar_kernel_lowers_for_over_range() {
+        // B-2026-08-18-40 increment 3: `for v in a..b` lowers to a native WGSL
+        // `for`, inclusive ranges compare with `<=`, loops nest, and the outer
+        // counter named `i` renames off the wrapper's thread index so the
+        // parameter still reads `input[i]`. Codegen-only, so CI-safe; the
+        // executed twin ran on lavapipe and matched the interpreter (11, 23).
+        let src = r#"
+#[gpu]
+fn poly(x: f32) -> f32 {
+    let mut acc: f32 = 0.0;
+    for i in 0..4 {
+        for k in 1..=2 {
+            acc = acc + x;
+        }
+    }
+    acc
+}
+
+fn main() {
+    let mut v: Vec[f32] = Vec.new();
+    v.push(2.0);
+    let out = gpu.dispatch(poly, v);
+    println(out[0] as i64);
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("for (var i_k = 0; i_k < 4; i_k = i_k + 1)"),
+            "an exclusive range must compare with `<`, with the counter renamed off \
+             the wrapper's thread index; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("for (var k = 1; k <= 2; k = k + 1)"),
+            "an inclusive range must compare with `<=`; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("acc = (acc + input[i]);"),
+            "the param must still read the THREAD element; got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_gpu_scalar_kernel_lowers_while_loop() {
         // B-2026-08-18-40 increment 2: `while` + mutable locals + assignment,
         // i.e. the accumulator shape every reduction needs. The loop counter is
