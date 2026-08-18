@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
 | missing-feature | 111 | 3 |
-| diagnostics | 83 | 1 |
+| diagnostics | 83 | 0 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 202 | 2 |
 | interp | 153 | 0 |
 | ownership | 60 | 0 |
-| other | 56 | 3 |
+| other | 56 | 2 |
 | autopar | 49 | 0 |
 | cli | 46 | 0 |
 | parser | 26 | 1 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced · 6 open · 1324 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced · 5 open · 1325 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-18-41 | 2026-08-18 | parser | low | TWO `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket", design.md:6071) and MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216 under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213). The third form this row was filed with -- PARAMETERIZED resources, `effect resource UserDB[user_id: i64];` -- is FIXED (see below); only `effect resource X;`, `effect resource X: Trait;` and the parameterized form parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
-| B-2026-08-18-42 | 2026-08-18 | other | low | EIGHT occurrences across SEVEN lines in design.md's kara blocks use Rust MACRO syntax (`name!(...)`), which Kara does not have -- the parser rejects `!` outright with "the `!` operator is not used in Kara". `panic!` (6, five of them in § Never type -- one line carries two -- plus § FFI callbacks), `matches!` (1, § peek-and-drop) and `format_into!` (1, § embedded formatting). Transcribing any of them fails to parse. Only `panic!` has a drop-in replacement -- `panic("x")` checks FULLY clean -- while `matches` resolves to nothing at all ("undefined name 'matches'") and `format_into!` is variadic over a format string, so two of the three need a language answer before the doc can be corrected. | docs/design.md:542, :543, :556, :557 (panic!), :5941 (panic!), :8419 (matches!), :12162 (format_into!); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR; cf. B-2026-08-17-35 for the same class |
 | B-2026-08-18-50 | 2026-08-18 | typecheck | low | A PARAMETERIZED RESOURCE'S PARTITION KEY IS NEVER TYPECHECKED against its declared type. `effect resource UserDB[user_id: i64];` records `i64`, and a use site `with writes(UserDB[name])` for a `String` binding is accepted with no diagnostic -- as is a keyed use of a resource that declares no key at all. design.md § Parameterized Resources additionally requires the key type to implement `Eq` (and `Hash + Eq` for the hash-partition path), "rejected at resource declaration with a clear diagnostic" (design.md:7180); nothing checks that either. | roadmap.md |
 | B-2026-08-18-51 | 2026-08-18 | other | medium | `tests/gpu_e2e.rs` FAILS THE WHOLE SUITE on any machine that has not built the OPTIONAL `libkarac_runtime_gpu.a` — six tests panic with a link error rather than skipping. CLAUDE.md documents that archive as opt-in ("Skip unless doing GPU work"), so this is the default state of a fresh checkout: every session working an unrelated bug now has a red `cargo test --features llvm`. The probe classifies a MISSING-ARCHIVE link failure as `Probe::Broken`, which panics unconditionally and no environment variable suppresses. | `gpu_probe` / `gpu_or_skip` in tests/gpu_e2e.rs and its `is_no_adapter` predicate; cf. `common::link_or_skip`, whose three-way discrimination this needs to mirror. Archive recipe in CLAUDE.md under the optional `gpu` archive. |
 
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced
 
 </details>
 
-### Fixed (1324)
+### Fixed (1325)
 
-<details><summary>1324 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1325 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11973,6 +11972,21 @@ NOT REPRODUCIBLE, checked in the same pass: the sibling `NestedBoxedEnumDrop` (a
 ASAN DOES NOT CATCH THE ORIGINAL DEFECT, which is worth recording before someone tries. The first ASAN run of the repro returned a wrong value and reported nothing, because the freed chunk is still mapped and the read lands inside it. The regression gate for the use-after-free is therefore an OUTPUT-VALUE assertion (tests/par_codegen.rs), with the ASAN fixture guarding only the "freed exactly once" half of the repair.
 
 LEAVES A LIVE REMAINDER, filed as B-2026-08-18-48 rather than buried here: if the joined binding is then MOVED into a by-value call, the move-out sentinel zeroes the parent's slot so the adopted drop no-ops, and a by-value enum parameter does not adopt the box — 2000/2000 boxes leak in a loop repro. That hole is older than this row and independent of it; sequentially the same program is clean only because the box never escapes a single function and LLVM deletes the allocation outright, so nothing was freeing it there either. Before this fix that program had a use-after-free instead of a leak, so the change is strictly an improvement, but it is not the whole story and the ASAN fixture deliberately uses a READING consumer and says so. |
+| B-2026-08-18-42 | other | low | EIGHT occurrences across SEVEN lines in design.md's kara blocks use Rust MACRO syntax (`name!(...)`), which Kara does not have -- the parser rejects… | FIXED by 9b6e1b1. All eight sites corrected, and the two the row said needed "a language answer" got one each rather than a guess.
+
+`panic!` x 6 -> `panic(...)`. The row already measured this as the safe drop-in; `panic()` with no argument checks clean too, which the `panic!()` sites at design.md:556-557 need.
+
+`matches!` -> a plain `match` expression yielding a bool:
+    let is_lit = match parent.left { AstNode.Lit { .. } => true, _ => false };
+No language decision was needed after all -- the row read `matches!` as requiring one because its second argument is a PATTERN with no bare-call equivalent, which is true, but a `match` expression takes patterns natively and returns a value. The replacement preserves the passage's whole point (the read borrow expires at the `;` before the assignment needs an exclusive one) and uses only v1 syntax. Verified compiling and running.
+
+`format_into!` -> NO spelling shown, and that is the answer rather than an evasion. A bare `format_into(buf, "temp={} rpm={}", temp, rpm)` would not have worked either -- the arguments are variadic behind a format string, which no v1 call syntax provides -- so correcting the notation alone would have moved the lie rather than removed it. The feature is also unimplemented: `grep format_into` over `src/`, `runtime/src/` and `deferred.md` returns nothing; it exists only as a `core` bullet and this example. So both sites now carry the house-style caveat ("**Not available in v1**, and the spelling is undecided ... because Kara has no macros"), and the example body is a comment rather than code an author could transcribe.
+
+A THIRD PARSE POSITION was found and fixed on the way. B-2026-08-18-46 recognized macro syntax at statement and value position; the six `panic!` sites are almost all in ARGUMENT position (`id(panic!("never"))`), which stops at `expect(RightParen)` and so reported "Expected RightParen, found Bang" while the identical mistake elsewhere got a diagnostic naming it. The recognizer is now keyed on the FOUND token rather than on which token was expected, so all three positions share it -- and `karac fix` repairs argument position too, verified end to end.
+
+GATED, which is the durable half: `design_md_kara_blocks_use_no_rust_macros` fails if any kara block produces the "no macros" diagnostic. It ASKS THE PARSER rather than pattern-matching text, because `vec![1, 2, 3]` IS valid Kara -- the postfix path consumes it before prefix parsing -- so a regex over `name!(` would need a hand-maintained exception list and would flag the one legitimate form. A sibling test pins both directions: the gate fires on an argument-position `panic!` and stays silent on `vec![...]`.
+
+Measured red before, green after: on the unfixed document the gate reports 9 diagnostics across 5 distinct lines. Fewer than eight because the parser stops at the first error in each block, so a second macro on a later line of the same block is masked -- the gate is iterative, like its terminator sibling. The corrections were made from a full survey rather than from gate output, so all eight went in one pass. |
 | B-2026-08-18-43 | parser | medium | `Expected Semicolon` -- the most common parse error in the whole corpus -- carries NO machine-applicable `replacement`, so `karac fix` reports it and… | FIXED by ce0ae03. `expect()` now attaches a machine-applicable `;` insertion whenever the expected token is `Semicolon`, so `karac fix` repairs the corpus's most common parse error instead of reporting it and changing nothing. Verified on the row's own repro: `karac fix fx.kara` reports "applied 1 fix(es)" and the file goes on to pass `karac check`.
 
 THE OFFSET IS EXACT, as the row said it would be: the `;` goes at the END OF THE PREVIOUS TOKEN, which is the last token of the statement that just parsed. The multi-line `let` in the regression test is precisely the shape that forced B-2026-08-17-31's line-level predecessor to be reverted -- there is no end-of-line to append to and the brackets balance on each line taken alone -- and the parser handles it without difficulty. Anchoring to the token also keeps a trailing comment intact for free, since comments are not tokens: `let x = 1  // n` becomes `let x = 1;  // n`.
