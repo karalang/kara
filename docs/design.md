@@ -2712,18 +2712,18 @@ Two built-in traits power `for` loops:
 
 ```kara
 trait Iterable {
-    type Item
-    fn iter(ref self) -> impl Iterator[Item = Self.Item]
+    type Item;
+    fn iter(ref self) -> impl Iterator[Item = Self.Item];
 }
 
 trait Iterator {
-    type Item
-    fn next(mut ref self) -> Option[Self.Item] with _
+    type Item;
+    fn next(mut ref self) -> Option[Self.Item] with _;
 }
 
 trait IntoIterator {
-    type Item
-    fn into_iter(self) -> impl Iterator[Item = Self.Item]
+    type Item;
+    fn into_iter(self) -> impl Iterator[Item = Self.Item];
 }
 ```
 
@@ -2731,7 +2731,7 @@ trait IntoIterator {
 
 ```kara
 impl[I: Iterator] Iterable for I {
-    type Item = I.Item
+    type Item = I.Item;
     fn iter(ref self) -> impl Iterator[Item = I.Item] { *self }
 }
 ```
@@ -2844,7 +2844,7 @@ fn skip_while[with E](self, pred: Fn(ref Self.Item) -> bool with E)
 
 ```kara
 trait FromIterator[T] {
-    fn from_iter[I: Iterator[Item = T]](iter: I) -> Self
+    fn from_iter[I: Iterator[Item = T]](iter: I) -> Self;
 }
 ```
 
@@ -2995,35 +2995,35 @@ Format backends (`Json`, `Toml`, `MessagePack`, etc.) implement the `Serializer`
 
 ```kara
 trait Serializer {
-    fn serialize_bool(mut ref self, v: bool) with _
-    fn serialize_i64(mut ref self, v: i64) with _
-    fn serialize_string(mut ref self, v: ref String) with _
-    fn serialize_seq_begin(mut ref self, len: i64) with _
-    fn serialize_seq_end(mut ref self) with _
-    fn serialize_struct_begin(mut ref self, name: ref String, len: i64) with _
-    fn serialize_field(mut ref self, name: ref String) with _
-    fn serialize_struct_end(mut ref self) with _
+    fn serialize_bool(mut ref self, v: bool) with _;
+    fn serialize_i64(mut ref self, v: i64) with _;
+    fn serialize_string(mut ref self, v: ref String) with _;
+    fn serialize_seq_begin(mut ref self, len: i64) with _;
+    fn serialize_seq_end(mut ref self) with _;
+    fn serialize_struct_begin(mut ref self, name: ref String, len: i64) with _;
+    fn serialize_field(mut ref self, name: ref String) with _;
+    fn serialize_struct_end(mut ref self) with _;
     // ... enum, map, option visitors
 }
 
 trait Serialize {
-    fn serialize(ref self, s: mut ref Serializer) with _
+    fn serialize(ref self, s: mut ref Serializer) with _;
 }
 
 trait Deserializer {
-    fn deserialize_bool(mut ref self) -> Result[bool, DeserializeError] with _
-    fn deserialize_i64(mut ref self) -> Result[i64, DeserializeError] with _
-    fn deserialize_string(mut ref self) -> Result[String, DeserializeError] with _
-    fn deserialize_seq_begin(mut ref self) -> Result[i64, DeserializeError] with _
-    fn deserialize_seq_end(mut ref self) -> Result[(), DeserializeError] with _
-    fn deserialize_struct_begin(mut ref self, name: ref String) -> Result[(), DeserializeError] with _
-    fn deserialize_field(mut ref self) -> Result[String, DeserializeError] with _
-    fn deserialize_struct_end(mut ref self) -> Result[(), DeserializeError] with _
+    fn deserialize_bool(mut ref self) -> Result[bool, DeserializeError] with _;
+    fn deserialize_i64(mut ref self) -> Result[i64, DeserializeError] with _;
+    fn deserialize_string(mut ref self) -> Result[String, DeserializeError] with _;
+    fn deserialize_seq_begin(mut ref self) -> Result[i64, DeserializeError] with _;
+    fn deserialize_seq_end(mut ref self) -> Result[(), DeserializeError] with _;
+    fn deserialize_struct_begin(mut ref self, name: ref String) -> Result[(), DeserializeError] with _;
+    fn deserialize_field(mut ref self) -> Result[String, DeserializeError] with _;
+    fn deserialize_struct_end(mut ref self) -> Result[(), DeserializeError] with _;
     // ... enum, map, option visitors
 }
 
 trait Deserialize {
-    fn deserialize(d: mut ref Deserializer) -> Result[Self, DeserializeError] with _
+    fn deserialize(d: mut ref Deserializer) -> Result[Self, DeserializeError] with _;
 }
 ```
 
@@ -3191,7 +3191,7 @@ impl Display for Vec[i64] { ... }     // ERROR: orphan impl
 **The newtype escape hatch.** When you need behavior from a foreign trait on a foreign type, wrap it in a local `distinct type`:
 
 ```kara
-distinct type DisplayVec = Vec[i64]
+distinct type DisplayVec = Vec[i64];
 
 impl Display for DisplayVec {
     fn to_string(ref self) -> String { ... }
@@ -3423,7 +3423,7 @@ A trait may declare that its implementors must also implement other traits. The 
 
 ```kara
 trait Ord: PartialOrd + Eq {
-    fn cmp(ref self, other: ref Self) -> Ordering
+    fn cmp(ref self, other: ref Self) -> Ordering;
 }
 ```
 
@@ -3441,7 +3441,7 @@ The `: PartialOrd + Eq` says **every type that implements `Ord` must also implem
 1. **Cross-trait default method bodies.** A default method on `Ord` may call `PartialOrd`'s and `Eq`'s methods, because the constraint guarantees they exist on any `Self`:
    ```kara
    trait Ord: PartialOrd + Eq {
-       fn cmp(ref self, other: ref Self) -> Ordering
+       fn cmp(ref self, other: ref Self) -> Ordering;
        fn max(self, other: Self) -> Self {
            if self.cmp(other) == Ordering.Less { other } else { self }
        }
@@ -3623,8 +3623,8 @@ A trait may declare **associated types** — named output types that are fixed b
 
 ```kara
 trait Iterator {
-    type Item
-    fn next(mut ref self) -> Option[Self.Item] with _
+    type Item;
+    fn next(mut ref self) -> Option[Self.Item] with _;
 }
 ```
 
@@ -3634,7 +3634,7 @@ The implementing type binds the associated type once:
 struct CountUp { current: i64, limit: i64 }
 
 impl Iterator for CountUp {
-    type Item = i64
+    type Item = i64;
     fn next(mut ref self) -> Option[i64] {
         if self.current >= self.limit { return None }
         self.current += 1
@@ -3668,7 +3668,7 @@ Equality constraints are distinct from bounds (`:`). Only one is allowed per ass
 ```kara
 // ERROR: CountUp already implements Iterator with Item = i64
 impl Iterator for CountUp {
-    type Item = String
+    type Item = String;
     ...
 }
 ```
@@ -3679,8 +3679,8 @@ This is the key difference from generic trait parameters: `trait Iterator[T]` wo
 
 ```kara
 trait Parseable {
-    type Output: Display
-    fn parse(input: String) -> Result[Self.Output, String]
+    type Output: Display;
+    fn parse(input: String) -> Result[Self.Output, String];
 }
 ```
 
@@ -3704,13 +3704,13 @@ An associated type may itself take type parameters — `type Mapped[U]` — maki
 
 ```kara
 trait Functor {
-    type Mapped[U]
-    fn map[U, with E](self, f: Fn(Self.Item) -> U with E) -> Self.Mapped[U] with E
+    type Mapped[U];
+    fn map[U, with E](self, f: Fn(Self.Item) -> U with E) -> Self.Mapped[U] with E;
 }
 
 impl Functor for Vec[T] {
-    type Item = T
-    type Mapped[U] = Vec[U]
+    type Item = T;
+    type Mapped[U] = Vec[U];
     fn map[U, with E](self, f: Fn(T) -> U with E) -> Vec[U] with E { ... }
 }
 ```
@@ -3761,11 +3761,11 @@ Standard traits for type conversions. These are implied by existing spec feature
 
 ```kara
 trait From[T] {
-    fn from(value: T) -> Self with _
+    fn from(value: T) -> Self with _;
 }
 
 trait Into[T] {
-    fn into(self) -> T with _
+    fn into(self) -> T with _;
 }
 ```
 
@@ -3803,13 +3803,13 @@ fn handler(e: ParseError) -> AppError with writes(Log) {
 
 ```kara
 trait TryFrom[T] {
-    type Error
-    fn try_from(value: T) -> Result[Self, Self.Error] with _
+    type Error;
+    fn try_from(value: T) -> Result[Self, Self.Error] with _;
 }
 
 trait TryInto[T] {
-    type Error
-    fn try_into(self) -> Result[T, Self.Error] with _
+    type Error;
+    fn try_into(self) -> Result[T, Self.Error] with _;
 }
 ```
 
@@ -3828,11 +3828,11 @@ fn parse_and_store(input: String) -> Result[(), AppError] {
 **Refinement types use `TryFrom`.** The standard re-refinement pattern is:
 
 ```kara
-type Positive = i64 where self > 0
+type Positive = i64 where self > 0;
 
 // Compiler generates:
 impl TryFrom[i64] for Positive {
-    type Error = String
+    type Error = String;
     fn try_from(value: i64) -> Result[Positive, String] {
         if value > 0 { Ok(value) } else { Err("expected positive i64") }
     }
@@ -3972,7 +3972,7 @@ Any narrowing that does not match one of these two rules requires an **explicit*
 When `T` is a refinement type, the source expression must have exactly the same type as `T`'s base type. If the source type differs from the base, the expression is a **compile error** — write the two steps explicitly:
 
 ```kara
-type Special = i32 where self > 0
+type Special = i32 where self > 0;
 
 let x: i64 = 100;
 let y = x as Special;          // COMPILE ERROR: source i64 ≠ base type i32
@@ -4121,7 +4121,7 @@ This gives you both type safety (can't pass a random `u16` as a port) and value 
 4. **`.raw()` returns the raw base type `Base`**, stripping both the `distinct` wrapper and the predicate. The predicate is a construction-time guarantee, not a runtime tag; `.raw()` is an explicit opt-out of both.
 
 ```kara
-distinct type ValidPort = u16 where self >= 1 and self <= 65535
+distinct type ValidPort = u16 where self >= 1 and self <= 65535;
 
 let p = ValidPort(80);            // OK — const-eval: predicate holds, no runtime check
 let q = ValidPort(70000);         // COMPILE ERROR — const-eval: 70000 > 65535
@@ -4425,7 +4425,7 @@ enum Shape {
 
 ```kara
 trait Shrink {
-    fn shrink(ref self) -> Vec[Self]   // returns candidate smaller values; empty = minimal
+    fn shrink(ref self) -> Vec[Self];   // returns candidate smaller values; empty = minimal
 }
 ```
 
@@ -4679,7 +4679,7 @@ let msg = f"hello {name}, {count} items, {count + 1} total";
 
   ```kara
   trait Debug {
-      fn fmt_debug(ref self) -> String
+      fn fmt_debug(ref self) -> String;
   }
   ```
 
@@ -5185,13 +5185,13 @@ User-defined types support `[]` indexing by implementing two standard traits:
 
 ```kara
 trait Index[Idx] {
-    type Output
-    fn index(ref self, idx: Idx) -> ref Self.Output
+    type Output;
+    fn index(ref self, idx: Idx) -> ref Self.Output;
 }
 
 trait IndexMut[Idx] {
-    type Output
-    fn index_mut(mut ref self, idx: Idx) -> mut ref Self.Output
+    type Output;
+    fn index_mut(mut ref self, idx: Idx) -> mut ref Self.Output;
 }
 ```
 
@@ -5236,20 +5236,20 @@ Every operator in Kāra is trait-dispatched from Day 1. There is no parser- or l
 
 ```kara
 // Arithmetic (binary) — owned operands, returns new value
-trait Add { fn add(self, rhs: Self) -> Self }
-trait Sub { fn sub(self, rhs: Self) -> Self }
-trait Mul { fn mul(self, rhs: Self) -> Self }
-trait Div { fn div(self, rhs: Self) -> Self }
-trait Rem { fn rem(self, rhs: Self) -> Self }
+trait Add { fn add(self, rhs: Self) -> Self; }
+trait Sub { fn sub(self, rhs: Self) -> Self; }
+trait Mul { fn mul(self, rhs: Self) -> Self; }
+trait Div { fn div(self, rhs: Self) -> Self; }
+trait Rem { fn rem(self, rhs: Self) -> Self; }
 
 // Arithmetic (unary) — owned operand, returns new value
-trait Neg { fn neg(self) -> Self }
+trait Neg { fn neg(self) -> Self; }
 
 // Equality — borrows both sides (inspects, does not consume).
 // PartialEq covers types where equality may not be reflexive (floats: NaN != NaN).
 // Eq is a marker: "my PartialEq is reflexive, symmetric, and transitive on every value."
 // It adds no new methods and cannot be implemented on a type that doesn't already implement PartialEq.
-trait PartialEq { fn eq(ref self, other: ref Self) -> bool }
+trait PartialEq { fn eq(ref self, other: ref Self) -> bool; }
 trait Eq: PartialEq {}
 
 // Ordering — borrows both sides.
@@ -5258,21 +5258,21 @@ trait Eq: PartialEq {}
 // Ord is a marker: "my PartialOrd is a total order, and my equality is reflexive."
 // Ord requires Eq (total equality) in addition to PartialOrd.
 trait PartialOrd: PartialEq {
-    fn partial_cmp(ref self, other: ref Self) -> Option[Ordering]
+    fn partial_cmp(ref self, other: ref Self) -> Option[Ordering];
 }
 trait Ord: PartialOrd + Eq {
-    fn cmp(ref self, other: ref Self) -> Ordering
+    fn cmp(ref self, other: ref Self) -> Ordering;
 }
 
 // Bitwise (binary) — owned operands, like arithmetic
-trait BitAnd { fn bitand(self, rhs: Self) -> Self }
-trait BitOr  { fn bitor(self, rhs: Self) -> Self }
-trait BitXor { fn bitxor(self, rhs: Self) -> Self }
-trait Shl    { fn shl(self, rhs: Self) -> Self }
-trait Shr    { fn shr(self, rhs: Self) -> Self }
+trait BitAnd { fn bitand(self, rhs: Self) -> Self; }
+trait BitOr  { fn bitor(self, rhs: Self) -> Self; }
+trait BitXor { fn bitxor(self, rhs: Self) -> Self; }
+trait Shl    { fn shl(self, rhs: Self) -> Self; }
+trait Shr    { fn shr(self, rhs: Self) -> Self; }
 
 // Bitwise (unary) — owned operand
-trait Not { fn not(self) -> Self }
+trait Not { fn not(self) -> Self; }
 ```
 
 The `Ordering` type returned by `Ord.cmp`:
@@ -5342,7 +5342,7 @@ Arithmetic on distinct types is **opt-in** via `#[derive(Arithmetic)]`. When opt
 
 ```kara
 #[derive(Eq, Ord, Arithmetic)]
-distinct type FloorNum = i64
+distinct type FloorNum = i64;
 
 let a = FloorNum(3)
 let b = FloorNum(1)
@@ -7785,7 +7785,7 @@ match flag {
 **Exception — bounded integer ranges.** A refinement whose constraint is exactly `self >= A and self <= B` (or `self >= A and self < B+1`, etc.), where `A` and `B` are integer compile-time constants and the base type is an integer primitive (`i8`..`i64`, `u8`..`u64`), defines a **closed finite domain** that the compiler can enumerate without SMT. For such types the exhaustiveness algorithm treats the type like an enum whose variants are the integers `A..=B`. A match that covers all values in `[A, B]` via literal and range patterns is accepted as exhaustive without a wildcard arm:
 
 ```kara
-type ValidFloor = i64 where self >= 1 and self <= 10
+type ValidFloor = i64 where self >= 1 and self <= 10;
 
 fn describe(floor: ValidFloor) -> String {
     match floor {
@@ -8800,9 +8800,9 @@ struct User { id: u64, name: String }
 **`distinct type` does not inherit `Copy`.** A `distinct type UserId = u64` does not automatically become `Copy` even though `u64` is `Copy`. The point of a distinct type is to prevent accidental treatment as the underlying type — inheriting `Copy` silently would undermine that. Opt in explicitly:
 
 ```kara
-distinct type Offset = i64          // NOT Copy — must clone/annotate explicitly
+distinct type Offset = i64;          // NOT Copy — must clone/annotate explicitly
 #[derive(Copy, Clone)]
-distinct type Offset = i64          // Copy — explicit opt-in
+distinct type Offset = i64;          // Copy — explicit opt-in
 ```
 
 A type like `SessionToken = u64` should never be `Copy` even though `u64` is — the programmer would not write `#[derive(Copy)]` for it.
@@ -8817,7 +8817,7 @@ Most non-`Copy` types — `String`, `Vec[T]`, user structs with heap-owned field
 
 ```kara
 trait Clone {
-    fn clone(ref self) -> Self
+    fn clone(ref self) -> Self;
 }
 ```
 
@@ -11317,7 +11317,7 @@ After `:dep` succeeds, the package's surface is in scope for subsequent cells ex
 trait RichDisplay {
     // Keys are MIME types; values are content strings (base64 for binary MIME types).
     // "text/plain" is required — it is the terminal and fallback representation.
-    fn rich_display(ref self) -> Map[String, String]
+    fn rich_display(ref self) -> Map[String, String];
 }
 ```
 
@@ -13151,7 +13151,7 @@ Checked at monomorphization — the concrete effect set provided by the caller i
 **Design shape:**
 
 ```kara
-type Vector[T: Numeric, const N: i64]
+type Vector[T: Numeric, const N: i64];
 
 let a: Vector[f32, 4] = Vector[f32, 4](1.0, 2.0, 3.0, 4.0)
 let b: Vector[f32, 4] = Vector[f32, 4](0.5, 0.5, 0.5, 0.5)
