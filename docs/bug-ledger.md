@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 260 | 1 |
-| leak | 184 | 1 |
+| leak | 184 | 0 |
 | double-free | 132 | 0 |
 | run-vs-build | 128 | 0 |
 | codegen-gap | 117 | 2 |
@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
 | diagnostics | 73 | 4 |
-| crash | 51 | 0 |
+| crash | 52 | 1 |
 | soundness | 50 | 0 |
 | other | 37 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 921 | 4 |
+| codegen | 922 | 4 |
 | typecheck | 196 | 3 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1311 surfaced · 11 open · 1283 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1312 surfaced · 11 open · 1284 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (11)
 
@@ -136,11 +136,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1311 surfaced
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
-| B-2026-08-18-10 | 2026-08-18 | codegen | medium | A `match` whose SCRUTINEE is a nested `match` with a BARE-IDENTIFIER arm leaks the boxed payload -- `match (match i % 3 { 0 => { o } _ => { None } }) { ... }` over an `o: Option[City]` local strands 1205 bytes in 68 objects across 200 iterations, while the `let`-bound twin `let c = match ...; match c { ... }` is clean. The last arm shape B-2026-08-18-8's fail-closed rule declines. | `match_result_scrutinee_owns_box` in src/codegen/control_flow_match.rs -- the `_ => self.expr_yields_fresh_owned_temp(tail)` arm is where a bare identifier currently falls through to false. The per-arm suppression this needs is the same channel `compile_match`'s arm loop uses for `freshtemp_boxed_slot`. |
 | B-2026-08-18-11 | 2026-08-18 | codegen | high | An OWNED `self` receiver on a builtin-container impl head is not lowered, and the two shapes measured fail in the two worst ways: `for x in self` over an owned `Set[i64]` self compiles to a sum over NOTHING (interpreter 12, `karac build` 0 -- a silent wrong answer), and `self[k]` over an owned `Map[String, i64]` self SEGFAULTS if the map index path is allowed to route it, because the slot does not hold the handle `compile_map_index` loads. The BORROWED spelling of both works. `Vec` and `Slice` owned selves work. | roadmap.md |
 | B-2026-08-18-12 | 2026-08-18 | codegen | medium | `self.len()` inside an `impl Trait for Map[K, V]` or `impl Trait for Set[T]` body has NO codegen dispatcher -- "no handler for method 'len' on non-identifier receiver" -- on BOTH receiver modes. The identical body over a `Vec[i64]` or `Slice[i64]` head compiles and runs. The interpreter answers correctly in every case, so this is a `karac check` / `karac build` divergence, not a language rule. | roadmap.md |
 | B-2026-08-18-13 | 2026-08-18 | typecheck | medium | A method declared by `impl Trait for Array[i64, 3]` CANNOT BE CALLED: the call site reports "no method 'g' on type 'Array'" even though the impl block itself now checks. Every other builtin container head measured (Vec, VecDeque, Slice, Map, Set, SortedMap, SortedSet, Option, Result, Column, Tensor) dispatches; `Array[T, N]` is the one that does not. | roadmap.md |
 | B-2026-08-18-14 | 2026-08-18 | codegen | medium | A RANGE SUBSCRIPT used directly as a METHOD RECEIVER -- `v[0..3].first_or(-1)` -- has no codegen: "no handler for expression kind Range". The same slice passed as an ARGUMENT works (`show(v[0..2])`), and binding it first works (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`), so it is the receiver position specifically. | roadmap.md |
+| B-2026-08-18-15 | 2026-08-18 | codegen | high | `let c = match k % 2 { 0 => v[k].city, _ => None };` SEGVs under ASAN -- binding a match whose arm tail INDEXES a container for a boxed `Option` field registers a box drop over storage the container still owns, and the double free lands as a segfault. The SCRUTINEE-position spelling of the same program is clean, which is the reverse of every other pairing in this family. | The `let`-binding boxed-payload registration in src/codegen/stmts.rs (the `boxed_enum_payload_variants` loop, ~line 6011) does not discriminate an INDEX-rooted initializer from an owned move. `match_result_scrutinee_owns_box` in src/codegen/control_flow_match.rs already excludes index chains for this reason and documents the measurement; the `let` site needs the same exclusion, or an element deep-clone like the one `clone_owned_vec_index_element` performs for a direct `match v[i]` scrutinee. |
 
 ### Wontfix (7)
 
@@ -158,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1311 surfaced
 
 </details>
 
-### Fixed (1283)
+### Fixed (1284)
 
-<details><summary>1283 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1284 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11347,6 +11347,23 @@ Gates: cargo fmt clean, clippy clean on both feature sets (the `--features llvm`
 (2) The parser's `Token::Question` arm (src/parser/exprs.rs) now spans lhs-start -> past the `?` token, the way B-2026-08-18-7 fixed `?.`. With (1) in place the regression this row was filed for does not reproduce: the `struct Big { name: String, n: i64 }` + `let b = mk(n)?;` program is correct under `--interp`, JIT and AOT alike.
 
 THE ROW NAMED THE RIGHT TABLE BUT UNDERSTATED THE SCOPE. `question_ok_payload_types` is indeed the table whose miss produced "cannot resolve field 'name'", but the three fallback lookups beneath it carried the same operand-span key with the same intent, so all four moved together -- fixing only the named one would have left the fallbacks reading the operand's own type (the `Result`/`Option` WRAPPER) and reintroduced the `w0` truncation by a different route. `question_conversions` needed nothing, and the row's guess as to why was right: its codegen consumer already read `outer_span` and the interpreter's already read `expr.span`, so both ends were on the producer's key by construction. That is what made it the control -- same parser node, same widening, no regression. |
+| B-2026-08-18-10 | codegen | medium | A `match` whose SCRUTINEE is a nested `match` with a BARE-IDENTIFIER arm leaks the boxed payload -- `match (match i % 3 { 0 => { o } _ => { None } })… | FIXED by 7f982b0. Admitted the identifier arm in `match_result_scrutinee_owns_box`, so the scrutinee temp registers the tag-guarded box drop the source hands over to.
+
+NO COMPILE-TIME "WHICH ARM RAN" DECISION IS NEEDED, and that is the part this row's own filing got wrong. The filing reasoned that ownership depends on which arm executes and concluded the fix must therefore disarm the source from inside the arm. The first half is right and the second is unnecessary: arm bodies are already distinct BASIC BLOCKS, and the arm-tail disarm (B-2026-08-07-1) already zeroes the source's payload word in the moving arm's own block. So the source was ALREADY disarmed before this fix — which is exactly why the shape leaked rather than double-freed. The only missing half was an owner for the phi. The sibling arm leaves its binding armed, the registration's tag guard sees `None` there, and exactly one free happens on either path.
+
+Both spellings close together: `0 => o` and `0 => { o }` measured identically at 1088 B in 34 boxes plus 117 B of string interiors over 200 iterations, both now zero. The `% 2` / `% 3` interleave in the fixture is deliberate — `o` is `Some` on even `i` and the handing-out arm runs on `i % 3 == 0`, so all four combinations occur; a fix that disarmed unconditionally would leak one case and one that never disarmed would double-free the other.
+
+TWO FURTHER SHAPES CLOSED WITH IT.
+
+An arm tail that is ITSELF a nested `match` or `?.` now recurses (`match (match k { 0 => (match ...), _ => None }) { ... }`, 247 B / 14 objs -> 0). Nothing registers for a value in arm-tail position, so the single registration at the outer scrutinee still owns whatever the inner one yields.
+
+The FIELD form is relaxed. B-2026-08-18-8 restricted it to a chain rooted at that arm's own payload binding; see the CORRECTION appended to that row. Measured here: a projection out of an unrelated live local, read again after the match, leaked 3545 B in 200 objects under that rule while its `let`-bound twin freed exactly once. The `ref`-root guard is what carries the weight.
+
+THE INDEX EXCLUSION STAYS, now measured rather than cautious. `v[k].city` is an element COPY, so the container keeps the box. Its `let`-bound spelling SEGVs under ASAN — the ONLY pairing in this family where the `let` form is the broken one, and the reason this position must not simply copy what `let` does. Filed as its own row; verified to predate B-2026-08-18-8 by rebuilding at e8e3274.
+
+Fifteen probes, each byte-identical to `--interp`, covering both identifier spellings, the unrelated-local field arm, three-level nesting, an owned-param source, both arms handing out the same local, `Result`, wildcard and struct-destructure outer arms, a `ref`-param source, and the declined index arm.
+
+Gates: cargo fmt clean, clippy clean on both feature sets, memory_sanitizer 1124 passed, codegen 3046 passed, full suite 104 targets / 13,976 tests green. |
 
 </details>
 
