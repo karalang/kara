@@ -743,7 +743,56 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.compile_for_set_var(label, pattern, name, body);
                     }
                 }
-                Ok(self.context.i64_type().const_int(0, false).into())
+                // B-2026-08-17-29 — `let r = a..b; for i in r`. The binding
+                // carries no runtime value (codegen has no `Range`), so the
+                // `let` spilled both bounds; load them and drive the ordinary
+                // range loop. No `bce_*` source exprs: the bounds are not
+                // syntactically present at the loop, which costs the
+                // elision/pin optimizations and nothing else.
+                if let Some(rl) = self
+                    .var_types
+                    .range_let_bindings
+                    .get(name.as_str())
+                    .copied()
+                {
+                    let start_val = self
+                        .builder
+                        .build_load(rl.int_ty, rl.start, "for.rlet.start")
+                        .unwrap()
+                        .into_int_value();
+                    let end_val = self
+                        .builder
+                        .build_load(rl.int_ty, rl.end, "for.rlet.end")
+                        .unwrap()
+                        .into_int_value();
+                    let step_val = rl.int_ty.const_int(1, false);
+                    return self.compile_for_range_values(
+                        label,
+                        pattern,
+                        start_val,
+                        end_val,
+                        rl.inclusive,
+                        step_val,
+                        true,
+                        &None,
+                        &None,
+                        body,
+                    );
+                }
+                // A name that reaches here is a for-loop over something
+                // codegen cannot iterate. Returning a constant made that a
+                // loop whose body never ran — the exact shape of
+                // B-2026-07-31-30 (module-level containers) and of
+                // B-2026-08-17-29 (this row): `karac check` clean, the
+                // interpreter right, both compiled backends silently doing
+                // nothing. Fail loudly instead, matching what `compile_expr`'s
+                // catch-all now does for an unhandled expression kind.
+                Err(format!(
+                    "codegen: `for` over `{name}` — the binding is not an \
+                     iterable this backend can lower (not a Vec/Slice/Map/Set/\
+                     String/array/range); this is a codegen bug, since the loop \
+                     typechecked"
+                ))
             }
             // `for x in self` inside a user `impl Trait for Vec[i64]` body.
             // `self` is a container receiver registered under the name "self"
@@ -1459,7 +1508,6 @@ impl<'ctx> super::Codegen<'ctx> {
         step: Option<&Expr>,
         body: &Block,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let fn_val = self.current_fn.unwrap();
         let i64_t = self.context.i64_type();
 
         let start_val = if let Some(s) = start {
@@ -1479,6 +1527,46 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             i64_t.const_int(1, false)
         };
+        self.compile_for_range_values(
+            label,
+            pattern,
+            start_val,
+            end_val,
+            inclusive,
+            step_val,
+            step.is_none(),
+            start,
+            end,
+            body,
+        )
+    }
+
+    /// The for-range loop proper, driven by bounds that have ALREADY been
+    /// compiled. Split out of `compile_for_range_with_step` so a range whose
+    /// bounds were evaluated somewhere other than the loop header can reuse
+    /// the identical loop shape (B-2026-08-17-29: `let r = a..b; for i in r`
+    /// captures its bounds at the `let`, then iterates them here).
+    ///
+    /// `bce_start` / `bce_end` are the bounds' SOURCE expressions, used only
+    /// by the two span-keyed optimizations below (bounds-check elision facts
+    /// and the Vec-length pin). A caller with no source expression to offer
+    /// passes `&None` and loses the elision, never correctness.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn compile_for_range_values(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        start_val: IntValue<'ctx>,
+        end_val: IntValue<'ctx>,
+        inclusive: bool,
+        step_val: IntValue<'ctx>,
+        step_is_default: bool,
+        bce_start: &Option<Box<Expr>>,
+        bce_end: &Option<Box<Expr>>,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
 
         // `for i in (a..b).rev()` / `(a..=b).rev()` — reverse iteration over the
         // SAME value set, just descending (B-2026-07-18-41 residual). The rev
@@ -1571,7 +1659,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // exclusive ranges (inclusive ranges include the end value, which
         // would be OOB on `v[end]`).
         let pushed_for_bounds =
-            self.collect_asserted_bounds_from_for_range(pattern, start, end, inclusive);
+            self.collect_asserted_bounds_from_for_range(pattern, bce_start, bce_end, inclusive);
         let pushed_for_count = pushed_for_bounds.len();
         self.bce.asserted_index_bounds.extend(pushed_for_bounds);
         // Monotone facts at body entry (pairs with the preheader loads
@@ -1639,7 +1727,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Descending: `cur - step_val` (step is always the unit default in
             // the reverse path — see the `reverse` gate above).
             self.builder.build_int_sub(cur, step_val, "decr").unwrap()
-        } else if step.is_none() && !inclusive {
+        } else if step_is_default && !inclusive {
             self.builder
                 .build_int_nsw_add(cur, step_val, "incr")
                 .unwrap()
@@ -1655,7 +1743,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // fill form (bce_length_pin.rs): the pin is keyed on the range END
         // expression's span. Now that the loop is fully emitted, move it live so
         // a later `while c < BOUND` guard elides `v[c]`'s upper bounds check.
-        if let Some(end_expr) = end.as_deref() {
+        if let Some(end_expr) = bce_end.as_deref() {
             let end_key = crate::resolver::SpanKey::from_span(&end_expr.span);
             if let Some(pin) = self.bce.pending_vec_len_pins.remove(&end_key) {
                 self.bce.vec_len_pins.push((pin.bound, pin.vec_var));

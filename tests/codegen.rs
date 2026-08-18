@@ -75395,6 +75395,148 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_let_bound_range_for_loop_iterates() {
+        // B-2026-08-17-29 — the range-valued sibling of the module-binding bug
+        // above, and it failed at the SAME `compile_for` Identifier arm: a name
+        // bound to a range matched no container table and fell through. All
+        // three iterable range forms from design.md § Loops' range-literal
+        // table are covered, each against the equivalent INLINE range in the
+        // same program — the inline control is what proves the loop shape
+        // itself is fine and only the binding was dropped.
+        let output = run_program(
+            "fn main() {\n\
+                 let r1 = 0..5;\n\
+                 let mut a = 0;\n\
+                 for i in r1 { a = a + i; }\n\
+                 let mut ac = 0;\n\
+                 for i in 0..5 { ac = ac + i; }\n\
+                 let r2 = 0..=4;\n\
+                 let mut b = 0;\n\
+                 for i in r2 { b = b + i; }\n\
+                 let lo = 2;\n\
+                 let hi = 6;\n\
+                 let r3 = lo..hi;\n\
+                 let mut c = 0;\n\
+                 for i in r3 { c = c + i; }\n\
+                 println(a);\n\
+                 println(ac);\n\
+                 println(b);\n\
+                 println(c);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "10\n10\n10\n14\n");
+    }
+
+    #[test]
+    fn test_e2e_let_bound_range_captures_bounds_at_binding() {
+        // The discriminator between the two ways to fix B-2026-08-17-29.
+        // Re-substituting the bound EXPRESSIONS at the loop would iterate
+        // `10..6` here — empty — while capturing the bounds at the `let`
+        // iterates `2..6`. design.md line 2616 types a range as a first-class
+        // `Range[T]` value, so 14 is the answer, and it is what `--interp`
+        // produces. A regression to expression-substitution prints 0, not an
+        // error, so this assertion is the only thing that would catch it.
+        //
+        // The second half pins the scope contract: an inner `let r` shadows
+        // for its block and the outer binding is intact afterwards (the
+        // capture table rides `snapshot_var_env`/`restore_var_env`).
+        let output = run_program(
+            "fn main() {\n\
+                 let mut a = 2;\n\
+                 let r = a..6;\n\
+                 a = 10;\n\
+                 let mut n = 0;\n\
+                 for i in r { n = n + i; }\n\
+                 println(n);\n\
+                 let s = 0..5;\n\
+                 let mut inner = 0;\n\
+                 {\n\
+                     let s = 0..2;\n\
+                     for i in s { inner = inner + 1; }\n\
+                 }\n\
+                 let mut outer = 0;\n\
+                 for i in s { outer = outer + 1; }\n\
+                 println(inner);\n\
+                 println(outer);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "14\n2\n5\n");
+    }
+
+    #[test]
+    fn test_e2e_let_bound_range_empty_and_reused() {
+        // Degenerate bounds and multi-use. An empty range must run zero times
+        // for the RIGHT reason (start == end), which is indistinguishable from
+        // the old bug's output on its own — hence pairing it with the
+        // single-element inclusive range and the nested reuse, which the bug
+        // could not have produced. Reuse also pins that the binding is not
+        // consumed by the first loop: the captured bounds are re-read, so
+        // `for i in r { for j in r { } }` is 3 x 3.
+        let output = run_program(
+            "fn main() {\n\
+                 let e = 5..5;\n\
+                 let mut n = 0;\n\
+                 for i in e { n = n + 1; }\n\
+                 let one = 3..=3;\n\
+                 let mut m = 0;\n\
+                 for i in one { m = m + 1; }\n\
+                 let r = 0..3;\n\
+                 let mut k = 0;\n\
+                 for i in r { for j in r { k = k + 1; } }\n\
+                 println(n);\n\
+                 println(m);\n\
+                 println(k);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "0\n1\n9\n");
+    }
+
+    #[test]
+    fn test_e2e_let_bound_range_control_flow_and_labels() {
+        // The bound range reaches the loop through a different entry point
+        // than an inline one, so pin that everything hanging off the loop
+        // frame still works: `break`, `continue`, a labeled `continue` from a
+        // nested loop over a SECOND bound range, and a bound range inside a
+        // function other than `main`. All four share one emitted loop shape
+        // with the inline path (`compile_for_range_values`), so a divergence
+        // here would mean the label or the frame was dropped on the way in.
+        let output = run_program(
+            "fn sum_to(n: i64) -> i64 {\n\
+                 let r = 0..n;\n\
+                 let mut t = 0;\n\
+                 for i in r { t = t + i; }\n\
+                 return t;\n\
+             }\n\
+             fn main() {\n\
+                 println(sum_to(5));\n\
+                 let r = 0..10;\n\
+                 let mut b = 0;\n\
+                 for i in r {\n\
+                     if i == 4 { break; }\n\
+                     if i % 2 == 0 { continue; }\n\
+                     b = b + i;\n\
+                 }\n\
+                 println(b);\n\
+                 let outer = 0..3;\n\
+                 let inner = 0..3;\n\
+                 let mut c = 0;\n\
+                 o: for i in outer {\n\
+                     for j in inner {\n\
+                         if j == 2 { continue o; }\n\
+                         c = c + 1;\n\
+                     }\n\
+                 }\n\
+                 println(c);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "10\n4\n6\n");
+    }
+
+    #[test]
     fn test_e2e_modbind_string_for_loop_iterates_chars() {
         // The String arm rides the same dispatch, and it is ordered BEFORE the
         // Vec arm on purpose (String vars are also registered in
@@ -97616,7 +97758,18 @@ fn main() {
     fn an_unhandled_expression_kind_fails_the_build_by_name() {
         for (src, kind) in [
             (
-                "fn main() { let r = 0..4; for i in r { println(i); } }\n",
+                // The `Range` exemplar MOVED when B-2026-08-17-29 landed. A
+                // `let`-bound range in for-loop ITERABLE position is lowered
+                // now (its bounds are captured at the binding and drive the
+                // ordinary range loop), so the old `let r = 0..4; for i in r`
+                // spelling compiles and no longer reaches this bail — which is
+                // the point of that fix, not a weakening of this one.
+                // `compile_expr` still has no `ExprKind::Range` arm, and the
+                // loop position is the only thing that routes around it, so
+                // any OTHER use of a range value still lands here. Assignment
+                // is the smallest such use and keeps this case pinning the
+                // same kind name.
+                "fn main() { let mut r = 0..4; r = 1..3; for i in r { println(i); } }\n",
                 "Range",
             ),
             (

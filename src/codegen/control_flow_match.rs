@@ -10484,7 +10484,7 @@ fn pattern_consumes_field(p: &crate::ast::Pattern) -> bool {
 /// `pattern_consumes_field` counts). `ref name @ …` and its subtree borrow, so
 /// they introduce no owning binding and are skipped. Used by the caller-retains
 /// consumption gate to know which variables to check in an arm body.
-fn collect_pattern_bindings(p: &crate::ast::Pattern, out: &mut Vec<String>) {
+pub(super) fn collect_pattern_bindings(p: &crate::ast::Pattern, out: &mut Vec<String>) {
     match &p.kind {
         PatternKind::Binding(n) => out.push(n.clone()),
         PatternKind::AtBinding { by_ref: true, .. } => {}

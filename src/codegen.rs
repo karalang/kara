@@ -5204,6 +5204,7 @@ impl<'ctx> Codegen<'ctx> {
                 string_vars: HashSet::new(),
                 ascii_const_string_lets: HashMap::new(),
                 cstr_vars: HashSet::new(),
+                range_let_bindings: HashMap::new(),
             },
             payload_vars: PayloadVars {
                 passthrough_owner_alias: std::collections::HashMap::new(),

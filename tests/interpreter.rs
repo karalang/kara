@@ -19813,6 +19813,49 @@ fn main() {
 }
 
 #[test]
+fn test_let_bound_range_is_a_value_captured_at_the_binding() {
+    // The ORACLE for B-2026-08-17-29, whose codegen twin lives in
+    // tests/codegen.rs. The interpreter was already right here — the bug was
+    // codegen-only — so this pins the answer codegen was made to match, not a
+    // behaviour change.
+    //
+    // What it pins is the semantics, not just "> 0 iterations": `let r = a..6`
+    // captures `a` AT THE BINDING, so mutating `a` afterwards cannot move the
+    // range. design.md line 2616 types a range as a first-class `Range[T]`
+    // value, which is what makes 14 (2+3+4+5) the answer instead of the 0 that
+    // re-reading `a` at the loop would give. Both compiled backends now agree.
+    //
+    // The rest covers the forms the bug report enumerated: inclusive bounds,
+    // an empty range, and reuse of one binding by two nested loops (3 x 3),
+    // which pins that iterating a bound range does not consume it.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let mut a = 2;
+    let r = a..6;
+    a = 10;
+    let mut n = 0;
+    for i in r { n = n + i; }
+    println(n);
+    let inc = 0..=4;
+    let mut b = 0;
+    for i in inc { b = b + i; }
+    println(b);
+    let e = 5..5;
+    let mut z = 0;
+    for i in e { z = z + 1; }
+    println(z);
+    let q = 0..3;
+    let mut k = 0;
+    for i in q { for j in q { k = k + 1; } }
+    println(k);
+}
+"#,
+    );
+    assert_eq!(output, "14\n10\n0\n9\n");
+}
+
+#[test]
 fn test_range_inclusive_take() {
     // `(0..=100).take(3).collect()` pins the eager-snapshot truncation
     // under `take` — the source pre-materialises 101 items but the

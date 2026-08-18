@@ -3180,6 +3180,78 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-08-17-29 — `let r = 0..5;` / `let r = a..=b;`.
+                // Codegen has no runtime `Range` value (no `ExprKind::Range`
+                // arm in `compile_expr` at all), so a range bound to a name
+                // used to reach the catch-all and `for i in r` used to reach
+                // the Identifier arm's zero fallback: a loop that ran zero
+                // times where the interpreter ran five, with `karac check`
+                // clean. Capture the two bounds HERE instead — evaluated
+                // exactly once, at the binding site — and let the for-loop
+                // iterable position drive the ordinary range loop from them.
+                //
+                // Evaluating at the `let` rather than re-substituting the
+                // bound EXPRESSIONS at the loop is what makes the binding a
+                // value: design.md line 2616 types a range as a first-class
+                // `Range[T]`, so `let mut a = 2; let r = a..6; a = 10;
+                // for i in r` must iterate 2..6. Substitution would iterate
+                // 10..6 — nothing — trading one wrong answer for another.
+                //
+                // Any other binding of the same name clears the entry (the
+                // `int_const_locals` discipline above), and the table is
+                // snapshotted with the rest of the variable environment, so a
+                // shadow in an inner scope cannot outlive its block.
+                //
+                // The clear is keyed on EVERY name the pattern binds, not just
+                // the simple-binding case that can populate the table: a
+                // destructuring `let (r, s) = (1, 2);` must not leave a stale
+                // range under `r`. The typechecker already rejects iterating
+                // the `i64` that rebinding produces, so a stale entry is not
+                // reachable today — but "a table that outlives the name it
+                // describes" is the same silent-wrong-answer shape this row is
+                // about, and clearing costs one walk of a `let` pattern.
+                {
+                    let mut rebound = Vec::new();
+                    super::control_flow_match::collect_pattern_bindings(pattern, &mut rebound);
+                    for n in &rebound {
+                        self.var_types.range_let_bindings.remove(n.as_str());
+                    }
+                }
+                if let PatternKind::Binding(bind_name) = &pattern.kind {
+                    if let ExprKind::Range {
+                        start: Some(start),
+                        end: Some(end),
+                        inclusive,
+                    } = &value.kind
+                    {
+                        let start_val = self.compile_expr(start)?.into_int_value();
+                        let end_val = self.compile_expr(end)?.into_int_value();
+                        let int_ty = start_val.get_type();
+                        let fn_val = self.current_fn.expect("let inside a function");
+                        let start_slot = self.create_entry_alloca(
+                            fn_val,
+                            &format!("{bind_name}.range.start"),
+                            int_ty.into(),
+                        );
+                        let end_slot = self.create_entry_alloca(
+                            fn_val,
+                            &format!("{bind_name}.range.end"),
+                            int_ty.into(),
+                        );
+                        self.builder.build_store(start_slot, start_val).unwrap();
+                        self.builder.build_store(end_slot, end_val).unwrap();
+                        self.var_types.range_let_bindings.insert(
+                            bind_name.clone(),
+                            super::var_types::RangeLetBinding {
+                                start: start_slot,
+                                end: end_slot,
+                                int_ty,
+                                inclusive: *inclusive,
+                            },
+                        );
+                        return Ok(());
+                    }
+                }
                 // Whole-value move of a container binding (`let b = a;`,
                 // `Box2 { s: d }`, `(h, 1)`): retract the SOURCE's
                 // `__karac_dropelems_*` bodies action before the destination

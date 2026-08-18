@@ -328,6 +328,7 @@ pub(super) struct VarEnvSnapshot<'ctx> {
     boxed_enum_payload_vars: HashSet<String>,
     boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
     rc_fallback_heap_types: HashMap<String, StructType<'ctx>>,
+    range_let_bindings: HashMap<String, super::var_types::RangeLetBinding<'ctx>>,
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -379,6 +380,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .boxed_optres_payload_view_vars
                 .clone(),
             rc_fallback_heap_types: self.drop_rc.rc_fallback_heap_types.clone(),
+            range_let_bindings: self.var_types.range_let_bindings.clone(),
         }
     }
 
@@ -421,5 +423,6 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.boxed_enum_payload_vars = snap.boxed_enum_payload_vars;
         self.payload_vars.boxed_optres_payload_view_vars = snap.boxed_optres_payload_view_vars;
         self.drop_rc.rc_fallback_heap_types = snap.rc_fallback_heap_types;
+        self.var_types.range_let_bindings = snap.range_let_bindings;
     }
 }

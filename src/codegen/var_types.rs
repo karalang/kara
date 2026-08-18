@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use inkwell::types::BasicTypeEnum;
+use inkwell::types::{BasicTypeEnum, IntType};
 use inkwell::values::PointerValue;
 
 use super::arena;
@@ -219,4 +219,40 @@ pub(crate) struct VarTypes<'ctx> {
     /// slices and vice versa. Populated by the `let` RHS/annotation
     /// heuristics (stmts.rs) and `register_var_from_type_expr` (params).
     pub(crate) cstr_vars: HashSet<String>,
+    /// B-2026-08-17-29 — locals bound to a BOUNDED range literal
+    /// (`let r = 0..5;`, `let r = a..=b;`), name -> the two bounds already
+    /// evaluated and spilled at the binding site.
+    ///
+    /// Codegen has no runtime `Range` value: `compile_expr` has no
+    /// `ExprKind::Range` arm at all, so before this table `let r = 0..5`
+    /// reached the catch-all and `for i in r` reached the Identifier arm's
+    /// zero fallback in `compile_for` — a loop that ran zero times while the
+    /// interpreter ran five. The bounds are captured HERE, at the `let`,
+    /// rather than by re-substituting the bound expressions at the loop:
+    /// design.md line 2616 types a range as a first-class value, so
+    /// `let mut a = 2; let r = a..6; a = 10; for i in r` must iterate 2..6.
+    /// Substituting the expressions would iterate 10..6 (nothing) — a
+    /// different wrong answer in place of the old one.
+    ///
+    /// Consumed only by the for-loop iterable position, which is the only
+    /// place codegen can drive a range without materializing one. Every other
+    /// use of the binding (`v[r]`, passing `r` to a function) still fails
+    /// LOUDLY at the catch-all; a real `Range` value is a separate slice.
+    pub(crate) range_let_bindings: HashMap<String, RangeLetBinding<'ctx>>,
+}
+
+/// A `let`-bound bounded range's captured loop bounds — see
+/// [`VarTypes::range_let_bindings`].
+#[derive(Clone, Copy)]
+pub(crate) struct RangeLetBinding<'ctx> {
+    /// Alloca holding the start bound, stored once at the `let`.
+    pub(crate) start: PointerValue<'ctx>,
+    /// Alloca holding the end bound, stored once at the `let`.
+    pub(crate) end: PointerValue<'ctx>,
+    /// Width both bounds were compiled at. The typechecker already rejects a
+    /// range whose bounds disagree ("range bounds must have same type"), so
+    /// one type covers the pair.
+    pub(crate) int_ty: IntType<'ctx>,
+    /// `..=` (true) versus `..` (false).
+    pub(crate) inclusive: bool,
 }
