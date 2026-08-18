@@ -2122,11 +2122,40 @@ impl<'ctx> super::Codegen<'ctx> {
             // element path below (and before the integer-index tail, which
             // would otherwise silently miscompile). `string_typed_exprs` is
             // the typechecker's per-expression String flag, keyed by span.
-            if self
-                .span_tables
-                .string_typed_exprs
-                .contains(&(object.span.offset, object.span.length))
-            {
+            // B-2026-08-18-14 — ask the STATIC type walk first and fall back to
+            // the span table only when it has no answer. `string_typed_exprs`
+            // is span-keyed, and every postfix node copies its object's span
+            // (`Index` and `MethodCall` both still do; `?.` was split off in
+            // B-2026-08-18-7), so a whole method CHAIN collapses onto its
+            // innermost receiver's key and the LAST write wins. Measured on
+            // `v[0..3].first_or(-1).to_string()`: the table's only entry was
+            // `(256,1)` — the `Vec[i64]` receiver `v` — because the chain's
+            // String-typed tail overwrote it. This branch then compiled a
+            // `Vec` range subscript as a fresh owned STRING, handing the method
+            // dispatcher a 3-word `{ptr,len,cap}` where a 2-word `{ptr,len}`
+            // view was due, and the build died on "no handler for expression
+            // kind Range". Splitting the same call across two statements built
+            // fine, which is the signature of a span collision rather than a
+            // missing lowering.
+            //
+            // Fixing the collision at its source means giving `Index` (and
+            // then `MethodCall`) spans of their own. B-2026-08-18-7 measured
+            // what that costs while doing it for `?.`: a table whose producer
+            // and consumer agree ONLY because the spans coincide breaks the
+            // moment they stop coinciding. Widening `Index` here does exactly
+            // that — `asan_push_str_range_slice_temp_no_double_free` starts
+            // leaking, because nothing records a type for an `Index` node, so
+            // its lookups had been resolving through the object's entry. That
+            // is a real fix and it is filed as its own row; asking the type
+            // walk is what makes THIS decision correct without it.
+            let object_is_string = match self.type_name_of_expr(object).as_deref() {
+                Some(name) => name == "String",
+                None => self
+                    .span_tables
+                    .string_typed_exprs
+                    .contains(&(object.span.offset, object.span.length)),
+            };
+            if object_is_string {
                 return self.compile_string_slice(object, start, end, *inclusive);
             }
             if let Some(elem_ty) = self.infer_elem_from_source(object) {

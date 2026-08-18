@@ -2591,12 +2591,27 @@ impl<'ctx> super::Codegen<'ctx> {
             // at the head of `compile_indexed_receiver_method` uses, so the two
             // are mutually exclusive by construction: `s[a..b]` on a String is
             // a fresh OWNED String, not a view, and must keep its own path.
-            if matches!(&index.kind, ExprKind::Range { .. })
-                && !self
+            // B-2026-08-18-14 leg 2 — ask the STATIC type walk first, and only
+            // fall back to the span table when it has no answer. The table is
+            // span-keyed, and in a method CHAIN the inner receiver's span
+            // collides with a String-typed node's (the same
+            // `MethodCall.span == receiver.span` collision B-2026-08-18-7 and
+            // -9 were about): `v[0..3].first_or(-1).to_string()` reported the
+            // `Vec[i64]` receiver as string-typed purely because the chain ends
+            // in `.to_string()`. That sent the view to the element-pointer
+            // lowering, which compiled the RANGE as a subscript and died —
+            // while the SAME call with the `.to_string()` split onto its own
+            // line built fine. A discriminator that depends on what happens
+            // LATER in the chain cannot be right; `type_name_of_expr` resolves
+            // the receiver itself.
+            let inner_is_string = match self.type_name_of_expr(inner).as_deref() {
+                Some(name) => name == "String",
+                None => self
                     .span_tables
                     .string_typed_exprs
-                    .contains(&(inner.span.offset, inner.span.length))
-            {
+                    .contains(&(inner.span.offset, inner.span.length)),
+            };
+            if matches!(&index.kind, ExprKind::Range { .. }) && !inner_is_string {
                 if let Some(value) = self.try_compile_nonident_slice_method(
                     object,
                     method,
@@ -9238,7 +9253,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // One list rather than two, same as the interpreter's slice gate: a
         // name outside the builtin `Slice` surface belongs to whatever
         // dispatcher owns it, not here.
-        if !crate::typechecker::SLICE_BUILTIN_METHODS.contains(&method) {
+        //
+        // B-2026-08-18-14 — …EXCEPT a method a USER impl block declared on the
+        // `Slice` head. `impl Head for Slice[i64] { fn first_or(...) }` called
+        // on `v[0..3]` is not a builtin name, so this declined and the caller
+        // fell through to the element-pointer lowering, which compiled the
+        // RANGE as if it were a subscript and died on "no handler for
+        // expression kind Range" — a check/build divergence, since `karac
+        // check` and `--interp` both accept the program.
+        //
+        // Nothing below this gate is method-specific: it materializes the
+        // view's `{ptr, len}` header into a synth local and re-dispatches by
+        // IDENTIFIER, which is precisely the spelling that already worked
+        // (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`). So admitting the
+        // user method here routes it to the same path its bound twin takes,
+        // rather than adding one.
+        if !crate::typechecker::SLICE_BUILTIN_METHODS.contains(&method)
+            && !self.user_impl_method_exists(call_span, "Slice", method)
+        {
             return Ok(None);
         }
         let Some(elem_llvm) = self.infer_slice_elem_from_rhs(object) else {

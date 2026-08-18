@@ -34224,3 +34224,40 @@ fn test_derive_partial_eq_vec_field_oracle() {
          }\n");
     assert_eq!(out, "false\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\n");
 }
+
+/// B-2026-08-18-14 — the interpreter oracle for a RANGE SUBSCRIPT used
+/// directly as a METHOD RECEIVER. `v[0..3].first_or(-1)` failed the BUILD with
+/// "no handler for expression kind Range" while `karac check` accepted it and
+/// the interpreter ran it, so this side is what the compiled fix was measured
+/// against — a check/build divergence, not a wrong answer.
+///
+/// BOTH SPELLINGS, because before the fix they failed for DIFFERENT reasons.
+/// With `.to_string()` chained on, the postfix span collapse recorded the
+/// chain's String-ness against the `Vec` receiver's own span key, so
+/// `compile_index` built a String slice where a `{ptr,len}` view was due. With
+/// the call split across two statements there is no chain to collapse, and what
+/// remained was a gate admitting only BUILTIN slice method names — so a user
+/// `impl … for Slice[i64]` method was declined and fell through to the
+/// element-pointer lowering. One line each, so a regression in either cause
+/// shows up on its own line.
+#[test]
+fn test_range_subscript_as_method_receiver_oracle() {
+    let out = run_no_errors(
+        "trait Head { fn first_or(ref self, d: i64) -> i64; }\n\
+         impl Head for Slice[i64] {\n\
+             fn first_or(ref self, d: i64) -> i64 {\n\
+                 if self.len() == 0 { return d; }\n\
+                 return self[0];\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let v: Vec[i64] = [10, 20, 30];\n\
+             println(v[0..3].first_or(-1).to_string());\n\
+             let r = v[1..3].first_or(-1);\n\
+             println(r.to_string());\n\
+             let empty: Vec[i64] = [];\n\
+             println(empty[0..0].first_or(-1).to_string());\n\
+         }\n",
+    );
+    assert_eq!(out, "10\n20\n-1\n");
+}

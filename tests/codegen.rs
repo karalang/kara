@@ -98416,6 +98416,59 @@ fn main() {
         }
     }
 
+    /// B-2026-08-18-14 — the E2E half: a RANGE SUBSCRIPT used directly as a
+    /// METHOD RECEIVER. `v[0..3].first_or(-1)` failed the build with "no
+    /// handler for expression kind Range" while `karac check` and `--interp`
+    /// both accepted it, which is why `a_slice_impl_head_can_read_its_own_
+    /// elements` above binds its slice to a local first.
+    ///
+    /// TWO INDEPENDENT CAUSES, one per spelling, which is why both are here.
+    ///
+    /// CHAINED (`.to_string()` inline): every postfix node copies its object's
+    /// span, so a method chain collapses onto its innermost receiver's key and
+    /// the last write wins — the chain's String-typed tail recorded `Type::Str`
+    /// against the `Vec[i64]` receiver's OWN span. `compile_index` read that and
+    /// built a fresh owned String (3-word `{ptr,len,cap}`) where a 2-word
+    /// `{ptr,len}` view was due, so the dispatcher rejected the shape and the
+    /// range fell through to the element-pointer lowering. Fixed by asking the
+    /// static type walk rather than a span-keyed table.
+    ///
+    /// SPLIT across two statements: no chain, so no collision — and what
+    /// remained was `try_compile_nonident_slice_method` gating on a list of
+    /// BUILTIN slice method names, which declined a method a user `impl`
+    /// declared on the `Slice` head. Its materialize-and-re-dispatch body is
+    /// method-agnostic, so admitting the user method routes it to the same path
+    /// its `let`-bound twin already took.
+    ///
+    /// The EMPTY slice exercises the impl's own `self.len() == 0` arm, so the
+    /// receiver has to be a real view with a correct length, not merely a value
+    /// that compiles.
+    #[test]
+    fn a_range_subscript_dispatches_a_user_slice_method_in_receiver_position() {
+        let src = "trait Head { fn first_or(ref self, d: i64) -> i64; }\n\
+                   impl Head for Slice[i64] {\n\
+                       fn first_or(ref self, d: i64) -> i64 {\n\
+                           if self.len() == 0 { return d; }\n\
+                           return self[0];\n\
+                       }\n\
+                   }\n\
+                   fn main() {\n\
+                       let v: Vec[i64] = [10, 20, 30];\n\
+                       println(v[0..3].first_or(-1).to_string());\n\
+                       let r = v[1..3].first_or(-1);\n\
+                       println(r.to_string());\n\
+                       let empty: Vec[i64] = [];\n\
+                       println(empty[0..0].first_or(-1).to_string());\n\
+                   }\n";
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(
+            out, "10\n20\n-1\n",
+            "a range subscript in receiver position must dispatch as the slice view it is"
+        );
+    }
+
     /// The `Option` head of the same fix, end to end. `impl Trait for
     /// Option[i64]` typed `self` as an args-less `Option`, so the body's
     /// `self.unwrap_or(0)` failed to resolve at all ("no method 'unwrap_or'
