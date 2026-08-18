@@ -12501,6 +12501,56 @@ fn test_tuple_index_nodes_span_past_the_index() {
     );
 }
 
+/// `Cast`, the sixth arm of B-2026-08-18-33 — and the one where the usual
+/// safety net is BLIND, which is why it gets a test of its own rather than
+/// riding the suite.
+///
+/// Every previous arm was caught by `selfhost_parser_matches_rust_parser`,
+/// which compares the two parsers span-for-span. That oracle cannot see this
+/// one: the self-hosted parser has no `Cast` AST node at all — it parses the
+/// target type purely to advance the cursor and keeps the operand unchanged
+/// (`selfhost/src/parser.kara`, "The port has NO Cast AST node"). So `Cast`
+/// widening measured ZERO failures, and zero here is the absence of a witness,
+/// not the presence of proof.
+#[test]
+fn test_cast_nodes_span_past_the_target_type() {
+    let source = "fn f(x: i32) -> i64 {\n  let a = x as i64 as i64;\n  return a;\n}";
+    let prog = parse(source).program;
+
+    fn collect(e: &Expr, out: &mut Vec<karac::token::Span>) {
+        if let ExprKind::Cast { expr, .. } = &e.kind {
+            out.push(e.span);
+            collect(expr, out);
+        }
+    }
+    let mut spans = Vec::new();
+    for item in &prog.items {
+        if let Item::Function(f) = item {
+            for st in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &st.kind {
+                    collect(value, &mut spans);
+                }
+            }
+        }
+    }
+    assert_eq!(spans.len(), 2, "expected two `Cast` nodes, got {spans:?}");
+
+    let text = |s: &karac::token::Span| &source[s.offset..s.offset + s.length];
+    assert_eq!(text(&spans[0]), "x as i64 as i64");
+    assert_eq!(text(&spans[1]), "x as i64");
+
+    assert_ne!(
+        (spans[0].offset, spans[0].length),
+        (spans[1].offset, spans[1].length),
+        "a chained cast must not share a SpanKey with its operand cast"
+    );
+    assert_ne!(
+        (spans[1].offset, spans[1].length),
+        (spans[1].offset, 1),
+        "a cast must not collapse onto its bare operand `x`"
+    );
+}
+
 /// `Span.line`/`Span.column` of an interpolation sub-expression must point to
 /// its true position in the ORIGINAL source — not into the synthetic
 /// `fn __interp__() { … }` re-parse wrapper (B-2026-06-09-1a). Before the fix

@@ -198,8 +198,12 @@ impl super::Parser {
                     }
                     self.advance();
                     let ty = self.parse_type()?;
+                    // B-2026-08-18-33 — span the whole cast (lhs start -> past
+                    // the target type) rather than copying `lhs.span`, so
+                    // `x as i64 as u8` gives its two nodes distinct keys.
+                    let cast_span = self.span_from(&lhs.span);
                     lhs = Expr {
-                        span: lhs.span,
+                        span: cast_span,
                         kind: ExprKind::Cast {
                             expr: Box::new(lhs),
                             ty,
