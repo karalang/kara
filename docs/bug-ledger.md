@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 45 | 2 |
+| other | 45 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -117,23 +117,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 53 | 3 |
 | autopar | 48 | 0 |
 | cli | 45 | 0 |
-| parser | 23 | 1 |
+| parser | 23 | 0 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1332 surfaced · 6 open · 1308 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1332 surfaced · 5 open · 1309 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
-| B-2026-08-18-33 | 2026-08-18 | parser | low | SEVEN parser arms still copy their LHS's span -- `Cast`, `TupleIndex`, `Call`, `Path`, `Pipe`, `NilCoalesce`, `Range` -- and the postfix-span family never enumerated them. `NilCoalesce` is the one with a MEASURED consequence: it is why `method_call_key`'s args-close preference cannot be retired (B-2026-08-18-30). | Seven parser arms still copy their LHS's span. `NilCoalesce` is the one with a measured consequence -- it blocks B-2026-08-18-30's cleanup -- and the other six (`Cast`, `TupleIndex`, `Call`, `Path`, `Pipe`, `Range`) are unmeasured. Widen one arm per change with its own suite run; the five already done cost 3, 42 and 12 test failures and each needed a different fix. |
 | B-2026-08-18-34 | 2026-08-18 | interp+codegen | high | `map.entry(k).or_insert(default).push(v)` FAILS ON ALL THREE BACKENDS when the map is a struct FIELD, while `karac check` accepts it: interpreter says "method 'push' not found on type 'unknown' (no interpreter dispatch arm)", codegen says "no handler for method 'push' on non-identifier receiver". The identical chain over a LOCAL map works everywhere. This is the idiomatic way to mutate a container nested in a container, and a struct holding a map is its common home. | The interpreter's method-dispatch arm for a borrow-returning builtin result (`src/interpreter/method_call.rs`), and codegen's `compile_method_call` non-identifier-receiver routing (`src/codegen/method_call.rs`) -- the same 'materialize the receiver and re-dispatch' family as `try_compile_freshtemp_mapset_read_method`, except here the receiver is a `mut ref` INTO the map and must not be copied, or the append lands on a temporary. |
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
 
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1332 surfaced
 
 </details>
 
-### Fixed (1308)
+### Fixed (1309)
 
-<details><summary>1308 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1309 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11883,6 +11882,22 @@ NOT ADDRESSED, and still true: the O(n^2) cost of building a string by repeated
 `+`. design.md's own note on the same line says "prefer `push_str` in loops",
 and borrowing the receiver does not change that — if anything it removes the
 clone that made the quadratic shape look even worse than it is. |
+| B-2026-08-18-33 | parser | low | SEVEN parser arms still copy their LHS's span -- `Cast`, `TupleIndex`, `Call`, `Path`, `Pipe`, `NilCoalesce`, `Range` -- and the postfix-span family… | FIXED by a6ee6137. ALL ARMS LANDED. Every postfix and infix node in the seed parser now carries a span of its own; none copies its LHS's. Six arms per change, each with its own suite run as the row required.
+
+  NilCoalesce  0 failures   3b417d29
+  TupleIndex   1 failure    678b00d7
+  Cast         0 failures   3c72fb27
+  Call         2 failures   2a0a870d
+  Pipe+Range   0 failures   5c76539b
+  Path         0 failures   a6ee6137  (see the correction below)
+
+THE COUNT IN THE TITLE IS WRONG AND THIS IS THE CORRECTION. The row says SEVEN arms, derived from a `grep 'span: lhs.span'` over the parser. `Path` is not an instance of the defect. `ExprKind::Path` carries `segments: Vec<String>` and NO child expression -- it REPLACES the identifier (name cloned into `segments`) rather than wrapping it, so the identifier node ceases to exist and two live nodes never shared that span. The collision class is a parent sharing a key with its CHILD, and this arm has no child. SIX arms were the defect. `Path` was widened anyway for diagnostic accuracy (a span of `foo` underlines three characters of `foo[i64, u8](x)`), and its test is named `..._spans_its_whole_head` rather than `...SpanKey...` so the distinction survives.
+
+IT DELIVERED B-2026-08-18-30 TOO. Widening `NilCoalesce` cost nothing and unblocked the collapse that row asked for and could not make: `method_call_key` and `SpanKey::for_method_call` are deleted outright, their ~13 call sites key on the span directly, and the compiler plus clippy swept up six dead destructuring bindings and five dead parameters. The `args_close_span` AST FIELD survives -- two consumers use it for something other than keying (`method_numeric.rs` records a type at that span; `concurrent_shared.rs` derives a `karac fix` edit range from it), checked rather than assumed.
+
+THE COST CURVE IS THE REUSABLE FINDING: 42 failures for `MethodCall`, 12 for `FieldAccess`, then 0/1/0/2/0/0. The drop is not luck and not diminishing scope. It is that B-2026-08-18-31 fixed the use-after-move readers by resolving a place to its ROOT rather than patching the one arm that broke, and B-2026-08-18-24 threaded the call span to the tables the typechecker keys on -- both of which put producer and consumer on keys that are right BY CONSTRUCTION. The later arms are cheap for exactly the reason the earlier ones were dear. A prediction that `Call` would be expensive (its span collides with its callee's, the shape behind every earlier row) was WRONG for this reason, and is recorded in that test's doc.
+
+THREE ZEROS WERE ABSENT WITNESSES, NOT PROOF, and each got a real test instead. `selfhost_parser_matches_rust_parser` compares the two parsers span-for-span and caught `TupleIndex` and `Call` -- so a clean run reads like coverage. It cannot see three of the arms: the self-hosted parser has NO `Cast` AST node (it parses the target type only to advance the cursor), its corpus contains NO `|>` input at all, and it lowers `..` to a port-local `Binary { op: Range }` rather than an `ExprKind::Range`. Every such arm now has a dedicated span test verified red-then-green, and for `Pipe`+`Range` each HALF was verified separately -- a combined test passes on one half while the other is vacuous, which is the failure mode being guarded against. |
 
 </details>
 
