@@ -103,17 +103,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 42 | 2 |
+| other | 43 | 3 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 928 | 2 |
+| codegen | 929 | 3 |
 | typecheck | 199 | 1 |
-| interp | 150 | 0 |
-| ownership | 57 | 0 |
+| interp | 151 | 1 |
+| ownership | 58 | 1 |
 | other | 52 | 2 |
 | autopar | 48 | 0 |
 | cli | 45 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1328 surfaced · 6 open · 1305 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1329 surfaced · 7 open · 1305 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1328 surfaced
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
 | B-2026-08-18-30 | 2026-08-18 | codegen | low | `compile_method_call`'s `args_close_span` parameter is now a REDUNDANT second key: it exists only to disambiguate side-table reads across a chain, and B-2026-08-18-24 made `call_span` unique per chain step, which is the job it was hired for. | src/codegen/method_call.rs (the `args_close_span` parameter and its ~12 call sites); `method_call_key`; `try_compile_freshtemp_user_method`. |
 | B-2026-08-18-31 | 2026-08-18 | parser+codegen | low | `FieldAccess` nodes still copy their object's span -- a FIFTH postfix arm with the identical defect the four-row family (`?.`, `?`, `Index`, `MethodCall`) just finished closing. `v[0]` and `v[0].second` share one SpanKey. | src/parser/exprs.rs (the `Token::Dot` field-access arm, `span: lhs.span`); selfhost/src/parser.kara `finish_dot`; src/codegen/expr_ops.rs `receiver_struct_inst` for the consumer that already compensates. |
+| B-2026-08-18-32 | 2026-08-18 | ownership+codegen+interp | low | THE OWNERSHIP CHECKER AND BOTH BACKENDS DISAGREE ABOUT WHETHER `String + ` CONSUMES ITS LEFT OPERAND. design.md gives `+` the signature `fn add(self, other: ref String)` — bare `self`, i.e. OWNED — so the checker warns "value moved here, used again here" on a second use. Neither the interpreter nor codegen enforces the move: the value is intact and correct afterward. The suggested `.clone()` is a real cost for a problem that does not exist at runtime. | The `+` operator's declared receiver mode. design.md:1821 says `fn add(self, other: ref String) -> String`; the ownership checker reads that as a move, and neither backend implements it as one. One of the two is wrong and it is a language call, not a bug-fix call. |
 
 ### Wontfix (7)
 
