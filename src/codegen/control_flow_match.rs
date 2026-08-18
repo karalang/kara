@@ -9714,24 +9714,35 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   * `None` — no payload, hence no box; the drop's tag guard skips it;
     ///   * a non-borrow `Call`/`MethodCall` — freshly allocated, including the
     ///     `Some(x)` variant construction whose boxing allocated the envelope;
-    ///   * a FIELD or tuple-index projection **out of that arm's own payload
-    ///     binding**, when the inner match consumed an OWNED scrutinee — the
-    ///     one case where the box provably changes hands, because the field is
-    ///     MOVED out of a value this frame owns and the move zeroes the
-    ///     source's slot. That is the state the `let` spelling relies on too.
+    ///   * a FIELD or tuple-index projection, when the inner match consumed an
+    ///     OWNED scrutinee and the chain's root is not a `ref` parameter — the
+    ///     projection MOVES the field out and the arm's own disarm zeroes the
+    ///     source, so the box changes hands;
+    ///   * an identifier naming a LOCAL that owns a box — handing it out of the
+    ///     arm is a move the arm-tail disarm already performs, in that arm's
+    ///     own block, so the sibling arm keeps its binding armed and the tag
+    ///     guard here covers the difference (B-2026-08-18-10);
+    ///   * a `match` / `?.` yielding the same, recursively — a third level of
+    ///     nesting reaches this frame's phi unchanged, and nothing registers
+    ///     for a value in ARM-TAIL position, so one registration still owns it.
     ///
-    /// The two restrictions on that last form are each load-bearing, and both
-    /// are hazards this fix would otherwise have introduced rather than found.
-    /// Rooting the chain at the arm's payload binding is what makes it a move:
-    /// a projection out of some OTHER local (`Some(_) => other.field`) reads a
-    /// place the frame still owns, so freeing the phi would double-free it. And
-    /// an INDEX anywhere in the chain (`Some(a) => a.items[0]`) is an element
-    /// COPY, never a move — the container keeps the box and frees it itself.
-    /// A borrowed or read-only inner scrutinee declines for the same family of
-    /// reason: there the payload aliases storage the source keeps.
+    /// AN INDEX LINK ANYWHERE IN A CHAIN DECLINES, and that one IS measured
+    /// rather than cautious: `v[k].city` is an element COPY, not a move, so the
+    /// container keeps the box. The `let`-bound spelling of exactly that shape
+    /// SEGVs under ASAN today (filed separately) — it is the only pairing in
+    /// this family where the `let` form is the broken one, which is precisely
+    /// why this position must not copy what `let` does there.
     ///
-    /// Anything else — a bare identifier above all, which may name a binding
-    /// carrying its own `BoxedEnumDrop` — declines the whole match.
+    /// The field form was ALSO restricted to a chain rooted at the arm's own
+    /// payload binding when B-2026-08-18-8 landed, described there as
+    /// load-bearing. It was not: measurement (`0 => { other.city }`, source read
+    /// again after the match) shows the `let` twin frees exactly once and the
+    /// scrutinee form leaks, i.e. the same defect, so the restriction only
+    /// narrowed the fix. Relaxed with B-2026-08-18-10; the `ref`-root guard is
+    /// what actually matters, since there the payload aliases storage the
+    /// caller keeps.
+    ///
+    /// Anything else declines the whole match.
     fn match_result_scrutinee_owns_box(&self, scrutinee: &Expr) -> bool {
         match &scrutinee.kind {
             ExprKind::Match {
@@ -9746,14 +9757,38 @@ impl<'ctx> super::Codegen<'ctx> {
                     let tail = Self::block_tail_expr(&arm.body);
                     match &tail.kind {
                         ExprKind::Identifier(n) if n == "None" => true,
+                        // B-2026-08-18-10 — an arm handing out a LOCAL that owns
+                        // a box. The hand-out is already a move: the arm-tail
+                        // disarm (B-2026-08-07-1) zeroes the source's payload
+                        // word in that arm's own block, so after it runs nothing
+                        // owns the box and the phi is its only possible owner.
+                        // That per-arm placement is also what makes the pair
+                        // safe — the sibling arm that does NOT hand the binding
+                        // out leaves it armed, and this registration's tag guard
+                        // sees `None` there, so exactly one free happens on
+                        // either path.
+                        ExprKind::Identifier(n) => {
+                            self.payload_vars
+                                .boxed_enum_payload_vars
+                                .contains(n.as_str())
+                                && self.variables.contains_key(n.as_str())
+                                && !self.borrow_vars.ref_params.contains_key(n.as_str())
+                        }
+                        // An arm tail that is ITSELF one of these — a third
+                        // level of nesting (`match (match k { 0 => (match ...),
+                        // _ => None }) { ... }`). Whatever the inner one yields
+                        // reaches this frame's phi unchanged, and nothing
+                        // registers for a value in ARM-TAIL position, so the
+                        // same single registration at the outer scrutinee owns
+                        // it. Recursion is structural and terminates.
+                        ExprKind::Match { .. } | ExprKind::OptionalChain { .. } => {
+                            self.match_result_scrutinee_owns_box(tail)
+                        }
                         ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
-                            if !inner_is_owned {
-                                return false;
-                            }
-                            let mut bound = Vec::new();
-                            collect_pattern_bindings(&arm.pattern, &mut bound);
-                            Self::moved_field_chain_root(tail)
-                                .is_some_and(|root| bound.iter().any(|b| b == root))
+                            inner_is_owned
+                                && Self::moved_field_chain_root(tail).is_some_and(|root| {
+                                    !self.borrow_vars.ref_params.contains_key(root)
+                                })
                         }
                         _ => self.expr_yields_fresh_owned_temp(tail),
                     }

@@ -43583,6 +43583,84 @@ fn main() {
     }
 
     #[test]
+    fn asan_match_scrutinee_identifier_arm_hands_over_its_box() {
+        // B-2026-08-18-10 — the arm shape B-2026-08-18-8 declined. An arm that
+        // hands out a LOCAL owning a boxed payload is a move: the arm-tail
+        // disarm zeroes the source's payload word in that arm's own block, so
+        // after B-2026-08-18-8 the source was disarmed and the scrutinee still
+        // owned nothing — 1088 B in 34 boxes plus their 117 B of string
+        // interiors, at 200 iterations.
+        //
+        // THE ARM SPLIT IS THE POINT, and the `% 2` / `% 3` interleave is what
+        // exercises it: `o` is `Some` on even `i`, and the handing-out arm runs
+        // on `i % 3 == 0`, so all four combinations occur. The moving arm must
+        // free the box exactly once, and the arm that keeps `o` must leave its
+        // own drop armed — a fix that disarmed unconditionally would leak the
+        // second case, and one that never disarmed would double-free the first.
+        assert_clean_asan_run(
+            r#"
+struct City { name: String, zip: i64 }
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 200 {
+        let o: Option[City] = if i % 2 == 0 { Some(City { name: f"c{i}", zip: i }) } else { None };
+        match (match i % 3 { 0 => o, _ => None }) {
+            Some(v) => { total = total + (v.name.len() as i64); }
+            None => { total = total + 1; }
+        }
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["283"],
+            "match_scrutinee_identifier_arm_hands_over_its_box",
+        );
+    }
+
+    #[test]
+    fn asan_match_scrutinee_field_arm_from_an_unrelated_local_clean() {
+        // B-2026-08-18-10, second half. B-2026-08-18-8 accepted a field
+        // projection only when the chain was rooted at that arm's OWN payload
+        // binding, and called the restriction load-bearing. Measurement says
+        // otherwise: this program — the projection rooted at an unrelated live
+        // local, which is then READ AGAIN after the match — leaked 3545 B in
+        // 200 objects under that rule, while its `let`-bound twin was clean.
+        // Same defect, narrower fix. The trailing `other.tag` read is the part
+        // that would expose an over-eager free as corruption rather than a
+        // quiet leak.
+        assert_clean_asan_run(
+            r#"
+struct City { name: String, zip: i64 }
+struct Address { city: Option[City], tag: String }
+
+fn mkaddr(i: i64) -> Address {
+    return Address { city: Some(City { name: f"c{i}", zip: i }), tag: f"t{i}" };
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 200 {
+        let other = mkaddr(i);
+        match (match i % 2 { 0 => { other.city } _ => { None } }) {
+            Some(v) => { total = total + (v.name.len() as i64); }
+            None => { total = total + 1; }
+        }
+        total = total + (other.tag.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["1135"],
+            "match_scrutinee_field_arm_from_an_unrelated_local_clean",
+        );
+    }
+
+    #[test]
     fn asan_nil_coalesce_heap_fallbacks_clean() {
         // B-2026-08-17-27 — `??` is lowered to `unwrap_or`, so it inherits that
         // path's ownership machinery: the moved-binding cap-zeroing (leg 1), the
