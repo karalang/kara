@@ -2452,64 +2452,6 @@ pub(super) fn render_must_use_lint_diag(
     }
 }
 
-/// Render a `crate::missing_must_use_lint::LintDiagnostic` in the same
-/// rustc-style three-piece shape. Structurally identical to
-/// `render_must_use_lint_diag` — the two `LintDiagnostic` types share
-/// shape but live in separate modules to keep each lint self-contained
-/// (the established pattern across `unsafe_lint`, `must_use_lint`,
-/// `logical_lint`, `ffi_lint`). A future lint-registry refactor (per
-/// the deferred "Lint level attributes" entry in
-/// `phase-5-diagnostics.md`) would unify these renderers.
-pub(super) fn render_missing_must_use_lint_diag(
-    diag: &crate::missing_must_use_lint::LintDiagnostic,
-    filename: &str,
-) {
-    eprintln!(
-        "{}[{}]: {}:{}:{}: {}",
-        if diag.level == crate::missing_must_use_lint::LintLevel::Error {
-            "error"
-        } else {
-            "warning"
-        },
-        diag.lint_name,
-        filename,
-        diag.span.line,
-        diag.span.column,
-        diag.message
-    );
-    if let Some(note) = &diag.note {
-        eprintln!("   = note: {note}");
-    }
-    if let Some(help) = &diag.help {
-        eprintln!("   = help: {help}");
-    }
-}
-
-pub(super) fn render_missing_track_caller_lint_diag(
-    diag: &crate::missing_track_caller_lint::LintDiagnostic,
-    filename: &str,
-) {
-    eprintln!(
-        "{}[{}]: {}:{}:{}: {}",
-        if diag.level == crate::missing_track_caller_lint::LintLevel::Error {
-            "error"
-        } else {
-            "warning"
-        },
-        diag.lint_name,
-        filename,
-        diag.span.line,
-        diag.span.column,
-        diag.message
-    );
-    if let Some(note) = &diag.note {
-        eprintln!("   = note: {note}");
-    }
-    if let Some(help) = &diag.help {
-        eprintln!("   = help: {help}");
-    }
-}
-
 /// Render the `#[target(...)]`-stripped items of a SINGLE-target check as a
 /// note (B-2026-08-05-29).
 ///

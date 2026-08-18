@@ -682,36 +682,36 @@ pub(super) fn cmd_run(
         ) {
             render_must_use_lint_diag(&diag, filename);
         }
-        // Lint: missing_must_use (slice 3 — stdlib-hygiene). Warns on
-        // baked stdlib `pub fn` returning iterator-shaped or
-        // new-value-from-self values that lack `#[must_use]`. Silent
-        // on user code by design (the lint walks `stdlib_origin == true`
-        // items only). Today end-user compiles see no output from this
-        // pass because baked stdlib items aren't spliced into the user
-        // program AST; the lint surfaces during karac's own stdlib-
-        // hygiene tests (`tests/missing_must_use_lint.rs`) and during
-        // any future bundled-stdlib-source compile mode.
-        for diag in crate::missing_must_use_lint::check_missing_must_use(
-            &pipeline.parsed.program,
-            &pipeline.lint_overrides,
-        ) {
-            render_missing_must_use_lint_diag(&diag, filename);
-        }
-        // Lint: missing_track_caller (slice 7 of the `#[track_caller]` for
-        // stdlib panic-emitters entry). Reads the effect-checker's
-        // `inferred_effects` map plus each function's declared `panics`
-        // effect to identify stdlib `pub fn`s that panic without
-        // `#[track_caller]`. Pre-codegen-slice-4 surface: the lint fires
-        // even though the codegen pass doesn't yet propagate the
-        // attribute — the slice-6 annotation pass will drive this lint
-        // clean and surface every missing-attribute site mechanically.
-        for diag in crate::missing_track_caller_lint::check_missing_track_caller(
-            &pipeline.parsed.program,
-            pipeline.effects.as_ref(),
-            &pipeline.lint_overrides,
-        ) {
-            render_missing_track_caller_lint_diag(&diag, filename);
-        }
+        // Lints NOT run on a user compile: `missing_must_use` and
+        // `missing_track_caller` (B-2026-08-18-16).
+        //
+        // Both are stdlib-HYGIENE lints: they fire only on items where
+        // `Function.stdlib_origin == true`, which on a user compile means
+        // exactly the items `prelude::synthetic_prelude_items` splices in.
+        // The comment that used to sit here said "end-user compiles see no
+        // output from this pass because baked stdlib items aren't spliced
+        // into the user program AST". That premise is no longer true, and a
+        // corpus sweep is what caught it: across the 955 `.kara` files in
+        // examples/ + kara-katas these two produced 68 diagnostics on 6 real
+        // user files.
+        //
+        // Worse than noise, the diagnostics are UNLOCATABLE. The span belongs
+        // to the baked stdlib source while the renderer prints the user's
+        // filename, so `examples/autograd_training.kara` — 88 lines long —
+        // drew diagnostics at lines 378 and 387, and `mandelbrot.kara` was
+        // told `fn animation_frames` lacks `#[must_use]` at line 94, where
+        // that function is not defined at all (it is imported from
+        // `std.web.time`).
+        //
+        // Suppressing here is the fix rather than a workaround, because there
+        // is no rendering that would make these actionable for the person
+        // compiling: the finding is about karac's own stdlib, in a file they
+        // did not write and cannot edit from their program. The lints keep
+        // their value where it belongs — `tests/missing_must_use_lint.rs` and
+        // `tests/missing_track_caller_lint.rs` run them against
+        // `STDLIB_PROGRAMS` directly, which is the scope their own module docs
+        // describe. A future bundled-stdlib-source compile mode is where they
+        // would legitimately return to a command.
         // Lint: ffi_float_eq
         for diag in
             crate::ffi_lint::check_ffi_float_eq(&pipeline.parsed.program, &pipeline.lint_overrides)

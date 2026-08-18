@@ -1163,6 +1163,64 @@ fn takeu(n: usize) -> usize { return n; }
 /// JSON feed, so the whole category was invisible to it — and invisibly so,
 /// since a diagnostic that is never emitted also never counts as unfixed.
 #[test]
+fn test_stdlib_hygiene_lints_are_silent_on_a_user_compile() {
+    // B-2026-08-18-16 — `missing_must_use` and `missing_track_caller` are
+    // stdlib-HYGIENE lints: they fire only on `stdlib_origin == true` items,
+    // which on a user compile means exactly the ones the prelude splices in.
+    // They were reporting those against the USER's filename with the baked
+    // stdlib source's span, so an 88-line example drew diagnostics at lines
+    // 378 and 387. Unlocatable, and about a file the author cannot edit.
+    //
+    // NON-VACUITY: the trigger is the IMPORT, not the body. Measured against
+    // the pre-fix compiler, this exact fixture emitted 2 diagnostics while the
+    // same program without the `std.web` import emitted 0 — so the import line
+    // is load-bearing and must not be "simplified" out of this test.
+    //
+    // The lints keep doing their real job; `tests/missing_must_use_lint.rs`
+    // has a sentinel asserting they still find candidates in STDLIB_PROGRAMS,
+    // so this test constrains WHERE they surface, not WHETHER they work.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-stdlib-hygiene-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("wi.kara");
+    std::fs::write(
+        &path,
+        "import std.web.time.{animation_frames};\n\
+         \n\
+         fn main() {\n\
+             println(\"hi\");\n\
+         }\n",
+    )
+    .unwrap();
+    let file = path.to_str().unwrap();
+
+    for args in [
+        vec!["check", file],
+        vec!["check", file, "--output=json"],
+        vec!["run", "--interp", file],
+    ] {
+        let out = karac_bin().args(&args).output().unwrap();
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !combined.contains("missing_must_use") && !combined.contains("missing_track_caller"),
+            "stdlib-hygiene lints must not reach a user compile via {args:?}; got: {combined}",
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_sibling_lints_reach_check_and_json() {
     // B-2026-08-18-2 — the three lints that joined `must_use` on the compile
     // path. `undocumented_unsafe` is the one with output on the corpus, so it
