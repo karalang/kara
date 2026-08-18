@@ -97,8 +97,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
-| missing-feature | 109 | 3 |
-| diagnostics | 81 | 2 |
+| missing-feature | 109 | 2 |
+| diagnostics | 83 | 3 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
@@ -116,15 +116,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 60 | 0 |
 | other | 55 | 3 |
 | autopar | 49 | 1 |
-| cli | 45 | 0 |
-| parser | 25 | 2 |
+| cli | 46 | 1 |
+| parser | 26 | 1 |
 | runtime | 22 | 0 |
-| resolver | 19 | 0 |
+| resolver | 20 | 1 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1342 surfaced · 7 open · 1317 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1344 surfaced · 7 open · 1319 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -136,7 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1342 surfaced
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | medium | A `#[gpu]` KERNEL BODY CANNOT USE `match`, AND CANNOT DECLARE LOCALS INSIDE AN `if` BRANCH. Increments 1-3 LANDED 2026-08-18 — immutable `let`, then `while` + mutable locals + assignment, then `for`-over-range — so reductions, accumulators and nested counted loops now compile and run. `match` (increment 4) remains, plus locals in an `if` branch, which is blocked separately on statement-form `if`. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-18-41 | 2026-08-18 | parser | low | THREE `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket"), MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216, under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213), and PARAMETERIZED resources (`effect resource UserDB[user_id: i64];` -> the `[...]` is parsed as generic type params, so the diagnostic is the naming-convention error "`user_id` is Value-class but generic type parameters must be Type-class", spec'd at design.md:7124 under its own heading "### Parameterized Resources" at :7121). Only `effect resource X;` and `effect resource X: Trait;` parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
 | B-2026-08-18-42 | 2026-08-18 | other | low | EIGHT occurrences across SEVEN lines in design.md's kara blocks use Rust MACRO syntax (`name!(...)`), which Kara does not have -- the parser rejects `!` outright with "the `!` operator is not used in Kara". `panic!` (6, five of them in § Never type -- one line carries two -- plus § FFI callbacks), `matches!` (1, § peek-and-drop) and `format_into!` (1, § embedded formatting). Transcribing any of them fails to parse. Only `panic!` has a drop-in replacement -- `panic("x")` checks FULLY clean -- while `matches` resolves to nothing at all ("undefined name 'matches'") and `format_into!` is variadic over a format string, so two of the three need a language answer before the doc can be corrected. | docs/design.md:542, :543, :556, :557 (panic!), :5941 (panic!), :8419 (matches!), :12162 (format_into!); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR; cf. B-2026-08-17-35 for the same class |
-| B-2026-08-18-43 | 2026-08-18 | parser | medium | `Expected Semicolon` -- the most common parse error in the whole corpus -- carries NO machine-applicable `replacement`, so `karac fix` reports it and changes nothing. The mechanism already exists and a SIBLING parse diagnostic uses it: the stray-comma-in-`with`-clause error emits `replacement: {offset, length, text}` and `karac fix` applies it. Since `karac fix` is the Mend loop's primary fix path, the single most frequent authoring mistake is the one it cannot repair. | the `Expected Semicolon` raise site in src/parser.rs and ParseResult.fix_edits (the stray-comma-in-with-clause edit is the working sibling to copy); consumers are collect_diagnostics (JSON `replacement`) and cmd_fix |
+| B-2026-08-18-47 | 2026-08-18 | resolver+cli | medium | `karac fix` AUTO-APPLIES a `did you mean` rename to a SEMANTICALLY UNRELATED function: an undefined `format("{}", 1)` is rewritten to `forget("{}", 1)` -- `forget` being the memory intrinsic. `suggest_similar` accepts any candidate within Levenshtein distance 2 for a name of 3+ characters, and the winner is written straight into a machine-applicable `TextEdit` that `karac fix` applies without further checks. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1342 surfaced
 
 </details>
 
-### Fixed (1317)
+### Fixed (1319)
 
-<details><summary>1317 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1319 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11948,8 +11948,16 @@ Third visit to this arm; B-2026-08-18-3 taught it one more legal operand shape (
 
 Verified: the map miss through a struct field, the same miss through a local, and a nested-Vec out-of-range now all report the real user-facing error with exit 1 under `--interp`, matching what JIT and AOT already did. The error is reported ONCE, not compounded by the outer subscript re-reporting against the `Unit` placeholder. Anti-vacuity pinned in the test: the present-key and in-range spellings still evaluate to the right elements, and the test fails with the original ICE when the fix is stashed. |
 | B-2026-08-18-38 | other | medium | The ENTIRE wasm E2E surface in `tests/cli.rs` passed VACUOUSLY on any machine whose default rustup toolchain is not the pinned one: 36 tests took the… | c3f5f3f |
+| B-2026-08-18-43 | parser | medium | `Expected Semicolon` -- the most common parse error in the whole corpus -- carries NO machine-applicable `replacement`, so `karac fix` reports it and… | FIXED by ce0ae03. `expect()` now attaches a machine-applicable `;` insertion whenever the expected token is `Semicolon`, so `karac fix` repairs the corpus's most common parse error instead of reporting it and changing nothing. Verified on the row's own repro: `karac fix fx.kara` reports "applied 1 fix(es)" and the file goes on to pass `karac check`.
+
+THE OFFSET IS EXACT, as the row said it would be: the `;` goes at the END OF THE PREVIOUS TOKEN, which is the last token of the statement that just parsed. The multi-line `let` in the regression test is precisely the shape that forced B-2026-08-17-31's line-level predecessor to be reverted -- there is no end-of-line to append to and the brackets balance on each line taken alone -- and the parser handles it without difficulty. Anchoring to the token also keeps a trailing comment intact for free, since comments are not tokens: `let x = 1  // n` becomes `let x = 1;  // n`.
+
+THE SCOPE NOTE NEEDED A REAL GUARD, not just the raise site. The row expected that emitting at the parser's own expected-token offset would exclude Rust `::` paths and macros "by construction". MEASURED: it does not. `let x = std::mem::size_of();` reports `Expected Semicolon, found ColonColon` and would have received a `;` at the end of `std`, producing `let x = std; ::mem::size_of();` -- a WRONG repair in the primary fix path, which is worse than none. So the edit is emitted only when the offending token plausibly begins a new statement: it starts on a LATER LINE than the previous token began, or it is the `}` closing the block (`unsafe { *out = v }`, where the terminator goes before the brace). Same-line mid-expression junk gets no edit and the diagnostic stands alone. A missed fix is the failure mode; a wrong one is not possible from this rule.
+
+Four regression tests: the multi-line `let`, the mid-expression `::` negative, the single-line-block brace case, and (for the sibling row) the macro shapes. Each repaired source is re-parsed in the test and asserted clean, so a future change that emits a plausible-looking but non-parsing edit fails rather than passes. |
 | B-2026-08-18-44 | ownership | medium | A SLICE PATTERN'S BINDINGS were dropped by `cfg::pattern_bindings`, so the ownership CFG recorded no `Define` for them and never called `note_local_i… | b55a046 |
 | B-2026-08-18-45 | ownership | medium | EVERY `collect()` into a non-`Vec` target emitted a `perf[rc-fallback]` note naming a SYNTHESIZED binding the user never wrote -- "RC fallback insert… | b55a046 |
+| B-2026-08-18-46 | parser | medium | `karac fix` CORRUPTED a Rust macro call: `println!("hi");` was rewritten to `printlnnot ("hi");` | ce0ae03 |
 
 </details>
 
