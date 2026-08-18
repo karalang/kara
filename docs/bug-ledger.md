@@ -103,18 +103,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 44 | 2 |
+| other | 45 | 2 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 930 | 2 |
+| codegen | 930 | 1 |
 | typecheck | 199 | 1 |
-| interp | 152 | 2 |
-| ownership | 58 | 1 |
-| other | 52 | 2 |
+| interp | 152 | 1 |
+| ownership | 58 | 0 |
+| other | 53 | 3 |
 | autopar | 48 | 0 |
 | cli | 45 | 0 |
 | parser | 23 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1331 surfaced · 6 open · 1307 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1332 surfaced · 6 open · 1308 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -133,9 +133,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1331 surfaced
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
-| B-2026-08-18-32 | 2026-08-18 | ownership+codegen+interp | low | THE OWNERSHIP CHECKER AND BOTH BACKENDS DISAGREE ABOUT WHETHER `String + ` CONSUMES ITS LEFT OPERAND. design.md gives `+` the signature `fn add(self, other: ref String)` — bare `self`, i.e. OWNED — so the checker warns "value moved here, used again here" on a second use. Neither the interpreter nor codegen enforces the move: the value is intact and correct afterward. The suggested `.clone()` is a real cost for a problem that does not exist at runtime. | The `+` operator's declared receiver mode. design.md:1821 says `fn add(self, other: ref String) -> String`; the ownership checker reads that as a move, and neither backend implements it as one. One of the two is wrong and it is a language call, not a bug-fix call. |
 | B-2026-08-18-33 | 2026-08-18 | parser | low | SEVEN parser arms still copy their LHS's span -- `Cast`, `TupleIndex`, `Call`, `Path`, `Pipe`, `NilCoalesce`, `Range` -- and the postfix-span family never enumerated them. `NilCoalesce` is the one with a MEASURED consequence: it is why `method_call_key`'s args-close preference cannot be retired (B-2026-08-18-30). | Seven parser arms still copy their LHS's span. `NilCoalesce` is the one with a measured consequence -- it blocks B-2026-08-18-30's cleanup -- and the other six (`Cast`, `TupleIndex`, `Call`, `Path`, `Pipe`, `Range`) are unmeasured. Widen one arm per change with its own suite run; the five already done cost 3, 42 and 12 test failures and each needed a different fix. |
 | B-2026-08-18-34 | 2026-08-18 | interp+codegen | high | `map.entry(k).or_insert(default).push(v)` FAILS ON ALL THREE BACKENDS when the map is a struct FIELD, while `karac check` accepts it: interpreter says "method 'push' not found on type 'unknown' (no interpreter dispatch arm)", codegen says "no handler for method 'push' on non-identifier receiver". The identical chain over a LOCAL map works everywhere. This is the idiomatic way to mutate a container nested in a container, and a struct holding a map is its common home. | The interpreter's method-dispatch arm for a borrow-returning builtin result (`src/interpreter/method_call.rs`), and codegen's `compile_method_call` non-identifier-receiver routing (`src/codegen/method_call.rs`) -- the same 'materialize the receiver and re-dispatch' family as `try_compile_freshtemp_mapset_read_method`, except here the receiver is a `mut ref` INTO the map and must not be copied, or the append lands on a temporary. |
+| B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1331 surfaced
 
 </details>
 
-### Fixed (1307)
+### Fixed (1308)
 
-<details><summary>1307 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1308 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11822,6 +11822,67 @@ The fix is one shared helper, `uam_consume_root_span`, walking a place to its ro
 THE TUPLE ARM IS FIXED THOUGH `TupleIndex` WAS NOT WIDENED. `uam_defensive_copy_tuple_elem` reads through the same helper now, so it is correct whether or not `TupleIndex` ever gets a span of its own -- and `test_e2e_tuple_elem_bound_out_of_local_is_a_copy` was among the twelve, because a tuple index over a field access (`b.a.0`) inherits the widened span through its object. Fixing the reader rather than only the arm that happened to break is what makes the remaining arm's future widening a non-event here.
 
 `receiver_struct_inst` needed nothing: B-2026-08-18-24 already reordered it to ask the structural walk before the span table, which was the compensation filed on this row. That prediction held. |
+| B-2026-08-18-32 | ownership+codegen+interp | low | THE OWNERSHIP CHECKER AND BOTH BACKENDS DISAGREE ABOUT WHETHER `String + ` CONSUMES ITS LEFT OPERAND | FIXED by 982ce8c, resolving the row's OPEN LANGUAGE DECISION in favour of its
+second option: `+` BORROWS. The owner made the call; the row correctly declined
+to.
+
+WHY THAT OPTION. It matches what both backends already do, so no emitted code
+changes and the diff is confined to the checker, the builtin signature and the
+spec line. The alternative — teaching the backends to consume — is defensible
+(it is what Rust's `String + &str` does, and an owned receiver is what would let
+`a + b` reuse `a`'s buffer instead of allocating) but is real work in both
+backends to make natural code an error.
+
+MECHANISM, a known shape rather than a new one. `+` on `String` lowers to
+`Call(Path(["String", "add"]), [lhs, rhs])` — a free-call of an INSTANCE trait
+method, which never gets a `callee_param_modes` entry because that table is
+static-methods-only, so the receiver fell to the consume default.
+B-2026-07-02-23 fixed exactly this for the comparison operators;
+`callee_is_string_concat` is the sibling of its `callee_is_relational_operator`.
+
+NARROWER THAN THAT SIBLING ON PURPOSE: comparisons borrow BOTH operands,
+concatenation only the RECEIVER. The fix frees argument 0 alone, so the right
+operand keeps whatever mode its own position gives it — `e + eat(f)` followed by
+`f.len()` still warns, and that is a test.
+
+TWO CORRECTIONS TO THE ROW, both from a 955-file sweep of examples/ +
+kara-katas rather than a sample:
+
+(1) PREVALENCE. The row says "a scan of 40 corpus files ... turned up exactly
+one that trips it (kata 278's differential)". The full sweep finds 7 move
+warnings and NONE is a String `+`: all are ordinary argument moves
+(`consume(t)`, `drain_cursor(lists)`, `tos.push(cur)`) or a `let` rebind. 278's
+is `d_ans` moved into `is_valid_answer(...)`. Kata 282, the row's source, was
+never landed. So the true corpus prevalence is ZERO and this change alters no
+existing diagnostic — it removes a warning on a shape nobody had committed yet,
+which is the cheapest moment to fix it.
+
+(2) THE MIRROR-LANGUAGE ARGUMENT. The row says borrowing "matches ... what every
+mirror language does". Go and Python treat strings as immutable values so reuse
+is free, but RUST'S `String + &str` CONSUMES `self` exactly as the old signature
+did — the Rust mirrors avoid the question by using `push_str`. The mirrors are
+split, so that argument does not carry the decision; the backends-already-agree
+argument does.
+
+WHAT CHANGED: `callee_is_string_concat` (lowering.rs) + one disjunct in the
+classifier's arg-mode decision; the typechecker's builtin `Add` impl for String
+now carries a `Type::Ref` receiver instead of the shared owned `binop` sig
+(which stays owned for the scalar types, where the receiver is a register copy);
+design.md's row 1824 becomes `fn add(ref self, other: ref String)` with a note
+that the left operand survives.
+
+VERIFIED on all four surfaces (check / interp / JIT / AOT / AOT under
+KARAC_AUTO_PAR=0). Three tests: the row's repro accepted, plus two anti-vacuity
+guards — a plain rebind and a move through the right operand both still report,
+so the fix cannot degrade into blanket suppression for `String`.
+
+Gates: fmt clean, clippy --all --all-targets --features llvm clean, 14,060
+passed / 0 failed / 18 ignored across 107 suites.
+
+NOT ADDRESSED, and still true: the O(n^2) cost of building a string by repeated
+`+`. design.md's own note on the same line says "prefer `push_str` in loops",
+and borrowing the receiver does not change that — if anything it removes the
+clone that made the quadratic shape look even worse than it is. |
 
 </details>
 
