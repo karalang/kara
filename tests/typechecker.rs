@@ -40057,3 +40057,85 @@ fn panic_types_as_never_and_checks_its_argument() {
     // A local binding shadowing the builtin still wins (B-2026-08-01-26).
     typecheck_ok("fn main() { let panic = |n: i64| n + 1; let _ = panic(42); }");
 }
+
+/// B-2026-08-17-44 — a CONCRETE builtin-container impl head keeps its element
+/// arguments on `self`.
+///
+/// The keep-the-args set grew one head at a time as each was hit (`Column` and
+/// `Tensor` for a reduction intercept, then `Vec` and `VecDeque` for a fold),
+/// so it was an accident of discovery order: every other builtin container
+/// erased its args and left the body a receiver it could barely use.
+/// `impl Trait for Slice[i64]` typed `self` as an args-less `Slice`, and
+/// `self[0]` was then rejected with "'Slice' does not support indexing with
+/// []" — whose own help text lists `Slice[T]` as indexable.
+///
+/// Each case below reads an ELEMENT out of `self`, so it can only check if the
+/// element type survived the impl head.
+#[test]
+fn concrete_builtin_container_impl_heads_keep_their_element_args() {
+    for (label, src) in [
+        (
+            "Slice element read",
+            "trait H { fn h(self) -> i64; }\n\
+             impl H for Slice[i64] { fn h(self) -> i64 { return self[0]; } }\n\
+             fn main() { }",
+        ),
+        (
+            "Map value read by String key",
+            "trait G { fn g(ref self) -> i64; }\n\
+             impl G for Map[String, i64] { fn g(ref self) -> i64 { return self[\"a\"]; } }\n\
+             fn main() { }",
+        ),
+        (
+            "Option payload method",
+            "trait O { fn o(self) -> i64; }\n\
+             impl O for Option[i64] { fn o(self) -> i64 { return self.unwrap_or(0); } }\n\
+             fn main() { }",
+        ),
+        (
+            "Set element iteration",
+            "trait C { fn c(self) -> i64; }\n\
+             impl C for Set[i64] { fn c(self) -> i64 { let mut t = 0; for x in self { t = t + x; } return t; } }\n\
+             fn main() { }",
+        ),
+        (
+            "Array element read",
+            "trait A { fn a(self) -> i64; }\n\
+             impl A for Array[i64, 3] { fn a(self) -> i64 { return self[0]; } }\n\
+             fn main() { }",
+        ),
+        (
+            "Vec element read (already worked — counterweight)",
+            "trait V { fn v(self) -> i64; }\n\
+             impl V for Vec[i64] { fn v(self) -> i64 { return self[0]; } }\n\
+             fn main() { }",
+        ),
+    ] {
+        let result = typecheck_ok(src);
+        assert!(
+            result.errors.is_empty(),
+            "{label}: the impl head lost its element args, got: {:?}",
+            result.errors
+        );
+    }
+}
+
+/// The counterweight to the row above: erasing args off a GENERIC head is what
+/// the fallback is for, and it still happens. `impl Foo[T]`'s `self` is `Foo`,
+/// not `Foo[T]`, so a head whose argument is a type param takes the erasing
+/// path — the concreteness guard is what separates the two.
+#[test]
+fn a_generic_container_impl_head_still_erases_its_args() {
+    // `Vec[T]` is not concrete, so `self` is the args-less `Vec` and the
+    // element read cannot resolve to `T`. The point is that the head does NOT
+    // take the keep-the-args path, which the error proves.
+    let errors = typecheck_errors(
+        "trait V[T] { fn first(self) -> T; }\n\
+         impl[T] V[T] for Vec[T] { fn first(self) -> T { return self[0] + 1; } }\n\
+         fn main() { }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "a generic head must keep taking the arg-erasing path"
+    );
+}

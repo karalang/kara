@@ -98331,6 +98331,146 @@ fn main() {
             "an optional chain must project, not compile to a constant"
         );
     }
+
+    /// B-2026-08-17-44 — the RUNTIME half of the impl-head fix: a concrete
+    /// builtin-container head keeps its element args, and codegen has to be
+    /// able to read through the `self` that results.
+    ///
+    /// Two things had to meet for this to work. The typechecker's
+    /// `check_impl_block` and codegen's `make_impl_method_function` each
+    /// carried their own hand-mirrored list of which heads keep their args;
+    /// they now share `impl_dispatch::impl_head_keeps_type_args`. And the
+    /// Slice index arm in `compile_index` keyed on `Identifier` only, while
+    /// `self[0]` arrives as `SelfValue` — so even with the element type
+    /// registered the body died on "Index operator applied to non-array
+    /// type" while `--interp` read the element. Both receiver modes are
+    /// pinned: a slice IS its `{ptr, len}` value, so owned and `ref` alike
+    /// must work.
+    #[test]
+    fn a_slice_impl_head_can_read_its_own_elements() {
+        for (label, self_mode) in [("owned self", "self"), ("borrowed self", "ref self")] {
+            let src = format!(
+                "trait Head {{ fn first_or({self_mode}, d: i64) -> i64; }}\n\
+                 impl Head for Slice[i64] {{\n\
+                     fn first_or({self_mode}, d: i64) -> i64 {{\n\
+                         if self.len() == 0 {{ return d; }}\n\
+                         return self[0];\n\
+                     }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                     let v: Vec[i64] = [10, 20, 30];\n\
+                     let s: Slice[i64] = v[1..3];\n\
+                     println(s.first_or(-1).to_string());\n\
+                 }}\n"
+            );
+            let Some(out) = run_program(&src) else {
+                return;
+            };
+            assert_eq!(
+                out, "20\n",
+                "{label}: the slice head must read its own element, not lose it at the head"
+            );
+        }
+    }
+
+    /// The `Option` head of the same fix, end to end. `impl Trait for
+    /// Option[i64]` typed `self` as an args-less `Option`, so the body's
+    /// `self.unwrap_or(0)` failed to resolve at all ("no method 'unwrap_or'
+    /// on type 'Option'") — this is the head that goes from REJECTED to
+    /// correct on all three backends with no codegen change of its own.
+    #[test]
+    fn an_option_impl_head_can_unwrap_its_own_payload() {
+        let src = "trait Or { fn or_zero(self) -> i64; }\n\
+                   impl Or for Option[i64] {\n\
+                       fn or_zero(self) -> i64 { return self.unwrap_or(0); }\n\
+                   }\n\
+                   fn main() {\n\
+                       let some: Option[i64] = Option.Some(9);\n\
+                       let none: Option[i64] = None;\n\
+                       println(some.or_zero().to_string());\n\
+                       println(none.or_zero().to_string());\n\
+                   }\n";
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(out, "9\n0\n", "the Option head must keep its payload type");
+    }
+
+    /// The same fix, at the shape that was SILENTLY WRONG rather than
+    /// rejected. `for x in self` over a `Slice[i64]` or `Set[i64]` impl head
+    /// typechecked before — iteration does not need the element type the way
+    /// `self[0]` does — so it built, and the compiled binary summed NOTHING
+    /// while `--interp` summed correctly. Measured on the pre-fix source:
+    /// interpreter 12, `karac build` 0, for both heads.
+    ///
+    /// Kept as its own test because a wrong answer that builds is the failure
+    /// this whole row is really about: the rejected shapes announced
+    /// themselves, this one did not.
+    #[test]
+    fn iterating_a_borrowed_container_self_sums_its_elements() {
+        for (head, fill) in [
+            (
+                "Slice[i64]",
+                "let v: Vec[i64] = [5, 7];\n let c: Slice[i64] = v[0..2];",
+            ),
+            (
+                "Set[i64]",
+                "let mut c: Set[i64] = Set.new();\n c.insert(5); c.insert(7);",
+            ),
+        ] {
+            let src = format!(
+                "trait Cnt {{ fn total(ref self) -> i64; }}\n\
+                 impl Cnt for {head} {{\n\
+                     fn total(ref self) -> i64 {{\n\
+                         let mut t = 0;\n\
+                         for x in self {{ t = t + x; }}\n\
+                         return t;\n\
+                     }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                     {fill}\n\
+                     println(c.total().to_string());\n\
+                 }}\n"
+            );
+            let Some(out) = run_program(&src) else {
+                return;
+            };
+            assert_eq!(
+                out, "12\n",
+                "{head}: iterating `self` compiled to a sum over nothing"
+            );
+        }
+    }
+
+    /// The `Map` head, restricted to the receiver mode that actually lowers.
+    /// `self[k]` inside an `impl Trait for Map[K, V]` body is routed only for
+    /// a BORROWED receiver: an owned `self` on a container head is not a
+    /// shape codegen supports (`self.len()` there fails with "no handler for
+    /// method 'len' on non-identifier receiver"), and routing `self[k]`
+    /// through the map path anyway does not fail — it SEGFAULTS, because the
+    /// slot does not hold the handle the index path loads. So the owned
+    /// spelling keeps its loud build error (B-2026-08-18-11) and this pins the
+    /// borrowed one.
+    #[test]
+    fn a_borrowed_map_impl_head_can_read_by_its_own_key_type() {
+        let src = "trait Get { fn get_a(ref self) -> i64; }\n\
+                   impl Get for Map[String, i64] {\n\
+                       fn get_a(ref self) -> i64 { return self[\"a\"]; }\n\
+                   }\n\
+                   fn main() {\n\
+                       let mut m: Map[String, i64] = Map.new();\n\
+                       m.insert(\"a\", 42);\n\
+                       println(m.get_a().to_string());\n\
+                   }\n";
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(
+            out, "42\n",
+            "a String key must survive the impl head — an args-less `Map` \
+             rejected it as \"index must be an integer or range\""
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

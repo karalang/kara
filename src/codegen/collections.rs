@@ -2430,8 +2430,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // Slice variable indexing: before the fast-path alloca lookup, check
         // whether the object is a slice variable. Slices use a 2-field
         // `{ptr, len}` representation and dispatch to a dedicated path.
-        if let ExprKind::Identifier(name) = &object.kind {
-            if self.var_types.slice_elem_types.contains_key(name.as_str()) {
+        //
+        // Keyed on `container_recv` (Identifier OR SelfValue), like the
+        // Column/Tensor and Vec arms — `self[0]` inside a user `impl Trait
+        // for Slice[i64]` body arrives as `SelfValue`, and once
+        // `impl_head_keeps_type_args` lets the head keep its element arg,
+        // `self` IS registered in `slice_elem_types`. Without the SelfValue
+        // half the body fell through to the tail's "Index operator applied to
+        // non-array type" while `--interp` read the element (B-2026-08-17-44).
+        if let Some(name) = container_recv {
+            if self.var_types.slice_elem_types.contains_key(name) {
                 return self.compile_slice_index(name, index);
             }
         }
@@ -2439,8 +2447,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // Map variable indexing: `m[k]` calls karac_map_get and panics on miss.
         // The key is hashed via the per-K hash_fn registered at Map construction;
         // it does NOT need to be an integer (unlike Array/Vec/Slice).
-        if let ExprKind::Identifier(name) = &object.kind {
-            if self.mapset.map_key_types.contains_key(name.as_str()) {
+        //
+        // `self[k]` inside an `impl Trait for Map[K, V]` body arrives as
+        // `SelfValue`, the same as the Slice arm above — but ONLY a
+        // BORROWED receiver is routed. An OWNED `self` on a container head
+        // is not a shape codegen supports at all: `self.len()` in that
+        // position fails with "no handler for method 'len' on non-identifier
+        // receiver", and `self[k]` does not fail, it SEGFAULTS — the slot
+        // does not hold the handle `compile_map_index` loads. So the owned
+        // spelling keeps its loud build error (B-2026-08-18-11) rather than
+        // being handed a wrong pointer. `ref self` / `mut ref self` are in
+        // `signature_ref_params` and work: measured 42 on all three backends.
+        //
+        // The Slice arm needs no such guard — a slice IS its `{ptr, len}`
+        // value, so the owned receiver is the value itself, and owned `self`
+        // is measured correct there on all three backends.
+        let map_recv: Option<&str> = match &object.kind {
+            ExprKind::Identifier(name) => Some(name.as_str()),
+            ExprKind::SelfValue if self.borrow_vars.signature_ref_params.contains("self") => {
+                Some("self")
+            }
+            _ => None,
+        };
+        if let Some(name) = map_recv {
+            if self.mapset.map_key_types.contains_key(name) {
                 return self.compile_map_index(name, index);
             }
         }

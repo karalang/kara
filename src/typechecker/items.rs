@@ -2628,22 +2628,39 @@ impl<'a> super::TypeChecker<'a> {
             let lowered = self.lower_type_expr(&imp.target_type, &gp);
             match &lowered {
                 Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => lowered,
+                // A CONCRETE BUILTIN CONTAINER head keeps its args, because
+                // for a container the args ARE the element types the body
+                // needs: `impl Trait for Column[i64]` must keep `i64` or the
+                // reduction intercept in `infer_method_call` misses and
+                // `self.sum()` stays the abstract trait return `T`; `impl
+                // Trait for Vec[i64]` must keep it or `for x in self` types
+                // the element `T` and the fold errors "cannot mix i64 and T";
+                // `impl Trait for Slice[i64]` must keep it or `self[0]` is
+                // rejected outright (B-2026-08-17-44).
+                //
+                // `impl_head_keeps_type_args` is shared with
+                // `make_impl_method_function`, which synthesizes the `self`
+                // param codegen registers its side-tables from — the two used
+                // to carry hand-mirrored name lists and had drifted. Read its
+                // doc before adding a head here.
                 Type::Named { name, args }
-                    if (name == "Column" || name == "Tensor")
+                    if crate::impl_dispatch::impl_head_keeps_type_args(name)
                         && !args.is_empty()
                         && args.iter().all(type_is_fully_concrete) =>
                 {
                     lowered.clone()
                 }
-                // S6c blanket-Vec: `impl Trait for Vec[i64]` must keep its
-                // concrete element arg so `self` is `Vec[i64]` (not `Vec[]`)
-                // and `for x in self` types the element `i64` — otherwise the
-                // body's element stays the abstract trait param `T` and a
-                // `self.sum()`-style fold errors "cannot mix i64 and T".
-                Type::Named { name, args }
-                    if (name == "Vec" || name == "VecDeque")
-                        && !args.is_empty()
-                        && args.iter().all(type_is_fully_concrete) =>
+                // The three builtin containers that lower to a DEDICATED
+                // `Type` variant instead of to `Named` — `Slice[i64]`,
+                // `Array[i64, 3]`, `Vector[f32, 4]`. For these the fallback
+                // did more than erase args: it replaced the VARIANT with
+                // `Named { name: "Slice" }`, so every consumer that matches
+                // on the variant (the index rule, slice method dispatch,
+                // element-type reads) stopped recognizing `self` as a slice
+                // at all. Same concreteness guard; the three names are in the
+                // shared list too, for the by-name codegen half.
+                Type::Slice { .. } | Type::Array { .. } | Type::Vector { .. }
+                    if type_is_fully_concrete(&lowered) =>
                 {
                     lowered.clone()
                 }

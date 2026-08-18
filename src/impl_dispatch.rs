@@ -196,6 +196,51 @@ pub fn impl_dispatch_segment(target: &TypeExpr, names: &ImplDispatchNames) -> Op
     impl_target_head(target)
 }
 
+/// Does an impl head named `name` keep its concrete type arguments on `self`?
+///
+/// A builtin container's arguments ARE its element types, so dropping them
+/// leaves the method body with a receiver it can barely use: `impl Trait for
+/// Slice[i64]` typed `self` as an args-less `Slice`, and `self[0]` was then
+/// rejected with "'Slice' does not support indexing with []" — whose own help
+/// text lists `Slice[T]` as indexable. A USER type is the opposite case: the
+/// args there are the impl's own generic params (`impl Foo[T]`), and erasing
+/// them to the head name is what makes `self` usable as `Foo`.
+///
+/// # Why this predicate is shared rather than spelled twice
+///
+/// Two places decide it — `TypeChecker::check_impl_block` (which types `self`
+/// for the body) and `make_impl_method_function` (which synthesizes the `self`
+/// parameter codegen registers side-tables from). They were hand-mirrored
+/// name lists, and both grew one head at a time as each was hit: `Column` and
+/// `Tensor` for a reduction intercept, then `Vec` and `VecDeque` for a fold.
+/// The set that resulted was an accident of discovery order, so `Map`, `Set`,
+/// `SortedMap`, `SortedSet`, `Option`, `Result`, `Slice`, `Array` and `Vector`
+/// were all still dropping their args — the front end rejecting the body, and
+/// codegen, on the shapes the front end did admit, dying on "Index operator
+/// applied to non-array type" for want of a registered element type
+/// (B-2026-08-17-44). One list means the two can no longer drift apart.
+///
+/// The caller pairs this with a concreteness check: a head whose args mention
+/// a type param has something generic to erase and takes the erasing path.
+pub fn impl_head_keeps_type_args(name: &str) -> bool {
+    matches!(
+        name,
+        "Vec"
+            | "VecDeque"
+            | "Map"
+            | "SortedMap"
+            | "Set"
+            | "SortedSet"
+            | "Column"
+            | "Tensor"
+            | "Option"
+            | "Result"
+            | "Slice"
+            | "Array"
+            | "Vector"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

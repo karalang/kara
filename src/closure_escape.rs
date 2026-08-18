@@ -2799,21 +2799,24 @@ pub fn make_impl_method_function(
     }
     if let Some(self_kind) = method.self_param.as_ref() {
         let span = method.span;
-        // S6c-12: for a CONCRETE handle-backed container target
-        // (`impl Trait for Column[i64]` / `Tensor[i64, [n]]`), keep the
-        // element args on `self` so the container-typed-param registration
-        // path populates `column_var_infos`/`tensor_var_infos["self"]` with
-        // the concrete element kind — otherwise `self.sum()` in the body has
-        // no element and can't pick the concrete kernel. Struct/enum targets
-        // keep the bare-name `self` they relied on (element inference runs off
-        // the receiver's instantiation elsewhere), so only Column/Tensor is
-        // threaded here. Mirrors `make_generic_impl_method_function`, which
-        // does the same via the full target expr for the generic case.
-        let self_generic_args = if type_name == "Column"
-            || type_name == "Tensor"
-            || type_name == "Vec"
-            || type_name == "VecDeque"
-        {
+        // A CONCRETE BUILTIN CONTAINER target keeps its element args on
+        // `self`, so the container-typed-param registration path populates
+        // the per-name side-tables codegen dispatches from —
+        // `column_var_infos`/`tensor_var_infos["self"]` with the concrete
+        // element kind (otherwise `self.sum()` has no element and can't pick
+        // the concrete kernel), and `slice_elem_types`/`map_key_types`
+        // likewise (otherwise `self[0]` compiles the receiver to a bare
+        // aggregate and dies on "Index operator applied to non-array type" —
+        // B-2026-08-17-44). Struct/enum targets keep the bare-name `self`
+        // they relied on; element inference runs off the receiver's
+        // instantiation elsewhere for those.
+        //
+        // The head set is `impl_head_keeps_type_args`, shared with the
+        // typechecker's `check_impl_block`, which types `self` for the same
+        // body. Spelled separately, the two drifted. Mirrors
+        // `make_generic_impl_method_function`, which keeps the full target
+        // expr for the generic case.
+        let self_generic_args = if crate::impl_dispatch::impl_head_keeps_type_args(type_name) {
             match &target_type.kind {
                 TypeKind::Path(p) => p.generic_args.clone(),
                 _ => None,
