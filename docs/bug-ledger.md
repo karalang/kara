@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 117 | 0 |
 | missing-feature | 105 | 2 |
 | false-positive | 78 | 0 |
-| diagnostics | 78 | 4 |
+| diagnostics | 78 | 3 |
 | perf | 77 | 0 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 925 | 2 |
-| typecheck | 198 | 3 |
+| typecheck | 198 | 2 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced · 8 open · 1297 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced · 7 open · 1298 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,7 +137,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced
 | B-2026-08-18-18 | 2026-08-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let`. The other two positions design.md's "infers the target type from context" covers still fix the chain to `Vec`: `return <chain>.collect()` against a declared non-`Vec` return type -> "expected 'Set[i64]', found 'Vec[i64]'", and argument position `f(<chain>.collect())` against a non-`Vec` parameter -> the same. Measured AFTER B-2026-08-17-36 landed, so these are the residue of that fix rather than a restatement of it. | src/desugar.rs (desugar_collect_target); src/typechecker/exprs.rs (check_expr) |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
-| B-2026-08-18-25 | 2026-08-18 | typecheck | low | The `deprecated` diagnostic's MESSAGE TEXT begins with its own severity prefix, so every renderer that adds one prints it twice: "warning[deprecated]: file:7:13: warning[deprecated]: use of deprecated item `old_way`...". Under `-D deprecated` the doubling reads as a contradiction -- "error[E0200]: ... warning[deprecated]: ..." -- telling the author it is a warning in the same line that rejects the build. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced
 
 </details>
 
-### Fixed (1297)
+### Fixed (1298)
 
-<details><summary>1297 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1298 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11638,6 +11637,23 @@ VERIFIED ON ALL THREE INVOCATIONS: `cargo clippy --all -- -D warnings` (CI's exa
 THE DURABLE GUARD IS A CLAUDE.md ENTRY, because nothing in the test suite can catch this class. `--features llvm` IS NOT A SUPERSET of the default build: the two cfgs contain different code, so each hides lints from the other -- the same asymmetry the existing `--all-targets`-not-`--tests` note documents one axis over. Anyone running only the llvm leg locally (as this session had been) sees green while CI's leg fails. Both invocations are now written out in the Commands section.
 
 WHY IT REACHED MAIN AT ALL: B-2026-08-18-1 introduced the helpers and their call sites TOGETHER, so under `--features llvm` -- the leg used to verify that work -- nothing was ever unused. The gate that would have caught it is the one the session was not running. |
+| B-2026-08-18-25 | typecheck | low | The `deprecated` diagnostic's MESSAGE TEXT begins with its own severity prefix, so every renderer that adds one prints it twice: "warning[deprecated]… | FIXED by 0ad5c51b. Two emit sites baked their own severity word into the message: `emit_deprecated_warning` ("warning[deprecated]: ") and `emit_unstable_warning` ("warning[unstable_api]: "). Every renderer already builds that prefix from the `lint_name` the entry carries, so the rendered line said it twice on every lane. The other five `type_lint_warning` call sites pass clean messages, which is why this was two sites and not a systemic convention.
+
+design.md § Deprecation shows the intended shape -- `warning[deprecated]: use of deprecated function ...`, one prefix -- so this aligns the implementation with the spec rather than inventing a house style.
+
+REMOVING THE PREFIX EXPOSED A SECOND GAP, and fixing only the first would have traded one flaw for another. Under `-D deprecated` the promoted entry rendered `error[typecheck]` on the single-file path and `error[E0200]` (the generic TypeMismatch code) in project mode. While the message still repeated "warning[deprecated]" that was merely contradictory; once it did not, the LINT NAME VANISHED from the promoted rendering entirely, leaving an author no route from the error back to the `-A <name>` that governs it. The bracket is the actionable label on the warning side for precisely that reason, so both promoted renderers now prefer `lint_name` and fall back to the phase / type code for a non-lint error.
+
+MEASURED AFTER, all four lanes:
+    karac check                -> warning[deprecated]: dep.kara:7:13: use of deprecated item `old_way`: ...
+    karac run / run --interp   -> same line
+    karac build                -> same line
+    project karac build        -> same line, module path
+    karac check -D deprecated  -> error[deprecated]: ... (says "warning" nowhere)
+    project build -D           -> error[deprecated]: ...
+    a plain type error         -> error[typecheck]: expected 'i64', found 'String'   (unchanged)
+    unstable_api               -> warning[unstable_api]: ... (one prefix)
+
+The suppression route survives in the message body ("suppress with `#[allow(deprecated)]` on the enclosing item"), which the test pins alongside the prefix count -- the point of the fix is to stop repeating the label, not to drop the guidance. |
 
 </details>
 
