@@ -34333,3 +34333,40 @@ fn test_collect_target_in_return_and_tail_position_oracle() {
     );
     assert_eq!(out, "3\n3\n3\n");
 }
+
+/// B-2026-08-18-26 — the interpreter oracle for READ METHODS on a freshly
+/// returned `Set`/`Map`. `mk_set().len()` printed 0 for a three-element set
+/// under `karac build`, `mk_map().len()` printed 152, `is_empty()` printed raw
+/// bytes, and six such calls in one program segfaulted — while this side was
+/// correct throughout, which is what made it the oracle.
+///
+/// The BUILD counter is the other half and the more important one: the AOT
+/// lowering evaluated the receiver TWICE, so a producer with side effects ran
+/// twice and the first handle was stranded. One line of output per call is the
+/// assertion.
+#[test]
+fn test_freshtemp_mapset_read_methods_oracle() {
+    let out = run_no_errors(
+        "fn mk_set(n: i64) -> Set[i64] {\n\
+             println(\"B\");\n\
+             let mut s: Set[i64] = Set.new();\n\
+             let mut i = 0;\n\
+             while i < n { s.insert(i); i = i + 1; }\n\
+             return s;\n\
+         }\n\
+         fn mk_map(n: i64) -> Map[String, i64] {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             let mut i = 0;\n\
+             while i < n { m.insert(f\"k{i}\", i); i = i + 1; }\n\
+             return m;\n\
+         }\n\
+         fn main() {\n\
+             println(mk_set(3).len().to_string());\n\
+             println(mk_set(3).is_empty().to_string());\n\
+             println(mk_set(3).contains(2).to_string());\n\
+             println(mk_map(2).len().to_string());\n\
+             println(mk_map(2).contains_key(\"k0\").to_string());\n\
+         }\n",
+    );
+    assert_eq!(out, "B\n3\nB\nfalse\nB\ntrue\n2\ntrue\n");
+}

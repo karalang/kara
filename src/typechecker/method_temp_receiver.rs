@@ -345,7 +345,28 @@ impl<'a> super::TypeChecker<'a> {
                         && args.len() == 2
                         && matches!(
                             method,
-                            "get" | "contains_key" | "iter" | "keys" | "values" | "entries"
+                            "get"
+                                | "contains_key"
+                                | "iter"
+                                | "keys"
+                                | "values"
+                                | "entries"
+                                // B-2026-08-18-26 — `len` and `is_empty` were
+                                // absent here, so no side-table entry was
+                                // recorded and codegen's fresh-temp Map/Set
+                                // path declined. The receiver then fell through
+                                // to a lowering that reads the HANDLE (a plain
+                                // pointer) as though it were an inline
+                                // aggregate: `mk_map().len()` printed 152 for a
+                                // two-entry map and `is_empty()` printed raw
+                                // bytes, while `--interp` was correct. A silent
+                                // wrong answer, not a build error — six such
+                                // calls in one program segfaulted.
+                                //
+                                // The methods that WORKED were exactly the ones
+                                // on this list, which is what identified it.
+                                | "len"
+                                | "is_empty"
                         )
                         && is_scalar_or_string(&args[0])
                         && is_scalar_or_string(&args[1]) =>
@@ -361,7 +382,8 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Named { name, args }
                     if name == "Set"
                         && args.len() == 1
-                        && matches!(method, "contains" | "iter")
+                        // B-2026-08-18-26 — the `Set` half of the same gap.
+                        && matches!(method, "contains" | "iter" | "len" | "is_empty")
                         && is_scalar_or_string(&args[0]) =>
                 {
                     Some(Type::Named {

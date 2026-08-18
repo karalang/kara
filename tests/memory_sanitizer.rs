@@ -10029,6 +10029,56 @@ fn main() {
     // view or a `ref String` identifier untouched).
 
     #[test]
+    fn asan_freshtemp_mapset_len_frees_its_handle() {
+        // B-2026-08-18-26 — `mk_set().len()` reached codegen's fresh-temp
+        // Map/Set path only after `len`/`is_empty` were added to the
+        // typechecker's side-table roster. That path is also what DROP-TRACKS
+        // the handle, so the fix has a memory obligation as well as a
+        // correctness one: before it the handle was never registered (leak
+        // territory), and a fix that registered it twice would double-free.
+        //
+        // IN A LOOP so the accounting cannot round away, and with a
+        // `Map[String, i64]` alongside the scalar `Set` because a String key
+        // gives the handle per-entry heap of its own to free. The bound
+        // receiver on the last two lines is the control: that spelling always
+        // worked, so if it starts failing the fix broke the path it reused.
+        assert_clean_asan_run(
+            r#"
+fn mk_set(n: i64) -> Set[i64] {
+    let mut s: Set[i64] = Set.new();
+    let mut i = 0;
+    while i < n { s.insert(i); i = i + 1; }
+    return s;
+}
+
+fn mk_map(n: i64) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    let mut i = 0;
+    while i < n { m.insert(f"k{i}", i); i = i + 1; }
+    return m;
+}
+
+fn main() {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 8 {
+        total = total + mk_set(3).len();
+        total = total + mk_map(2).len();
+        if mk_set(3).is_empty() { total = total + 100; }
+        if mk_map(2).is_empty() { total = total + 100; }
+        k = k + 1;
+    }
+    let bound = mk_map(4);
+    println(total);
+    println(bound.len());
+}
+"#,
+            &["40", "4"],
+            "freshtemp_mapset_len_frees_its_handle",
+        );
+    }
+
+    #[test]
     fn asan_string_range_slice_reader_receiver_allocates_nothing() {
         // B-2026-08-18-22 — `s[a..b].len()` and its scalar-reader siblings
         // dispatch on a BORROWED `{ptr, len, cap = 0}` view of the source

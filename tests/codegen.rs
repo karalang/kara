@@ -98416,6 +98416,61 @@ fn main() {
         }
     }
 
+    /// B-2026-08-18-26 — READ METHODS on a freshly returned `Set`/`Map`, which
+    /// silently produced garbage: `mk_set().len()` printed 0 for a three-element
+    /// set, `mk_map().len()` printed 152 for a two-entry map, `is_empty()`
+    /// printed raw bytes, and six such calls in one program SEGFAULTED. The
+    /// program ran and exited 0, which is what made it worse than a build error.
+    ///
+    /// TWO INDEPENDENT DEFECTS, one per half of this test.
+    ///
+    /// The VALUES were wrong because the typechecker's fresh-temp Map/Set
+    /// side-table roster listed `get`/`contains_key`/`iter`/`keys`/`values`/
+    /// `entries` and `contains`/`iter` — precisely the methods that answered
+    /// correctly — while `len` and `is_empty` were absent, so no entry was
+    /// recorded, codegen's fresh-temp path declined, and the receiver fell
+    /// through to a lowering that reads the HANDLE (a plain pointer) as an
+    /// inline aggregate.
+    ///
+    /// The `B` COUNTER is the second defect and does not follow from the first:
+    /// once those two names were admitted, the helper still ran behind arms
+    /// that compile the receiver and fall through, so the producer was emitted
+    /// TWICE — `mk_set` ran twice per call under `karac build` against once
+    /// under `--interp`, and only the second handle was drop-tracked. Exactly
+    /// one `B` per call is therefore the load-bearing assertion here; the
+    /// companion ASAN fixture pins the freeing of the handle that stranded.
+    #[test]
+    fn freshtemp_mapset_read_methods_answer_and_evaluate_once() {
+        let src = "fn mk_set(n: i64) -> Set[i64] {\n\
+                       println(\"B\");\n\
+                       let mut s: Set[i64] = Set.new();\n\
+                       let mut i = 0;\n\
+                       while i < n { s.insert(i); i = i + 1; }\n\
+                       return s;\n\
+                   }\n\
+                   fn mk_map(n: i64) -> Map[String, i64] {\n\
+                       let mut m: Map[String, i64] = Map.new();\n\
+                       let mut i = 0;\n\
+                       while i < n { m.insert(f\"k{i}\", i); i = i + 1; }\n\
+                       return m;\n\
+                   }\n\
+                   fn main() {\n\
+                       println(mk_set(3).len().to_string());\n\
+                       println(mk_set(3).is_empty().to_string());\n\
+                       println(mk_set(3).contains(2).to_string());\n\
+                       println(mk_map(2).len().to_string());\n\
+                       println(mk_map(2).contains_key(\"k0\").to_string());\n\
+                   }\n";
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(
+            out, "B\n3\nB\nfalse\nB\ntrue\n2\ntrue\n",
+            "a read method on a fresh Map/Set temp must answer from the real handle \
+             and evaluate its receiver exactly once"
+        );
+    }
+
     /// B-2026-08-18-18 — `collect()` into a non-`Vec` target in RETURN position
     /// and in a function body's TAIL, end to end.
     ///

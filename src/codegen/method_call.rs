@@ -6813,7 +6813,27 @@ impl<'ctx> super::Codegen<'ctx> {
         let user_method_for_len_family = dispatch_key.as_deref().is_some_and(|k| {
             self.module.get_function(k).is_some() || self.mono_state.generic_fns.contains_key(k)
         });
+        // B-2026-08-18-26 — a FRESH-TEMP `Map`/`Set` receiver is the same
+        // hazard the paragraph above describes, one receiver-kind over, and the
+        // guard there does not cover it: a builtin `Map`/`Set` declares no user
+        // `len`, so `user_method_for_len_family` is false and the intercept
+        // speculatively compiled the receiver. A handle is a plain `ptr`, not
+        // the Vec/String struct this arm can lower, so it fell through — and
+        // `try_compile_freshtemp_mapset_read_method` further down evaluated
+        // `object` AGAIN. `mk_set(3).len()` therefore ran `mk_set` twice under
+        // `karac build` against once under `--interp`, and only the second
+        // handle was drop-tracked, stranding the first (216 bytes for a
+        // 3-element `Set`, 604 for a 2-entry `Map[String, i64]`).
+        //
+        // Deciding it from the typechecker's recorded receiver TYPE keeps the
+        // skip ahead of any emission, which is the whole point — returning
+        // `Ok(None)` after `compile_expr` cannot un-emit the producer.
+        let freshtemp_mapset_recv = self
+            .mapset
+            .temp_recv_mapset_types
+            .contains_key(&(object.span.offset, object.span.length));
         if !user_method_for_len_family
+            && !freshtemp_mapset_recv
             && (!matches!(&object.kind, ExprKind::Identifier(_)) || borrow_local_recv)
             && matches!(method, "len" | "is_empty" | "count")
         {
