@@ -194,6 +194,15 @@ enum KStmt<'a> {
         /// here as a single-element list holding another [`KStmt::If`].
         else_body: Option<Vec<KStmt<'a>>>,
     },
+    /// `var name: T;` — an uninitialized declaration, emitted only as the
+    /// hoisted destination of a value-`if` whose branches carry statements
+    /// (B-2026-08-18-49 step 2). WGSL requires the type here because there is
+    /// no initializer to infer from, which is why that desugar needs the
+    /// binding's annotation.
+    DeclareVar {
+        name: &'a str,
+        wgsl_ty: &'static str,
+    },
 }
 
 /// Lexical scope for a scalar kernel body: a stack of (source name, WGSL name)
@@ -294,14 +303,46 @@ fn scalar_stmt_list(stmts: &[Stmt]) -> Result<Vec<KStmt<'_>>, WgslError> {
             StmtKind::Let {
                 is_mut,
                 pattern,
+                ty,
                 value,
-                ..
             } => {
                 let PatternKind::Binding(name) = &pattern.kind else {
                     return Err(WgslError::UnsupportedBody(
                         "a GPU kernel `let` must bind a simple name (no destructuring)".to_string(),
                     ));
                 };
+                // `let y = if c { <stmts> v } else { … };` — the branches carry
+                // statements, so the value-`if`'s `select()` cannot express it
+                // (a `select` operand is one expression). Hoist a `var` and let
+                // each arm ASSIGN into it, which is exactly `KStmt::If`.
+                if let ExprKind::If {
+                    condition,
+                    then_block,
+                    else_branch,
+                } = &value.kind
+                {
+                    if value_if_carries_statements(value) {
+                        let Some(ty) = ty else {
+                            return Err(WgslError::UnsupportedBody(format!(
+                                "a GPU kernel's `let {name} = if …` needs a type annotation when a \
+                                 branch declares a local (`let {name}: f32 = if …`) — the \
+                                 declaration is hoisted above the `if`, and WGSL cannot infer a \
+                                 type there"
+                            )));
+                        };
+                        out.push(KStmt::DeclareVar {
+                            name: name.as_str(),
+                            wgsl_ty: wgsl_scalar(ty, "binding")?,
+                        });
+                        out.push(stmt_if_assigning(
+                            condition,
+                            then_block,
+                            else_branch,
+                            name.as_str(),
+                        )?);
+                        continue;
+                    }
+                }
                 out.push(KStmt::Bind {
                     name: name.as_str(),
                     mutable: *is_mut,
@@ -309,8 +350,27 @@ fn scalar_stmt_list(stmts: &[Stmt]) -> Result<Vec<KStmt<'_>>, WgslError> {
                 });
             }
             StmtKind::Assign { target, value } => {
+                let target = assign_target_name(target)?;
+                // Same desugar, but the destination already exists — so unlike
+                // the `let` form this one needs no annotation at all.
+                if let ExprKind::If {
+                    condition,
+                    then_block,
+                    else_branch,
+                } = &value.kind
+                {
+                    if value_if_carries_statements(value) {
+                        out.push(stmt_if_assigning(
+                            condition,
+                            then_block,
+                            else_branch,
+                            target,
+                        )?);
+                        continue;
+                    }
+                }
                 out.push(KStmt::Assign {
-                    target: assign_target_name(target)?,
+                    target,
                     op: None,
                     value,
                 });
@@ -443,6 +503,108 @@ fn compound_assign_op(op: &CompoundOp) -> Result<&'static str, WgslError> {
 }
 
 /// Emit a statement list into `out` at `indent` levels of four spaces.
+/// Whether a value-`if` has any branch that declares locals, i.e. whose arms
+/// are not each a single expression.
+///
+/// This is the fork between the two value-`if` lowerings. A plain one stays a
+/// branchless `select(else, then, cond)`; only this shape needs the hoisted-var
+/// desugar, because a `select` operand is ONE expression and cannot carry a
+/// `let`. Keeping the cheap form on the cheap path matters — `select` is
+/// divergence-free, which is what a GPU wants.
+fn value_if_carries_statements(e: &Expr) -> bool {
+    let ExprKind::If {
+        then_block,
+        else_branch,
+        ..
+    } = &e.kind
+    else {
+        return false;
+    };
+    if !then_block.stmts.is_empty() {
+        return true;
+    }
+    match else_branch.as_deref() {
+        Some(Expr {
+            kind: ExprKind::Block(b),
+            ..
+        }) => !b.stmts.is_empty(),
+        // An `else if` chain: any arm carrying statements forces the desugar.
+        Some(
+            nested @ Expr {
+                kind: ExprKind::If { .. },
+                ..
+            },
+        ) => value_if_carries_statements(nested),
+        _ => false,
+    }
+}
+
+/// Build a [`KStmt::If`] whose every arm ends by ASSIGNING its branch value to
+/// `target` — the desugar that turns a value-`if` with locals into the
+/// statement form (B-2026-08-18-49 step 2).
+///
+/// `let y: f32 = if c { let t = x * 2.0; t } else { x };` becomes
+/// `var y: f32; if (c) { let t = …; y = t; } else { y = input[i]; }`.
+///
+/// Note this is strictly MORE faithful than `select`, not merely equivalent:
+/// only the taken arm's statements run, where `select` evaluates both. Both are
+/// sound under the effect gate; this one also matches the interpreter's
+/// evaluation order.
+fn stmt_if_assigning<'a>(
+    condition: &'a Expr,
+    then_block: &'a Block,
+    else_branch: &'a Option<Box<Expr>>,
+    target: &'a str,
+) -> Result<KStmt<'a>, WgslError> {
+    let arm = |b: &'a Block| -> Result<Vec<KStmt<'a>>, WgslError> {
+        let mut body = scalar_stmt_list(&b.stmts)?;
+        let value = b.final_expr.as_deref().ok_or_else(|| {
+            WgslError::UnsupportedBody(
+                "a GPU `if` branch bound to a value must end in an expression".to_string(),
+            )
+        })?;
+        body.push(KStmt::Assign {
+            target,
+            op: None,
+            value,
+        });
+        Ok(body)
+    };
+
+    let then_body = arm(then_block)?;
+    let else_body = match else_branch.as_deref() {
+        None => {
+            return Err(WgslError::UnsupportedBody(
+                "a GPU `if` must have an `else` — it produces a value".to_string(),
+            ));
+        }
+        Some(e) => match &e.kind {
+            ExprKind::Block(b) => Some(arm(b)?),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => Some(vec![stmt_if_assigning(
+                condition,
+                then_block,
+                else_branch,
+                target,
+            )?]),
+            // `else <expr>` with no block of its own.
+            _ => Some(vec![KStmt::Assign {
+                target,
+                op: None,
+                value: e,
+            }]),
+        },
+    };
+    Ok(KStmt::If {
+        cond: condition,
+        then_body,
+        else_body,
+    })
+}
+
 /// Build a [`KStmt::If`] from the pieces of an `ExprKind::If` in statement
 /// position, recursing through an `else if` chain.
 ///
@@ -561,6 +723,15 @@ fn emit_stmts<'a>(
                 emit_stmts(body, scope, helpers, indent + 1, out)?;
                 scope.truncate(depth);
                 out.push_str(&format!("{pad}}}\n"));
+            }
+            KStmt::DeclareVar { name, wgsl_ty } => {
+                // Bound MUTABLE so the desugared arms may assign into it. Kāra's
+                // own `let`-immutability is enforced upstream by the
+                // typechecker; this lowering is not the mutability checker, and
+                // treating the hoisted slot as immutable here would reject the
+                // very assignment the desugar just generated.
+                let wgsl = scope.bind(name, true);
+                out.push_str(&format!("{pad}var {wgsl}: {wgsl_ty};\n"));
             }
             KStmt::If {
                 cond,
@@ -3214,6 +3385,82 @@ mod tests {
         let msg = format!("{err:?}");
         assert!(msg.contains("must not produce a value"), "{msg}");
         assert!(msg.contains("bind it instead"), "{msg}");
+    }
+
+    // ── Value-`if` with locals, desugared onto the statement form (step 2) ──
+
+    #[test]
+    fn scalar_kernel_hoists_a_var_for_a_let_bound_if_with_locals() {
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    \
+             let y: f32 = if x > 2.0 { let t: f32 = x * 2.0; t + 1.0 } else { x };\n    y\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("var y: f32;"), "{wgsl}");
+        assert!(wgsl.contains("if ((input[i] > 2.0)) {"), "{wgsl}");
+        assert!(wgsl.contains("let t = (input[i] * 2.0);"), "{wgsl}");
+        assert!(wgsl.contains("y = (t + 1.0);"), "{wgsl}");
+        assert!(wgsl.contains("y = input[i];"), "{wgsl}");
+        assert!(!wgsl.contains("select("), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_assign_form_if_with_locals_needs_no_annotation() {
+        // The destination already exists, so nothing is hoisted and no type is
+        // required — the annotation is a cost of the `let` form alone.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
+             acc = if x > 2.0 { let t: f32 = x * 3.0; t } else { let u: f32 = x + 1.0; u };\n    \
+             acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("var acc = 0.0;"), "{wgsl}");
+        // No second declaration of `acc` — the existing one is assigned into.
+        assert_eq!(wgsl.matches("var acc").count(), 1, "{wgsl}");
+        assert!(wgsl.contains("acc = t;"), "{wgsl}");
+        assert!(wgsl.contains("acc = u;"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_keeps_select_for_a_value_if_without_locals() {
+        // The fork that keeps the cheap path cheap: a branchless `select` is
+        // what a GPU wants, so only the shapes `select` CANNOT express take the
+        // heavier statement lowering. A regression here would be invisible in
+        // output but real in divergence.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let y: f32 = if x > 2.0 { x * 2.0 } else { x };\n    y\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("select("), "{wgsl}");
+        assert!(!wgsl.contains("var y: f32;"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_an_unannotated_let_bound_if_with_locals() {
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    \
+             let y = if x > 2.0 { let t: f32 = x * 2.0; t } else { x };\n    y\n}",
+        );
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("needs a type annotation"), "{msg}");
+        // Names the binding and shows the repair, rather than just refusing.
+        assert!(msg.contains("let y: f32 = if"), "{msg}");
+    }
+
+    #[test]
+    fn scalar_kernel_desugars_an_else_if_chain_with_locals() {
+        let func = parse_kernel(
+            "#[gpu]\nfn pick(x: f32) -> f32 {\n    \
+             let y: f32 = if x > 3.0 { let a: f32 = x * 2.0; a } \
+             else if x > 1.0 { let b: f32 = x + 5.0; b } else { x };\n    y\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("var y: f32;"), "{wgsl}");
+        assert!(wgsl.contains("} else if ((input[i] > 1.0)) {"), "{wgsl}");
+        assert!(wgsl.contains("y = a;"), "{wgsl}");
+        assert!(wgsl.contains("y = b;"), "{wgsl}");
+        assert!(wgsl.contains("y = input[i];"), "{wgsl}");
     }
 
     #[test]

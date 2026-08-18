@@ -430,3 +430,65 @@ fn gpu_executes_bare_statement_if_without_else() {
         "1\n2\n30\n40",
     );
 }
+
+// ── Value-`if` carrying locals, desugared onto the statement form (step 2) ──
+
+#[test]
+fn gpu_executes_let_bound_if_with_a_local_in_a_branch() {
+    // The remainder B-2026-08-18-49 named: a value-`if` whose branch declares a
+    // local. `select` cannot express it (an operand is one expression), so it
+    // desugars to a hoisted `var` plus the statement `if` from step 1.
+    //
+    // The local is USED in the branch value (`t + 1.0`, not `t`), so a desugar
+    // that dropped the binding or assigned the wrong expression diverges here
+    // rather than coincidentally agreeing.
+    assert_gpu_matches_interp(
+        "let_if",
+        "#[gpu]\n\
+         fn k(x: f32) -> f32 {\n\
+         \x20   let y: f32 = if x > 2.0 { let t: f32 = x * 2.0; t + 1.0 } else { x };\n\
+         \x20   y\n\
+         }",
+        "f32",
+        "1.0, 2.0, 3.0, 4.0",
+        "1\n2\n7\n9",
+    );
+}
+
+#[test]
+fn gpu_executes_assigned_if_with_locals_in_both_branches() {
+    // The assignment form needs no annotation — the destination already exists.
+    // Both branches declare a local, and they REUSE the same source name in the
+    // `let` form below; here they differ so the two paths are distinguishable.
+    assert_gpu_matches_interp(
+        "assign_if",
+        "#[gpu]\n\
+         fn k(x: f32) -> f32 {\n\
+         \x20   let mut acc: f32 = 0.0;\n\
+         \x20   acc = if x > 2.0 { let t: f32 = x * 3.0; t } else { let u: f32 = x + 1.0; u };\n\
+         \x20   acc\n\
+         }",
+        "f32",
+        "1.0, 2.0, 3.0, 4.0",
+        "2\n3\n9\n12",
+    );
+}
+
+#[test]
+fn gpu_executes_else_if_chain_carrying_locals() {
+    // Three arms, each with its own local, and inputs landing in each — so an
+    // arm whose hoisted assignment went to the wrong slot shows up as a wrong
+    // number rather than as a shader that merely still compiles.
+    assert_gpu_matches_interp(
+        "chain_locals",
+        "#[gpu]\n\
+         fn k(x: f32) -> f32 {\n\
+         \x20   let y: f32 = if x > 3.0 { let a: f32 = x * 2.0; a } \
+         else if x > 1.0 { let b: f32 = x + 5.0; b } else { x };\n\
+         \x20   y\n\
+         }",
+        "f32",
+        "1.0, 2.0, 3.0, 4.0",
+        "1\n7\n8\n8",
+    );
+}
