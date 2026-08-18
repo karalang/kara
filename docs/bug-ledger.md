@@ -96,12 +96,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 184 | 0 |
 | double-free | 133 | 0 |
 | run-vs-build | 130 | 0 |
-| codegen-gap | 118 | 1 |
+| codegen-gap | 118 | 0 |
 | missing-feature | 106 | 1 |
 | diagnostics | 80 | 2 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
-| crash | 51 | 0 |
+| crash | 52 | 0 |
 | soundness | 50 | 0 |
 | other | 45 | 1 |
 | use-after-free | 20 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 931 | 1 |
+| codegen | 931 | 0 |
 | typecheck | 199 | 1 |
-| interp | 152 | 0 |
+| interp | 153 | 0 |
 | ownership | 58 | 0 |
 | other | 53 | 3 |
 | autopar | 48 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1333 surfaced · 5 open · 1310 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1334 surfaced · 4 open · 1312 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1333 surfaced
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
-| B-2026-08-18-36 | 2026-08-18 | codegen | medium | A NESTED INDEXED READ through a struct field -- `h.buckets[3][1]` where `buckets: Map[i64, Vec[i64]]` -- fails codegen with "nested indexed read requires the outer container to be a named variable in v1 (got non-identifier inner expression)", while `--interp` returns the right element. `karac check` accepts it. Binding the inner container first (`let b = h.buckets[3]; b[1]`) works, so the gap is the CHAIN, not the types. | the nested indexed-read path in src/codegen (the 'nested indexed read requires the outer container to be a named variable in v1' diagnostic); cf. try_compile_field_rooted_entry_chain in src/codegen/calls.rs for the materialization pattern |
 
 ### Wontfix (7)
 
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1333 surfaced
 
 </details>
 
-### Fixed (1310)
+### Fixed (1312)
 
-<details><summary>1310 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1312 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11907,6 +11906,20 @@ CODEGEN — the fix is ONE rewrite, not three. Three separate places peel an ent
 INTERPRETER — map references resolve as a PLACE: a plain binding or a dotted field path (`h.buckets`, `self.buckets`). A dot cannot occur in a Kāra identifier nor in the `__`-prefixed synthetic names, so it unambiguously marks a path. Only value structs are walked: a `shared struct` field returns `None` and behaves exactly as before rather than being half-supported, since its fields carry interior mutability and the write would need to go through the cell. Resolving in place also removes the whole-map clone-and-write-back that `or_insert` performed on every call, including the local case.
 
 A DIVERGENCE THE FIX ITSELF EXPOSED, found by probing the sibling terminals rather than stopping at the filed repro: with the rest corrected, `and_modify` on a field gave `7 107` under codegen and `7 7` under `--interp` -- codegen applied the modification while the interpreter silently skipped it and left the `or_insert` default. That arm was still name-keyed. Both now agree with the local-map oracle. |
+| B-2026-08-18-36 | codegen | medium | A NESTED INDEXED READ through a struct field -- `h.buckets[3][1]` where `buckets: Map[i64, Vec[i64]]` -- fails codegen with "nested indexed read requ… | FIXED by ffb3f76. The nested-index lowering resolved a struct field's ELEMENT type through `vec_inner_type_expr`, which returns the FIRST generic argument. That is right for `Vec[T]` / `VecDeque[T]` and wrong for a map, whose element is the SECOND argument (the VALUE type) -- so the map case never got as far as a container arm and fell out to the "outer container must be a named variable" diagnostic. The head is now matched BEFORE the element type is resolved rather than after, which is the only ordering under which a map can supply its own element type.
+
+Reaching the entry then needed a Map lowering that is not keyed on a binding name. `lower_indexed_elem_ptr_map` resolved exactly three things from name-keyed side tables -- the slot holding the handle, the key LLVM type and the value LLVM type -- and everything after that is name-independent. A field has none of those registry entries but can supply all three from its declared type and its place-expression pointer, so the function splits at precisely that boundary: the named path keeps the lookups and delegates the rest to a new pointer-keyed twin, `lower_indexed_elem_ptr_map_at`. Same split B-2026-08-09-21 made for the Vec arm, and no second copy of the key-coercion and hash-probe logic to drift.
+
+Verified on all four surfaces (`--interp`, JIT, AOT default/auto-par, AOT with KARAC_AUTO_PAR=0), byte-identical, for a Map field, a SortedMap field with a String key, and a Vec-of-Vec regression control that pins the reordering. |
+| B-2026-08-18-37 | interp | medium | A NESTED SUBSCRIPT whose INNER index FAULTS panicked the interpreter with an internal `unreachable!()` -- `m[missing_key][0]` printed "internal error… | FIXED by c80c62f. The `ExprKind::Index` arm evaluated both operands and went straight to matching them against the container arms, with nothing checking whether either evaluation had FAULTED. A short-circuit on `pending_cf.is_some()` -- the interpreter's standard fault protocol, read at roughly 125 other sites -- now sits between the two, returning `Value::Unit` and letting the pending `ControlFlow::RuntimeError` carry the real diagnostic up.
+
+Placed AFTER both operands are evaluated rather than between them, so a faulting object still evaluates its index and left-to-right evaluation order is preserved.
+
+That restores the precondition the catch-all `unreachable!()` always assumed but never enforced: it is only sound for operand pairs produced by successful evaluation. The fix is therefore container-agnostic, which matches the defect -- the nested Vec out-of-bounds case ICE'd identically and is fixed by the same line.
+
+Third visit to this arm; B-2026-08-18-3 taught it one more legal operand shape (a let-bound range), and this is the complementary half.
+
+Verified: the map miss through a struct field, the same miss through a local, and a nested-Vec out-of-range now all report the real user-facing error with exit 1 under `--interp`, matching what JIT and AOT already did. The error is reported ONCE, not compounded by the outer subscript re-reporting against the `Unit` placeholder. Anti-vacuity pinned in the test: the present-key and in-range spellings still evaluate to the right elements, and the test fails with the original ICE when the fix is stashed. |
 
 </details>
 
