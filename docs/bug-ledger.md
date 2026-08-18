@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 115 | 1 |
 | missing-feature | 103 | 4 |
 | perf | 77 | 1 |
-| false-positive | 77 | 3 |
+| false-positive | 77 | 2 |
 | diagnostics | 73 | 7 |
 | soundness | 50 | 0 |
 | crash | 50 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 912 | 8 |
-| typecheck | 193 | 10 |
+| typecheck | 193 | 9 |
 | interp | 149 | 2 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1299 surfaced · 23 open · 1260 fixed · 6 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1299 surfaced · 22 open · 1261 fixed · 6 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (23)
+### Open (22)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1299 surfaced
 | B-2026-08-17-22 | 2026-08-17 | typecheck | medium | A string literal NESTED inside a module-level struct / tuple / array initializer types as `String` instead of `StringSlice`, and since `String` is forbidden at module scope this makes module-level constants carrying static string data unwritable. design.md § Module-Level Bindings states "String literals have type `StringSlice` at module scope" and separately lists "Struct and tuple literals built from constant expressions" and "Array literals" among the allowed initializers -- the intersection must work, and does not. `let DIRECT: StringSlice = "ok";` checks fine, but `let NESTED: Cfg = Cfg { name: "karac", retries: 3 };` -> "expected 'StringSlice', found 'String'", `let TUP: (StringSlice, i64) = ("karac", 3);` -> "expected '(StringSlice, i64)', found '(String, i64)'", and `let ARR: Array[StringSlice, 2] = ["a", "b"];` -> one such error per element. There is no spelling that works: declaring the field as `String` is rejected by the constant-initializer rule ("String is heap-allocated; use StringSlice for static string data"), so the module-scope literal rule reaching only the TOP LEVEL of the initializer leaves the composite forms with no legal form at all. | roadmap.md |
 | B-2026-08-17-23 | 2026-08-17 | codegen | medium | A destructuring pattern in FUNCTION-parameter position is never lowered by codegen -- `karac check` passes clean, `--interp` runs correctly, and BOTH compiled backends refuse with `codegen failed: Undefined variable '<binding>'`. design.md § Destructuring in Function and Closure Parameters opens with "Any irrefutable pattern may appear in parameter position" and roadmap.md line 112 marks it `[x]` done. Measured, every shape fails identically: `fn add((a, b): (i64, i64)) -> i64 { a + b }` -> "Undefined variable 'a'"; `fn y_only((_, y): (i64, i64))` -> "Undefined variable 'y'"; `fn only_a((a, _): (i64, i64))` -> "Undefined variable 'a'"; `fn nested(((a, b), c): ((i64,i64), i64))` -> "Undefined variable 'a'"; `fn px(Point { x, y }: Point)` -> "Undefined variable 'x'"; the spec's own two-parameter example `fn distance(Point { x: x1, y: y1 }: Point, Point { x: x2, y: y2 }: Point)` -> "Undefined variable 'x2'"; heap-carrying `fn take(H { s, n }: H) -> String` -> "Undefined variable 's'". Same error under `karac run` (JIT) and `karac build` (AOT) -- the codegen prologue binds the parameter slot but never walks the pattern to bind its leaves. | roadmap.md |
 | B-2026-08-17-24 | 2026-08-17 | codegen | low | The STRUCT-pattern sibling of B-2026-07-14-21's tuple fix: a struct destructuring pattern as an iterator-adaptor closure parameter still bails out of the codegen chain peel, and the fallthrough MISATTRIBUTES the failure to the terminal method. `v.iter().map(|P { x, y }| x + y).collect()` -> `codegen: no handler for method 'collect' on non-identifier receiver (method dispatch fell through; this is a codegen bug -- add a dispatcher arm in compile_method_call ...)`; the same closure under `fold` -> the identical message naming 'fold'. The interpreter runs both correctly and `karac check` is clean. B-2026-07-14-21 fixed exactly this class for the TUPLE form (`ps.iter().map(|(a, b)| a + b)`) -- the tuple form now lowers on all three backends, so the peel handles destructuring closure params in principle and only the struct pattern is unrecognized. | roadmap.md |
-| B-2026-08-17-26 | 2026-08-17 | typecheck | low | A closure literal as the pipe RHS is rejected -- "right-hand side of pipe must be a function name or function call" -- even though design.md prescribes exactly that form as the workaround for its own `_` restrictions. § Pipe Operator's `_` rule says: "The correct form is `let d = data |> g; d |> |d| f(d, extra)` or `data |> |d| f(g(d), extra)`", and the multi-use rule adds "Workaround for multi-use: wrap in a closure -- `data |> |d| f(d, d)`". Both prescribed forms fail `karac check` verbatim, each with the not-a-function-name error plus a cascaded `expected 'i64', found '?T0'` on the closure's own parameter (the closure body is typed against an uninstantiated var once the pipe arm bails). So the spec's escape hatch for the at-most-one-`_`-per-stage and no-`_`-in-a-nested-subexpression rules does not exist, leaving those two restrictions with no documented way out. | roadmap.md |
 | B-2026-08-17-28 | 2026-08-17 | codegen+interp | high | Optional chaining `?.` ICEs the interpreter at one shape and silently returns the wrong answer at another, and is not lowered by codegen at all -- `karac check` says "All checks passed" for every case. design.md line 782: "`user.address?.city?.name` short-circuits to `None` if any level is absent." (1) INTERPRETER ICE: `match u.address?.city { Some(c) => println("L2 some: " + c.name), None => ... }` panics with `internal error: entered unreachable code: field access at 7:42: receiver was Value::EnumVariant not Struct/SharedStruct; either an interpreter codepath produced the wrong variant or the typechecker accepted field access on a non-struct` (src/interpreter.rs:2252) -- the Some-arm binding `c` holds an unstripped enum value rather than the `City` struct, the same wrapper-not-stripped shape as B-2026-08-17-27's `??` legs. (2) INTERPRETER SILENT WRONG ANSWER: the spec's own three-level example `u.address?.city?.name`, built with EVERY level `Some`, takes the `None` arm and prints "L3 none". (3) CODEGEN: not lowered -- both compiled backends refuse the same programs (`codegen failed: Undefined variable 's'`, and `no handler for method 'to_string' on variable 'z'` for the one-level form). | roadmap.md |
 | B-2026-08-17-29 | 2026-08-17 | codegen | high | A range bound to a `let` and then iterated compiles to a ZERO-ITERATION loop -- silent wrong answer under both compiled backends, `karac check` clean, interpreter correct. `let r = 0..5; let mut n = 0; for i in r { n = n + 1; } println(f"iterations={n}")` prints iterations=5 under `--interp` and iterations=0 under `karac run` (JIT) and `karac build` (AOT); the INLINE control in the same file (`for i in 0..5 { m = m + 1; }`) prints control=5 on all three, so the range itself and the loop lowering are both fine and only the binding indirection is lost. All three iterable range forms from design.md § Loops' range-literal table fail identically: exclusive `let r = 0..5` (0 instead of 5), inclusive `let r = 0..=4` (0 instead of 5), and variable endpoints `let a = 2; let b = 6; let r2 = a..b` (sum 0 instead of 14). design.md line 2616 types these as first-class library values (`Range[T]` / `RangeInclusive[T]`, "Iterable? Yes"), so binding one is ordinary use, not an exotic shape. | roadmap.md |
 | B-2026-08-17-30 | 2026-08-17 | typecheck+cli | low | E0218 TELLS YOU THE EXACT TEXT TO INSERT AND `karac fix` STILL DECLINES IT: the call-site `mut`-marker diagnostic ends with ``Write `mut <expr>`.`` but carries no `replacement`, while its EXACT INVERSE E0219 ("drop the `mut` marker") does carry one and is applied automatically. Same marker, opposite directions, adjacent codes, one fixable and one not. | E0218's diagnostic construction: it has no `replacement` field where E0219 emits `replacement: {offset, length, text}`. The repair is a single insertion at a known offset. |
@@ -169,9 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1299 surfaced
 
 </details>
 
-### Fixed (1260)
+### Fixed (1261)
 
-<details><summary>1260 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1261 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10455,6 +10454,65 @@ FILED FROM THIS PASS: B-2026-08-17-42 (a range bound to a variable has no
 codegen -- the loop printed nothing) and B-2026-08-17-43 (`?.` optional
 chaining, another silent zero). Both were invisible until the catch-all became
 loud; both now fail the build by name. |
+| B-2026-08-17-26 | typecheck | low | A closure literal as the pipe RHS is rejected -- "right-hand side of pipe must be a function name or function call" -- even though design.md prescrib… | Fixed in df626614. BOTH halves — the row named one and predicted the other away.
+
+(1) THE RHS SHAPE GATE. `ast::desugar_pipe` accepted only a name or a call, so
+a closure literal fell to its `None` arm and `infer_pipe` reported "right-hand
+side of pipe must be a function name or function call". A closure is a callee
+like any other, so it now takes the same path as a name: `a |> |x| body`
+desugars to `(|x| body)(a)`. One line in the shared desugar, which all three
+phases already route through (B-2026-08-17-25), so the interpreter and codegen
+inherited it with no separate change.
+
+(2) THE "CASCADE" IS AN INDEPENDENT DEFECT, and this is the correction to the
+row: it says "the second diagnostic is noise, not an independent defect -- it
+disappears with the first". It does not. With the gate widened, every
+prescribed form still failed with `expected 'i64', found '?T0'` on the
+closure's own parameter, and the same failure reproduces with NO PIPE AT ALL:
+
+    fn main() { let r = (|d| f(d, 1))(5); }        // identical error
+
+An immediately-invoked closure literal never took its parameter types from the
+call. The call-site solving that exists for exactly this (B-2026-07-12-20)
+runs AFTER `infer_expr(callee)` has typed the closure BODY against the
+still-unsolved var -- the param does get solved, but the body's diagnostic was
+already written. Ordering, not absence.
+
+Fixed by typing an ANNOTATED COPY of the closure with each missing annotation
+filled from the argument opposite it: the program the author would have
+written by hand, and a spelling that already worked end to end. Going through
+the `check_expr` expectation does NOT work and it is worth recording why --
+that path wants a concrete expected RETURN type, and the only honest value is
+a fresh var, which it COMPARES against the body's actual type rather than
+solving ("expected '?T0', found 'i64'"). The copy is typed at the original
+closure's span so the resolved `Fn` type lands where codegen reads it; the
+evaluators still see the author's un-annotated AST.
+
+WHY (2) MATTERED FOR THIS ROW rather than being split off: every form design.md
+prescribes is un-annotated, so with only (1) the spec's escape hatch still did
+not compile and the row's actual complaint -- "so the spec's escape hatch does
+not exist" -- would have survived its own fix.
+
+ONE MORE, IN THE SAME BLAST RADIUS: a string-LITERAL argument types as `str`,
+so filling the annotation literally gave `|s: str|` and the body's `String`
+uses were then rejected. Filled as `String` instead -- the type the literal
+coerces to, and what an author would write. `"x" |> |s| tag(s)` works as a
+result; so does the plain `(|s| tag(s))("x")`, which failed before this pass
+for the same underlying reason (measured against the parent: `expected
+'String', found '?T0'`).
+
+MEASURED: design.md's three forms, transcribed verbatim, now check, `--interp`,
+JIT and AOT to the same values (11 / 11 / 10). The non-callable RHS is still
+rejected -- the gate was widened, not removed.
+
+Tests: `pipe_accepts_the_closure_rhs_design_md_prescribes` and
+`an_immediately_invoked_closure_takes_its_param_types_from_the_call`
+(tests/typechecker.rs, the second one pipe-free by construction),
+`pipe_still_rejects_a_non_callable_rhs` as the counterweight, and
+`a_closure_pipe_stage_compiles_to_the_call_it_stands_for` (tests/codegen.rs)
+pinning each spelling against the direct call it stands for. All verified
+failing on the pre-fix source except the counterweight, which must pass both
+ways. |
 | B-2026-08-17-27 | codegen+interp | high | The `??` operator is wrong on BOTH backends, in three different ways, with `karac check` clean throughout | Fixed in 3e9a6287. All four defects, across three phases.
 
 `??` IS `unwrap_or` -- design.md line 782 gives it exactly that contract -- so
