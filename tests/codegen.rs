@@ -75582,6 +75582,54 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_drop_scrutinee_option_field_move_out_runs() {
+        // B-2026-08-18-4 — the user-`Drop` spelling of the row above, which
+        // -45's fix deliberately excluded: with an `impl Drop` on the payload a
+        // BODIES walk still has to read the box, so -45's move-site zero would
+        // have corrupted what that body reads. The zero is queued and emitted
+        // between the two readers instead.
+        //
+        // THE ASSERTION THAT MATTERS IS `other=`. The double free aborted the
+        // process, so the run merely surviving proves the memory half; what a
+        // value test uniquely catches is the OPPOSITE failure — the zero
+        // landing before the Drop body, which prints an EMPTY `other=` while
+        // ASAN stays perfectly quiet. That exact trade (a double free for a
+        // silently wrong value) is what B-2026-08-06-10's comment recorded
+        // having made once, and it is why the body reads a sibling field here
+        // rather than just announcing itself.
+        //
+        // The memory half is
+        // `asan_boxed_option_user_drop_field_move_out_no_leak_no_double_free`
+        // in tests/memory_sanitizer.rs.
+        let output = run_program(
+            "struct C { name: String, zip: i64 }\n\
+             struct A { c: Option[C], other: String }\n\
+             impl Drop for A {\n\
+                 fn drop(mut ref self) { println(f\"dropA other={self.other}\"); }\n\
+             }\n\
+             fn main() {\n\
+                 let a = Option.Some(A {\n\
+                     c: Option.Some(C { name: \"moved out payload\", zip: 7 }),\n\
+                     other: \"untouched sibling\",\n\
+                 });\n\
+                 let f = match a {\n\
+                     Option.Some(x) => { x.c }\n\
+                     Option.None => { Option.None }\n\
+                 };\n\
+                 match f {\n\
+                     Option.Some(cc) => { println(cc.name); println(cc.zip); }\n\
+                     Option.None => { println(\"none\"); }\n\
+                 }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(
+            output,
+            "dropA other=untouched sibling\nmoved out payload\n7\n"
+        );
+    }
+
+    #[test]
     fn test_e2e_modbind_string_for_loop_iterates_chars() {
         // The String arm rides the same dispatch, and it is ordered BEFORE the
         // Vec arm on purpose (String vars are also registered in

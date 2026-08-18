@@ -10011,6 +10011,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // path is the unique field-cleanup invocation for types
             // with a user Drop impl.
             CleanupAction::UserDrop {
+                binding_name,
                 binding_ptr,
                 drop_fn,
                 ..
@@ -10018,6 +10019,46 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_call(*drop_fn, &[(*binding_ptr).into()], "")
                     .unwrap();
+                // B-2026-08-18-4 — THE SEAM BETWEEN THE TWO READERS.
+                //
+                // When a field was moved out of a boxed payload whose user
+                // `Drop` bodies walk is the call just emitted, the move's
+                // neutralizing zero was queued rather than written at the move
+                // site. Emit it now: the body has run and read live fields, and
+                // the box's own memory drop (`__karac_drop_struct_<T>`, a later
+                // `BoxedEnumDrop` in this frame) has not. Without it that drop
+                // frees the field the move handed away — `free(): double free
+                // detected in tcache 2` on a program `--interp` runs correctly.
+                //
+                // Ordering is what makes this sound, and it is structural
+                // rather than incidental: the bodies action is registered
+                // against the ARM BINDING while the box drop belongs to the
+                // SOURCE, whose registration is older, so LIFO drains the body
+                // first. Verified in the emitted IR — `__karac_dropelems_opt_A`
+                // precedes `__karac_drop_struct_A` on the same box.
+                //
+                // READ, not drained: one cleanup action is emitted once per
+                // control-flow path that exits the scope (normal fall-through,
+                // early `return`, `?`), and each of those paths reaches the
+                // box's memory drop, so each needs its own zero. Draining would
+                // neutralize the first path and leave every other one double
+                // freeing — the harder half of this bug to see, since the
+                // straight-line repro exercises only one path.
+                if let Some(pending) = self
+                    .payload_vars
+                    .pending_box_field_zeroes
+                    .get(binding_name.as_str())
+                {
+                    for pz in pending {
+                        self.zero_struct_field_move_cap_inst(
+                            pz.box_ptr,
+                            &pz.struct_name,
+                            &pz.field,
+                            pz.st,
+                            pz.inst.as_ref(),
+                        );
+                    }
+                }
             }
             // `Option[shared T]` binding — load the tag, branch on
             // Some, recover the inner pointer from word 0, dispatch

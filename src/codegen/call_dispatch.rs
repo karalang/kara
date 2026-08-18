@@ -7265,6 +7265,36 @@ impl<'ctx> super::Codegen<'ctx> {
                                     Some(held),
                                     inst.as_ref(),
                                 );
+                            } else if let Some(box_ptr) =
+                                self.payload_vars.deferred_payload_box_ptrs.get(s).copied()
+                            {
+                                // B-2026-08-18-4 — a user `Drop` BODIES walk
+                                // still has to read this box, so the zero above
+                                // cannot be written HERE: the walk fires at the
+                                // binding's death, after this move site, and
+                                // would see the neutralized field. That is the
+                                // exact regression B-2026-08-06-10's comment
+                                // records — a double free traded for a Drop body
+                                // printing an empty string.
+                                //
+                                // Queue it instead. The drain sits immediately
+                                // after that walk in the `UserDrop` cleanup arm,
+                                // which is before the box's own memory drop, so
+                                // the body reads live fields and the memory drop
+                                // reads the neutralized one. Same helper, same
+                                // layout, same field — only the emission point
+                                // moves.
+                                self.payload_vars
+                                    .pending_box_field_zeroes
+                                    .entry(s.to_string())
+                                    .or_default()
+                                    .push(crate::codegen::payload_vars::PendingBoxFieldZero {
+                                        box_ptr,
+                                        struct_name: struct_name.to_string(),
+                                        field: field.to_string(),
+                                        st: Some(held),
+                                        inst: inst.clone(),
+                                    });
                             }
                         }
                     }

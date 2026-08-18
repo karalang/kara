@@ -12757,10 +12757,13 @@ fn main() {
     /// `KARAC_OPT_LEVEL=0`, so the fixture pins the fix at whichever level CI
     /// happens to run.
     ///
-    /// The user-`Drop` spelling of the same move is deliberately NOT here: it
-    /// still double-frees, measured identical with and without this fix, and
-    /// the mirror excludes it on purpose because the box's words are what a
-    /// re-homed payload-BODIES walk reads. Filed separately.
+    /// The user-`Drop` spelling of the same move lives in its own fixture
+    /// below (`asan_boxed_option_user_drop_field_move_out_*`). When this one
+    /// landed it still double-freed and was filed as B-2026-08-18-4, because
+    /// the mirror excludes it on purpose: the box's words are what a re-homed
+    /// payload-BODIES walk reads, so a move-site zero corrupts the body. That
+    /// row is now fixed by QUEUEING the zero and emitting it between the two
+    /// readers rather than by widening this gate.
     #[test]
     fn asan_boxed_option_local_scrutinee_field_move_out_no_leak_no_double_free() {
         assert_clean_asan_run(
@@ -12813,6 +12816,94 @@ fn main() {
 "#,
             &["817"],
             "boxed_option_local_scrutinee_field_move_out",
+        );
+    }
+
+    /// B-2026-08-18-4 — the user-`Drop` spelling of the fixture above, and the
+    /// shape its gate deliberately excluded.
+    ///
+    /// With an `impl Drop` on the payload, a re-homed `__karac_dropelems_opt_*`
+    /// BODIES walk still reads the box after the move. So the two neutralizing
+    /// channels that already existed were both wrong here: writing the zero at
+    /// the MOVE SITE (B-2026-08-06-10's mirror) corrupts what that body reads —
+    /// measured once as a double free traded for a Drop body printing an empty
+    /// string — and RETRACTION (B-2026-08-04-2) is whole-action, so it cannot
+    /// express "skip exactly the one field the move took" while the box's drop
+    /// stays responsible for the rest.
+    ///
+    /// The fix queues the zero and emits it BETWEEN the two readers: after the
+    /// bodies walk, before the box's memory drop. This fixture is what proves
+    /// both halves of that seam, which is why the `impl Drop` body READS a
+    /// sibling field (`self.other.len()`) rather than merely announcing itself
+    /// — if the zero lands too early, the body reads a buffer the move already
+    /// handed away and ASAN reports it here rather than staying quiet.
+    ///
+    /// Same three legs as the sibling, for the same reasons: MOVED is the
+    /// double-free leg, KEPT (an arm that moves nothing, over a struct with two
+    /// owning fields) is where a too-wide zero surfaces as a leak, and the
+    /// `None` source is the direction an over-eager zero strands a payload.
+    ///
+    /// NON-VACUITY IS MEASURED, not assumed: against the pre-fix compiler this
+    /// exits 1 under ASAN at BOTH the default opt level and
+    /// `KARAC_OPT_LEVEL=0`, and clean at both after.
+    #[test]
+    fn asan_boxed_option_user_drop_field_move_out_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct C { name: String, zip: i64 }
+struct A { c: Option[C], other: String }
+
+impl Drop for A {
+    fn drop(mut ref self) {
+        let _ = self.other.len();
+    }
+}
+
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a = Option.Some(A {
+            c: Option.Some(C { name: "payload-string-" + i.to_string(), zip: i }),
+            other: "sibling-string-" + i.to_string(),
+        });
+        let f = match a {
+            Option.Some(x) => { x.c }
+            Option.None => { Option.None }
+        };
+        match f {
+            Option.Some(cc) => { acc = acc + cc.name.len() + cc.zip; }
+            Option.None => { acc = acc + 1; }
+        }
+        i = i + 1;
+    }
+    let mut j: i64 = 0;
+    while j < 20 {
+        let b = Option.Some(A {
+            c: Option.Some(C { name: "kept-string-" + j.to_string(), zip: j }),
+            other: "kept-sibling-" + j.to_string(),
+        });
+        let n = match b {
+            Option.Some(y) => { y.other.len() }
+            Option.None => { 0 }
+        };
+        acc = acc + n;
+        j = j + 1;
+    }
+    let e: Option[A] = Option.None;
+    let g = match e {
+        Option.Some(z) => { z.c }
+        Option.None => { Option.None }
+    };
+    match g {
+        Option.Some(cc) => { acc = acc + cc.name.len(); }
+        Option.None => { acc = acc + 7; }
+    }
+    println(acc);
+}
+"#,
+            &["817"],
+            "boxed_option_user_drop_field_move_out",
         );
     }
 

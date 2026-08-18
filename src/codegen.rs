@@ -5230,6 +5230,8 @@ impl<'ctx> Codegen<'ctx> {
                 shared_enum_payload_view_vars: std::collections::HashMap::new(),
                 boxed_optres_payload_view_vars: HashMap::new(),
                 deboxed_payload_box_ptrs: HashMap::new(),
+                deferred_payload_box_ptrs: HashMap::new(),
+                pending_box_field_zeroes: HashMap::new(),
                 param_view_locals: HashSet::new(),
             },
             drop_rc: DropRc {

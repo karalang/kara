@@ -1289,6 +1289,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.boxed_enum_payload_vars.clear();
         self.payload_vars.boxed_optres_payload_view_vars.clear();
         self.payload_vars.deboxed_payload_box_ptrs.clear();
+        self.payload_vars.deferred_payload_box_ptrs.clear();
+        self.payload_vars.pending_box_field_zeroes.clear();
         self.mono_state.mono_payload_binding_type_exprs.clear();
         self.payload_vars.inline_result_payload_vars.clear();
         self.payload_vars.inline_option_map_payload_vars.clear();

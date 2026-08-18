@@ -4184,14 +4184,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // corruption: the mirror writes one field, so every field the move left
         // alone keeps its live cap and that drop still frees it. With it
         // `Some`, nothing is recorded and the shape stays byte-identical.
-        if !self.pattern_state.pattern_binding_scrutinee_is_owned_param
+        //
+        // B-2026-08-18-4 — with a bodies walk present the box is not recorded
+        // for the IMMEDIATE mirror, but it is no longer dropped on the floor
+        // either: it goes on the DEFERRED channel instead, so a per-field zero
+        // can be emitted BETWEEN the two readers (after the bodies walk, before
+        // the box's memory drop) rather than ahead of both. That keeps the
+        // measurement above intact — the body still reads live fields — while
+        // closing the double free it left open. `defer_box` is threaded to the
+        // recording tail so both channels share one box pointer derivation.
+        let defer_box = !self.pattern_state.pattern_binding_scrutinee_is_owned_param
             && self
                 .pattern_state
                 .pattern_binding_scrutinee_payload_bodies_src
-                .is_some()
-        {
+                .is_some();
+        if defer_box {
             self.payload_vars.deboxed_payload_box_ptrs.remove(&slot);
-            return;
         }
         // …and never through a SHARED enum's payload box. That box lives inside
         // an RC node other handles can still read, so a cap/len zero there is
@@ -4202,12 +4210,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // still reaches the mirror; only the shared original is off limits.
         if self.pattern_state.pattern_binding_scrutinee_is_shared_enum {
             self.payload_vars.deboxed_payload_box_ptrs.remove(&slot);
+            self.payload_vars.deferred_payload_box_ptrs.remove(name);
             return;
         }
         // The unpack mirror of `coerce_to_payload_words`'s pack-side boxing —
         // identical to `reconstruct_payload_value`'s own `want > field_words`.
         if field_words.is_empty() || self.pattern_payload_word_count(sub_pat) <= field_words.len() {
             self.payload_vars.deboxed_payload_box_ptrs.remove(&slot);
+            self.payload_vars.deferred_payload_box_ptrs.remove(name);
             return;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -4216,12 +4226,22 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_to_ptr(field_words[0], ptr_ty, "enumbox.mv")
         {
             Ok(box_ptr) => {
-                self.payload_vars
-                    .deboxed_payload_box_ptrs
-                    .insert(slot, box_ptr);
+                if defer_box {
+                    // Deferred channel (B-2026-08-18-4): keyed by NAME, because
+                    // the drain site is the `CleanupAction::UserDrop` arm and
+                    // the name is what that action carries.
+                    self.payload_vars
+                        .deferred_payload_box_ptrs
+                        .insert(name.clone(), box_ptr);
+                } else {
+                    self.payload_vars
+                        .deboxed_payload_box_ptrs
+                        .insert(slot, box_ptr);
+                }
             }
             Err(_) => {
                 self.payload_vars.deboxed_payload_box_ptrs.remove(&slot);
+                self.payload_vars.deferred_payload_box_ptrs.remove(name);
             }
         }
     }

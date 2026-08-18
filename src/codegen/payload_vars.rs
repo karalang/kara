@@ -236,10 +236,54 @@ pub(crate) struct PayloadVars<'ctx> {
     /// of merely unlikely. Cleared per function.
     pub(crate) deboxed_payload_box_ptrs:
         HashMap<inkwell::values::PointerValue<'ctx>, inkwell::values::PointerValue<'ctx>>,
+    /// B-2026-08-18-4 — the DEFERRED sibling of `deboxed_payload_box_ptrs`,
+    /// for the one shape that map deliberately refuses: a payload box that a
+    /// user `Drop` BODIES walk still has to read.
+    ///
+    /// Writing the move's neutralizing zero through the box at the MOVE SITE
+    /// is what `deboxed_payload_box_ptrs` does, and it is wrong here — the
+    /// re-homed `__karac_dropelems_opt_*` walk fires LATER (at the binding's
+    /// death) and would read the zeroed field, which is exactly the measured
+    /// regression B-2026-08-06-10's comment records: a double free traded for
+    /// a user Drop body printing an empty string. Retraction cannot serve
+    /// either, because it is whole-action and a single moved FIELD leaves the
+    /// box's drop responsible for every field the move did not take.
+    ///
+    /// So the zero is neither written early nor skipped: it is QUEUED here and
+    /// emitted between the two readers — after the bodies walk, before the
+    /// box's memory drop. Both readers then see what they need, which is the
+    /// per-field analogue of B-2026-08-04-2's whole-action retraction.
+    ///
+    /// Keyed by binding NAME rather than slot, because the drain site is the
+    /// `CleanupAction::UserDrop` arm and the name is what that action carries.
+    /// Cleared per function.
+    pub(crate) deferred_payload_box_ptrs: HashMap<String, inkwell::values::PointerValue<'ctx>>,
+    /// The per-field neutralizations queued against [`Self::deferred_payload_box_ptrs`],
+    /// drained immediately after the binding's payload-BODIES walk. Cleared per
+    /// function.
+    pub(crate) pending_box_field_zeroes: HashMap<String, Vec<PendingBoxFieldZero<'ctx>>>,
     /// B-2026-08-01-15 — locals that are whole-move REBINDS of an owned
     /// param (`let h2 = h;`), transitively. A destructure or match on one
     /// is a param-view bind exactly like the direct param case
     /// (`scrutinee_is_owned_param_binding` consults this), and its own
     /// let-site registration is memory-only. Cleared per-function.
     pub(crate) param_view_locals: HashSet<String>,
+}
+
+/// One queued per-field neutralization against a payload box whose user `Drop`
+/// bodies walk has not run yet. See
+/// [`PayloadVars::pending_box_field_zeroes`].
+///
+/// The struct LLVM type is carried rather than re-resolved at the drain site:
+/// it is a type, not an SSA value, so it stays valid anywhere in the function,
+/// and re-resolving would consult the ACTIVE monomorph subst — which at the
+/// drain point is whatever the surrounding cleanup happens to be under, not the
+/// move site's. That is the same "hand the slot's own layout down" discipline
+/// B-2026-08-06-2 established for `zero_struct_field_move_cap_in`.
+pub(crate) struct PendingBoxFieldZero<'ctx> {
+    pub(crate) box_ptr: inkwell::values::PointerValue<'ctx>,
+    pub(crate) struct_name: String,
+    pub(crate) field: String,
+    pub(crate) st: Option<inkwell::types::StructType<'ctx>>,
+    pub(crate) inst: Option<crate::ast::TypeExpr>,
 }
