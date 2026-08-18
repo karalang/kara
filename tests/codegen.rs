@@ -56332,6 +56332,53 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_gpu_scalar_kernel_lowers_while_loop() {
+        // B-2026-08-18-40 increment 2: `while` + mutable locals + assignment,
+        // i.e. the accumulator shape every reduction needs. The loop counter is
+        // named `i` on purpose: `i` is the generated wrapper's THREAD index, so
+        // the local must be renamed and the parameter must keep resolving to
+        // `input[i]` (the thread's element), not to the counter. Codegen-only
+        // assertion on the embedded shader, so CI-safe; the executed twin ran
+        // on lavapipe during development and matched the interpreter (8, 24).
+        let src = r#"
+#[gpu]
+fn poly(x: f32) -> f32 {
+    let mut acc: f32 = 0.0;
+    let mut i: i32 = 0;
+    while i < 4 {
+        acc = acc + x;
+        i = i + 1;
+    }
+    acc * 2.0
+}
+
+fn main() {
+    let mut v: Vec[f32] = Vec.new();
+    v.push(1.0);
+    let out = gpu.dispatch(poly, v);
+    println(out[0] as i64);
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("var acc = 0.0;"),
+            "a mutable local must lower to a WGSL `var`; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("var i_k = 0;") && ir.contains("while ((i_k < 4))"),
+            "the counter must be renamed off the wrapper's thread index; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("acc = (acc + input[i]);"),
+            "the param must still read the THREAD element, not the counter; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("output[i] = (acc * 2.0);"),
+            "the tail must read the accumulator; got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_gpu_scalar_kernel_lowers_let_locals() {
         // B-2026-08-18-40: a scalar `#[gpu]` kernel body may name intermediates
         // with `let` instead of being one hand-inlined expression. Each binding

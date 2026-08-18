@@ -32,8 +32,8 @@
 //! the shapes slice-0 has not *yet* grown to lower (not ill-formed programs).
 
 use crate::ast::{
-    BinOp, Block, CallArg, Expr, ExprKind, Function, Param, PatternKind, StmtKind, TypeExpr,
-    TypeKind, UnaryOp,
+    BinOp, Block, CallArg, CompoundOp, Expr, ExprKind, Function, Param, PatternKind, Stmt,
+    StmtKind, TypeExpr, TypeKind, UnaryOp,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -120,42 +120,16 @@ pub fn emit_kernel(func: &Function, helpers: &[&Function]) -> Result<String, Wgs
     // emitted as WGSL `fn`s before `main`; their names are recognized as calls.
     let (helper_defs, helper_names) = emit_helpers(func, helpers)?;
 
-    // Leading `let` bindings then the tail expression. Each binding lowers to
-    // a WGSL `let` in `main`'s body, so an intermediate can be named instead of
-    // hand-inlined into one nested expression (B-2026-08-18-40). A binding is
-    // visible to every later binding and to the tail, and `resolve` prefers a
-    // local over the kernel parameter — matching Kāra's own scoping, and the
-    // convention the SoA emitter already uses.
-    let (lets, body_expr) = kernel_body_parts(func, "a scalar expression")?;
-    let mut locals: Vec<&str> = Vec::new();
-    let mut let_decls = String::new();
-    for (name, value) in lets {
-        let rhs = {
-            let in_scope = &locals;
-            let resolve = |n: &str| {
-                if in_scope.contains(&n) {
-                    Some(n.to_string())
-                } else if n == param_name {
-                    Some("input[i]".to_string())
-                } else {
-                    None
-                }
-            };
-            lower_expr(value, &resolve, &helper_names)?
-        };
-        let_decls.push_str(&format!("\x20   let {name} = {rhs};\n"));
-        locals.push(name);
-    }
-    let resolve = |n: &str| {
-        if locals.contains(&n) {
-            Some(n.to_string())
-        } else if n == param_name {
-            Some("input[i]".to_string())
-        } else {
-            None
-        }
-    };
-    let body_wgsl = lower_expr(body_expr, &resolve, &helper_names)?;
+    // The body is a statement sequence — `let` / `let mut` bindings,
+    // assignments, and `while` loops — followed by the tail expression
+    // (B-2026-08-18-40). `Scope` carries the source-name → WGSL-name mapping so
+    // the param resolves to `input[i]` and a local resolves to its own (possibly
+    // renamed) identifier.
+    let (stmts, body_expr) = scalar_body_stmts(func)?;
+    let mut scope = Scope::new(param_name);
+    let mut decls = String::new();
+    emit_stmts(&stmts, &mut scope, &helper_names, 1, &mut decls)?;
+    let body_wgsl = lower_expr(body_expr, &scope.resolver(), &helper_names)?;
 
     Ok(format!(
         "{helper_defs}@group(0) @binding(0) var<storage, read>       input:  array<{scalar}>;\n\
@@ -165,10 +139,274 @@ pub fn emit_kernel(func: &Function, helpers: &[&Function]) -> Result<String, Wgs
          fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
          \x20   if (i >= arrayLength(&input)) {{ return; }}\n\
-         {let_decls}\
+         {decls}\
          \x20   output[i] = {body_wgsl};\n\
          }}\n"
     ))
+}
+
+/// One statement of a scalar `#[gpu]` kernel body. The scalar path supports
+/// strictly more than the struct-SoA / stencil emitters (which take only `let`
+/// bindings through [`kernel_body_parts`]), so it carries its own statement
+/// model rather than widening a helper two callers cannot use.
+enum KStmt<'a> {
+    /// `let name = value;` / `let mut name = value;` → WGSL `let` / `var`.
+    Bind {
+        name: &'a str,
+        mutable: bool,
+        value: &'a Expr,
+    },
+    /// `target = value;` or `target += value;` — `op` is the compound
+    /// operator's WGSL spelling, or `None` for a plain assignment.
+    Assign {
+        target: &'a str,
+        op: Option<&'static str>,
+        value: &'a Expr,
+    },
+    /// `while cond { body }` → WGSL `while (cond) { … }`.
+    While {
+        cond: &'a Expr,
+        body: Vec<KStmt<'a>>,
+    },
+}
+
+/// Lexical scope for a scalar kernel body: a stack of (source name, WGSL name)
+/// pairs plus the kernel parameter. Entering a block records the stack depth and
+/// exiting truncates back to it, so a `let` inside a `while` body is not visible
+/// after the loop — matching both Kāra's scoping and WGSL's.
+struct Scope<'a> {
+    param: &'a str,
+    /// Innermost binding last; lookups scan in reverse.
+    names: Vec<(&'a str, String, bool)>,
+}
+
+impl<'a> Scope<'a> {
+    fn new(param: &'a str) -> Self {
+        Scope {
+            param,
+            names: Vec::new(),
+        }
+    }
+
+    /// Bind `name`, returning the WGSL identifier it will use. A name that
+    /// collides with the generated wrapper's own declarations (or a WGSL
+    /// keyword) is renamed rather than rejected — a loop counter called `i` is
+    /// too idiomatic to turn away, and the rename is invisible in Kāra source.
+    fn bind(&mut self, name: &'a str, mutable: bool) -> String {
+        let mut wgsl = if WGSL_RESERVED_LOCALS.contains(&name) {
+            format!("{name}_k")
+        } else {
+            name.to_string()
+        };
+        // Renaming could itself collide with a live binding; walk to a free one.
+        while self.names.iter().any(|(_, w, _)| *w == wgsl) {
+            wgsl.push('_');
+        }
+        self.names.push((name, wgsl.clone(), mutable));
+        wgsl
+    }
+
+    fn depth(&self) -> usize {
+        self.names.len()
+    }
+
+    fn truncate(&mut self, depth: usize) {
+        self.names.truncate(depth);
+    }
+
+    /// The innermost binding of `name`, if any.
+    fn lookup(&self, name: &str) -> Option<&(&'a str, String, bool)> {
+        self.names.iter().rev().find(|(n, _, _)| *n == name)
+    }
+
+    /// Identifier resolver for [`lower_expr`]: a local wins over the parameter,
+    /// which reads this thread's element.
+    fn resolver(&self) -> impl Fn(&str) -> Option<String> + '_ {
+        move |n: &str| {
+            if let Some((_, wgsl, _)) = self.lookup(n) {
+                Some(wgsl.clone())
+            } else if n == self.param {
+                Some("input[i]".to_string())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Split a scalar kernel body into its statements and tail expression.
+fn scalar_body_stmts(func: &Function) -> Result<(Vec<KStmt<'_>>, &Expr), WgslError> {
+    let block = &func.body;
+    let (stmts, tail) = if let Some(t) = &block.final_expr {
+        (block.stmts.as_slice(), t.as_ref())
+    } else if let Some((last, init)) = block.stmts.split_last() {
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Return(Some(inner)),
+            ..
+        }) = &last.kind
+        {
+            (init, inner.as_ref())
+        } else {
+            return Err(WgslError::UnsupportedBody(
+                "a GPU kernel body must end in a scalar expression or `return <expr>;`".to_string(),
+            ));
+        }
+    } else {
+        return Err(WgslError::UnsupportedBody(
+            "a GPU kernel body is empty".to_string(),
+        ));
+    };
+    Ok((scalar_stmt_list(stmts)?, tail))
+}
+
+/// Convert a Kāra statement slice into the kernel statement model, rejecting
+/// anything outside the supported subset with a diagnostic that names it.
+fn scalar_stmt_list(stmts: &[Stmt]) -> Result<Vec<KStmt<'_>>, WgslError> {
+    let mut out = Vec::new();
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Let {
+                is_mut,
+                pattern,
+                value,
+                ..
+            } => {
+                let PatternKind::Binding(name) = &pattern.kind else {
+                    return Err(WgslError::UnsupportedBody(
+                        "a GPU kernel `let` must bind a simple name (no destructuring)".to_string(),
+                    ));
+                };
+                out.push(KStmt::Bind {
+                    name: name.as_str(),
+                    mutable: *is_mut,
+                    value,
+                });
+            }
+            StmtKind::Assign { target, value } => {
+                out.push(KStmt::Assign {
+                    target: assign_target_name(target)?,
+                    op: None,
+                    value,
+                });
+            }
+            StmtKind::CompoundAssign { target, op, value } => {
+                out.push(KStmt::Assign {
+                    target: assign_target_name(target)?,
+                    op: Some(compound_assign_op(op)?),
+                    value,
+                });
+            }
+            StmtKind::Expr(Expr {
+                kind: ExprKind::While {
+                    condition, body, ..
+                },
+                ..
+            }) => {
+                if body.final_expr.is_some() {
+                    return Err(WgslError::UnsupportedBody(
+                        "a GPU kernel `while` body must not produce a value".to_string(),
+                    ));
+                }
+                out.push(KStmt::While {
+                    cond: condition,
+                    body: scalar_stmt_list(&body.stmts)?,
+                });
+            }
+            _ => {
+                return Err(WgslError::UnsupportedBody(
+                    "a GPU kernel body supports `let` bindings, assignments and `while` loops \
+                     before the final expression"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The assignable local's name. Only a bare identifier is assignable in a
+/// kernel: the parameter is a read-only storage load, and field / index targets
+/// need the struct paths the SoA emitter owns.
+fn assign_target_name(target: &Expr) -> Result<&str, WgslError> {
+    match &target.kind {
+        ExprKind::Identifier(name) => Ok(name.as_str()),
+        _ => Err(WgslError::UnsupportedBody(
+            "a GPU kernel can only assign to a local `let mut` binding".to_string(),
+        )),
+    }
+}
+
+/// WGSL spelling of a compound-assignment operator.
+fn compound_assign_op(op: &CompoundOp) -> Result<&'static str, WgslError> {
+    match op {
+        CompoundOp::Add => Ok("+="),
+        CompoundOp::Sub => Ok("-="),
+        CompoundOp::Mul => Ok("*="),
+        CompoundOp::Div => Ok("/="),
+        CompoundOp::Mod => Ok("%="),
+        // The bitwise / shift compounds have WGSL spellings, but the scalar
+        // kernel subset has no bitwise operators yet (`binop_str` rejects
+        // them), so accepting them here would emit unreachable shapes.
+        CompoundOp::BitAnd
+        | CompoundOp::BitOr
+        | CompoundOp::BitXor
+        | CompoundOp::Shl
+        | CompoundOp::Shr => Err(WgslError::UnsupportedBody(
+            "a GPU kernel does not support bitwise compound assignment yet".to_string(),
+        )),
+    }
+}
+
+/// Emit a statement list into `out` at `indent` levels of four spaces.
+fn emit_stmts<'a>(
+    stmts: &[KStmt<'a>],
+    scope: &mut Scope<'a>,
+    helpers: &HashSet<String>,
+    indent: usize,
+    out: &mut String,
+) -> Result<(), WgslError> {
+    let pad = "    ".repeat(indent);
+    for stmt in stmts {
+        match stmt {
+            KStmt::Bind {
+                name,
+                mutable,
+                value,
+            } => {
+                let rhs = lower_expr(value, &scope.resolver(), helpers)?;
+                let kw = if *mutable { "var" } else { "let" };
+                let wgsl = scope.bind(name, *mutable);
+                out.push_str(&format!("{pad}{kw} {wgsl} = {rhs};\n"));
+            }
+            KStmt::Assign { target, op, value } => {
+                let Some((_, wgsl, mutable)) = scope.lookup(target) else {
+                    return Err(WgslError::UnsupportedBody(format!(
+                        "a GPU kernel cannot assign to `{target}` — it is not a local binding"
+                    )));
+                };
+                if !*mutable {
+                    return Err(WgslError::UnsupportedBody(format!(
+                        "a GPU kernel cannot assign to the immutable local `{target}` — \
+                         declare it `let mut`"
+                    )));
+                }
+                let wgsl = wgsl.clone();
+                let rhs = lower_expr(value, &scope.resolver(), helpers)?;
+                let op = op.unwrap_or("=");
+                out.push_str(&format!("{pad}{wgsl} {op} {rhs};\n"));
+            }
+            KStmt::While { cond, body } => {
+                let c = lower_expr(cond, &scope.resolver(), helpers)?;
+                out.push_str(&format!("{pad}while ({c}) {{\n"));
+                // A binding inside the loop body is scoped to it.
+                let depth = scope.depth();
+                emit_stmts(body, scope, helpers, indent + 1, out)?;
+                scope.truncate(depth);
+                out.push_str(&format!("{pad}}}\n"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Extract the kernel's sole parameter, rejecting the zero-param and
@@ -2440,36 +2678,137 @@ mod tests {
     }
 
     #[test]
-    fn scalar_kernel_rejects_shadowing_local() {
-        // WGSL has no same-scope redeclaration, so this must fail here rather
-        // than inside the driver at dispatch.
+    fn scalar_kernel_shadowing_local_gets_a_distinct_wgsl_name() {
+        // Was `scalar_kernel_rejects_shadowing_local` in increment 1. WGSL has
+        // no same-scope redeclaration, so the scope stack renames the inner
+        // binding instead of rejecting: the second RHS still sees the FIRST
+        // `a`, and the tail sees the innermost — Kara's shadowing semantics.
         let func = parse_kernel(
-            "#[gpu]\nfn k(x: f32) -> f32 {\n    let a: f32 = x * 2.0;\n    \
-             let a: f32 = a + 1.0;\n    a\n}",
+            "#[gpu]\nfn k(x: f32) -> f32 {\n    let a: f32 = x * 2.0;\n    let a: f32 = a + 1.0;\n    a\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("let a = (input[i] * 2.0);"), "{wgsl}");
+        assert!(wgsl.contains("let a_ = (a + 1.0);"), "{wgsl}");
+        assert!(wgsl.contains("output[i] = a_;"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_renames_a_reserved_local_rather_than_rejecting() {
+        // Was `scalar_kernel_rejects_reserved_local_name` in increment 1: a
+        // local colliding with the wrapper's own `i` is renamed, not turned
+        // away — a loop counter called `i` is too idiomatic to reject.
+        let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 {\n    let i: f32 = x;\n    i\n}");
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("let i_k = input[i];"), "{wgsl}");
+        assert!(wgsl.contains("output[i] = i_k;"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_lowers_let_mut_to_a_wgsl_var() {
+        // Was `scalar_kernel_rejects_let_mut_pointing_at_the_next_increment` in
+        // increment 1; that increment is this one.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: f32) -> f32 {\n    let mut a: f32 = x;\n    a = a + 1.0;\n    a\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("var a = input[i];"), "{wgsl}");
+        assert!(wgsl.contains("a = (a + 1.0);"), "{wgsl}");
+    }
+
+    // ── `while` loops + mutable locals (B-2026-08-18-40, increment 2) ──
+
+    #[test]
+    fn scalar_kernel_lowers_while_loop_with_accumulator() {
+        // The reduction shape the single-expression floor made impossible.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
+             let mut n: i32 = 0;\n    while n < 4 {\n        acc = acc + x;\n        \
+             n = n + 1;\n    }\n    acc * 2.0\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("var acc = 0.0;"), "{wgsl}");
+        assert!(wgsl.contains("var n = 0;"), "{wgsl}");
+        assert!(wgsl.contains("while ((n < 4)) {"), "{wgsl}");
+        assert!(wgsl.contains("acc = (acc + input[i]);"), "{wgsl}");
+        assert!(wgsl.contains("output[i] = (acc * 2.0);"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_renames_a_local_that_collides_with_the_wrapper() {
+        // A loop counter called `i` is idiomatic, but `i` is the generated
+        // wrapper's THREAD index. The local is renamed so the parameter keeps
+        // resolving to the thread's own element — a correctness property, not
+        // just ergonomics: `input[i]` must not pick up the loop counter.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
+             let mut i: i32 = 0;\n    while i < 4 {\n        acc = acc + x;\n        \
+             i = i + 1;\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("var i_k = 0;"), "{wgsl}");
+        assert!(wgsl.contains("while ((i_k < 4))"), "{wgsl}");
+        assert!(wgsl.contains("i_k = (i_k + 1);"), "{wgsl}");
+        // The thread index is untouched, and the param still reads through it.
+        assert!(wgsl.contains("let i = gid.y"), "{wgsl}");
+        assert!(wgsl.contains("acc = (acc + input[i]);"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_lowers_compound_assignment() {
+        let func = parse_kernel(
+            "#[gpu]\nfn s(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
+             let mut n: i32 = 0;\n    while n < 3 {\n        acc += x;\n        \
+             n += 1;\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("acc += input[i];"), "{wgsl}");
+        assert!(wgsl.contains("n += 1;"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_scopes_a_binding_to_the_loop_body() {
+        // A `let` inside the loop is declared inside the WGSL block, so it is
+        // re-bound each iteration and invisible afterwards.
+        let func = parse_kernel(
+            "#[gpu]\nfn s(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
+             let mut n: i32 = 0;\n    while n < 3 {\n        let step: f32 = x + 1.0;\n        \
+             acc += step;\n        n += 1;\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        let body = wgsl.split("while").nth(1).unwrap();
+        assert!(body.contains("let step = (input[i] + 1.0);"), "{wgsl}");
+        assert!(wgsl.contains("acc += step;"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_assignment_to_immutable_local() {
+        let func = parse_kernel(
+            "#[gpu]\nfn s(x: f32) -> f32 {\n    let a: f32 = x;\n    a = a + 1.0;\n    a\n}",
         );
         let err = emit_kernel(&func, &[]).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("shadow"), "{msg}");
+        assert!(msg.contains("immutable local"), "{msg}");
+        assert!(msg.contains("let mut"), "{msg}");
     }
 
     #[test]
-    fn scalar_kernel_rejects_reserved_local_name() {
-        // `i` is the generated wrapper's own thread index.
-        let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 {\n    let i: f32 = x;\n    i\n}");
+    fn scalar_kernel_rejects_assignment_to_the_parameter() {
+        // The parameter is a read-only storage load, not a place.
+        let func = parse_kernel("#[gpu]\nfn s(x: f32) -> f32 {\n    x = x + 1.0;\n    x\n}");
         let err = emit_kernel(&func, &[]).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("cannot be named `i`"), "{msg}");
+        assert!(msg.contains("not a local binding"), "{msg}");
     }
 
     #[test]
-    fn scalar_kernel_rejects_let_mut_pointing_at_the_next_increment() {
-        // Mutable locals are meaningless without assignment, which arrives with
-        // loops — the diagnostic must say so rather than fail vaguely.
-        let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 {\n    let mut a: f32 = x;\n    a\n}");
+    fn scalar_kernel_rejects_a_while_body_that_produces_a_value() {
+        let func = parse_kernel(
+            "#[gpu]\nfn s(x: f32) -> f32 {\n    let mut n: i32 = 0;\n    \
+             while n < 2 {\n        n = n + 1;\n        x\n    }\n    x\n}",
+        );
         let err = emit_kernel(&func, &[]).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("`let mut`"), "{msg}");
-        assert!(msg.contains("loop support"), "{msg}");
+        assert!(msg.contains("must not produce a value"), "{msg}");
     }
 
     #[test]

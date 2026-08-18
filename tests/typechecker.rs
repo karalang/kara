@@ -37325,12 +37325,16 @@ fn gpu_dispatch_accepts_kernel_body_with_let_locals() {
 
 #[test]
 fn gpu_dispatch_rejects_unsupported_kernel_body() {
-    // The emitter's rejection must still surface as E_GPU_DISPATCH_KERNEL at the
-    // dispatch site. `let mut` is the boundary now that immutable locals are in:
-    // mutable locals need assignment, which arrives with loop support.
+    // The emitter's rejection must surface as E_GPU_DISPATCH_KERNEL at the
+    // dispatch site. Anchored on a PERMANENT boundary — assigning to the kernel
+    // parameter, which is a read-only storage load and can never be a place —
+    // rather than on whatever the current increment has not reached yet. The
+    // previous two anchors (a `let` local, then `let mut`) each became
+    // supported one increment later, which made this test chase the boundary
+    // instead of guarding the surfacing path.
     let errs = typecheck_errors(
         "#[gpu]\n\
-         fn weird(x: f32) -> f32 { let mut y = x * 2.0; y }\n\
+         fn weird(x: f32) -> f32 { x = x + 1.0; x }\n\
          fn main() {\n\
              let buf: Vec[f32] = [1.0];\n\
              let out = gpu.dispatch(weird, buf);\n\
