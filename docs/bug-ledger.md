@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 262 | 0 |
-| leak | 185 | 1 |
+| leak | 185 | 0 |
 | double-free | 133 | 0 |
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 935 | 3 |
+| codegen | 935 | 2 |
 | typecheck | 201 | 2 |
 | interp | 153 | 0 |
 | ownership | 60 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced · 7 open · 1321 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced · 6 open · 1322 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-18-41 | 2026-08-18 | parser | low | THREE `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket"), MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216, under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213), and PARAMETERIZED resources (`effect resource UserDB[user_id: i64];` -> the `[...]` is parsed as generic type params, so the diagnostic is the naming-convention error "`user_id` is Value-class but generic type parameters must be Type-class", spec'd at design.md:7124 under its own heading "### Parameterized Resources" at :7121). Only `effect resource X;` and `effect resource X: Trait;` parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
 | B-2026-08-18-42 | 2026-08-18 | other | low | EIGHT occurrences across SEVEN lines in design.md's kara blocks use Rust MACRO syntax (`name!(...)`), which Kara does not have -- the parser rejects `!` outright with "the `!` operator is not used in Kara". `panic!` (6, five of them in § Never type -- one line carries two -- plus § FFI callbacks), `matches!` (1, § peek-and-drop) and `format_into!` (1, § embedded formatting). Transcribing any of them fails to parse. Only `panic!` has a drop-in replacement -- `panic("x")` checks FULLY clean -- while `matches` resolves to nothing at all ("undefined name 'matches'") and `format_into!` is variadic over a format string, so two of the three need a language answer before the doc can be corrected. | docs/design.md:542, :543, :556, :557 (panic!), :5941 (panic!), :8419 (matches!), :12162 (format_into!); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR; cf. B-2026-08-17-35 for the same class |
-| B-2026-08-18-48 | 2026-08-18 | codegen | medium | A HEAP-BOXED enum payload that is MOVED into a by-value call is freed by nobody. The move-out sentinel zeroes the caller's slot so its `BoxedEnumDrop` no-ops, and a by-value enum PARAMETER does not adopt the box — `fn tail(o: Option[W])` emits no free at all. Measured 2000/2000 boxes leaked (64000 bytes) in a loop repro under auto-par. Sequentially the identical program is clean only because the box never escapes one function and LLVM deletes the allocation outright, so nothing frees it there either — the hole is the same, only unobservable. | the move-out sentinel at the by-value call site (src/codegen) vs `CleanupAction::BoxedEnumDrop`; by-value enum parameter cleanup registration in the callee prologue. Regression fixture deliberately excludes this shape — see `asan_par_slot_boxed_option_payload_freed_once` in tests/memory_sanitizer.rs, which documents the exclusion and points here. |
 | B-2026-08-18-49 | 2026-08-18 | typecheck+codegen | low | STATEMENT-FORM `if` IS NOT SUPPORTED AT ALL in a `#[gpu]` kernel body — not merely `if` branches containing locals. `if c { acc = x; } else { acc = -x; }` is rejected even though neither branch declares a local, because the scalar statement walker has no `If` arm. Separately, a VALUE-`if` branch cannot contain a local. Both need the same fix (a `KStmt::If`), and the second rides on the first as a desugar. Workaround verified: move the `if` into value position — `acc = acc + (if c { x } else { -x })` compiles and runs. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster — the "Kernel-body expressiveness" entry. Split out of B-2026-08-18-40 (whose four increments landed `let`, `while` + mutable locals, `for`-over-range and value `match`); that row named this remainder but UNDERSTATED it, see the SCOPE CORRECTION below. |
 
 ### Wontfix (7)
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced
 
 </details>
 
-### Fixed (1321)
+### Fixed (1322)
 
-<details><summary>1321 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1322 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11991,6 +11990,24 @@ ONE OBSTACLE WORTH RECORDING FOR THE NEXT READER: the resolver registers ALL 35 
 `<=` RATHER THAN `==`: a parameter with a default makes the accepted count a range, so equality would reject calls that compile. Over-supply is the signal the repro trips.
 
 NOT A COMPLETE FILTER, and the row should not be read as claiming otherwise. `zip(a, b)` still renames to `min` — two arguments against a two-parameter function genuinely fits, and no arity rule can see that one. What is fixed is the class where the call visibly contradicts the candidate, which is where the row's own example sat. |
+| B-2026-08-18-48 | codegen | medium | A HEAP-BOXED enum payload that is MOVED into a by-value call is freed by nobody | FIXED by 67e8feb. One conjunct removed from the predicate that populates `boxed_struct_payload_vars` (`runtime.rs`, `track_boxed_enum_var`): membership is now `inner_struct_name.is_some()` alone, where it also required `inner_drop_fn.is_some()`.
+
+WHAT LOCATED IT WAS AN ASYMMETRY, not the IR. The row's repro leaks with `struct W { f0..f3: i64 }`; the SAME program with `struct R { id: i64, name: String }` as the payload is clean under the identical auto-par fork. That is measured, both directions:
+    Option[W]  (all-POD interior)     -> 64,000 B leaked in 2,000 allocations
+    Option[R]  (one String field)     -> clean, 859 mallocs, all freed
+So the box does get freed for a struct payload -- just not for that one.
+
+The IR then said where: in the CLEAN variant the caller emits no move-out sentinel at all (`%hit6 = load ...` then straight into `call @tail`), while in the leaking one it emits `store zeroinitializer, ptr %hit` between them. The caller-keeps-ownership mechanism already existed and already worked; the POD payload was falling out of the set that turns it on.
+
+`emit_struct_drop_synthesis` returns `None` for a struct with no heap-bearing fields -- there is nothing for a drop fn to do -- so `inner_drop_fn.is_some()` was false for `W` and true for `R`. But that predicate asks whether the struct INTERIOR needs cleanup, which has no bearing on who owns the ENVELOPE: a box needs its own `free` whether or not anything inside it does. Keying the set on the payload being a user struct at all is the question it was always meant to answer.
+
+WHICH OF THE ROW'S TWO CANDIDATE FIXES: neither, in the sense the row framed them. It offered "make a by-value enum parameter adopt its boxed payload" or "suppress the caller's sentinel", and reading it as an open design choice would have been wrong -- the choice was already made and already implemented. B-2026-08-06-9 leg A records that registering struct payloads callee-side double-frees three named fixtures (`asan_boxed_option_param_payload_move_out`, `asan_owned_struct_optres_field_call_arg_move`, `asan_shared_payload_view_optres_field_call_arg_copy`), so option (a) is closed by measurement; B-2026-08-06-31 then built option (b) for exactly this class. This is a hole in that population, not a new policy.
+
+VERIFIED: the new `asan_boxed_payload_moved_into_by_value_call_is_freed` fixture is RED before and green after; the full `memory_sanitizer` suite is 1,130 passed / 0 failed, including the three fixtures the callee-side alternative is known to break; and the repro is byte-identical across `run --interp`, `run` (JIT), `build`, and `KARAC_AUTO_PAR=0 build`.
+
+The fixture carries a `min_allocs` floor of 2,000 because this shape is only OBSERVABLE under auto-par -- sequentially the box never escapes one frame and LLVM deletes the allocation, so a fixture without the floor would go on passing if the leak came back and the optimizer happened to hide it.
+
+`examples/dump_ir` gained `KARAC_DUMP_AUTO_PAR=1` in the same commit: the investigation needed the auto-par IR and the harness could only emit the sequential shape, which for this bug is the shape where the evidence is absent. |
 
 </details>
 
