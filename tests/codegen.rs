@@ -98498,6 +98498,105 @@ fn main() {
         }
     }
 
+    /// B-2026-08-18-12 — a BUILTIN method called on `self` inside an
+    /// `impl Trait for Map[K, V]` or `impl Trait for Set[T]` body.
+    ///
+    /// The main Map/Set dispatch lives inside an `ExprKind::Identifier` arm,
+    /// so a `SelfValue` receiver never reached it and every builtin method on
+    /// such a body failed with "no handler for method 'len' on non-identifier
+    /// receiver" — while the identical body over a `Vec[i64]` or `Slice[i64]`
+    /// head compiled and ran. That asymmetry was not a decision: a
+    /// Vec/Slice/String receiver compiles to a STRUCT VALUE, which the
+    /// `len`/`is_empty`/`count` intercept reads the length field straight out
+    /// of, and a Map/Set handle is a bare pointer the same intercept declines.
+    /// So Vec looked handled and Map/Set looked unimplemented, when neither
+    /// had a `self` arm at all.
+    ///
+    /// Both receiver modes and several methods, because one method passing
+    /// would not distinguish "the arm is there" from "this one method happens
+    /// to be intercepted somewhere else".
+    #[test]
+    fn a_builtin_method_on_a_map_or_set_self_receiver_compiles() {
+        let map_setup = "let mut c: Map[String, i64] = Map.new();\n                          c.insert(\"a\", 5); c.insert(\"b\", 7);";
+        let set_setup = "let mut c: Set[i64] = Set.new();\n c.insert(5); c.insert(7);";
+        for (label, head, self_mode, body, setup, want) in [
+            (
+                "Map.len, ref self",
+                "Map[String, i64]",
+                "ref self",
+                "return self.len().to_string();",
+                map_setup,
+                "2\n",
+            ),
+            (
+                "Map.len, owned self",
+                "Map[String, i64]",
+                "self",
+                "return self.len().to_string();",
+                map_setup,
+                "2\n",
+            ),
+            (
+                "Map.contains_key",
+                "Map[String, i64]",
+                "ref self",
+                "if self.contains_key(\"a\") { return \"yes\"; } return \"no\";",
+                map_setup,
+                "yes\n",
+            ),
+            (
+                "Map.get",
+                "Map[String, i64]",
+                "ref self",
+                "return self.get(\"a\").unwrap_or(0).to_string();",
+                map_setup,
+                "5\n",
+            ),
+            (
+                "Set.len, ref self",
+                "Set[i64]",
+                "ref self",
+                "return self.len().to_string();",
+                set_setup,
+                "2\n",
+            ),
+            (
+                "Set.len, owned self",
+                "Set[i64]",
+                "self",
+                "return self.len().to_string();",
+                set_setup,
+                "2\n",
+            ),
+            (
+                "Set.contains",
+                "Set[i64]",
+                "ref self",
+                "if self.contains(5) { return \"yes\"; } return \"no\";",
+                set_setup,
+                "yes\n",
+            ),
+            (
+                "Set.is_empty",
+                "Set[i64]",
+                "ref self",
+                "if self.is_empty() { return \"yes\"; } return \"no\";",
+                set_setup,
+                "no\n",
+            ),
+        ] {
+            let src = format!(
+                "trait P {{ fn p({self_mode}) -> String; }}\n\
+                 impl P for {head} {{ fn p({self_mode}) -> String {{ {body} }} }}\n\
+                 fn main() {{ {setup} println(c.p()); }}\n"
+            );
+            let Some(out) = run_program(&src) else {
+                return;
+            };
+            assert_eq!(out, want, "{label}");
+        }
+    }
+
     /// The `Map` head, on both receiver modes. An args-less `Map` rejected a
     /// String key outright as "index must be an integer or range".
     ///

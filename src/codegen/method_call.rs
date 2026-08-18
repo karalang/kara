@@ -8028,6 +8028,33 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result);
         }
 
+        // `self.len()` inside an `impl Trait for Map[K, V]` / `Set[T]` body.
+        // The main Map/Set dispatch sits inside an `ExprKind::Identifier` arm,
+        // so a `SelfValue` receiver never reached it and every builtin method
+        // on such a body fell through to the error below — while the identical
+        // body over a `Vec[i64]` or `Slice[i64]` head compiled. That asymmetry
+        // was not a decision: a Vec/Slice/String receiver compiles to a STRUCT
+        // VALUE, which the `len` / `is_empty` / `count` intercept above reads
+        // the length field straight out of, and a Map/Set handle is a bare
+        // pointer that the same intercept declines. So Vec looked handled and
+        // Map/Set looked unimplemented, when neither had a `self` arm at all
+        // (B-2026-08-18-12).
+        //
+        // Placed LAST, immediately before the diagnostic, so it can only fire
+        // where compilation was already going to fail: every earlier
+        // dispatcher — including the generic user-impl path that gives a
+        // user-declared `Map.<method>` priority over the builtin — has already
+        // declined. `self` is registered under the name "self" in both
+        // registries, exactly as the index and for-loop arms rely on.
+        if matches!(&object.kind, ExprKind::SelfValue) {
+            if self.mapset.map_key_types.contains_key("self") {
+                return self.compile_map_method("self", method, args);
+            }
+            if self.mapset.set_elem_types.contains_key("self") {
+                return self.compile_set_method("self", method, args);
+            }
+        }
+
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),
