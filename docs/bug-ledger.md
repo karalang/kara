@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 105 | 2 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
-| diagnostics | 75 | 4 |
+| diagnostics | 77 | 5 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
 | other | 37 | 0 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
-| cli | 41 | 2 |
+| cli | 43 | 3 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 19 | 0 |
@@ -124,19 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced · 7 open · 1291 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1317 surfaced · 8 open · 1292 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
-| B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-14 | 2026-08-18 | codegen | medium | A RANGE SUBSCRIPT used directly as a METHOD RECEIVER -- `v[0..3].first_or(-1)` -- has no codegen: "no handler for expression kind Range". The same slice passed as an ARGUMENT works (`show(v[0..2])`), and binding it first works (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`), so it is the receiver position specifically. | roadmap.md |
 | B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
 | B-2026-08-18-18 | 2026-08-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let`. The other two positions design.md's "infers the target type from context" covers still fix the chain to `Vec`: `return <chain>.collect()` against a declared non-`Vec` return type -> "expected 'Set[i64]', found 'Vec[i64]'", and argument position `f(<chain>.collect())` against a non-`Vec` parameter -> the same. Measured AFTER B-2026-08-17-36 landed, so these are the residue of that fix rather than a restatement of it. | src/desugar.rs (desugar_collect_target); src/typechecker/exprs.rs (check_expr) |
+| B-2026-08-18-19 | 2026-08-18 | cli | medium | PROJECT-mode `karac build` still renders no warning-level diagnostic. B-2026-08-18-1 gave the SINGLE-FILE build path a warning surface; a `karac build` run inside a project directory takes a different function entirely and prints only its module banner and `Built: <exe>`. | roadmap.md |
+| B-2026-08-18-20 | 2026-08-18 | cli | low | `karac run` is inconsistent with ITSELF about warnings: it renders `must_use` but not `deprecated`. The two ride different channels -- `must_use` through `cmd_run`'s own lint block, `deprecated` through `TypeCheckResult::warnings` -- and only the first is wired into the run path. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -154,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced
 
 </details>
 
-### Fixed (1291)
+### Fixed (1292)
 
-<details><summary>1291 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1292 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11085,6 +11086,22 @@ THE LEAK SIDE IS MEASURED, NOT ASSUMED, because every neighbouring suppressor's 
 TESTS: `asan_boxed_option_local_scrutinee_field_move_out_no_leak_no_double_free` (tests/memory_sanitizer.rs) plus a value twin `test_e2e_local_scrutinee_option_field_move_out_runs` (tests/codegen.rs) -- the defect ABORTED rather than printing a wrong answer, so the value assertion catches the opposite failure mode, a neutralizer firing too widely and printing empty while ASAN stays quiet. Coverage is stronger than the sibling B-2026-08-06-10 fixture's, which only bites at `-O0`: against the pre-fix compiler this one SEGVs under ASAN at BOTH `-O2` and `KARAC_OPT_LEVEL=0`. Full `--features llvm` suite green (106 targets, 13962 passed, 0 failed) with `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`.
 
 UNBLOCKS B-2026-08-17-28 leg (3): `?.`'s flatten case lowers to exactly this shape, and that leg was deferred solely because implementing it would have traded a loud build error for this runtime double free. |
+| B-2026-08-18-1 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk | FIXED by ea53727a for the SINGLE-FILE build path. The row's diagnosis was right and its mechanism was one line off: `cmd_build` does have a diagnostic renderer, but it calls it ONLY inside `if pipeline.has_fatal_errors()`. So the path that actually produces a binary dropped the entire diagnostic stream -- not a missing render surface, an unreachable one. Everything the compiler had already computed was thrown away between the checks and the `Built:` line.
+
+FIXED BY FILTERING THE SHARED RENDERER, not by writing a second one. `render_text_warning_diagnostics` is `render_text_diagnostics` with the non-`warning[` blocks dropped, and `collect_warning_diagnostics_json` is `collect_diagnostics` with the non-warning entries dropped. That is the same shape B-2026-08-05-17 used when it fixed the effect-gate version of this class -- "one classifier, shared by every gate, so the lanes cannot drift apart again" -- and it is why the test asserts `build`'s warning line EQUALS `check`'s rather than matching a hardcoded string: a drift in wording between the lanes is the regression worth catching.
+
+THE THREE DECISIONS THE ROW ASKED FOR, made explicitly:
+  * WHICH DIAGNOSTICS: warning-severity only. `note[...]` is excluded -- those are advisory hints (FFI lint notes, the wasm-tools note) rather than findings about the program, and printing them on every build is noise this row did not ask for. Non-fatal ERROR-severity blocks are excluded too: `build` continuing past them is existing, deliberate behaviour and surfacing them is a separate decision.
+  * `--output=json`: warnings ride the SUCCESS object under `diagnostics`, and ONLY when there are some. A consumer reading `status`/`output` sees no new key on a clean build, which is what keeps the kata corpus and the Mend baselines reading build output exactly as before. A test pins the absent-key case.
+  * EXISTING EXPECTATIONS: text warnings go to stderr, `Built: ...` stays on stdout, so a consumer parsing stdout is untouched. Full suite green.
+
+MEASURED AFTER, on a `#[deprecated]` program: `karac build` prints the identical `warning[deprecated]` block `karac check` prints, then `Built: dep.bin`; `karac build --output=json` carries `"severity":"warning","lint_name":"deprecated"` on the success object; a warning-free program builds silently in both modes. `must_use` rides the same channel and now surfaces on build too.
+
+TWO CORRECTIONS TO THE ROW'S OWN MEASUREMENTS, both re-measured here:
+  1. The row says `deprecated` is "emitted under `karac run`, absent under `karac build`". It is absent under BOTH -- `karac run` and `karac run --interp` are silent on it as well; only `check` reported it. The `run`-vs-`build` contrast the row drew was really `check`-vs-everything-else, which does not change the conclusion (two independent warning mechanisms went silent on the build path) but does move where the remaining gap is.
+  2. Consequently `run` is INCONSISTENT WITH ITSELF: it renders `must_use` (through its own lint block) and not `deprecated` (which rides `TypeCheckResult::warnings`). Filed separately.
+
+NOT FIXED, filed separately: the PROJECT-mode build path. `karac build` inside a project with a `#[deprecated]` call in `src/main.kara` still prints no warning -- that path is a different function (`BuildCodegenStatus`) whose only output channel is a failure message, so giving it a warning surface is its own change rather than a line in this one. |
 | B-2026-08-18-2 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONL… | FIXED by f8f10ac — three of the four lints wired onto the compile path, the
 other one excluded on measured evidence, and a false positive fixed as the
 prerequisite for wiring the first of them.
