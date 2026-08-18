@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
-| missing-feature | 110 | 3 |
+| missing-feature | 110 | 2 |
 | diagnostics | 83 | 2 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 935 | 2 |
-| typecheck | 201 | 2 |
+| codegen | 935 | 1 |
+| typecheck | 201 | 1 |
 | interp | 153 | 0 |
 | ownership | 60 | 0 |
 | other | 55 | 3 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced · 6 open · 1322 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced · 5 open · 1323 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-18-41 | 2026-08-18 | parser | low | THREE `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket"), MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216, under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213), and PARAMETERIZED resources (`effect resource UserDB[user_id: i64];` -> the `[...]` is parsed as generic type params, so the diagnostic is the naming-convention error "`user_id` is Value-class but generic type parameters must be Type-class", spec'd at design.md:7124 under its own heading "### Parameterized Resources" at :7121). Only `effect resource X;` and `effect resource X: Trait;` parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
 | B-2026-08-18-42 | 2026-08-18 | other | low | EIGHT occurrences across SEVEN lines in design.md's kara blocks use Rust MACRO syntax (`name!(...)`), which Kara does not have -- the parser rejects `!` outright with "the `!` operator is not used in Kara". `panic!` (6, five of them in § Never type -- one line carries two -- plus § FFI callbacks), `matches!` (1, § peek-and-drop) and `format_into!` (1, § embedded formatting). Transcribing any of them fails to parse. Only `panic!` has a drop-in replacement -- `panic("x")` checks FULLY clean -- while `matches` resolves to nothing at all ("undefined name 'matches'") and `format_into!` is variadic over a format string, so two of the three need a language answer before the doc can be corrected. | docs/design.md:542, :543, :556, :557 (panic!), :5941 (panic!), :8419 (matches!), :12162 (format_into!); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR; cf. B-2026-08-17-35 for the same class |
-| B-2026-08-18-49 | 2026-08-18 | typecheck+codegen | low | STATEMENT-FORM `if` WAS NOT SUPPORTED AT ALL in a `#[gpu]` kernel body — not merely `if` branches containing locals. STEP 1 LANDED 2026-08-18: `KStmt::If` lowers a statement `if` to WGSL's native `if`/`else if`/bare-`if`, with each branch its own scope. REMAINING (step 2): a VALUE-`if` branch still cannot contain a local, which desugars onto step 1 via a hoisted `var`. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster — the "Kernel-body expressiveness" entry. Split out of B-2026-08-18-40 (whose four increments landed `let`, `while` + mutable locals, `for`-over-range and value `match`); that row named this remainder but UNDERSTATED it, see the SCOPE CORRECTION below. |
 
 ### Wontfix (7)
 
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced
 
 </details>
 
-### Fixed (1322)
+### Fixed (1323)
 
-<details><summary>1322 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1323 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12008,6 +12007,55 @@ VERIFIED: the new `asan_boxed_payload_moved_into_by_value_call_is_freed` fixture
 The fixture carries a `min_allocs` floor of 2,000 because this shape is only OBSERVABLE under auto-par -- sequentially the box never escapes one frame and LLVM deletes the allocation, so a fixture without the floor would go on passing if the leak came back and the optimizer happened to hide it.
 
 `examples/dump_ir` gained `KARAC_DUMP_AUTO_PAR=1` in the same commit: the investigation needed the auto-par IR and the harness could only emit the sequential shape, which for this bug is the shape where the evidence is absent. |
+| B-2026-08-18-49 | typecheck+codegen | low | STATEMENT-FORM `if` WAS NOT SUPPORTED AT ALL in a `#[gpu]` kernel body — not merely `if` branches containing locals | FIXED by df6538ed. BOTH STEPS LANDED 2026-08-18.
+
+STEP 1 (statement-form `if`) is recorded in the detail below. STEP 2 lifts the
+remainder: a value-`if` whose branch declares a local.
+
+`select()` cannot express that shape at all — an operand is ONE expression, so
+there is nowhere to put a `let`. Now that step 1 exists, it desugars onto it:
+
+    let y: f32 = if c { let t = x * 2.0; t + 1.0 } else { x };
+    -->
+    var y: f32;
+    if (c) { let t = (input[i] * 2.0); y = (t + 1.0); } else { y = input[i]; }
+
+The desugar is STRICTLY MORE FAITHFUL than `select`, not merely equivalent:
+only the taken arm's statements run, where `select` evaluates both. Both are
+sound under the effect gate, but this one also matches the interpreter's
+evaluation order.
+
+THE FORK IS DELIBERATE AND TESTED. A value-`if` WITHOUT locals still lowers to
+`select` — branchless is what a GPU wants, so only the shapes `select` cannot
+express take the heavier statement lowering. A dedicated test asserts the
+plain form still emits `select(` and hoists nothing, because a regression there
+would be invisible in program output and real in per-lane divergence.
+
+TWO FORMS, ONE COST DIFFERENCE. The ASSIGNMENT form
+(`acc = if c { let t = …; t } else { … };`) needs no type annotation: the
+destination already exists, so nothing is hoisted. The `let` form does need
+one, because WGSL cannot infer a type for an uninitialized `var` and the
+declaration is hoisted above the `if`. That is a real (small) papercut and it
+is reported as such: the diagnostic names the binding and shows the repair
+(`let y: f32 = if …`) rather than merely refusing.
+
+REMAINING, NOT COVERED: a value-`if` with locals nested INSIDE a larger
+expression (`acc = acc + (if c { let t = …; t } else { … })`) is still
+rejected. Lifting that needs general statement-lifting of subexpressions (ANF),
+which is a different and much larger change than this desugar; the two forms
+above are where the shape actually occurs. The workaround is to bind it first,
+which is now supported.
+
+VALIDATED BY EXECUTION on lavapipe via `tests/gpu_e2e.rs`: let-bound with a
+local (1/2/7/9), assignment form with a local in BOTH branches (2/3/9/12), and
+a three-arm `else if` chain each carrying its own local (1/7/8/8) -- every one
+byte-identical to `--interp`. The branch values USE their locals (`t + 1.0`,
+not `t`), so a desugar that dropped a binding or assigned the wrong expression
+diverges rather than coincidentally agreeing. Five more emitter unit tests
+cover the WGSL shape, the `select` fork, and the annotation diagnostic.
+
+Gates: fmt, clippy both legs, 78 gpu_wgsl unit tests, 12 gpu_e2e execution
+fixtures, 2294 typechecker, 3064 codegen. Zero test churn across both steps. |
 
 </details>
 
