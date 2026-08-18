@@ -112,25 +112,36 @@ impl super::Parser {
             // Check for postfix operators first
             match self.peek_token_ref() {
                 Token::Question => {
+                    // The `?` token's own span, captured before `advance`.
+                    let q_span = self.current_span();
                     self.advance();
-                    // B-2026-08-18-7 — this arm DELIBERATELY still copies
-                    // `lhs.span`, and the reason is measured rather than
-                    // conservative. Widening it the way the `?.` arm below is
-                    // widened breaks `question_ok_payload_types`: a
-                    // `let b = mk(n)?;` whose Some payload is a multi-word
-                    // struct stops resolving the binding's fields under codegen
-                    // ("cannot resolve field 'name'"), while `--interp` stays
-                    // correct. That table's producer and its consumer therefore
-                    // do NOT both key off this node — they agree today only
-                    // because this span happens to equal the operand's.
+                    // B-2026-08-18-9 — span the operand PLUS the `?` (lhs start
+                    // -> past the `?` token) rather than copying `lhs.span`.
+                    // Same defect the `?.` arm below documents: a node that
+                    // reuses its LHS's span has no SpanKey of its own, so
+                    // nested `?` sites (`f(g()?)?`) collapse onto one key and
+                    // whatever a side-table records for one is overwritten by
+                    // the other.
                     //
-                    // So `?` carries the same latent collision `?.` had (nested
-                    // `a?` steps share one key) and cannot be fixed here alone;
-                    // it needs the table's two ends put on the same key first.
-                    // Left as-is, with the evidence, rather than traded for a
-                    // silent miscompile.
+                    // This arm outlived B-2026-08-18-7 by one bug because the
+                    // collision was load-bearing: `question_ok_payload_types`
+                    // was WRITTEN at this node's span and READ at the operand's,
+                    // and widening alone therefore moved the producer off the
+                    // consumer's key — a multi-word `?` payload then fell
+                    // through to the `w0`-truncating fallback ("cannot resolve
+                    // field 'name'", codegen only, `--interp` correct). The
+                    // consumer now reads this node's span
+                    // (`reconstruct_question_ok_payload`), so the two ends agree
+                    // by construction and the span is free to describe the
+                    // source text it covers.
+                    let end = q_span.offset + q_span.length;
                     lhs = Expr {
-                        span: lhs.span,
+                        span: Span {
+                            line: lhs.span.line,
+                            column: lhs.span.column,
+                            offset: lhs.span.offset,
+                            length: end.saturating_sub(lhs.span.offset),
+                        },
                         kind: ExprKind::Question(Box::new(lhs)),
                     };
                     continue;

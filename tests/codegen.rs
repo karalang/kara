@@ -32912,6 +32912,45 @@ fn main() {
     }
 
     #[test]
+    fn e2e_question_struct_payload_survives_a_span_of_its_own() {
+        // B-2026-08-18-9. `question_ok_payload_types` is WRITTEN by the
+        // typechecker at the `?` node's span and READ by
+        // `reconstruct_question_ok_payload`, which used to read the OPERAND's
+        // span instead. Those were the same key only because the parser handed
+        // `ExprKind::Question` a verbatim copy of its operand's span; giving
+        // `?` a span of its own (so nested sites stop colliding) moved the
+        // producer off the consumer's key.
+        //
+        // This is the shape that caught it: a multi-word struct payload. The
+        // miss fell through to the `w0`-truncating fallback and the binding's
+        // fields stopped resolving under codegen ("cannot resolve field
+        // 'name'") while `--interp` stayed correct — so the pin has to be an
+        // E2E, not a typechecker test. Both legs run: `Some` through the
+        // success path, `None` through the propagation path.
+        if let Some(out) = run_program(
+            "struct Big { name: String, n: i64 }\n             fn mk(n: i64) -> Option[Big] {\n                 if n < 0 { return None; }\n                 return Some(Big { name: \"widget\", n: n });\n             }\n             fn use_it(n: i64) -> Option[String] {\n                 let b = mk(n)?;\n                 return Some(b.name + \"-\" + b.n.to_string());\n             }\n             fn main() {\n                 match use_it(7) { Some(s) => println(s), None => println(\"none\") }\n                 match use_it(-1) { Some(s) => println(s), None => println(\"none\") }\n             }",
+        ) {
+            assert_eq!(out, "widget-7\nnone\n");
+        }
+    }
+
+    #[test]
+    fn e2e_nested_question_sites_do_not_share_a_span_key() {
+        // The reason `?` needed a span of its own (B-2026-08-18-9): every node
+        // copied `lhs.span`, so an inner `?` and the outer `?` enclosing it
+        // landed on ONE SpanKey and the outer's recorded payload type
+        // overwrote the inner's. Here the two differ — inner unwraps
+        // `Option[Big]` (multi-word struct), outer unwraps `Option[String]`
+        // (3-word) — so a collision rebuilds one of them at the other's
+        // layout instead of merely being untidy.
+        if let Some(out) = run_program(
+            "struct Big { name: String, n: i64 }\n             fn mk(n: i64) -> Option[Big] {\n                 if n < 0 { return None; }\n                 return Some(Big { name: \"w\", n: n });\n             }\n             fn label(b: Big) -> Option[String] {\n                 if b.n == 0 { return None; }\n                 return Some(b.name + b.n.to_string());\n             }\n             fn go(n: i64) -> Option[String] {\n                 let s = label(mk(n)?)?;\n                 return Some(s + \"!\");\n             }\n             fn main() {\n                 match go(3) { Some(s) => println(s), None => println(\"none\") }\n                 match go(0) { Some(s) => println(s), None => println(\"none\") }\n                 match go(-1) { Some(s) => println(s), None => println(\"none\") }\n             }",
+        ) {
+            assert_eq!(out, "w3!\nnone\nnone\n");
+        }
+    }
+
+    #[test]
     fn e2e_vecdeque_string_with_capacity_codegen() {
         // B-2026-06-10-3: `VecDeque.with_capacity` / `String.with_capacity` had
         // no codegen arm and fell through to the `Ok(const 0)` default → SIGTRAP.

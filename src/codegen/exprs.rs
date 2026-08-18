@@ -2131,7 +2131,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                     .unwrap();
             }
-            return self.reconstruct_question_ok_payload(inner, val, w0);
+            return self.reconstruct_question_ok_payload(outer_span, val, w0);
         }
 
         if self.fn_ctx.current_fn_name == "main" && self.main_result_err_te.is_some() {
@@ -2207,7 +2207,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `len`/`cap`) → malformed value that crashes on use. Surfaced by
         // `Result[Vec[T], AllocError]?` from the fallible constructors, but the
         // bug is general (any multi-word `?` payload — `String`, tuples).
-        self.reconstruct_question_ok_payload(inner, val, w0)
+        self.reconstruct_question_ok_payload(outer_span, val, w0)
     }
 
     /// Rebuild the `Ok`/`Some` payload value at a `?` success path. `?`
@@ -2222,20 +2222,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// recorded — keeps the single-word `w0`, which is exactly its value.
     fn reconstruct_question_ok_payload(
         &mut self,
-        inner: &Expr,
+        outer_span: &crate::token::Span,
         result_val: BasicValueEnum<'ctx>,
         w0: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // The `?` operand and the `?` expression share a span (parser
-        // collision), and the `?` result type — i.e. the *unwrapped* Ok/Some
-        // payload type — is the last write at that key. So the recorded type
-        // at the operand span IS the payload type directly:
-        //   * `String` lands in `string_typed_exprs` (`Type::Str` isn't a
-        //     `Named`, so `enum_inst_type_exprs` misses it); its layout is the
-        //     3-word `{ptr, len, cap}` vec shape.
-        //   * `Vec[T]` and other generic `Named` payloads land in
-        //     `enum_inst_type_exprs`, recorded as the payload type itself.
-        let key = (inner.span.offset, inner.span.length);
+        // KEYED ON THE `?` NODE, NOT ITS OPERAND (B-2026-08-18-9). Every lookup
+        // below wants ONE fact: the type this `?` evaluates to, i.e. the
+        // *unwrapped* Ok/Some payload. The typechecker records that against the
+        // `?` expression's own span — `question_ok_payload_types` explicitly,
+        // and `expr_types` (whence `string_typed_exprs` /
+        // `enum_inst_type_exprs` / `concrete_named_type_exprs` are derived)
+        // generically, the way it records every expression's type.
+        //
+        // This used to read `inner.span` and still worked, because the parser
+        // gave `ExprKind::Question` a verbatim copy of its operand's span: the
+        // two keys were the same key, and the `?` node — typed after its
+        // operand — was simply the last write there. That is an accident, not
+        // an invariant, and it was load-bearing enough to block giving `?` a
+        // span of its own (widening the span alone moved the producer off the
+        // consumer's key, and a multi-word payload fell through to the
+        // `w0`-truncating fallback: "cannot resolve field 'name'").
+        //
+        // Reading the node's span makes the two ends agree BY CONSTRUCTION, so
+        // the span is now free to describe the source text it covers.
+        let key = (outer_span.offset, outer_span.length);
         let payload_llvm: BasicTypeEnum<'ctx> = if let Some(te) = self
             .span_tables
             .question_ok_payload_types
@@ -2244,9 +2254,10 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             // The typechecker's dedicated, single-write record of THIS `?`'s
             // unwrapped Ok/Some payload type (B-2026-07-13-19). Unlike
-            // `enum_inst_type_exprs` — which shares the operand's span and can
-            // hold the `Result`/`Option` WRAPPER as its last write — this is
-            // always the genuine payload, so a nested `Option[T]`/`Result[T,E]`
+            // `enum_inst_type_exprs` — derived from `expr_types`, so at this
+            // key it holds whatever the `?` evaluates to and can therefore be
+            // a `Result`/`Option` in its own right — this is always the
+            // genuine payload, so a nested `Option[T]`/`Result[T,E]`
             // payload (`Result[Option[String], E]?`) is rebuilt as the real
             // multi-word value instead of truncated to `w0` (which left the
             // subsequent `match` unable to type the Some binding). A String

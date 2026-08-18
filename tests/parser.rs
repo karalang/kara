@@ -12228,6 +12228,63 @@ fn test_optional_chain_nodes_have_distinct_spans() {
     );
 }
 
+/// Sibling of the `?.` case above, for the `?` operator (B-2026-08-18-9). Each
+/// `?` node must span its operand PLUS the `?`, so nested sites get distinct
+/// SpanKeys. Copying `lhs.span` collapsed `g(x)?` onto `g(x)`, which is the
+/// operand's OWN key — the two nodes then shared one slot in every span-keyed
+/// side table, and the outer one's fact silently overwrote the inner one's.
+///
+/// This span was the last one still copying its LHS, and it stayed that way
+/// one bug longer than the rest: `question_ok_payload_types` was written at
+/// the `?` node and read at the operand, so the collision was load-bearing
+/// until both ends were put on the same key.
+#[test]
+fn test_question_nodes_span_past_the_operator() {
+    let source = "fn f(x: i64) -> Option[i64] {\n  let a = g(x)?;\n  let b = h(g(x)?)?;\n  return Some(a + b);\n}";
+    let prog = parse(source).program;
+
+    fn collect(e: &Expr, out: &mut Vec<karac::token::Span>) {
+        match &e.kind {
+            ExprKind::Question(inner) => {
+                out.push(e.span);
+                collect(inner, out);
+            }
+            ExprKind::Call { args, .. } => {
+                for a in args {
+                    collect(&a.value, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut spans = Vec::new();
+    for item in &prog.items {
+        if let Item::Function(f) = item {
+            for st in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &st.kind {
+                    collect(value, &mut spans);
+                }
+            }
+        }
+    }
+    assert_eq!(spans.len(), 3, "expected three `?` nodes, got {spans:?}");
+
+    let text = |s: &karac::token::Span| &source[s.offset..s.offset + s.length];
+    // The span covers the operand and the operator, not just the operand.
+    assert_eq!(text(&spans[0]), "g(x)?");
+    // Nested: outer `h(...)?` first, then the inner `g(x)?` from its argument.
+    assert_eq!(text(&spans[1]), "h(g(x)?)?");
+    assert_eq!(text(&spans[2]), "g(x)?");
+
+    // The property every span-keyed table relies on: an inner `?` and the
+    // outer `?` that encloses it must not share a key.
+    assert_ne!(
+        (spans[1].offset, spans[1].length),
+        (spans[2].offset, spans[2].length),
+        "nested `?` sites must not share a SpanKey"
+    );
+}
+
 /// `Span.line`/`Span.column` of an interpolation sub-expression must point to
 /// its true position in the ORIGINAL source — not into the synthetic
 /// `fn __interp__() { … }` re-parse wrapper (B-2026-06-09-1a). Before the fix

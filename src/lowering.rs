@@ -795,8 +795,9 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .collect();
     // Complement of the above: arg-less (concrete, non-generic) `Named` types —
     // user enums/structs — keyed by span, EXCLUDING the `Result`/`Option`
-    // wrappers (a `?` operand's span records the unwrapped Ok type, never the
-    // wrapper, but guard anyway). The `?`-Ok-payload reconstruction needs these
+    // wrappers (a `?` NODE's span records the unwrapped Ok type — its operand's
+    // span is where the wrapper lands, and since B-2026-08-18-9 those are two
+    // distinct keys — but guard anyway). The `?`-Ok-payload reconstruction needs these
     // to rebuild a multi-word concrete-enum/struct payload that
     // `enum_inst_type_exprs`'s `!args.is_empty()` filter drops (B-2026-07-11-7).
     program.concrete_named_type_exprs = tc
