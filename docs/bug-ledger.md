@@ -95,12 +95,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 258 | 1 |
 | leak | 182 | 0 |
 | double-free | 131 | 1 |
-| run-vs-build | 128 | 3 |
+| run-vs-build | 128 | 1 |
 | codegen-gap | 115 | 1 |
 | missing-feature | 103 | 4 |
 | perf | 77 | 0 |
-| false-positive | 77 | 2 |
-| diagnostics | 73 | 6 |
+| false-positive | 77 | 1 |
+| diagnostics | 73 | 5 |
 | crash | 51 | 2 |
 | soundness | 50 | 0 |
 | other | 35 | 0 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 913 | 7 |
-| typecheck | 193 | 8 |
+| codegen | 913 | 5 |
+| typecheck | 193 | 7 |
 | interp | 150 | 3 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
-| cli | 39 | 4 |
+| cli | 39 | 3 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 18 | 0 |
@@ -124,16 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced · 20 open · 1263 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced · 16 open · 1267 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (20)
+### Open (16)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-20 | 2026-08-17 | typecheck | low | The default-parameter-value const validator rejects FOUR of the forms design.md explicitly lists as allowed, including the spec's own example literal. § Default Parameter Values says "The allowed forms are identical to those for Module-Level Bindings: literals (`42`, `"localhost"`, `true`), arithmetic on literals (`60 * 1000`), enum variants (`Direction.North`), struct/tuple/array literals built from constant expressions, and references to other module-level bindings", and separately calls `Option[T] = None` "idiomatic". Measured, one form per line: ACCEPTED -- `i64 = 42`, `bool = true`, `f64 = 1.5`, `char = 'z'`, `i64 = 60 * 1000`, `Direction = Direction.North`, `(i64,i64) = (1, 2)`. REJECTED -- (a) `String = "localhost"` -> "default parameter value must be a constant expression (no function calls, closures, or runtime-only values)", the spec's own quoted literal; (b) `i64 = LIMIT` where `let LIMIT: i64 = 7` is a module-level binding -> "const expression: 'LIMIT' is not a known const"; (c) `P = P { x: 1, y: 2 }` struct literal -> same not-a-constant-expression message (the TUPLE literal sibling is accepted, so it is the struct shape specifically); (d) `Option[i64] = None` -> "const expression: 'None' is not a known const", and `Option[i64] = Option.Some(42)` -> not-a-constant-expression. | roadmap.md |
-| B-2026-08-17-22 | 2026-08-17 | typecheck | medium | A string literal NESTED inside a module-level struct / tuple / array initializer types as `String` instead of `StringSlice`, and since `String` is forbidden at module scope this makes module-level constants carrying static string data unwritable. design.md § Module-Level Bindings states "String literals have type `StringSlice` at module scope" and separately lists "Struct and tuple literals built from constant expressions" and "Array literals" among the allowed initializers -- the intersection must work, and does not. `let DIRECT: StringSlice = "ok";` checks fine, but `let NESTED: Cfg = Cfg { name: "karac", retries: 3 };` -> "expected 'StringSlice', found 'String'", `let TUP: (StringSlice, i64) = ("karac", 3);` -> "expected '(StringSlice, i64)', found '(String, i64)'", and `let ARR: Array[StringSlice, 2] = ["a", "b"];` -> one such error per element. There is no spelling that works: declaring the field as `String` is rejected by the constant-initializer rule ("String is heap-allocated; use StringSlice for static string data"), so the module-scope literal rule reaching only the TOP LEVEL of the initializer leaves the composite forms with no legal form at all. | roadmap.md |
-| B-2026-08-17-23 | 2026-08-17 | codegen | medium | A destructuring pattern in FUNCTION-parameter position is never lowered by codegen -- `karac check` passes clean, `--interp` runs correctly, and BOTH compiled backends refuse with `codegen failed: Undefined variable '<binding>'`. design.md § Destructuring in Function and Closure Parameters opens with "Any irrefutable pattern may appear in parameter position" and roadmap.md line 112 marks it `[x]` done. Measured, every shape fails identically: `fn add((a, b): (i64, i64)) -> i64 { a + b }` -> "Undefined variable 'a'"; `fn y_only((_, y): (i64, i64))` -> "Undefined variable 'y'"; `fn only_a((a, _): (i64, i64))` -> "Undefined variable 'a'"; `fn nested(((a, b), c): ((i64,i64), i64))` -> "Undefined variable 'a'"; `fn px(Point { x, y }: Point)` -> "Undefined variable 'x'"; the spec's own two-parameter example `fn distance(Point { x: x1, y: y1 }: Point, Point { x: x2, y: y2 }: Point)` -> "Undefined variable 'x2'"; heap-carrying `fn take(H { s, n }: H) -> String` -> "Undefined variable 's'". Same error under `karac run` (JIT) and `karac build` (AOT) -- the codegen prologue binds the parameter slot but never walks the pattern to bind its leaves. | roadmap.md |
-| B-2026-08-17-24 | 2026-08-17 | codegen | low | The STRUCT-pattern sibling of B-2026-07-14-21's tuple fix: a struct destructuring pattern as an iterator-adaptor closure parameter still bails out of the codegen chain peel, and the fallthrough MISATTRIBUTES the failure to the terminal method. `v.iter().map(|P { x, y }| x + y).collect()` -> `codegen: no handler for method 'collect' on non-identifier receiver (method dispatch fell through; this is a codegen bug -- add a dispatcher arm in compile_method_call ...)`; the same closure under `fold` -> the identical message naming 'fold'. The interpreter runs both correctly and `karac check` is clean. B-2026-07-14-21 fixed exactly this class for the TUPLE form (`ps.iter().map(|(a, b)| a + b)`) -- the tuple form now lowers on all three backends, so the peel handles destructuring closure params in principle and only the struct pattern is unrecognized. | roadmap.md |
 | B-2026-08-17-28 | 2026-08-17 | codegen+interp | high | Optional chaining `?.` ICEs the interpreter at one shape and silently returns the wrong answer at another, and is not lowered by codegen at all -- `karac check` says "All checks passed" for every case. design.md line 782: "`user.address?.city?.name` short-circuits to `None` if any level is absent." (1) INTERPRETER ICE: `match u.address?.city { Some(c) => println("L2 some: " + c.name), None => ... }` panics with `internal error: entered unreachable code: field access at 7:42: receiver was Value::EnumVariant not Struct/SharedStruct; either an interpreter codepath produced the wrong variant or the typechecker accepted field access on a non-struct` (src/interpreter.rs:2252) -- the Some-arm binding `c` holds an unstripped enum value rather than the `City` struct, the same wrapper-not-stripped shape as B-2026-08-17-27's `??` legs. (2) INTERPRETER SILENT WRONG ANSWER: the spec's own three-level example `u.address?.city?.name`, built with EVERY level `Some`, takes the `None` arm and prints "L3 none". (3) CODEGEN: not lowered -- both compiled backends refuse the same programs (`codegen failed: Undefined variable 's'`, and `no handler for method 'to_string' on variable 'z'` for the one-level form). | roadmap.md |
 | B-2026-08-17-30 | 2026-08-17 | typecheck+cli | low | E0218 TELLS YOU THE EXACT TEXT TO INSERT AND `karac fix` STILL DECLINES IT: the call-site `mut`-marker diagnostic ends with ``Write `mut <expr>`.`` but carries no `replacement`, while its EXACT INVERSE E0219 ("drop the `mut` marker") does carry one and is applied automatically. Same marker, opposite directions, adjacent codes, one fixable and one not. | E0218's diagnostic construction: it has no `replacement` field where E0219 emits `replacement: {offset, length, text}`. The repair is a single insertion at a known offset. |
 | B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
@@ -141,7 +138,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced
 | B-2026-08-17-33 | 2026-08-17 | typecheck | medium | Derive dependency auto-resolution is implemented for the `Ord` chain but NOT for `Copy` or `Hash`, and design.md states the behaviour unconditionally. § Derive: "The compiler resolves derive dependencies automatically regardless of the order items appear in `#[derive(...)]`. Writing `#[derive(Hash)]` when `PartialEq` and `Eq` are not yet derived causes the compiler to auto-derive them in dependency order (`PartialEq` -> `Eq` -> `Hash`). Listing dependencies explicitly is valid and idiomatic; omitting them is also allowed. `#[derive(Copy)]` auto-derives `Clone` if not already present -- **`Copy` without `Clone` is NEVER a compile error, because the compiler fills in the missing dependency.**" Measured: `#[derive(Copy)] struct C { a: i64 }` is EXACTLY that compile error -- `error[typecheck]: struct 'C' derives Copy but not Clone; Copy requires Clone`. `#[derive(Hash)] struct K { a: i64 }` used as a Map key fails with `Map[K, ...]: key type does not implement 'Eq'; only hashable equality-comparable types (... or structs/enums with '#[derive(Hash, Eq)]') can be Map keys`. In BOTH cases the diagnostic names the very dependency the compiler was supposed to fill in, and recommends the manual spelling the spec says is optional. The discriminator that makes this a partial implementation rather than an absent one: `#[derive(Ord)] struct S { a: i64 }` + `x < y` passes `karac check` clean, so the `Ord -> PartialOrd + Eq -> PartialEq` chain IS resolved. | roadmap.md |
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-17-36 | 2026-08-17 | typecheck | medium | `collect()` can only ever produce `Vec[T]` -- every other `FromIterator` target design.md promises is rejected at typecheck. § Iterator Adaptors: "Every standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`, `String`) implements `FromIterator` for its natural element type. `collect` infers the target type from context or requires annotation." Measured, one target per file: `let up: String = s.chars().map(|c| c.to_uppercase()).collect()` -> "expected 'String', found 'Vec[char]'"; `let j: String = v.iter().map(|s| s.to_uppercase()).collect()` -> "expected 'String', found 'Vec[String]'"; `let s: Set[i64] = ... .collect()` -> "expected 'Set[i64]', found 'Vec[i64]'"; `let d: VecDeque[i64] = ... .collect()` -> "expected 'VecDeque[i64]', found 'Vec[i64]'"; `let m: Map[i64, i64] = v.iter().map(|x| (x, x * 10)).collect()` -> "expected 'Map[i64, i64]', found 'Vec[(i64, i64)]'". The sixth target, `TreeMap`, cannot even be named -- see B-2026-08-17-38. In every case the annotation is ignored and the chain's type is fixed to `Vec` of the element type, so the diagnostic reads as a mismatch the user caused rather than a target the compiler does not support. | roadmap.md |
-| B-2026-08-17-37 | 2026-08-17 | cli | medium | The `must_use` lint NEVER RUNS under `karac check` or `karac build` -- it fires only under `karac run`, so the entire surface is invisible to `karac check --output=json` and therefore to the Mend loop. `fn main() { let mut m: Map[i64, i64] = Map.new(); m.insert(1, 10); m.get(1); }` -- a discarded `Option` from a LOOKUP, the exact case design.md § must_use exists to catch ("lookups, parses, fallible operations, where the `Option` IS the result") -- gets `warning[must_use]: discarded 'Option' value` under `karac run --interp` AND `karac run`, while `karac check` reports "All checks passed." and `karac build` reports only "Built: mu2.bin". `karac check --output=json` on the same file emits `"diagnostics":[]`. design.md describes must_use as a COMPILE warning ("silently dropping it is a compile warning"), and CLAUDE.md's Mend loop is built on `karac check --output=json` as its diagnostics feed -- so a lint the spec mandates across six stdlib categories reaches neither the compile path nor the AI-facing feed. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-17-42 | 2026-08-17 | codegen | medium | DUPLICATE OF B-2026-08-17-29 -- A RANGE bound to a variable has no codegen. `let r = 0..4; for i in r { println(i); }` prints 0 1 2 3 under `--interp` and NOTHING under `karac run` (JIT) and `karac build` (AOT), exiting 0 either way, with `karac check` clean. The inline spelling (`for i in 0..4`) is correct on all three -- only the binding form is dead. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::Range` arm. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure; implementing this should flip that case, which is a deliberate edit to that test. |
 | B-2026-08-17-43 | 2026-08-17 | codegen | high | DUPLICATE OF B-2026-08-17-28 -- `?.` OPTIONAL CHAINING has no codegen and produced a SILENT WRONG ANSWER. `let v = get(1)?.x; println(v);` where `get -> Option[P]` printed `Some(5)` under `--interp` and `0` under both `karac run` (JIT) and `karac build` (AOT), with `karac check` clean. roadmap.md line 241 carries a CHECKED box claiming `?.` optional chaining is done. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::OptionalChain` arm; roadmap.md line 241. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure. |
@@ -167,9 +163,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced
 
 </details>
 
-### Fixed (1263)
+### Fixed (1267)
 
-<details><summary>1263 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1267 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10407,6 +10403,93 @@ binding constraint on which defaults an author can actually write. The
 type-flow test in this change uses a tuple default for exactly that reason,
 with a comment naming -20. |
 | B-2026-08-17-21 | parser+typecheck | medium | `UPPERCASE_BINDING.field.method()` is misresolved as a type path -- "type 'Point' is not callable" -- so a module-level struct constant's field can n… | Fixed in three places, because the row's false positive was hiding a second defect behind it and a third would have been introduced by the fix. (1) TYPECHECK, the row's own diagnosis: the uppercase-receiver disambiguation in `infer_call` (src/typechecker/expr_call.rs) was gated on `segments.len() == 2`; widened to `>= 2`, with the middle segments synthesized into a `FieldAccess` chain on the receiver — exactly the AST the working parenthesized spelling `(ORIGIN.x).to_string()` produces, so every downstream phase is already proven on it. `rewrite_path_call_to_method_call` (src/lowering.rs) gained the identical chain so the lowered node matches what the typechecker typed. Type-rooted paths are untouched: the value-binding guard rejects them, so `Vec.new()`, `module.Sub.fn()` and the enum-literal receiver `Dir.North.code()` (B-2026-07-13-4, a 3-segment path that would now be in range) keep their existing routes — pinned by a new regression test. (2) CODEGEN, a second layer the row could not see because check never got that far: with the false positive gone, `ORIGIN.x.to_string()` reached codegen and died on "field-receiver method 'to_string' — outer 'ORIGIN' has no slot". `lower_field_access_ptr` (src/codegen/calls.rs) resolves the field-GEP base by looking the outer name up in `self.variables`, and a MODULE-LEVEL binding has no entry there — its storage is a program-lifetime LLVM global, and `reseed_module_binding_side_tables` re-registers only its TYPE tables per function. Added the `mod_bindings.module_bindings` fallback: the global pointer IS the receiver pointer (module bindings are never `shared` handles or `ref` params, so neither deref case applies). This fixes every field-receiver path, method-call and index alike, not just the one shape. Measured end to end: the row's headline program now checks clean, builds, and AOT output matches the interpreter exactly. (3) LINT PLACEMENT, a run-vs-build gap the widening would otherwise have OPENED: `CFG.inner.v.to_string()` is a genuine chained field receiver (FR4, deferred), but it parses as a 4-segment `Call(Path)` and only becomes a chained `FieldAccess` receiver after `rewrite_path_call_to_method_call` runs — so `chained_field_receiver`, which ran in `typecheck()`, could not see it: check clean, build refused. Moved the lint to the end of `Pipeline::lower()` (beside `escaping_closure`, moved there for the same reason one row earlier): its predicate mirrors `lower_field_access_ptr`, which codegen reaches on the LOWERED AST, so post-lower is the placement that has parity and pre-lower is the one that can diverge. The shape now gets the correct diagnostic with its remedy at check time. TESTS: two typechecker tests (the widened dispatch across module-const / local-uppercase / deeper-chain shapes, plus the enum-variant guard), one codegen E2E asserting both the clean check and the actual run output, and a CLI test pinning the lowered-shape lint fire with its one-level sibling as an over-fire control. Full --features llvm suite green (13,901 tests), both clippy legs and fmt clean. NOT FIXED, and out of scope: the FR4 chained-field-receiver deferral itself (B-2026-08-13-12's subject) — `CONST.a.b.method()` still needs the documented temporary; it is now reported at check instead of at build. |
+| B-2026-08-17-22 | typecheck | medium | A string literal NESTED inside a module-level struct / tuple / array initializer types as `String` instead of `StringSlice`, and since `String` is fo… | Fixed in 8c2be9b. The coercion carve-out that gives a module-scope string
+literal type `StringSlice` (design.md §1284) matched only the OUTERMOST
+expression, while § Module-Level Bindings separately admits struct / tuple /
+array literals built from constant expressions. The intersection of the two
+was therefore unwritable:
+
+    let CONFIG: Cfg = Cfg { name: "karac", retries: 3 };
+    -> expected 'StringSlice', found 'String'
+
+There was no other spelling. Declaring the field `String` is refused by
+E_MODULE_BINDING_HEAP_TYPE, so a module constant carrying a name, path or
+message had no legal form at all — which is what made this a false-positive
+rather than a missing feature.
+
+THE FIX: replaced the top-level match with `check_module_binding_value`, a
+structure-directed recursive walk that carries the declared type inward and
+applies the same literal rule at every depth.
+
+WHY IT IS CONTAINED: the recursion is one-sided by construction. It descends
+only where the declared type and the initializer agree on shape, and hands
+every mismatch to `check_expr` unchanged, so all pre-existing diagnostics
+still come from the same code at the same spans. The array arm is gated on
+the declared size matching the element count — an earlier cut recursed
+unconditionally and swallowed the array-length error; that regression was
+caught by differential-testing against HEAD and is pinned by a negative-case
+test.
+
+Codegen already lowered these shapes correctly, so the typechecker was the
+entire blocker. The E2E test asserts the emitted constants carry the right
+BYTES rather than merely that the program checks. |
+| B-2026-08-17-23 | codegen | medium | A destructuring pattern in FUNCTION-parameter position is never lowered by codegen -- `karac check` passes clean, `--interp` runs correctly, and BOTH… | Fixed in 31044ad. design.md § Destructuring in Function and Closure Parameters
+opens with "Any irrefutable pattern may appear in parameter position" and
+roadmap.md marks it done, but codegen's prologue allocated the parameter slot
+and never walked the pattern. Every leaf reference died with `Undefined
+variable '<leaf>'` on BOTH compiled backends while `karac check` passed clean
+and `--interp` ran correctly — the run-vs-build signature the row recorded.
+
+TWO DEFECTS IN THE SAME LOOP:
+
+(1) THE LEAVES WERE NEVER BOUND. A non-`Binding` pattern now loads the
+parameter back through its own alloca type and hands it to `bind_pattern` —
+the same choke point `let (a, b) = p;` uses, which is the control the row
+measured as already working. So a parameter pattern lowers exactly as the
+one-line body rewrite does, rather than through a parallel implementation.
+Loading through the alloca keeps arm64 coerced/indirect structs and
+niche-ABI Options on the identical path every other consumer reads.
+
+(2) TWO DESTRUCTURING PARAMS COLLIDED ON ONE SLOT. `param_name` renders every
+non-binding pattern as the literal `"_"`, so the second overwrote the first's
+`variables` entry and type registration — which is precisely why design.md's
+own two-parameter example failed on `x2` and not `x1`. The synthetic name is
+now index-qualified.
+
+VERIFICATION: all seven shapes from the row produce byte-identical output on
+interp, JIT and AOT. Binding leaves transfers ownership of the parameter's
+heap fields, so an ASAN/LSan fixture loops heap-carrying destructures 40x to
+catch any per-call retain/release imbalance — clean. |
+| B-2026-08-17-24 | codegen | low | The STRUCT-pattern sibling of B-2026-07-14-21's tuple fix: a struct destructuring pattern as an iterator-adaptor closure parameter still bails out of… | Fixed in 2f15c3f. `v.iter().map(|P { x, y }| x + y).collect()` bailed out of
+the chain peel, and the fallthrough then MISATTRIBUTED the failure to the
+terminal method — "no handler for method 'collect' on non-identifier receiver
+(this is a codegen bug — add a dispatcher arm in `compile_method_call`)" —
+pointing a fixer at a dispatcher that was never the problem. The interpreter
+ran the shape correctly and `karac check` was clean.
+
+B-2026-07-14-21 fixed this class for the TUPLE form; this is the STRUCT
+sibling, desugaring identically with a field access where the tuple arm uses
+a tuple index:
+
+    |P { x, y }| body   ->   |__dp| { let x = __dp.x; let y = __dp.y; body }
+
+Shorthand (`{ x }`), renaming (`{ x: x1 }`) and ignored fields (`{ x, y: _ }`)
+all reduce to the same form, since the field READ is keyed off the field name
+and only the bound name varies. A nested sub-pattern still bails to the loud
+dispatch-fail rather than miscompiling.
+
+`fold` needed the same widening: its element param went through
+`closure_param_name`, which fails closed on any destructuring pattern. The
+desugaring is factored into `destructuring_closure_param`, used by both `fold`
+and the map/filter peel so the two cannot drift — which also makes the TUPLE
+form work under `fold` for the first time. The accumulator param keeps the
+narrow helper; it is never an element and never carries a pattern.
+
+VERIFICATION: all shapes byte-identical across interp, JIT and AOT.
+
+DIAGNOSTIC NOTE: the misattributed "add a dispatcher arm" message was the
+costlier half of this bug — it named the wrong file. Worth remembering when a
+chain-peel bailout reports against a terminal method. |
 | B-2026-08-17-25 | codegen | high | The pipe operator `\|>` produces a SILENT WRONG ANSWER under both compiled backends -- every pipe expression evaluates to 0 -- and a String-typed pipe… | Fixed in 3e9a6287. `ExprKind::Pipe` now has an arm in `compile_expr` and is
 lowered through a desugar SHARED by all three phases.
 
@@ -10638,6 +10721,43 @@ TESTS: a codegen E2E covering all five shapes in one program and its
 interpreter oracle twin, pinning byte-identical output. The E2E is
 baseline-red (verified by reverting the codegen change alone: the build
 fails with the misnaming diagnostic). |
+| B-2026-08-17-37 | cli | medium | The `must_use` lint NEVER RUNS under `karac check` or `karac build` -- it fires only under `karac run`, so the entire surface is invisible to `karac… | Fixed in 777f4e7, for the `karac check` and JSON-feed surfaces. `must_use` was
+invoked only from `cmd_run`, so a program `karac run` warned about got "All
+checks passed." from `karac check` and `"diagnostics":[]` from `karac check
+--output=json`. design.md § must_use describes it as a COMPILE warning, and
+CLAUDE.md's Mend loop is built on that JSON feed — so a lint the spec mandates
+across six stdlib categories reached neither the compile path nor the AI-facing
+feed. The gap was invisible from the machine-fix statistics themselves, since a
+diagnostic that is never emitted also never counts as unfixed.
+
+Wired into both renderers, each reading the same lint with the same `-A` / `-D`
+overrides so text and JSON cannot disagree:
+
+* `render_text_diagnostics` (cli.rs) — rendered there rather than pushed into
+  `TypeCheckResult::warnings`, so the lint keeps its own `help` and `note`
+  continuation lines.
+* `collect_diagnostics` (diag_json.rs) — as a `lint`-phase W0250/E0250 entry
+  carrying `lint_name`, which is what makes it addressable by `-A` and
+  discoverable by the Mend loop.
+
+No `fix_it`: the repair depends on intent (`let _ = m.get(1);` to discard
+deliberately, versus actually using the value), so offering one would be a
+guess. The run path keeps its own call site and still reports exactly once.
+
+THIRD SURFACE DELIBERATELY NOT FIXED HERE, and not must_use-specific: `karac
+build` prints no warnings at all on a successful build — measured identical for
+`deprecated`, which reaches the user through the typechecker's
+`type_lint_warning` channel rather than the `cmd_run` lint block. Two
+independent warning-production mechanisms both go silent on the build path, so
+that is a global missing render surface in `cmd_build`, not a wiring quirk.
+Filed as B-2026-08-18-1 rather than changed unilaterally.
+
+SIBLING GAP ALSO LEFT OPEN: the four other lints in the same `cmd_run` block
+(`undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`,
+`missing_track_caller`, `ffi_float_eq`) still have exactly the wiring this
+change repaired for must_use. Not switched on together, because making four
+lints newly fire on `karac check` risks breaking existing check-output
+expectations; filed as B-2026-08-18-2 with a per-lint blast-radius prior. |
 | B-2026-08-17-39 | typecheck | low | Five iterator-adaptor diagnostics print types with Rust's `{:?}` Debug formatter, leaking internal AST structs into user-facing messages -- and one o… | Fixed in fbc42214. All the sites, plus one the row did not list.
 
 SIX, NOT FIVE. Alongside filter_map (149), find_map (615), flat_map (834),
