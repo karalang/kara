@@ -16490,7 +16490,31 @@ fn check_manifest_unknown_build_target_is_hard_error() {
 
 /// Fresh temp dir for one wasm-path test.
 fn wasm_test_dir(tag: &str) -> std::path::PathBuf {
-    let tmp = std::env::temp_dir().join(format!(
+    // B-2026-08-18-35 — INSIDE the workspace, not `std::env::temp_dir()`.
+    //
+    // These tests run `karac build --target=wasm_*` with `current_dir` set to
+    // this directory, and karac resolves the wasi sysroot by shelling out to
+    // `rustc --print target-libdir --target wasm32-wasip1`. rustup picks the
+    // toolchain from the CURRENT DIRECTORY, so from `/tmp` it resolves the
+    // DEFAULT toolchain — not the one `rust-toolchain.toml` pins, which is the
+    // only one that declares the wasm targets. The sysroot then comes back
+    // missing and every wasm E2E test takes its skip path.
+    //
+    // That skip reports `ok`, so the whole wasm E2E surface passed VACUOUSLY on
+    // any machine whose default toolchain differs from the pin — measured in a
+    // container where `stable` is default and `1.94.1` is pinned: all of them
+    // skipped, and forcing `RUSTUP_TOOLCHAIN` to the pin made them run. The
+    // pin's own comment promises "a fresh checkout can build them without a
+    // separate `rustup target add`"; that promise only holds while the build's
+    // CWD is inside the checkout.
+    //
+    // Rooting the scratch dir at `CARGO_MANIFEST_DIR/target` restores it: the
+    // pin applies, and the directory is already ignored and cleaned.
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("wasm-e2e");
+    let _ = std::fs::create_dir_all(&base);
+    let tmp = base.join(format!(
         "karac-cli-wasm-{tag}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
@@ -20854,7 +20878,21 @@ console.log("RAF_OK elapsed=" + elapsed.toFixed(1) + "ms");
 // for a browser — the page runs until closed), so node's event loop never
 // drains on its own. Force-exit now that the assertions passed, else this
 // harness hangs and the test's `node` subprocess never returns.
-process.exit(0);
+//
+// B-2026-08-18-35 — exit from a LATER MACROTASK, not from here. This module is
+// an ASYNC module (the top-level `await` above), so calling `process.exit()`
+// inline runs it inside the module's own continuation, which is the frame V8
+// aborts in: `Check failed: (location_) != nullptr` in
+// `SourceTextModule::ExecuteAsyncModule`, after this line's assertions have
+// already passed. Deferring by a timer lets the module finish evaluating and
+// its promise settle first; the process then exits from a plain timer callback.
+//
+// HONEST STATUS: mechanism-motivated, NOT verified against the failure. The
+// flake did not reproduce here in 32 isolated runs of this test nor 24 parallel
+// runs of the whole wasm suite, so this is reasoning from the V8 signature, not
+// a measured before/after. It changes no assertion — every check above has run
+// by this point — and the rAF loop re-arms every ~16ms, so exit stays prompt.
+setTimeout(() => process.exit(0), 0);
 "#,
     )
     .unwrap();
