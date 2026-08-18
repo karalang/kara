@@ -98,12 +98,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
 | missing-feature | 111 | 3 |
-| diagnostics | 83 | 2 |
+| diagnostics | 83 | 1 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 50 | 0 |
-| other | 46 | 1 |
+| other | 47 | 2 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 202 | 2 |
 | interp | 153 | 0 |
 | ownership | 60 | 0 |
-| other | 55 | 3 |
+| other | 56 | 3 |
 | autopar | 49 | 0 |
 | cli | 46 | 0 |
 | parser | 26 | 1 |
@@ -124,18 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1347 surfaced · 6 open · 1323 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced · 6 open · 1324 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-18-41 | 2026-08-18 | parser | low | TWO `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket", design.md:6071) and MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216 under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213). The third form this row was filed with -- PARAMETERIZED resources, `effect resource UserDB[user_id: i64];` -- is FIXED (see below); only `effect resource X;`, `effect resource X: Trait;` and the parameterized form parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
 | B-2026-08-18-42 | 2026-08-18 | other | low | EIGHT occurrences across SEVEN lines in design.md's kara blocks use Rust MACRO syntax (`name!(...)`), which Kara does not have -- the parser rejects `!` outright with "the `!` operator is not used in Kara". `panic!` (6, five of them in § Never type -- one line carries two -- plus § FFI callbacks), `matches!` (1, § peek-and-drop) and `format_into!` (1, § embedded formatting). Transcribing any of them fails to parse. Only `panic!` has a drop-in replacement -- `panic("x")` checks FULLY clean -- while `matches` resolves to nothing at all ("undefined name 'matches'") and `format_into!` is variadic over a format string, so two of the three need a language answer before the doc can be corrected. | docs/design.md:542, :543, :556, :557 (panic!), :5941 (panic!), :8419 (matches!), :12162 (format_into!); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR; cf. B-2026-08-17-35 for the same class |
 | B-2026-08-18-50 | 2026-08-18 | typecheck | low | A PARAMETERIZED RESOURCE'S PARTITION KEY IS NEVER TYPECHECKED against its declared type. `effect resource UserDB[user_id: i64];` records `i64`, and a use site `with writes(UserDB[name])` for a `String` binding is accepted with no diagnostic -- as is a keyed use of a resource that declares no key at all. design.md § Parameterized Resources additionally requires the key type to implement `Eq` (and `Hash + Eq` for the hash-partition path), "rejected at resource declaration with a clear diagnostic" (design.md:7180); nothing checks that either. | roadmap.md |
+| B-2026-08-18-51 | 2026-08-18 | other | medium | `tests/gpu_e2e.rs` FAILS THE WHOLE SUITE on any machine that has not built the OPTIONAL `libkarac_runtime_gpu.a` — six tests panic with a link error rather than skipping. CLAUDE.md documents that archive as opt-in ("Skip unless doing GPU work"), so this is the default state of a fresh checkout: every session working an unrelated bug now has a red `cargo test --features llvm`. The probe classifies a MISSING-ARCHIVE link failure as `Probe::Broken`, which panics unconditionally and no environment variable suppresses. | `gpu_probe` / `gpu_or_skip` in tests/gpu_e2e.rs and its `is_no_adapter` predicate; cf. `common::link_or_skip`, whose three-way discrimination this needs to mirror. Archive recipe in CLAUDE.md under the optional `gpu` archive. |
 
 ### Wontfix (7)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1347 surfaced
 
 </details>
 
-### Fixed (1323)
+### Fixed (1324)
 
-<details><summary>1323 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1324 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10870,6 +10870,17 @@ TESTS: a codegen E2E covering all five shapes in one program and its
 interpreter oracle twin, pinning byte-identical output. The E2E is
 baseline-red (verified by reverting the codegen change alone: the build
 fails with the misnaming diagnostic). |
+| B-2026-08-17-35 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Tr… | FIXED by 56ee5c1. Both halves fixed, and probing them turned up a THIRD and FOURTH defect in the same two sections — recorded because the row's premise was that these sections describe a language other than the one that ships, and they do so in both directions.
+
+(1) § derive(Display), AS FILED. `Circle(radius: f64)` / `Rect(w: f64, h: f64)` is a tuple variant with NAMED fields, a spelling that exists nowhere: `error[parse]: Expected RightParen, found Colon`. The construction comments beneath the block are positional (`Shape.Circle(2.5)`), so the intent was plain tuple variants; corrected to `Circle(f64)` / `Rect(f64, f64)`, which checks clean.
+
+(2) § Subscript Trait, AS FILED. It opened "User-defined types support `[]` indexing by implementing two standard traits" while the resolver rejects a user impl outright ("operator traits are stdlib-only"). Now states the v1 boundary its sibling § Operator Traits already stated, and says why the traits are specified anyway — the desugaring is what v1 already does for the stdlib types, so admitting user impls later is the same purely additive change that section describes.
+
+(3) NOT FILED, AND THE OPPOSITE ERROR. § Display claimed "`#[derive(Display)]` on an **enum** is restricted to all-unit-variant enums (a data variant requires a manual `impl Display`)". That is false on BOTH backends: measured, `Shape.Circle(2.5)` renders `"Circle(2.5)"` under `--interp` and under `karac build`, including through a struct field and an explicit `.to_string()`. So § Display denied the very feature § derive(Display) was teaching, and the two sections contradicted each other. The interpreter's own test for the behaviour carries a comment noting that restriction "was stale", which dates how long the sentence had been wrong.
+
+(4) NOT FILED. The example's output comment claimed `Shape.Rect(3.0, 4.0)` → `"Rect(3.0, 4.0)"`. Both backends print `Rect(3, 4)`: a whole-valued `f64` renders without a trailing `.0`. Corrected to match; the compiler was not touched, since `3` is what `println` gives for `let a: f64 = 3.0` generally and that is a formatting decision well outside this row.
+
+GATED, and the gates check PROSE AGAINST THE COMPILER rather than against prose — which is what drifted. `design_md_derive_display_data_variant_example_compiles` extracts the section's own block and parses it, so the syntax cannot regress to a form the language lacks. `design_md_subscript_trait_v1_caveat_matches_the_resolver` asserts BOTH that the resolver still rejects a user `impl Index` AND that the section still says so: if v1 ever admits user operator impls the first assertion fails, which is the intended reminder that the caveat has itself become the stale claim. Both verified non-vacuous by restoring the original text. |
 | B-2026-08-17-36 | typecheck | medium | `collect()` can only ever produce `Vec[T]` -- every other `FromIterator` target design.md promises is rejected at typecheck | Fixed in 21c402f. `collect()` now builds every non-`Vec` target design.md § Iterator Adaptors promises and can name: `String`, `Set[T]`, `VecDeque[T]`, and `Map[K, V]`. All five of the row's measured repros compile and run, and `--interp`, the JIT and AOT agree byte-for-byte.
 
 LOWERED AS A PRE-TYPECHECK DESUGAR (`src/desugar.rs`), not as a `FromIterator` target inferred in the typechecker. `let x: T = <chain>.collect()` is rewritten into the accumulate-into-`T` loop the language already supports -- collect the chain into its `Vec` as today, then fold that into a fresh `T`. Every phase downstream (typecheck, effects, ownership, interpreter, codegen) therefore sees ordinary code that already worked, so backend agreement is BY CONSTRUCTION rather than three parallel implementations kept in sync -- and the feature needs no new span-keyed side table, which is the machinery that makes this class of change expensive here. Codegen and the interpreter were not touched at all.
