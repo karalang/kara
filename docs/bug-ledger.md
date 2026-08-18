@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 261 | 0 |
 | leak | 184 | 0 |
 | double-free | 133 | 0 |
-| run-vs-build | 129 | 0 |
+| run-vs-build | 130 | 1 |
 | codegen-gap | 117 | 0 |
 | missing-feature | 106 | 1 |
 | diagnostics | 80 | 2 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 929 | 1 |
+| codegen | 930 | 2 |
 | typecheck | 199 | 1 |
-| interp | 151 | 1 |
+| interp | 152 | 2 |
 | ownership | 58 | 1 |
 | other | 52 | 2 |
 | autopar | 48 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1330 surfaced · 5 open · 1307 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1331 surfaced · 6 open · 1307 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1330 surfaced
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
 | B-2026-08-18-32 | 2026-08-18 | ownership+codegen+interp | low | THE OWNERSHIP CHECKER AND BOTH BACKENDS DISAGREE ABOUT WHETHER `String + ` CONSUMES ITS LEFT OPERAND. design.md gives `+` the signature `fn add(self, other: ref String)` — bare `self`, i.e. OWNED — so the checker warns "value moved here, used again here" on a second use. Neither the interpreter nor codegen enforces the move: the value is intact and correct afterward. The suggested `.clone()` is a real cost for a problem that does not exist at runtime. | The `+` operator's declared receiver mode. design.md:1821 says `fn add(self, other: ref String) -> String`; the ownership checker reads that as a move, and neither backend implements it as one. One of the two is wrong and it is a language call, not a bug-fix call. |
 | B-2026-08-18-33 | 2026-08-18 | parser | low | SEVEN parser arms still copy their LHS's span -- `Cast`, `TupleIndex`, `Call`, `Path`, `Pipe`, `NilCoalesce`, `Range` -- and the postfix-span family never enumerated them. `NilCoalesce` is the one with a MEASURED consequence: it is why `method_call_key`'s args-close preference cannot be retired (B-2026-08-18-30). | Seven parser arms still copy their LHS's span. `NilCoalesce` is the one with a measured consequence -- it blocks B-2026-08-18-30's cleanup -- and the other six (`Cast`, `TupleIndex`, `Call`, `Path`, `Pipe`, `Range`) are unmeasured. Widen one arm per change with its own suite run; the five already done cost 3, 42 and 12 test failures and each needed a different fix. |
+| B-2026-08-18-34 | 2026-08-18 | interp+codegen | high | `map.entry(k).or_insert(default).push(v)` FAILS ON ALL THREE BACKENDS when the map is a struct FIELD, while `karac check` accepts it: interpreter says "method 'push' not found on type 'unknown' (no interpreter dispatch arm)", codegen says "no handler for method 'push' on non-identifier receiver". The identical chain over a LOCAL map works everywhere. This is the idiomatic way to mutate a container nested in a container, and a struct holding a map is its common home. | The interpreter's method-dispatch arm for a borrow-returning builtin result (`src/interpreter/method_call.rs`), and codegen's `compile_method_call` non-identifier-receiver routing (`src/codegen/method_call.rs`) -- the same 'materialize the receiver and re-dispatch' family as `try_compile_freshtemp_mapset_read_method`, except here the receiver is a `mut ref` INTO the map and must not be copied, or the append lands on a temporary. |
 
 ### Wontfix (7)
 
