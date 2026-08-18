@@ -103,14 +103,30 @@ That is a fundamentally different model from PTX/HSA, where device images are
 second backend therefore cannot reuse these seven symbols — it is a sibling
 runtime path, not a swap.
 
-**4. The shipped WGSL kernel subset has no loops and no `match`.**
-`src/gpu_wgsl.rs` (2,329 lines) handles exactly fourteen `ExprKind`s: Binary,
-Block, Call, Cast, FieldAccess, Float, Identifier, If, Index, Integer,
-MethodCall, Path, Return, StructLiteral, Unary. Zero occurrences of
-`ExprKind::While`, `For`, `Loop`, or `Match`. Kernels today are straight-line
-code plus `if`. This is a real limitation of the *shipped* path that the
-slice-0 spike doc does not call out, and it matters to the option analysis
-below.
+**4. The shipped kernel body must be a single expression with NO `let`
+bindings.** `src/gpu_wgsl.rs` (2,329 lines) handles exactly fourteen
+`ExprKind`s — Binary, Block, Call, Cast, FieldAccess, Float, Identifier, If,
+Index, Integer, MethodCall, Path, Return, StructLiteral, Unary — with zero
+occurrences of `ExprKind::While`, `For`, `Loop`, or `Match`, and a
+single-expression body contract on top. Probed with the release `karac check`,
+one construct at a time:
+
+| kernel body | result |
+|---|---|
+| `x * 2.0` | accepted |
+| `if x > 0.0 { x } else { -x }` | accepted |
+| `x.sqrt()` | accepted |
+| `let y: f32 = x * 2.0; y + 1.0` | **rejected** |
+| `while` loop with an accumulator | **rejected** |
+
+Both rejections carry the same clean, correctly-spanned diagnostic
+(`error[E_GPU_DISPATCH_KERNEL]: … a slice-0 GPU kernel body must be a single
+expression (no locals)`), so this is a capability ceiling reported honestly,
+not a diagnostics defect. **Correction:** an earlier draft of this finding said
+"no loops or `match`" and understated it — the real limit also forbids `let`,
+so every intermediate must be hand-inlined. Slice-0 documented its *signature*
+contract (`fn k(x:T)->U` over `[T]`→`[U]`) but not this *body* restriction.
+Filed as **B-2026-08-18-40**.
 
 **5. No offload runtime, no CUDA, no GPU in this container.** `/usr/lib/llvm-18/lib`
 carries only `libLLVMFrontendOffloading.a` — the *compiler-side* helper for

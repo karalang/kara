@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
-| missing-feature | 106 | 1 |
+| missing-feature | 107 | 2 |
 | diagnostics | 80 | 2 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 932 | 1 |
-| typecheck | 199 | 1 |
+| codegen | 933 | 2 |
+| typecheck | 200 | 2 |
 | interp | 153 | 0 |
 | ownership | 58 | 0 |
 | other | 54 | 3 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1336 surfaced · 5 open · 1313 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1337 surfaced · 6 open · 1313 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1336 surfaced
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
 | B-2026-08-18-39 | 2026-08-18 | autopar+codegen | high | `?.` ON TWO LET-BOUND CALL RESULTS MISCOMPILES UNDER AUTO-PAR, RETURNING MEMORY THAT VARIES BETWEEN RUNS. Two independent `let`s from Option-returning calls, consumed by `?.`, print `Some(23092184781)` where the answer is `Some(5)` — a different value on every execution. `--interp` and `KARAC_AUTO_PAR=0` are correct; the JIT and the default build each give their own garbage. | Unknown. The SHAPE is B-2026-08-16-1's family — two independent `let`s form an auto-par fork group and a later expression reading them gets no return slot — but that row's cause (a missing `refs_in_expr` arm) is NOT it here: `ExprKind::OptionalChain` IS handled, at closure_escape.rs:2362, recursing into both `object` and `args`. Checked before filing so the next reader does not repeat it. |
+| B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | medium | A `#[gpu]` KERNEL BODY MUST BE A SINGLE EXPRESSION WITH NO `let` BINDINGS — no locals, no loops, no `match`. `let y: f32 = x * 2.0; y + 1.0` is rejected with E_GPU_DISPATCH_KERNEL, so every intermediate must be hand-inlined and no reduction, stencil, or tiled kernel can be written at all. The v1 GPU ship gate is recorded MET against the element-wise-map shape, which this does not contradict — but the shipped kernel language is far narrower than "GPU compute shaders" reads, and nothing outside the emitter source says so. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 
 ### Wontfix (7)
 
