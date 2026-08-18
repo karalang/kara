@@ -433,8 +433,12 @@ impl super::Parser {
                 }
                 self.advance();
                 let rhs = self.parse_expr_bp(pipe_bp + 1)?;
+                // B-2026-08-18-33 — span the whole pipe (lhs start -> past the
+                // stage) rather than copying `lhs.span`, so `a |> f |> g` gives
+                // its two nodes distinct keys.
+                let pipe_span = self.span_from(&lhs.span);
                 lhs = Expr {
-                    span: lhs.span,
+                    span: pipe_span,
                     kind: ExprKind::Pipe {
                         left: Box::new(lhs),
                         right: Box::new(rhs),
@@ -505,8 +509,12 @@ impl super::Parser {
                 } else {
                     None
                 };
+                // B-2026-08-18-33 — span the whole range (lhs start -> past
+                // the end operand, or past the operator for a half-open form)
+                // rather than copying `lhs.span`.
+                let range_span = self.span_from(&lhs.span);
                 lhs = Expr {
-                    span: lhs.span,
+                    span: range_span,
                     kind: ExprKind::Range {
                         start: Some(Box::new(lhs)),
                         end,

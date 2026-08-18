@@ -12603,6 +12603,80 @@ fn test_call_nodes_span_past_the_closing_paren() {
     );
 }
 
+/// `Pipe` and `Range`, the last two arms of B-2026-08-18-33 — and both are
+/// cases where the usual net is blind, so each gets a witness of its own.
+///
+/// Widening them measured ZERO failures, which by now is a claim to check
+/// rather than accept. `tests/selfhost_parser.rs`'s corpus contains no `|>`
+/// input at all, so the span-for-span oracle has nothing to compare for the
+/// pipe; and the self-hosted parser lowers `..` to a port-local
+/// `Binary { op: Range }` rather than an `ExprKind::Range`, so it is not
+/// comparing the same node either. Same lesson as the `Cast` arm: a zero from
+/// an oracle that cannot see the change is not evidence.
+#[test]
+fn test_pipe_and_range_nodes_span_their_whole_expression() {
+    // Pipe: `a |> f |> g` nests left, so both nodes previously carried `a`'s
+    // span and collided in every span-keyed table.
+    let pipe_src = "fn dbl(x: i64) -> i64 { return x * 2; }\n\
+                    fn inc(x: i64) -> i64 { return x + 1; }\n\
+                    fn f(a: i64) -> i64 {\n  let r = a |> dbl |> inc;\n  return r;\n}";
+    let prog = parse(pipe_src).program;
+
+    fn collect_pipes(e: &Expr, out: &mut Vec<karac::token::Span>) {
+        if let ExprKind::Pipe { left, .. } = &e.kind {
+            out.push(e.span);
+            collect_pipes(left, out);
+        }
+    }
+    let mut pipes = Vec::new();
+    for item in &prog.items {
+        if let Item::Function(f) = item {
+            for st in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &st.kind {
+                    collect_pipes(value, &mut pipes);
+                }
+            }
+        }
+    }
+    assert_eq!(pipes.len(), 2, "expected two `Pipe` nodes, got {pipes:?}");
+    let ptext = |s: &karac::token::Span| &pipe_src[s.offset..s.offset + s.length];
+    assert_eq!(ptext(&pipes[0]), "a |> dbl |> inc");
+    assert_eq!(ptext(&pipes[1]), "a |> dbl");
+    assert_ne!(
+        (pipes[0].offset, pipes[0].length),
+        (pipes[1].offset, pipes[1].length),
+        "a chained pipe must not share a SpanKey with the stage it feeds"
+    );
+
+    // Range: the span must cover the end operand, not just the start.
+    let range_src = "fn f(v: Vec[i64]) -> i64 {\n  let s = v[1..3];\n  return 0;\n}";
+    let rprog = parse(range_src).program;
+
+    fn collect_ranges(e: &Expr, out: &mut Vec<karac::token::Span>) {
+        match &e.kind {
+            ExprKind::Range { .. } => out.push(e.span),
+            ExprKind::Index { object, index } => {
+                collect_ranges(object, out);
+                collect_ranges(index, out);
+            }
+            _ => {}
+        }
+    }
+    let mut ranges = Vec::new();
+    for item in &rprog.items {
+        if let Item::Function(f) = item {
+            for st in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &st.kind {
+                    collect_ranges(value, &mut ranges);
+                }
+            }
+        }
+    }
+    assert_eq!(ranges.len(), 1, "expected one `Range` node, got {ranges:?}");
+    let rtext = |s: &karac::token::Span| &range_src[s.offset..s.offset + s.length];
+    assert_eq!(rtext(&ranges[0]), "1..3");
+}
+
 /// `Span.line`/`Span.column` of an interpolation sub-expression must point to
 /// its true position in the ORIGINAL source — not into the synthetic
 /// `fn __interp__() { … }` re-parse wrapper (B-2026-06-09-1a). Before the fix
