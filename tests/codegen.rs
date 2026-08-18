@@ -98407,21 +98407,34 @@ fn main() {
     /// this whole row is really about: the rejected shapes announced
     /// themselves, this one did not.
     #[test]
-    fn iterating_a_borrowed_container_self_sums_its_elements() {
-        for (head, fill) in [
+    fn iterating_a_container_self_sums_its_elements() {
+        for (head, fill, self_mode) in [
             (
                 "Slice[i64]",
                 "let v: Vec[i64] = [5, 7];\n let c: Slice[i64] = v[0..2];",
+                "ref self",
             ),
             (
                 "Set[i64]",
                 "let mut c: Set[i64] = Set.new();\n c.insert(5); c.insert(7);",
+                "ref self",
+            ),
+            // The OWNED spelling of the Set case is B-2026-08-18-11's own
+            // repro: the head fix made the borrowed one correct and left this
+            // one at 0, because the caller passed the ADDRESS of the owned
+            // pointer-shaped receiver rather than its value, so
+            // `karac_map_iter_new` got the receiver's stack slot and iterated
+            // nothing.
+            (
+                "Set[i64]",
+                "let mut c: Set[i64] = Set.new();\n c.insert(5); c.insert(7);",
+                "self",
             ),
         ] {
             let src = format!(
-                "trait Cnt {{ fn total(ref self) -> i64; }}\n\
+                "trait Cnt {{ fn total({self_mode}) -> i64; }}\n\
                  impl Cnt for {head} {{\n\
-                     fn total(ref self) -> i64 {{\n\
+                     fn total({self_mode}) -> i64 {{\n\
                          let mut t = 0;\n\
                          for x in self {{ t = t + x; }}\n\
                          return t;\n\
@@ -98437,39 +98450,40 @@ fn main() {
             };
             assert_eq!(
                 out, "12\n",
-                "{head}: iterating `self` compiled to a sum over nothing"
+                "{head} / `{self_mode}`: iterating `self` compiled to a sum over nothing"
             );
         }
     }
 
-    /// The `Map` head, restricted to the receiver mode that actually lowers.
-    /// `self[k]` inside an `impl Trait for Map[K, V]` body is routed only for
-    /// a BORROWED receiver: an owned `self` on a container head is not a
-    /// shape codegen supports (`self.len()` there fails with "no handler for
-    /// method 'len' on non-identifier receiver"), and routing `self[k]`
-    /// through the map path anyway does not fail — it SEGFAULTS, because the
-    /// slot does not hold the handle the index path loads. So the owned
-    /// spelling keeps its loud build error (B-2026-08-18-11) and this pins the
-    /// borrowed one.
+    /// The `Map` head, on both receiver modes. An args-less `Map` rejected a
+    /// String key outright as "index must be an integer or range".
+    ///
+    /// The OWNED spelling is here for a second reason. It was briefly the one
+    /// shape this fix left out, because routing it did not fail — it
+    /// SEGFAULTED, the receiver's slot appearing not to hold the handle the
+    /// index path loads. That turned out to be a symptom of B-2026-08-18-11,
+    /// where the caller passed the ADDRESS of an owned pointer-shaped
+    /// receiver instead of its value, so the slot really did hold the wrong
+    /// thing. Both modes are pinned so neither half can regress alone.
     #[test]
-    fn a_borrowed_map_impl_head_can_read_by_its_own_key_type() {
-        let src = "trait Get { fn get_a(ref self) -> i64; }\n\
-                   impl Get for Map[String, i64] {\n\
-                       fn get_a(ref self) -> i64 { return self[\"a\"]; }\n\
-                   }\n\
-                   fn main() {\n\
-                       let mut m: Map[String, i64] = Map.new();\n\
-                       m.insert(\"a\", 42);\n\
-                       println(m.get_a().to_string());\n\
-                   }\n";
-        let Some(out) = run_program(src) else {
-            return;
-        };
-        assert_eq!(
-            out, "42\n",
-            "a String key must survive the impl head — an args-less `Map` \
-             rejected it as \"index must be an integer or range\""
-        );
+    fn a_map_impl_head_can_read_by_its_own_key_type() {
+        for self_mode in ["self", "ref self"] {
+            let src = format!(
+                "trait Get {{ fn get_a({self_mode}) -> i64; }}\n\
+                 impl Get for Map[String, i64] {{\n\
+                     fn get_a({self_mode}) -> i64 {{ return self[\"a\"]; }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                     let mut m: Map[String, i64] = Map.new();\n\
+                     m.insert(\"a\", 42);\n\
+                     println(m.get_a().to_string());\n\
+                 }}\n"
+            );
+            let Some(out) = run_program(&src) else {
+                return;
+            };
+            assert_eq!(out, "42\n", "`{self_mode}` receiver: wrong map read");
+        }
     }
 }
 

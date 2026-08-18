@@ -6403,29 +6403,59 @@ impl<'ctx> super::Codegen<'ctx> {
                     ExprKind::SelfValue => Some("self"),
                     _ => None,
                 };
-                let receiver_arg: BasicMetadataValueEnum<'ctx> = if first_param_is_ptr
-                    && !first_param_is_ref
-                    && self.type_decls.shared_types.contains_key(&receiver_type)
-                {
-                    // Owned shared `self`: the heap pointer by value. The
-                    // callee's entry emits its own receive-inc ("caller
-                    // keeps its reference"), so no caller-side count
-                    // change here. `compile_expr` on an Identifier loads
-                    // the slot, which holds exactly the heap ptr.
-                    self.compile_expr(object)?.into()
-                } else if first_param_is_ptr {
-                    if let Some(ptr) = recv_storage_name.and_then(|n| self.get_data_ptr(n)) {
-                        ptr.into()
-                    } else {
-                        // Non-identifier / non-self receiver into a ref-self
-                        // method: unsupported in v1 (would require materializing
-                        // a temporary alloca). Fall through to compile_expr;
-                        // mismatched ABI may surface at link time.
+                // B-2026-08-18-11 — an OWNED receiver that lowers to a bare
+                // `ptr` is passed BY VALUE, not by address. The rule used to
+                // name shared types specifically, but shared-ness was never
+                // what made it true: what makes it true is that the callee
+                // declared the param OWNED (`!first_param_is_ref`) while its
+                // LLVM type came out `ptr` — the value IS the pointer, so the
+                // address of the slot holding it is one indirection too many.
+                //
+                // A `Map[K, V]` / `Set[T]` handle is exactly that shape, and
+                // it was taking the address path: `for x in self` over an
+                // owned `Set[i64]` self handed `karac_map_iter_new` the
+                // receiver's STACK SLOT instead of the handle, so it iterated
+                // nothing and the method returned 0 while `--interp` returned
+                // 12 — a silent wrong answer, the same "one indirection off"
+                // failure the shared-receiver case was added for. `Vec` and
+                // `Slice` were never affected: they lower to `{ptr, len, cap}`
+                // / `{ptr, len}` STRUCTS, so `first_param_is_ptr` is false and
+                // they already took the value path.
+                //
+                // The one owned-and-`ptr` shape that genuinely wants an
+                // address is an AArch64 INDIRECT struct param (> 16 B
+                // `#[repr(C)]`, which arrives as a pointer to the caller's
+                // copy), so it is carved out by name+index. That map is empty
+                // on x86-64, which is also why this axis cannot be measured
+                // there — the carve-out is what keeps arm64 on the path it
+                // has today.
+                let receiver_is_indirect_struct = self
+                    .target_abi
+                    .indirect_struct_params
+                    .get(&qualified)
+                    .is_some_and(|v| v.iter().any(|(idx, _)| *idx == 0));
+                let receiver_arg: BasicMetadataValueEnum<'ctx> =
+                    if first_param_is_ptr && !first_param_is_ref && !receiver_is_indirect_struct {
+                        // Owned pointer-shaped `self`: the pointer by value. For a
+                        // shared receiver the callee's entry emits its own
+                        // receive-inc ("caller keeps its reference"), so there is
+                        // no caller-side count change here either. `compile_expr`
+                        // on an Identifier loads the slot, which holds exactly the
+                        // heap ptr / container handle.
                         self.compile_expr(object)?.into()
-                    }
-                } else {
-                    self.compile_expr(object)?.into()
-                };
+                    } else if first_param_is_ptr {
+                        if let Some(ptr) = recv_storage_name.and_then(|n| self.get_data_ptr(n)) {
+                            ptr.into()
+                        } else {
+                            // Non-identifier / non-self receiver into a ref-self
+                            // method: unsupported in v1 (would require materializing
+                            // a temporary alloca). Fall through to compile_expr;
+                            // mismatched ABI may surface at link time.
+                            self.compile_expr(object)?.into()
+                        }
+                    } else {
+                        self.compile_expr(object)?.into()
+                    };
                 // Positional-arg ref/slice lowering — mirrors the free-fn
                 // path in `compile_call` (call_dispatch.rs). Before this, the
                 // method path compiled every non-receiver arg by *value* and

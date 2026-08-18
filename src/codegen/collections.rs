@@ -2449,27 +2449,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // it does NOT need to be an integer (unlike Array/Vec/Slice).
         //
         // `self[k]` inside an `impl Trait for Map[K, V]` body arrives as
-        // `SelfValue`, the same as the Slice arm above — but ONLY a
-        // BORROWED receiver is routed. An OWNED `self` on a container head
-        // is not a shape codegen supports at all: `self.len()` in that
-        // position fails with "no handler for method 'len' on non-identifier
-        // receiver", and `self[k]` does not fail, it SEGFAULTS — the slot
-        // does not hold the handle `compile_map_index` loads. So the owned
-        // spelling keeps its loud build error (B-2026-08-18-11) rather than
-        // being handed a wrong pointer. `ref self` / `mut ref self` are in
-        // `signature_ref_params` and work: measured 42 on all three backends.
+        // `SelfValue`, the same as the Slice arm above, so both receiver
+        // spellings key on `container_recv`.
         //
-        // The Slice arm needs no such guard — a slice IS its `{ptr, len}`
-        // value, so the owned receiver is the value itself, and owned `self`
-        // is measured correct there on all three backends.
-        let map_recv: Option<&str> = match &object.kind {
-            ExprKind::Identifier(name) => Some(name.as_str()),
-            ExprKind::SelfValue if self.borrow_vars.signature_ref_params.contains("self") => {
-                Some("self")
-            }
-            _ => None,
-        };
-        if let Some(name) = map_recv {
+        // This arm was briefly restricted to a BORROWED receiver, because an
+        // owned `self` here did not fail — it SEGFAULTED, the slot appearing
+        // not to hold the handle `compile_map_index` loads. That was a
+        // symptom, not a rule: B-2026-08-18-11 found the caller passing the
+        // ADDRESS of an owned pointer-shaped receiver instead of its value,
+        // so the slot really did hold the wrong thing. With the convention
+        // fixed the restriction is unnecessary, and both spellings measure 42
+        // on all three backends.
+        if let Some(name) = container_recv {
             if self.mapset.map_key_types.contains_key(name) {
                 return self.compile_map_index(name, index);
             }
