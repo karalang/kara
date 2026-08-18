@@ -1155,6 +1155,95 @@ fn takeu(n: usize) -> usize { return n; }
     }
 }
 
+/// B-2026-08-17-37 — `must_use` reaches the COMPILE path and the JSON feed.
+///
+/// The lint ran only from `cmd_run`, so `karac check` said "All checks
+/// passed." and `karac check --output=json` emitted `"diagnostics":[]` for a
+/// program `karac run` warned about. CLAUDE.md's Mend loop is built on that
+/// JSON feed, so the whole category was invisible to it — and invisibly so,
+/// since a diagnostic that is never emitted also never counts as unfixed.
+#[test]
+fn test_must_use_reaches_check_and_json() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-must-use-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("mu.kara");
+    // The row's fixture: a discarded `Option` from a LOOKUP — the exact case
+    // design.md § must_use exists to catch.
+    std::fs::write(
+        &path,
+        "fn main() {\n\
+             let mut m: Map[i64, i64] = Map.new();\n\
+             m.insert(1, 10);\n\
+             m.get(1);\n\
+         }\n",
+    )
+    .unwrap();
+    let file = path.to_str().unwrap();
+
+    // 1. Text `check` reports it. Exit stays 0 — it is a warning, not an error.
+    let out = karac_bin().args(["check", file]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("must_use") && stderr.contains("discarded"),
+        "check must report the discarded Option; stderr={stderr}",
+    );
+    assert!(
+        out.status.success(),
+        "must_use is a warning: check must still exit 0; stderr={stderr}",
+    );
+
+    // 2. JSON carries it with the lint name — the Mend loop's feed.
+    let out = karac_bin()
+        .args(["check", file, "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("\"diagnostics\":[]"),
+        "the empty diagnostics array IS the bug; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("must_use"),
+        "the JSON diagnostic must name the lint; stdout={stdout}",
+    );
+
+    // 3. `-A must_use` suppresses on both surfaces (shared overrides).
+    let out = karac_bin()
+        .args(["check", file, "-A", "must_use"])
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("must_use"),
+        "-A must_use must suppress the text diagnostic",
+    );
+    let out = karac_bin()
+        .args(["check", file, "--output=json", "-A", "must_use"])
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("must_use"),
+        "-A must_use must suppress the JSON diagnostic too",
+    );
+
+    // 4. `run` still emits it EXACTLY ONCE — the run path has its own call
+    //    site, so wiring check up must not double-report.
+    let out = karac_bin()
+        .args(["run", "--interp", file])
+        .output()
+        .unwrap();
+    let hits = String::from_utf8_lossy(&out.stderr)
+        .matches("warning[must_use]")
+        .count();
+    assert_eq!(hits, 1, "run must report must_use exactly once, got {hits}");
+}
+
 /// B-2026-08-17-21 — the chained-receiver lint must see LOWERED shapes.
 ///
 /// `ORIGIN.inner.v.to_string()` parses as a 4-segment `Call(Path)` because the

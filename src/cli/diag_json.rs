@@ -1843,6 +1843,49 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         }
     }
 
+    // B-2026-08-17-37 — the `must_use` lint reaches the JSON feed. It used to
+    // run ONLY from `cmd_run`, so `karac check --output=json` emitted
+    // `"diagnostics":[]` for a program `karac run` warned about — and since
+    // CLAUDE.md's Mend loop is built on exactly that feed, the whole category
+    // was invisible to it: an author never saw the diagnostic, `karac fix`
+    // never got to offer the `let _ =` repair, and the gap could not show up
+    // in the machine-fix statistics, because a diagnostic that is never
+    // emitted also never counts as unfixed. design.md § must_use calls this a
+    // COMPILE warning, so the compile path is where it belongs.
+    //
+    // Runs off the same inputs as the `cmd_run` call site (`typed` for the
+    // `expr_types` lookups that recognise `Option`/`Result`), and honours
+    // `-A must_use` through the shared overrides, so text and JSON agree.
+    for diag in crate::must_use_lint::check_implicit_must_use(
+        &pipeline.parsed.program,
+        pipeline.typed.as_ref(),
+        &pipeline.lint_overrides,
+    ) {
+        id_counter += 1;
+        let is_error = diag.level == crate::must_use_lint::LintLevel::Error;
+        diags.add(DiagEntry {
+            id: &format!("d{id_counter}"),
+            severity: if is_error { "error" } else { "warning" },
+            phase: "lint",
+            code: if is_error { "E0250" } else { "W0250" },
+            category: "lint",
+            message: &diag.message,
+            filename,
+            span: &diag.span,
+            suggestion: diag.help.as_deref(),
+            extra_json: None,
+            lint_name: Some(&diag.lint_name),
+            // No machine-applicable edit: the repair depends on intent —
+            // `let _ = m.get(1);` to discard deliberately, or using the value.
+            // Offering one would be a guess at which the author meant.
+            fix_it: None,
+            class: Some("LINT_WARNING"),
+            expected: None,
+            got: None,
+            stub_hint_json: None,
+        });
+    }
+
     if let Some(ref e) = pipeline.effects {
         for err in &e.errors {
             id_counter += 1;

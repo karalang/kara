@@ -1753,6 +1753,42 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             ));
         }
     }
+    // B-2026-08-17-37 — `must_use` on the COMPILE path. The lint ran only
+    // from `cmd_run`, so `karac check` printed "All checks passed." and
+    // `karac build` printed only "Built: …" for a program `karac run` warned
+    // about. design.md § must_use calls it a compile warning; the JSON twin of
+    // this block lives in `diag_json::collect_diagnostics`, and both read the
+    // same lint with the same overrides so the two renderings cannot disagree.
+    // Rendered here rather than pushed into `TypeCheckResult::warnings` so the
+    // lint keeps its own `help`/`note` continuation lines.
+    for diag in crate::must_use_lint::check_implicit_must_use(
+        &pipeline.parsed.program,
+        pipeline.typed.as_ref(),
+        &pipeline.lint_overrides,
+    ) {
+        let severity = if diag.level == crate::must_use_lint::LintLevel::Error {
+            "error"
+        } else {
+            "warning"
+        };
+        let mut block = with_snippet(
+            format!(
+                "{severity}[{}]: {}:{}:{}: {}",
+                diag.lint_name, filename, diag.span.line, diag.span.column, diag.message
+            ),
+            source,
+            diag.span.line,
+            diag.span.column,
+            diag.span.length,
+        );
+        if let Some(help) = &diag.help {
+            block.push_str(&format!("\n  = help: {help}"));
+        }
+        if let Some(note) = &diag.note {
+            block.push_str(&format!("\n  = note: {note}"));
+        }
+        out.push(block);
+    }
     if let Some(ref e) = pipeline.effects {
         for err in &e.errors {
             if err.kind == EffectErrorKind::FfiLintHint {
