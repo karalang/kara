@@ -97312,6 +97312,47 @@ fn main() {
         );
     }
 
+    /// B-2026-08-17-33 — derive dependency auto-resolution. design.md § Derive
+    /// states it unconditionally ("`Copy` without `Clone` is NEVER a compile
+    /// error, because the compiler fills in the missing dependency"), but only
+    /// the `Ord` chain resolved: `#[derive(Copy)]` alone was exactly that
+    /// error, and `#[derive(Hash)]` alone left the type unusable as a `Map`
+    /// key. The fill has to produce WORKING derives on the compiled backends,
+    /// not just a quiet typechecker — `Copy` leaves the source binding usable,
+    /// and the auto-filled `Eq`/`PartialEq` are what collapse two equal keys
+    /// into one Map entry. Paired with
+    /// `test_derive_dependency_auto_fill_oracle` in `tests/interpreter.rs`.
+    #[test]
+    fn test_e2e_derive_dependency_auto_fill() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Copy)]
+struct C { a: i64 }
+
+#[derive(Hash)]
+struct K { a: i64, b: i64 }
+
+fn main() {
+    let x = C { a: 3 };
+    let y = x;
+    println("copy = " + x.a.to_string() + "," + y.a.to_string());
+    let mut m: Map[K, i64] = Map.new();
+    m.insert(K { a: 1, b: 2 }, 10);
+    m.insert(K { a: 1, b: 2 }, 20);
+    m.insert(K { a: 9, b: 9 }, 30);
+    println("len = " + m.len().to_string());
+    match m.get(K { a: 1, b: 2 }) {
+        Some(v) => println("k12 = " + v.to_string()),
+        None => println("k12 missing"),
+    }
+}
+"#
+            ),
+            Some("copy = 3,3\nlen = 2\nk12 = 20\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-24 — the TUPLE-element sibling of B-2026-08-15-21.
     /// `s[0].0 = v` through a `mut Slice[(A, B)]` param failed the build with
     /// "tuple-element assignment through this receiver shape is not yet

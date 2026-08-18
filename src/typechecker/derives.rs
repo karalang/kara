@@ -749,9 +749,10 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Check whether a type supports `Clone`. GAT slice 8b
     /// carry-forward (a). All primitives clone trivially; named
-    /// types require `#[derive(Clone)]` (Copy implies Clone by the
-    /// existing `validate_copy_implies_clone` rule, so this is
-    /// already an invariant in practice). Used by
+    /// types require `#[derive(Clone)]` (`Copy` implies `Clone` because
+    /// `extract_derived_traits` closes the derive set over its
+    /// dependencies — B-2026-08-17-33 — so this is an invariant by
+    /// construction rather than by a separate validation pass). Used by
     /// `type_satisfies_bound` so a `T: Clone` bound discharges
     /// against the derive metadata directly — built-in derive-only
     /// traits aren't registered as impl-table entries, so without
@@ -1008,55 +1009,6 @@ impl<'a> super::TypeChecker<'a> {
                     span,
                     TypeErrorKind::TypeMismatch,
                 );
-            }
-        }
-    }
-
-    /// Validate that every type deriving Copy also derives Clone.
-    pub(super) fn validate_copy_implies_clone(&mut self) {
-        let items: &[Item] = &self.program.items;
-        for item in items {
-            match item {
-                Item::StructDef(s) => {
-                    let traits = extract_derived_traits(&s.attributes);
-                    if traits.contains("Copy") && !traits.contains("Clone") {
-                        self.type_error(
-                            format!(
-                                "struct '{}' derives Copy but not Clone; Copy requires Clone",
-                                s.name
-                            ),
-                            s.span,
-                            TypeErrorKind::TypeMismatch,
-                        );
-                    }
-                }
-                Item::EnumDef(e) => {
-                    let traits = extract_derived_traits(&e.attributes);
-                    if traits.contains("Copy") && !traits.contains("Clone") {
-                        self.type_error(
-                            format!(
-                                "enum '{}' derives Copy but not Clone; Copy requires Clone",
-                                e.name
-                            ),
-                            e.span,
-                            TypeErrorKind::TypeMismatch,
-                        );
-                    }
-                }
-                Item::DistinctType(d) => {
-                    let traits = extract_derived_traits(&d.attributes);
-                    if traits.contains("Copy") && !traits.contains("Clone") {
-                        self.type_error(
-                            format!(
-                                "distinct type '{}' derives Copy but not Clone; Copy requires Clone",
-                                d.name
-                            ),
-                            d.span,
-                            TypeErrorKind::TypeMismatch,
-                        );
-                    }
-                }
-                _ => {}
             }
         }
     }

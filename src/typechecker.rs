@@ -159,7 +159,59 @@ pub(super) fn extract_derived_traits(attributes: &[Attribute]) -> HashSet<String
             }
         }
     }
+    add_implied_derives(&mut traits);
     traits
+}
+
+/// Close a derive set under its dependencies, in place (B-2026-08-17-33).
+///
+/// design.md § Derive states this unconditionally: "The compiler resolves
+/// derive dependencies automatically regardless of the order items appear in
+/// `#[derive(...)]` … Listing dependencies explicitly is valid and idiomatic;
+/// omitting them is also allowed. `#[derive(Copy)]` auto-derives `Clone` if
+/// not already present — **`Copy` without `Clone` is NEVER a compile error,
+/// because the compiler fills in the missing dependency.**"
+///
+/// It was true only for the `Ord` chain, which the comparison checks accept
+/// directly. `#[derive(Copy)]` alone produced exactly the error the spec says
+/// can never happen, and `#[derive(Hash)]` alone left the type unusable as a
+/// `Map` key — in both cases the diagnostic named the dependency the compiler
+/// was supposed to fill in and prescribed the spelling the spec calls
+/// optional.
+///
+/// Closing the set HERE, at the single point every consumer reads derives
+/// through, is what makes the fill uniform: the `Copy`-requires-`Clone`
+/// validator, the `Map`-key `Eq`/`Hash` gate, and the per-backend derive
+/// lowering all see the same closed set, so none of them can disagree about
+/// what a type derives. `Copy` / `Clone` / `Eq` / `Hash` are NATIVE derives —
+/// `expand_derives` deliberately skips them — so filling the name in is the
+/// whole implementation; there is no impl to synthesize.
+///
+/// Deliberately NOT extended to `Ord` → `PartialOrd` / `Eq`: that chain
+/// already resolves through the comparison checks, and adding names to a
+/// working path buys nothing while risking behaviour nobody asked to change.
+pub(super) fn add_implied_derives(traits: &mut HashSet<String>) {
+    // `Copy` requires `Clone` (spec, stated as a rule).
+    if traits.contains("Copy") {
+        traits.insert("Clone".to_string());
+    }
+    // `PartialEq` → `Eq` → `Hash`, filled in reverse: deriving the tail of the
+    // chain implies everything it rests on.
+    if traits.contains("Hash") {
+        traits.insert("Eq".to_string());
+    }
+    // `Eq` ⇒ `PartialEq` is NOT filled, and that is a measurement rather than
+    // an omission. The two field-shape validators disagree about `Vec`:
+    // `#[derive(Eq)] struct I { v: Vec[i64] }` is accepted (and its `==`
+    // lowering is pinned by `test_e2e_derive_eq_struct_with_vec_field_
+    // compares_contents`), while the `PartialEq` validator rejects the same
+    // field — "struct 'I' derives PartialEq but field 'v' has non-PartialEq
+    // type 'Vec[i64]'". So implying `PartialEq` from `Eq` turns a working
+    // program into a compile error, which is the opposite of what this fill
+    // exists to do. Since `Eq` alone already drives equality, the implication
+    // would add no behaviour even where it is accepted. The validator
+    // inconsistency is filed separately; when it is resolved this line is the
+    // place to close the chain.
 }
 
 /// Extract the `#[must_use]` message from a declaration's attribute list
@@ -2271,7 +2323,6 @@ impl<'a> TypeChecker<'a> {
     pub fn check(mut self) -> TypeCheckResult {
         self.build_type_env();
         self.validate_derive_copy();
-        self.validate_copy_implies_clone();
         // Fallible-allocation: under `panic_on_alloc_failure = false`, reject a
         // `#[derive(Clone)]` whose synthesized clone may panic on OOM
         // (phase-8-stdlib-floor item 5). No-op in the default mode.

@@ -5537,12 +5537,21 @@ fn test_generic_call_where_clause_bound_rejects_non_hash_struct() {
 
 #[test]
 fn test_generic_call_multiple_bounds_each_checked() {
-    // fn f[T: Hash + Eq](x: T) with a struct that has Hash but not Eq
-    // — Eq miss should fire even though Hash is satisfied.
+    // fn f[T: Hash + Ord](x: T) with a struct that has Hash but not Ord
+    // — the Ord miss should fire even though Hash is satisfied.
+    //
+    // RE-FIXTURED by B-2026-08-17-33. This case used `T: Hash + Eq` against a
+    // `#[derive(Hash)]`-only struct, on the premise that such a struct "has
+    // Hash but not Eq". Deriving `Hash` now IMPLIES `Eq` (design.md's
+    // `PartialEq` -> `Eq` -> `Hash` chain), so that premise is no longer
+    // constructible and the bound correctly succeeds. The test's actual
+    // subject — one satisfied bound and one missed bound in the same list,
+    // where only the missed one is named — is unchanged; `Ord` is simply a
+    // bound the derive set does not imply.
     let errors = typecheck_errors(
         r#"#[derive(Hash)]
            struct P { x: i64 }
-           fn use_both[T: Hash + Eq](_x: T) {}
+           fn use_both[T: Hash + Ord](_x: T) {}
            fn main() {
                let p = P { x: 1 };
                use_both(p);
@@ -5551,8 +5560,8 @@ fn test_generic_call_multiple_bounds_each_checked() {
     assert!(
         errors
             .iter()
-            .any(|e| e.kind == TypeErrorKind::TypeMismatch && e.message.contains("Eq")),
-        "Expected TypeMismatch naming Eq, got: {:?}",
+            .any(|e| e.kind == TypeErrorKind::TypeMismatch && e.message.contains("Ord")),
+        "Expected TypeMismatch naming Ord, got: {:?}",
         errors
     );
     // Hash is satisfied, so no Hash-named diagnostic should fire.
@@ -5560,7 +5569,7 @@ fn test_generic_call_multiple_bounds_each_checked() {
         !errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
             && e.message.contains("trait bound")
             && e.message.contains("Hash")
-            && !e.message.contains("Eq")),
+            && !e.message.contains("Ord")),
         "Hash should be satisfied by #[derive(Hash)]; got: {:?}",
         errors
     );
@@ -6971,14 +6980,63 @@ fn test_derive_copy_option_field_ok() {
 }
 
 #[test]
-fn test_derive_copy_without_clone_error() {
-    let errors = typecheck_errors(
+fn test_derive_copy_without_clone_auto_fills() {
+    // INVERTED by B-2026-08-17-33. This test previously asserted the error
+    // `struct 'Point' derives Copy but not Clone; Copy requires Clone` — which
+    // design.md § Derive says can never happen: "`#[derive(Copy)]`
+    // auto-derives `Clone` if not already present — **`Copy` without `Clone`
+    // is NEVER a compile error, because the compiler fills in the missing
+    // dependency.**" The compiler now closes the derive set over its
+    // dependencies, so the diagnostic (and the validator that produced it) is
+    // gone, and the spec's own spelling checks clean.
+    typecheck_ok(
         "#[derive(Copy)]\n\
          struct Point { x: i64, y: i64 }",
     );
-    assert!(errors
-        .iter()
-        .any(|e| e.message.contains("Copy") && e.message.contains("Clone")));
+}
+
+#[test]
+fn test_derive_hash_without_eq_is_a_map_key() {
+    // The other half of the same rule: `PartialEq` -> `Eq` -> `Hash` is filled
+    // in, so a `#[derive(Hash)]`-only struct is usable as a `Map` key. Before,
+    // the Map-key gate rejected it and named the very dependency the compiler
+    // was supposed to supply.
+    typecheck_ok(
+        "#[derive(Hash)]\n\
+         struct K { a: i64 }\n\
+         fn main() {\n\
+             let mut m: Map[K, i64] = Map.new();\n\
+             m.insert(K { a: 1 }, 10);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_derive_dependencies_still_ok_when_listed_explicitly() {
+    // "Listing dependencies explicitly is valid and idiomatic" — closing the
+    // set must be idempotent, not a double-derive error.
+    typecheck_ok(
+        "#[derive(Copy, Clone)]\n\
+         struct A { x: i64 }\n\
+         #[derive(Hash, Eq, PartialEq)]\n\
+         struct B { y: i64 }",
+    );
+}
+
+#[test]
+fn test_derive_copy_still_rejects_non_copy_field_after_auto_clone() {
+    // The auto-fill must not weaken the REAL Copy rule: a `String` field is
+    // still not `Copy`, and filling in `Clone` does not change that.
+    let errors = typecheck_errors(
+        "#[derive(Copy)]\n\
+         struct W { name: String }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Copy") && e.message.contains("name")),
+        "expected the non-Copy-field error to survive; got: {errors:?}"
+    );
 }
 
 #[test]
@@ -7009,14 +7067,16 @@ fn test_distinct_type_derive_copy_non_copy_base_error() {
 }
 
 #[test]
-fn test_distinct_type_derive_copy_without_clone_error() {
-    let errors = typecheck_errors(
+fn test_distinct_type_derive_copy_without_clone_auto_fills() {
+    // INVERTED by B-2026-08-17-33, for the same reason as the struct twin
+    // (`test_derive_copy_without_clone_auto_fills`): design.md § Derive says
+    // `Copy` without `Clone` is NEVER a compile error because the compiler
+    // fills the dependency in. Distinct types read their derives through the
+    // same `extract_derived_traits`, so they get the same closure.
+    typecheck_ok(
         "#[derive(Copy)]\n\
          distinct type Meters = i64;",
     );
-    assert!(errors
-        .iter()
-        .any(|e| e.message.contains("Copy") && e.message.contains("Clone")));
 }
 
 // ── #[derive(Arithmetic)] on distinct types ────────────────────

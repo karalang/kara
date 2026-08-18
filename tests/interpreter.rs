@@ -34078,3 +34078,33 @@ fn test_enum_variant_path_display_oracle() {
          }\n");
     assert_eq!(out, "Up\nDown\nfast_path\nMouseUp\nUp then Down\n");
 }
+
+#[test]
+fn test_derive_dependency_auto_fill_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s
+    // `test_e2e_derive_dependency_auto_fill` (B-2026-08-17-33). Filling the
+    // dependency in must produce WORKING derives, not just a quiet
+    // typechecker: `Copy` leaves the source binding usable, and the
+    // auto-filled `Eq`/`PartialEq` behind `Hash` are what make two equal keys
+    // collapse to one Map entry.
+    let out = run("\n\
+         #[derive(Copy)]\n\
+         struct C { a: i64 }\n\
+         #[derive(Hash)]\n\
+         struct K { a: i64, b: i64 }\n\
+         fn main() {\n\
+             let x = C { a: 3 };\n\
+             let y = x;\n\
+             println(\"copy = \" + x.a.to_string() + \",\" + y.a.to_string());\n\
+             let mut m: Map[K, i64] = Map.new();\n\
+             m.insert(K { a: 1, b: 2 }, 10);\n\
+             m.insert(K { a: 1, b: 2 }, 20);\n\
+             m.insert(K { a: 9, b: 9 }, 30);\n\
+             println(\"len = \" + m.len().to_string());\n\
+             match m.get(K { a: 1, b: 2 }) {\n\
+                 Some(v) => println(\"k12 = \" + v.to_string()),\n\
+                 None => println(\"k12 missing\"),\n\
+             }\n\
+         }\n");
+    assert_eq!(out, "copy = 3,3\nlen = 2\nk12 = 20\n");
+}
