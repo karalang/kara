@@ -11220,7 +11220,7 @@ rather than only in whichever spelling a caller happened to use; Ord still
 rejects it; Eq implies PartialEq) plus an interpreter oracle and its codegen
 E2E twin over the silent-failure table above. Baseline-red verified against
 the reverted change. Corpus failing-file set unchanged. |
-| B-2026-08-18-7 | parser | medium | Every `?.` node copies its object's span VERBATIM, so nested chains are indistinguishable to any span-keyed side table | FIXED by 0addd77 for `?.`; the `?` half is SPLIT OUT, not done — see below.
+| B-2026-08-18-7 | parser | medium | Every `?.` node copies its object's span VERBATIM, so nested chains are indistinguishable to any span-keyed side table | FIXED by e644132 for `?.`; the `?` half is SPLIT OUT, not done — see below.
 
 `?.` now spans from its object's start through the member (past the closing paren for the method form) instead of copying `lhs.span`. Measured on `u.address?.city?.name`: the two nodes went from an identical `(267,1)` to `(267,15)` and `(267,21)`. The idiom is the `Binary` arm's, three arms away in the same function, whose comment already states the rule the postfix arms never adopted.
 
