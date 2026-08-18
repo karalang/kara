@@ -7160,6 +7160,92 @@ fn test_distinct_constructor_arg_must_be_base() {
     );
 }
 
+// ── B-2026-08-17-32: a PLAIN refinement has no `T(value)` constructor ──
+//
+// The `T(value)` form belongs to `distinct type` (design.md § Distinct
+// Types). A plain `type T = Base where pred` offers only `T.try_from(v)`,
+// `v as T`, and the const-eval elision at a binding site. Calling one was
+// accepted by `karac check` and then disagreed across backends — `--interp`
+// died with an internal "resolved but has no binding at run time", while the
+// JIT printed a plausible `0`.
+
+#[test]
+fn test_plain_refinement_is_not_a_constructor() {
+    let errors = typecheck_errors(
+        "type ValidPort = u16 where self >= 1 and self <= 65535;
+         fn f() -> i64 { let q = ValidPort(80); 0 }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::NotCallable),
+        "expected NotCallable for a plain-refinement constructor call, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+    // The remedy must name all three sanctioned forms — this is the
+    // diagnostic's whole value, since the author is one keyword from the
+    // declaration that WOULD make their call legal.
+    let msg = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::NotCallable)
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(msg.contains("try_from"), "remedy must name try_from: {msg}");
+    assert!(
+        msg.contains("as ValidPort"),
+        "remedy must name the cast: {msg}"
+    );
+    assert!(
+        msg.contains("distinct type"),
+        "remedy must name the distinct-type contrast: {msg}"
+    );
+}
+
+#[test]
+fn test_plain_refinement_sanctioned_constructions_still_typecheck() {
+    // The controls that bound the fix: all three legal forms are untouched.
+    typecheck_ok(
+        "type Special = i64 where self > 0;
+         fn a() -> Special { let v: Special = 5; v }
+         fn b() -> Special { let z = 7; z as Special }
+         fn c() -> Result[Special, String] { Special.try_from(3) }",
+    );
+}
+
+#[test]
+fn test_distinct_refinement_constructor_is_not_rejected() {
+    // The new rejection must not over-fire: a `distinct type` WITH a
+    // predicate keeps its constructor. This is the arm directly above the
+    // rejection, and the two are told apart only by `distinct_bases`.
+    typecheck_ok(
+        "distinct type Port = u16 where self >= 1 and self <= 65535;
+         fn f() -> Port { Port(80) }",
+    );
+}
+
+#[test]
+fn test_fn_cannot_share_a_refinement_type_name() {
+    // Why the rejection above is safe to key on the bare name: a `fn` can
+    // never collide with a refinement type, because fn names must be
+    // Value-class while type names are Type-class. So a Type-class callee
+    // that names a plain refinement has no other meaning to shadow it.
+    // (The `functions` guard in the arm is therefore defensive only —
+    // asserted here so that stays true if the naming rule ever loosens.)
+    let src = "type Tag = i64 where self > 0;
+               fn Tag(x: i64) -> i64 { x }";
+    let parsed = karac::parse(src);
+    assert!(
+        parsed
+            .errors
+            .iter()
+            .any(|e| e.message.contains("Value-class")),
+        "expected the snake_case fn-name rule to reject `fn Tag`, got: {:?}",
+        parsed.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn test_distinct_raw_returns_base_type() {
     // `.raw()` returns the base `i64`; using it where `bool` is expected is

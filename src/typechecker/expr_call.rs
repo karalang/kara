@@ -683,6 +683,74 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // PLAIN refinement called as a constructor: `ValidPort(80)` where
+        // `type ValidPort = u16 where pred`. There is no such form. design.md
+        // § Refinement Types offers exactly three constructions —
+        // `T.try_from(v)`, `v as T`, and the const-eval elision at a binding
+        // site — while the `T(value)` constructor belongs to `distinct type`
+        // (§ Distinct Types, "Wrap: `UserId(42)` — constructor syntax"), which
+        // is the arm directly above. The two declarations differ by ONE
+        // keyword, so reaching for the wrong constructor is an easy mistake.
+        //
+        // B-2026-08-17-32: without this rejection the name fell through to
+        // `resolve_identifier_type`'s silent `Type::Error` fallback, so the
+        // invalid program passed `karac check` clean and then DISAGREED across
+        // backends — `--interp` died with "resolved but has no binding at run
+        // time. This is a compiler bug", while `karac run` (JIT) printed a
+        // plausible `0`. The interpreter's own message named the fix site
+        // ("the resolver should have rejected or bound it") and it was right:
+        // this is a missing rejection, not a lowering gap. It is rejected here
+        // rather than in `type_name_in_value_position_message` because that
+        // helper is consulted only from `infer_expr`'s bare-identifier arm,
+        // which a CALLEE never reaches.
+        //
+        // The `functions` guard is DEFENSIVE, not load-bearing: a user `fn`
+        // can never share the alias's name today, because fn names must be
+        // Value-class (`fn Tag` is a parse error, "fn names must be
+        // Value-class (snake_case)") while a refinement type is Type-class.
+        // It is kept so the arm stays correct if some future route ever
+        // registers a Type-class name in `env.functions`; the local-scope
+        // check above is the one that does real work, shadowing included.
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if self.local_scope.lookup(name).is_none()
+                && !self.env.functions.contains_key(name)
+                && self.env.refinement_predicates.contains_key(name)
+                && !self.env.distinct_bases.contains_key(name)
+            {
+                let base = self
+                    .env
+                    .type_aliases
+                    .get(name)
+                    .map(|t| match t {
+                        Type::Refinement { base, .. } => type_display(base),
+                        other => type_display(other),
+                    })
+                    .unwrap_or_else(|| "Base".to_string());
+                let arg = args
+                    .first()
+                    .map(|a| crate::formatter::render_expr(&a.value))
+                    .unwrap_or_else(|| "value".to_string());
+                self.type_error(
+                    format!(
+                        "'{name}' is a refinement type, not a constructor — \
+                         `type {name} = {base} where …` has no `{name}(…)` form. \
+                         Construct one with `{name}.try_from({arg})` (checked, \
+                         returns a Result), `{arg} as {name}` (asserted), or let a \
+                         const-evaluable value elide the check at a binding site \
+                         (`let x: {name} = {arg}`). The `{name}({arg})` constructor \
+                         syntax belongs to `distinct type {name} = {base}`, which is \
+                         one keyword away."
+                    ),
+                    *span,
+                    TypeErrorKind::NotCallable,
+                );
+                for a in args {
+                    self.infer_expr(&a.value);
+                }
+                return Type::Error;
+            }
+        }
+
         // Uppercase-receiver method-dispatch rewrite. The parser at
         // `src/parser/exprs.rs` 1298–1326 greedily wraps `X.method(args)`
         // in `Call(Path([X, method]))` whenever `X` starts uppercase —
