@@ -539,8 +539,8 @@ When a generic function `f[T₁, ..., T_k](p: P, ...) -> R` is called, the typec
 ```kara
 fn id[T](x: T) -> T { x }
 
-let y = id(panic!("never"));     // y : Never  — NOT y : ()
-let f = || panic!("nope");       // f : Fn() -> Never  — NOT Fn() -> ()
+let y = id(panic("never"));     // y : Never  — NOT y : ()
+let f = || panic("nope");       // f : Fn() -> Never  — NOT Fn() -> ()
 let v = vec![todo()];            // v : Vec[Never]  — NOT Vec[()]
 ```
 
@@ -553,8 +553,8 @@ Why this rule rather than the older "fall back to `()`" rule: a function whose r
 ```kara
 fn pick[T](x: T, y: T) -> T { if cond() { x } else { y } }
 
-let a = pick(42, panic!());      // a : i64       — LUB(i64, Never) = i64
-let b = pick(panic!(), panic!()); // b : Never    — only Never constraints; fallback to Never
+let a = pick(42, panic());      // a : i64       — LUB(i64, Never) = i64
+let b = pick(panic(), panic()); // b : Never    — only Never constraints; fallback to Never
 ```
 
 **Coercion vs. inference.** `Never` *coerces* to any type at use sites where the type is already known from context (the existing rule, also documented at [`todo()` and `unreachable()`](#built-in-primitive-resources)). The fallback rule above governs *inference* — what the metavariable solves to when no concrete type is in context. The two rules compose: a value of type `Never` can be used wherever any type is expected, and when no type is expected, the value's type stays `Never` rather than being silently widened.
@@ -5938,7 +5938,7 @@ fn safe_lookup(db: ref UserDb, id: u64) -> Option[User]
 ```kara
 match catch_panic(|| user_supplied_callback()) {
     Ok(v)       => v,
-    Err(info)   => panic!(f"callback panicked: {info.message}"),
+    Err(info)   => panic(f"callback panicked: {info.message}"),
 }
 ```
 
@@ -8415,8 +8415,12 @@ fn connect(a: GraphNode, b: GraphNode) {
   The fix is **peek-and-drop**: extract the value needed for the decision, let the borrow expire at the statement boundary, *then* mutate.
 
   ```kara
-  // OK — matches!() returns a bool; the underlying read borrow expires at the `;`.
-  let is_lit = matches!(parent.left, AstNode.Lit { .. });
+  // OK — the match expression yields a bool; the underlying read borrow
+  // expires at the `;`, before the assignment below needs an exclusive one.
+  let is_lit = match parent.left {
+      AstNode.Lit { .. } => true,
+      _ => false,
+  };
   if is_lit {
       let v = match parent.left {
           AstNode.Lit { value, .. } => value,  // bind and exit the match arm cleanly
@@ -12122,7 +12126,7 @@ Language fundamentals with zero OS or allocator dependencies:
 - Refinement types, trait definitions
 - Effect system (compile-time only — no runtime overhead)
 - Math (`sin`, `cos`, `sqrt`, etc.) via libm
-- `format_into!` — format into a caller-supplied fixed-size buffer (no allocation)
+- Fixed-buffer formatting — format into a caller-supplied fixed-size buffer (no allocation). **Not available in v1**, and the spelling is undecided: the `format_into!(...)` form earlier drafts showed cannot be the final one, because Kāra has no macros (see [§ `no_alloc` formatting](#no_alloc-formatting)).
 
 `core` is always available, including in `no_std` + `no_alloc` kernel code.
 
@@ -12152,18 +12156,26 @@ The `kernel` profile sets `no_std = true` and `no_alloc = true`. The `embedded`
 profile sets `no_std = true`; `no_alloc` is opt-in (some embedded systems have
 heap allocators).
 
-### `no_alloc` formatting pattern
+### `no_alloc` formatting
 
-When `alloc` is unavailable, use `format_into!` to write formatted output into a
-fixed-size stack buffer:
+`f"..."` interpolation requires `alloc` and is unavailable in `no_alloc`
+contexts, so a `no_std` + `no_alloc` program needs a way to format into a
+caller-supplied fixed-size buffer:
 
-```kara
+```
 let mut buf: Array[u8, 64] = Array.zeroed();
-format_into!(buf, "temp={} rpm={}", temp, rpm);
+// ... format `temp` and `rpm` into `buf` ...
 uart.write(buf.as_str());
 ```
 
-`f"..."` interpolation requires `alloc` and is unavailable in `no_alloc` contexts.
+**Not available in v1, and the spelling is deliberately not shown.** Earlier
+drafts wrote `format_into!(buf, "temp={} rpm={}", temp, rpm)`, which cannot be
+the final form: Kāra has no macros, and the parser rejects `name!(...)` outright
+(B-2026-08-18-42). A bare call does not express it either — the arguments are
+variadic behind a format string, which no v1 call syntax provides. Fixing the
+notation without deciding the mechanism would only move the problem, so the
+example above is left as a comment rather than as code an author could
+transcribe and be misled by.
 
 ---
 

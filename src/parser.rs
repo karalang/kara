@@ -737,14 +737,23 @@ impl Parser {
             Some(())
         } else {
             let found_span = self.current_span();
-            // A MACRO CALL IN VALUE POSITION stops here rather than in the
-            // prefix parser: `let s = format!("{}", 1);` parses `format` as the
-            // initializer and then wants its `;`, finding the `!`.
-            // B-2026-08-18-46. Reporting "Expected Semicolon, found Bang" for
-            // the same mistake the statement form names precisely would be a
-            // worse diagnostic for a harder-to-see case, so it is recognized
-            // here too and carries the same delete edit.
-            if matches!(expected, Token::Semicolon) && self.check(&Token::Bang) {
+            // A MACRO CALL stops here rather than in the prefix parser whenever
+            // it sits inside a larger expression: `let s = format!("{}", 1);`
+            // wants a `;` and finds the `!`, and `id(panic!("never"))` wants a
+            // `)` and finds it. B-2026-08-18-46, widened for B-2026-08-18-42.
+            //
+            // KEYED ON THE FOUND TOKEN, not on which token was expected. The
+            // first cut asked only about `Semicolon`, which left argument
+            // position -- the single most common place a `panic!` appears in
+            // design.md -- reporting "Expected RightParen, found Bang" while
+            // the statement and value spellings of the identical mistake got a
+            // diagnostic naming it. Three positions, one recognizer.
+            //
+            // The shape test is what keeps this from over-firing: an identifier
+            // ABUTTING the `!` followed by an opening bracket. `vec![…]` never
+            // reaches `expect` at all (the postfix path consumes it), and a real
+            // prefix negation is preceded by an operator or keyword.
+            if self.check(&Token::Bang) {
                 if let Some(name) = self.macro_call_name_before_bang(&found_span) {
                     self.error_at(
                         &format!(

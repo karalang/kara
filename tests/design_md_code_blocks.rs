@@ -431,6 +431,69 @@ fn design_md_statements_carry_their_terminating_semicolon() {
     );
 }
 
+/// No `kara` block in design.md uses RUST MACRO SYNTAX. B-2026-08-18-42.
+///
+/// design.md carried eight `name!(...)` sites — six `panic!`, one `matches!`,
+/// one `format_into!` — none of which Kāra can parse, because the language has
+/// no macros at all. design.md is the corpus an LLM reads when writing Kāra and
+/// the Mend loop's premise is blind authorship against it, so a reader
+/// transcribing § Never type got a parse error from the document meant to teach
+/// them.
+///
+/// ASKS THE PARSER rather than pattern-matching text, for the same reason the
+/// terminator gate does: `vec![1, 2, 3]` IS valid Kāra (the postfix path
+/// consumes it before prefix parsing), so a regex over `name!(` would have to
+/// carry a hand-maintained exception list and would flag the one legitimate
+/// form. The parser already draws that line exactly.
+#[test]
+fn design_md_kara_blocks_use_no_rust_macros() {
+    let mut offenders: Vec<String> = Vec::new();
+    for (start_line, body) in kara_blocks(DESIGN_MD) {
+        for err in karac::parse(body).errors {
+            if !err.message.contains("no macros") {
+                continue;
+            }
+            let lines: Vec<&str> = body.split('\n').collect();
+            let at = err.span.line;
+            offenders.push(format!(
+                "  docs/design.md:{}: {}\n      {}",
+                start_line + at - 1,
+                lines.get(at - 1).copied().unwrap_or("").trim(),
+                err.message
+            ));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "{} Rust macro call(s) in docs/design.md's kara blocks (B-2026-08-18-42); \
+         Kāra has no macros, so transcribing these produces code that does not parse:\n{}",
+        offenders.len(),
+        offenders.join("\n")
+    );
+}
+
+/// The macro gate above is only worth having if it actually fires, and the
+/// shape it must NOT fire on is the one legitimate `!` form in the language.
+#[test]
+fn the_macro_gate_fires_on_a_macro_and_not_on_vec() {
+    let macro_call = "fn main() {\n    let y = id(panic!(\"never\"));\n}\n";
+    assert!(
+        karac::parse(macro_call)
+            .errors
+            .iter()
+            .any(|e| e.message.contains("no macros")),
+        "the gate would not have caught an argument-position `panic!`"
+    );
+    let vec_literal = "fn main() {\n    let v: Vec[i32] = vec![1, 2, 3];\n}\n";
+    assert!(
+        !karac::parse(vec_literal)
+            .errors
+            .iter()
+            .any(|e| e.message.contains("no macros")),
+        "`vec![…]` is valid Kāra and must not be flagged as a macro"
+    );
+}
+
 /// The allow-list above stays honest: an entry that no longer fires means its
 /// underlying row was fixed, and the entry must go rather than silently
 /// covering a future regression at the same line.
