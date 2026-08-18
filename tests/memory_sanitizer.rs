@@ -43367,7 +43367,7 @@ fn main() {
         // a boxed `Option` payload leaks that box, which reproduces with no
         // `?.` anywhere (`match (match u.address { Some(x) => { x.city } None
         // => { None } }) { ... }` leaks the identical 3200 bytes / 100
-        // objects). Filed separately; `?.` inherits it in that position
+        // objects). Filed as B-2026-08-18-8; `?.` inherits it in that position
         // exactly as it inherits everything else about the shape it lowers to.
         // Its own lowering is clean, which is what this pins.
         assert_clean_asan_run(
