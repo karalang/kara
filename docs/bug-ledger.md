@@ -103,28 +103,28 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 43 | 2 |
+| other | 44 | 2 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 929 | 2 |
+| codegen | 929 | 1 |
 | typecheck | 199 | 1 |
 | interp | 151 | 1 |
 | ownership | 58 | 1 |
 | other | 52 | 2 |
 | autopar | 48 | 0 |
 | cli | 45 | 0 |
+| parser | 23 | 1 |
 | runtime | 22 | 0 |
-| parser | 22 | 0 |
 | resolver | 19 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1329 surfaced · 5 open · 1307 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1330 surfaced · 5 open · 1307 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -133,8 +133,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1329 surfaced
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
-| B-2026-08-18-30 | 2026-08-18 | codegen | low | `compile_method_call`'s `args_close_span` parameter is now a REDUNDANT second key: it exists only to disambiguate side-table reads across a chain, and B-2026-08-18-24 made `call_span` unique per chain step, which is the job it was hired for. | src/codegen/method_call.rs (the `args_close_span` parameter and its ~12 call sites); `method_call_key`; `try_compile_freshtemp_user_method`. |
 | B-2026-08-18-32 | 2026-08-18 | ownership+codegen+interp | low | THE OWNERSHIP CHECKER AND BOTH BACKENDS DISAGREE ABOUT WHETHER `String + ` CONSUMES ITS LEFT OPERAND. design.md gives `+` the signature `fn add(self, other: ref String)` — bare `self`, i.e. OWNED — so the checker warns "value moved here, used again here" on a second use. Neither the interpreter nor codegen enforces the move: the value is intact and correct afterward. The suggested `.clone()` is a real cost for a problem that does not exist at runtime. | The `+` operator's declared receiver mode. design.md:1821 says `fn add(self, other: ref String) -> String`; the ownership checker reads that as a move, and neither backend implements it as one. One of the two is wrong and it is a language call, not a bug-fix call. |
+| B-2026-08-18-33 | 2026-08-18 | parser | low | SEVEN parser arms still copy their LHS's span -- `Cast`, `TupleIndex`, `Call`, `Path`, `Pipe`, `NilCoalesce`, `Range` -- and the postfix-span family never enumerated them. `NilCoalesce` is the one with a MEASURED consequence: it is why `method_call_key`'s args-close preference cannot be retired (B-2026-08-18-30). | Seven parser arms still copy their LHS's span. `NilCoalesce` is the one with a measured consequence -- it blocks B-2026-08-18-30's cleanup -- and the other six (`Cast`, `TupleIndex`, `Call`, `Path`, `Pipe`, `Range`) are unmeasured. Widen one arm per change with its own suite run; the five already done cost 3, 42 and 12 test failures and each needed a different fix. |
 
 ### Wontfix (7)
 
