@@ -1007,6 +1007,101 @@ jobs:
       - name: Memory sanitizer at KARAC_OPT_LEVEL=0 (ratcheted against known failures)
         run: scripts/asan-o0-leg.sh
 
+  # ── GPU execution lane (lavapipe software Vulkan) ───────────────────────
+  # The first CI coverage of `#[gpu]` kernels EXECUTING. Before this lane the
+  # repo had ~101 GPU tests across seven files and not one ran a shader — they
+  # assert on WGSL text or on the WGSL baked into emitted LLVM IR — so the
+  # whole kernel language was protected only against changes in what we
+  # *write*, never in what the device *computes*.
+  #
+  # It needs no GPU: `mesa-vulkan-drivers` ships lavapipe, a software Vulkan
+  # implementation, so `KARAC_GPU_BACKEND=cpu` drives the real naga + wgpu +
+  # Vulkan pipeline on a stock runner. That also makes this the first
+  # automated coverage of CG-6's `KARAC_GPU_BACKEND=cpu` leg, which was
+  # deferred at the time as "Linux-container territory" because Metal has no
+  # CPU compute adapter.
+  #
+  # NO VACUOUS PASSES, and this lane needs the gate more than most. Two
+  # existing runtime unit tests (`doubles_an_f32_buffer_on_the_gpu`,
+  # `select_adapter_honors_backend_cpu`) are written to pass adapterlessly, so
+  # without an explicit gate a silently-broken driver install would leave every
+  # GPU test green having touched no device. `KARAC_REQUIRE_GPU_ADAPTER=1`
+  # turns tests/gpu_e2e.rs's skip into a hard failure. (A *broken* probe —
+  # adapter present, kernel still fails — panics regardless of that variable;
+  # only a genuinely absent device is skippable.)
+  #
+  # Deliberately a SEPARATE, NON-required job (not in branch protection) until
+  # it builds a green streak, and NOTE FOR ITS FIRST RUN: lavapipe under
+  # GitHub's runner image is unverified here — the suite was validated in a
+  # local Linux container. If the adapter does not come up, the job fails
+  # loudly by design (that is the gate working, not a flake); check the probe
+  # output before assuming a compiler regression.
+  #
+  # COST, stated plainly: this is one more job against a matrix that has
+  # measured runner starvation (see the `concurrency` comment above), and the
+  # `gpu` archive is the heaviest of the opt-in set — wgpu + naga + objc2, ~4.5
+  # MB. If the queue degrades, this lane is a fair candidate to restrict to
+  # GPU-touching paths or to the nightly schedule.
+  gpu-e2e:
+    name: GPU execution E2E (lavapipe software Vulkan)
+    runs-on: ubuntu-latest
+    env:
+      # Force the software adapter rather than relying on lavapipe being the
+      # only one present — this asserts the CG-6 selection path itself.
+      KARAC_GPU_BACKEND: cpu
+      # A missing adapter must fail this job, not silently cover nothing.
+      KARAC_REQUIRE_GPU_ADAPTER: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install lavapipe (software Vulkan)
+        run: |
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+          # Fail here rather than 20 minutes later inside the test suite: if
+          # the ICD is absent the driver package did not land as expected.
+          test -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+            || test -f /usr/share/vulkan/icd.d/lvp_icd.json \
+            || { echo "lavapipe ICD missing after install"; ls -la /usr/share/vulkan/icd.d/ || true; exit 1; }
+          vulkaninfo --summary 2>/dev/null | head -40 || true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: gpu-e2e
+
+      # Only the `gpu` and full archives matter here: a `gpu.dispatch` program
+      # references `karac_runtime_gpu_*`, which auto-selects the gpu archive,
+      # and the full archive is the fallback for anything else. Build order per
+      # CLAUDE.md § "Four archives" — the gpu build emits the canonical name,
+      # so it is renamed before the plain full build overwrites it.
+      - name: Build runtime staticlib archives (gpu → full)
+        run: |
+          cargo rustc -p karac-runtime --release --features gpu --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_gpu.a
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      # Executes every landed kernel-body form (let / while+mut / for-range /
+      # match / value-if) and asserts interpreter == GPU == expected output.
+      - name: GPU execution E2E (interpreter-vs-device oracle)
+        run: cargo test --features llvm --test gpu_e2e
+
+      # The runtime's own GPU unit tests. They skip gracefully when adapterless
+      # — which, before this lane, is what they did everywhere — so running
+      # them here is the point: with lavapipe present they finally execute.
+      - name: Runtime GPU unit tests (adapter selection + f32 map)
+        run: cargo test -p karac-runtime --features gpu --lib gpu
+
   # ── Phase 6.3 Slice 7: flagship-demo benchmark regression gate ──────────
   # Builds the `ws_idle_holder` flagship demo (Demo 1) with `karac build`,
   # runs the Rust bench harness against it at a CI-appropriate load tier
