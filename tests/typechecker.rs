@@ -5931,6 +5931,72 @@ fn an_immediately_invoked_closure_takes_its_param_types_from_the_call() {
     );
 }
 
+// ── Category: iterator-adaptor diagnostic rendering ────────────
+
+/// B-2026-08-17-39 — six iterator-adaptor diagnostics formatted the offending
+/// type with Rust's `{:?}` Debug, so `v.iter().flat_map(|x| [x, x])` reported
+///
+///   closure must return Iterator[U], found Named { name: "Vec", args: [Int(I64)] }
+///
+/// which names Rust internals for a Kāra mistake — not a type any Kāra
+/// programmer, or the Mend loop, can act on. Two of them also spelled the
+/// EXPECTED type `Option<(A, U)>`, angle brackets in a language whose spec
+/// opens with "`[T]` not `<T>` — no turbofish", which is worse than noise: it
+/// teaches a syntax the parser rejects.
+///
+/// The assertion is on the RENDERING, not the wording: every message must name
+/// its type the way the rest of the compiler does, and none may contain a
+/// Debug-struct fragment or an angle-bracketed generic.
+#[test]
+fn iterator_adaptor_diagnostics_render_types_as_kara_types() {
+    // (probe, the type_display spelling its message must contain)
+    for (src, want) in [
+        (
+            "fn main() { let v: Vec[i64] = [1, 2]; let r = v.iter().flat_map(|x| [x, x]); }",
+            "'Vec[i64]'",
+        ),
+        (
+            "fn main() { let v: Vec[i64] = [1, 2]; let r = v.iter().filter_map(|x| x); }",
+            "'i64'",
+        ),
+        (
+            "fn main() { let v: Vec[i64] = [1, 2]; let r = v.iter().find_map(|x| x); }",
+            "'i64'",
+        ),
+        (
+            "fn main() { let v: Vec[i64] = [1, 2]; let r = v.iter().scan(0, |a, x| a + x); }",
+            "'i64'",
+        ),
+        (
+            // The `Option<{:?}>` site the row did not list — a scan closure
+            // returning an `Option` of a NON-tuple takes a different arm.
+            "fn main() { let v: Vec[i64] = [1, 2]; let r = v.iter().scan(0, |a, x| Some(a + x)); }",
+            "'Option[i64]'",
+        ),
+        (
+            "fn main() { let v: Vec[i64] = [1, 2]; let r = v.iter().zip(5); }",
+            "'i64'",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        let msgs: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains(want)),
+            "expected a message naming {want}; got: {msgs:?}"
+        );
+        for m in &msgs {
+            assert!(
+                !m.contains("Named {") && !m.contains("Int(I64)"),
+                "a Rust Debug struct leaked into a user-facing message: {m}"
+            );
+            assert!(
+                !m.contains("Option<") && !m.contains("(A, U)>"),
+                "a Kāra generic must use `[T]`, not angle brackets: {m}"
+            );
+        }
+    }
+}
+
 // ── Category: `?.` (optional chaining) ─────────────────────────
 
 const OPTCHAIN_DECLS: &str = "

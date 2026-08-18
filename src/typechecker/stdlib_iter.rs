@@ -146,8 +146,8 @@ impl<'a> super::TypeChecker<'a> {
                         other => {
                             self.type_error(
                                 format!(
-                                    "Iterator.filter_map() closure must return Option[U], found {:?}",
-                                    other
+                                    "Iterator.filter_map() closure must return Option[U], found '{}'",
+                                    type_display(&other)
                                 ),
                                 *span,
                                 TypeErrorKind::TypeMismatch,
@@ -612,8 +612,8 @@ impl<'a> super::TypeChecker<'a> {
                         other => {
                             self.type_error(
                                 format!(
-                                    "Iterator.find_map() closure must return Option[U], found {:?}",
-                                    other
+                                    "Iterator.find_map() closure must return Option[U], found '{}'",
+                                    type_display(&other)
                                 ),
                                 *span,
                                 TypeErrorKind::TypeMismatch,
@@ -831,8 +831,8 @@ impl<'a> super::TypeChecker<'a> {
                         other => {
                             self.type_error(
                                 format!(
-                                    "Iterator.flat_map() closure must return Iterator[U], found {:?}",
-                                    other
+                                    "Iterator.flat_map() closure must return Iterator[U], found '{}'",
+                                    type_display(&other)
                                 ),
                                 *span,
                                 TypeErrorKind::TypeMismatch,
@@ -979,10 +979,10 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             "scan" => {
-                // `scan(init: A, f: Fn(A, T) -> Option<(A, U)>) ->
+                // `scan(init: A, f: Fn(A, T) -> Option[(A, U)])` ->
                 // Iterator[U]`. A is inferred from init; the closure's
                 // return is constrained via post-hoc unwrap of
-                // Option<(A, U)>. U becomes the new Item.
+                // Option[(A, U)]. U becomes the new Item.
                 if args.len() != 2 {
                     self.type_error(
                         format!("Iterator.scan() expects 2 arguments, found {}", args.len()),
@@ -1017,8 +1017,8 @@ impl<'a> super::TypeChecker<'a> {
                             other => {
                                 self.type_error(
                                     format!(
-                                        "Iterator.scan() closure must return Option<(A, U)>, found Option<{:?}>",
-                                        other
+                                        "Iterator.scan() closure must return Option[(A, U)], found 'Option[{}]'",
+                                        type_display(&other)
                                     ),
                                     *span,
                                     TypeErrorKind::TypeMismatch,
@@ -1029,8 +1029,8 @@ impl<'a> super::TypeChecker<'a> {
                         other => {
                             self.type_error(
                                 format!(
-                                    "Iterator.scan() closure must return Option<(A, U)>, found {:?}",
-                                    other
+                                    "Iterator.scan() closure must return Option[(A, U)], found '{}'",
+                                    type_display(&other)
                                 ),
                                 *span,
                                 TypeErrorKind::TypeMismatch,
@@ -1188,8 +1188,8 @@ impl<'a> super::TypeChecker<'a> {
                     _ => {
                         self.type_error(
                             format!(
-                                "Iterator.zip() expects an Iterator argument, found {:?}",
-                                other_ty
+                                "Iterator.zip() expects an Iterator argument, found '{}'",
+                                type_display(&other_ty)
                             ),
                             *span,
                             TypeErrorKind::TypeMismatch,
@@ -1226,7 +1226,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             "peek" => {
-                // `peek() -> Option<T>` — only valid on `Peekable[T]`. The
+                // `peek() -> Option[T]` — only valid on `Peekable[T]`. The
                 // distinct receiver name is the type-level signal that
                 // peekable() has been called; on a plain Iterator we
                 // emit UnknownMethod (via Type::Error) so adaptor pipelines
