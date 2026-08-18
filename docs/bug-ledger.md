@@ -94,14 +94,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 260 | 0 |
 | leak | 184 | 0 |
-| double-free | 132 | 0 |
+| double-free | 133 | 0 |
 | run-vs-build | 128 | 0 |
 | codegen-gap | 117 | 1 |
 | missing-feature | 105 | 3 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
 | diagnostics | 75 | 5 |
-| crash | 52 | 1 |
+| crash | 51 | 0 |
 | soundness | 50 | 0 |
 | other | 37 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 922 | 2 |
+| codegen | 922 | 1 |
 | typecheck | 197 | 3 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced · 10 open · 1288 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced · 9 open · 1289 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-13 | 2026-08-18 | typecheck | medium | A method declared by `impl Trait for Array[i64, 3]` CANNOT BE CALLED: the call site reports "no method 'g' on type 'Array'" even though the impl block itself now checks. Every other builtin container head measured (Vec, VecDeque, Slice, Map, Set, SortedMap, SortedSet, Option, Result, Column, Tensor) dispatches; `Array[T, N]` is the one that does not. | roadmap.md |
 | B-2026-08-18-14 | 2026-08-18 | codegen | medium | A RANGE SUBSCRIPT used directly as a METHOD RECEIVER -- `v[0..3].first_or(-1)` -- has no codegen: "no handler for expression kind Range". The same slice passed as an ARGUMENT works (`show(v[0..2])`), and binding it first works (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`), so it is the receiver position specifically. | roadmap.md |
-| B-2026-08-18-15 | 2026-08-18 | codegen | high | `let c = match k % 2 { 0 => v[k].city, _ => None };` SEGVs under ASAN -- binding a match whose arm tail INDEXES a container for a boxed `Option` field registers a box drop over storage the container still owns, and the double free lands as a segfault. The SCRUTINEE-position spelling of the same program is clean, which is the reverse of every other pairing in this family. | The `let`-binding boxed-payload registration in src/codegen/stmts.rs (the `boxed_enum_payload_variants` loop, ~line 6011) does not discriminate an INDEX-rooted initializer from an owned move. `match_result_scrutinee_owns_box` in src/codegen/control_flow_match.rs already excludes index chains for this reason and documents the measurement; the `let` site needs the same exclusion, or an element deep-clone like the one `clone_owned_vec_index_element` performs for a direct `match v[i]` scrutinee. |
 | B-2026-08-18-16 | 2026-08-18 | cli | medium | `missing_must_use` and `missing_track_caller` render BAKED-STDLIB findings against the USER's filename with the stdlib item's own span, producing diagnostics whose line numbers do not exist in the file named. `examples/autograd_training.kara` is 88 LINES LONG and draws `stdlib `pub fn TensorVar.value` has `panics` ... but lacks `#[track_caller]`` at line 378 and 387; `examples/fathom/mandelbrot.kara` draws `stdlib `fn animation_frames` returns a new value but is not annotated `#[must_use]`` at line 94, where `animation_frames` is not defined at all -- it is IMPORTED from `std.web.time` (line 50). The finding is real stdlib hygiene; the LOCATION is another file's. Both lints are therefore unfit for `karac check` / the JSON feed until the span carries its own file. | roadmap.md |
 | B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
 | B-2026-08-18-18 | 2026-08-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let`. The other two positions design.md's "infers the target type from context" covers still fix the chain to `Vec`: `return <chain>.collect()` against a declared non-`Vec` return type -> "expected 'Set[i64]', found 'Vec[i64]'", and argument position `f(<chain>.collect())` against a non-`Vec` parameter -> the same. Measured AFTER B-2026-08-17-36 landed, so these are the residue of that fix rather than a restatement of it. | src/desugar.rs (desugar_collect_target); src/typechecker/exprs.rs (check_expr) |
@@ -157,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced
 
 </details>
 
-### Fixed (1288)
+### Fixed (1289)
 
-<details><summary>1288 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1289 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11462,6 +11461,31 @@ THE ARM IS PLACED LAST, immediately before the fall-through diagnostic, and that
 MEASURED, nine shapes, interpreter / `karac build` agreeing on every one: `Map.len` on `ref self` and on owned `self` (2), `Map.is_empty` (no), `Map.contains_key` (yes), `Map.get(...).unwrap_or(0)` (5), `Set.len` on both receiver modes (2), `Set.contains` (yes), `Set.is_empty` (no). Vec and Slice `self.len()` are unchanged controls at 3.
 
 Both receiver modes are pinned by the test on purpose: one method passing would not distinguish "the arm is there" from "this one method happens to be intercepted somewhere else", which is exactly the confusion that made the original row's diagnosis wrong. |
+| B-2026-08-18-15 | codegen | high | Binding a container element's BOXED `Option` field double-frees the payload envelope: `let c = v[i].opt;` aborts with `free(): double free detected i… | Narrowed the let-site box registration: an initializer that PROJECTS A FIELD OUT OF A CONTAINER ELEMENT no longer registers a `BoxedEnumDrop`, leaving the container the sole owner it already was.
+
+THIS ROW UNDERSTATED ITS OWN SHAPE, and the correction matters more than the fix. It was filed as a match-arm-tail case found while probing which arm shapes B-2026-08-18-10 could admit, and titled accordingly. The match is INCIDENTAL. The minimal repro is a plain `let c = v[i].opt;` — no match anywhere — and it aborts with `free(): double free detected in tcache 2` on a DEFAULT `karac build`, no sanitizer needed. That is an everyday shape, and the row read as an exotic one.
+
+BOXING IS THE VARIABLE, isolated by holding the program fixed and changing only the payload:
+  * `City { zip: i64 }`                  1 word, inline        CLEAN
+  * `City { name: String }`              3 words, fits area    CLEAN
+  * `City { a, b, c, d: i64 }`           4 words, BOXED        double free, exit 134
+The crashing payload carries NO interior heap at all, so the 32-byte envelope itself is what gets freed twice — the binding's `BoxedEnumDrop` and the container's element drop over one pointer.
+
+WHICH SIDE TO FIX WAS A SEMANTICS QUESTION, not a codegen one, and measurement settled it. Two consecutive `match v[k].opt` reads of the same element yield the same total under `--interp` and AOT alike, so the element survives the read: an element projection is a COPY and the container is the rightful owner. Suppressing the container would have passed a double-free check and broken that second read. Narrowing the binding's registration is what remains — and it is the same call B-2026-08-06-21 documents a few lines below in this very function: narrowing a registration leaves the sole owner intact, widening a free strands whatever else reads the element. The MATCH-position twin (`match v[k].opt { ... }`) has always been clean for exactly this reason: it registers nothing.
+
+THREE REACHING SHAPES CLOSE.
+  * direct              `let c = v[i].opt;`                              abort (134)  -> clean
+  * field-rooted        `let c = b.items[i].city;`                       abort (134)  -> clean
+  * branching           `let c = match k { 0 => v[k].opt, _ => None };`  SEGV (139)   -> clean
+The field-rooted one is the self-hosted parser's `self.tokens[self.pos].token`, which is why this is not a corner case. The branching one hides the projection in an ARM TAIL, so the place-shaped gate cannot see it; ANY projecting tail decides the binding, since one registration covers every branch.
+
+A BARE ELEMENT READ IS DELIBERATELY UNTOUCHED. `let c = v[i];` over `Vec[Option[Wide]]` was already clean, so the gate requires a projection ABOVE the index — without that restriction the fix would have withdrawn a registration that shape depends on.
+
+Verified on fifteen shapes, every one byte-identical to `--interp`, including the three above, the two non-boxing payload controls, the two-read element-survival check, the bare element read, and the whole B-2026-08-18-8 / -10 scrutinee family (unchanged).
+
+One fixture landed with a hand-computed expected value that was wrong (30 for 24); ASAN had already passed and only the arithmetic failed. Corrected from the interpreter rather than recomputed by hand.
+
+Gates: cargo fmt clean, clippy clean on both feature sets, memory_sanitizer 1126 passed, full suite green. |
 
 </details>
 
