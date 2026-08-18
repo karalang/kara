@@ -43661,6 +43661,100 @@ fn main() {
     }
 
     #[test]
+    fn asan_let_bound_container_element_field_box_has_one_owner() {
+        // B-2026-08-18-15 — `let c = v[i].opt;` over a BOXED payload
+        // double-freed the 32-byte envelope: an element read is a copy, the
+        // container still owns the box, and this binding registered a second
+        // `BoxedEnumDrop` over the same pointer. It aborted with `free():
+        // double free detected in tcache 2` on a DEFAULT `karac build` — no
+        // sanitizer required — so this fixture pins a crash, not a leak.
+        //
+        // THE PAYLOAD IS FOUR PLAIN `i64`s AND NO STRING, deliberately. Four
+        // words is one past the 3-word inline area, so the payload boxes while
+        // owning no interior heap of its own — which isolates the envelope as
+        // the thing freed twice. The same program with a 1-word or a
+        // String-only (3-word, fitting) payload was always clean, and that
+        // contrast is what identified boxing as the variable.
+        //
+        // The SECOND read of the same element is the other half: it proves the
+        // element survives the binding, i.e. the semantics are a copy and the
+        // container is the rightful sole owner. A fix that suppressed the
+        // container instead of narrowing this registration would pass the
+        // double-free check and corrupt this line.
+        assert_clean_asan_run(
+            r#"
+struct City { a: i64, b: i64, c: i64, d: i64 }
+struct Holder { city: Option[City] }
+
+fn main() {
+    let mut v: Vec[Holder] = Vec.new();
+    let mut i = 0;
+    while i < 5 {
+        v.push(Holder { city: Some(City { a: i, b: i, c: i, d: i }) });
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut k = 0;
+    while k < 5 {
+        let c2 = v[k].city;
+        match c2 { Some(c) => { total = total + c.a; } None => { total = total + 100; } }
+        match v[k].city { Some(c) => { total = total + c.a; } None => { total = total + 1000; } }
+        k = k + 1;
+    }
+    println(total);
+}
+"#,
+            &["20"],
+            "let_bound_container_element_field_box_has_one_owner",
+        );
+    }
+
+    #[test]
+    fn asan_let_bound_element_field_box_through_a_branch_and_a_field_root() {
+        // B-2026-08-18-15's two reaching shapes, which the direct spelling
+        // above does not cover.
+        //
+        // `b.items[k].city` is FIELD-ROOTED — the self-hosted parser's
+        // `self.tokens[self.pos].token`, and the reason this row is not an
+        // exotic-shape row.
+        //
+        // The `match` binding is the branching one: the RHS is not a place at
+        // all, so the element projection sits in an ARM TAIL. Exactly one arm
+        // runs but the binding registers once for both, so one projecting tail
+        // is enough to make the registration a second owner on that path. This
+        // spelling SEGV'd where the direct one aborted, which is the same
+        // defect landing on a different pointer.
+        assert_clean_asan_run(
+            r#"
+struct City { a: i64, b: i64, c: i64, d: i64 }
+struct Holder { city: Option[City] }
+struct Bag { items: Vec[Holder] }
+
+fn main() {
+    let mut b = Bag { items: Vec.new() };
+    let mut i = 0;
+    while i < 6 {
+        b.items.push(Holder { city: Some(City { a: i, b: i, c: i, d: i }) });
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut k = 0;
+    while k < 6 {
+        let viaroot = b.items[k].city;
+        match viaroot { Some(c) => { total = total + c.a; } None => { total = total + 100; } }
+        let viabranch = match k % 2 { 0 => { b.items[k].city } _ => { None } };
+        match viabranch { Some(c) => { total = total + c.b; } None => { total = total + 1; } }
+        k = k + 1;
+    }
+    println(total);
+}
+"#,
+            &["24"],
+            "let_bound_element_field_box_through_a_branch_and_a_field_root",
+        );
+    }
+
+    #[test]
     fn asan_nil_coalesce_heap_fallbacks_clean() {
         // B-2026-08-17-27 — `??` is lowered to `unwrap_or`, so it inherits that
         // path's ownership machinery: the moved-binding cap-zeroing (leg 1), the

@@ -5886,6 +5886,35 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                             let mut boxed = self.boxed_enum_payload_variants(te);
+                            // B-2026-08-18-15 — the RHS PROJECTS A FIELD OUT OF
+                            // A CONTAINER ELEMENT (`let c = v[i].opt;`, the
+                            // self-hosted parser's `self.toks[i].tok`). An
+                            // element read is a COPY, not a move: the container
+                            // still owns the box, and two consecutive
+                            // `match v[i].opt` reads both see the payload on
+                            // every backend, so the semantics are settled. But
+                            // this site registered a second `BoxedEnumDrop` on
+                            // the binding, and container plus binding both freed
+                            // the 32-byte envelope — `free(): double free
+                            // detected in tcache 2` on a DEFAULT `karac build`,
+                            // no sanitizer needed.
+                            //
+                            // Skipping the registration rather than suppressing
+                            // the container is the same call B-2026-08-06-21
+                            // made a few lines below, for the same reason:
+                            // narrowing a registration leaves the sole owner
+                            // intact, while widening a free strands whatever
+                            // else reads the element. The MATCH-position twin of
+                            // this shape has always been clean precisely because
+                            // it registers nothing and lets the container own it.
+                            //
+                            // Requires a projection ABOVE the index. A bare
+                            // element read (`let c = v[i];` over
+                            // `Vec[Option[Wide]]`) is already correct and is
+                            // deliberately left alone.
+                            if Self::init_projects_out_of_container_element(value) {
+                                boxed.clear();
+                            }
                             if let Some(slot) = (!boxed.is_empty())
                                 .then(|| self.variables.get(var_name.as_str()).copied())
                                 .flatten()
@@ -12127,6 +12156,61 @@ impl<'ctx> super::Codegen<'ctx> {
     /// *method* receivers used directly — `u.name().len()` — are rejected
     /// upstream by the `user_ref_method_names` gate in `compile_method_call`,
     /// so the free-fn check suffices.)
+    /// Does this initializer read a FIELD out of a container ELEMENT —
+    /// `v[i].opt`, `self.toks[i].tok`, `b.items[i].city`? Such a read is a
+    /// copy whose interior aliases storage the container still owns, so a
+    /// binding taking it must not register its own drop (B-2026-08-18-15).
+    ///
+    /// A projection above the index is REQUIRED: a bare `v[i]` is the element
+    /// itself, handled correctly elsewhere, and must keep its registration.
+    fn init_projects_out_of_container_element(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                Self::place_chain_contains_index(object)
+            }
+            // A BRANCHING initializer whose value is one of its tails. Exactly
+            // one branch runs, but the binding is registered once for all of
+            // them, so a single element-projecting tail is enough to make the
+            // registration a second owner on that path — `let c = match k { 0 =>
+            // v[k].opt, _ => None };` segfaulted while the direct spelling
+            // double-freed. ANY tail decides it, which is the same
+            // narrow-the-registration direction the site takes elsewhere: the
+            // cost of being wrong here is that the container keeps ownership it
+            // already had.
+            ExprKind::Match { arms, .. } => arms.iter().any(|a| {
+                Self::init_projects_out_of_container_element(Self::block_tail_expr(&a.body))
+            }),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                then_block.final_expr.as_deref().is_some_and(|t| {
+                    Self::init_projects_out_of_container_element(Self::block_tail_expr(t))
+                }) || else_branch.as_deref().is_some_and(|e| {
+                    Self::init_projects_out_of_container_element(Self::block_tail_expr(e))
+                })
+            }
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+                b.final_expr.as_deref().is_some_and(|t| {
+                    Self::init_projects_out_of_container_element(Self::block_tail_expr(t))
+                })
+            }
+            _ => false,
+        }
+    }
+
+    /// Is there an `Index` link anywhere in this place chain?
+    fn place_chain_contains_index(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Index { .. } => true,
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                Self::place_chain_contains_index(object)
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn expr_yields_fresh_owned_temp(&self, expr: &Expr) -> bool {
         matches!(
             &expr.kind,
