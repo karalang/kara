@@ -1088,10 +1088,12 @@ impl Parser {
     //
     // Each takes the already-parsed left operand BY VALUE and returns the
     // wrapped node. The operand's span is read BEFORE the operand moves into
-    // the node. `finish_index` extends it past the `]` (B-2026-08-18-21) and
-    // `finish_dot`'s METHOD-CALL arm past the `)` (B-2026-08-18-24), mirroring
-    // the seed; the rest — `finish_call`, tuple index, field access — still
-    // reuse it verbatim, exactly the seed's `lhs.span.clone()`.
+    // the node, then EXTENDED to cover the postfix itself: past the `]`
+    // (`finish_index`, B-2026-08-18-21), past the `)` (`finish_dot`'s
+    // method-call arm, B-2026-08-18-24), past the field name (`finish_dot`'s
+    // field arm, B-2026-08-18-31). `finish_call` and the tuple-index arm still
+    // reuse the operand's span verbatim — the seed's `lhs.span.clone()` — and
+    // are the two the seed has not split out either.
 
     // `callee(args)`.
     fn finish_call(mut ref self, callee: Expr) -> Expr {
@@ -1188,10 +1190,14 @@ impl Parser {
                 span: span,
             })
         } else {
+            // B-2026-08-18-31 — a field access spans object-start -> past the
+            // field name, mirroring the seed. `take_member_name` has just made
+            // the name the token before `pos`, which is what `span_from` reads.
+            let span = self.span_from(sp);
             Expr.Field(FieldAccessExpr {
                 object: object,
                 field: name,
-                span: sp,
+                span: span,
             })
         }
     }

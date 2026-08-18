@@ -4694,6 +4694,45 @@ impl<'ctx> super::Codegen<'ctx> {
         copied
     }
 
+    /// The span `uam_consume_sites` keys a PLACE consume under — B-2026-08-18-31.
+    ///
+    /// The producer states its contract plainly: `use_classifier`'s
+    /// `record_place_at_root` inserts "against the root identifier's span", and
+    /// the CFG's `record` does the same. So a consume of `b.a` is recorded at
+    /// `b`'s span, not at `b.a`'s. The three place-shaped readers below were
+    /// nonetheless looking the site up at their own node's span, which resolved
+    /// only because `FieldAccess` and `TupleIndex` copy their object's span —
+    /// the collision this row's family exists to remove.
+    ///
+    /// Walking to the root makes both ends agree by construction rather than by
+    /// coincidence, and keeps working when the remaining arm is widened too.
+    /// Each occurrence of a root is its own span, so per-use-site precision is
+    /// unchanged: `let t = b.a;` and a later `let u = b.n;` still key on their
+    /// own `b` tokens.
+    fn uam_consume_root_span(expr: &Expr) -> Option<crate::token::Span> {
+        let mut cur = expr;
+        loop {
+            match &cur.kind {
+                ExprKind::Identifier(_) | ExprKind::SelfValue => return Some(cur.span),
+                ExprKind::FieldAccess { object, .. }
+                | ExprKind::TupleIndex { object, .. }
+                | ExprKind::Index { object, .. } => cur = object,
+                _ => return None,
+            }
+        }
+    }
+
+    /// True when a PLACE expression's root is a flagged use-after-move consume
+    /// site. The one lookup all three place readers share, so none of them can
+    /// drift back onto the node's own span.
+    fn uam_consume_site_at_root(&self, expr: &Expr) -> bool {
+        Self::uam_consume_root_span(expr).is_some_and(|sp| {
+            self.span_tables
+                .uam_consume_sites
+                .contains(&(sp.offset, sp.length))
+        })
+    }
+
     /// B-2026-08-13-14 — the field-bind half of [`Self::uam_defensive_copy`].
     ///
     /// `Some(copy)` when `expr` is `<local>.<field>` at a flagged consume site
@@ -4717,11 +4756,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::FieldAccess { object, field } = &expr.kind else {
             return None;
         };
-        if !self
-            .span_tables
-            .uam_consume_sites
-            .contains(&(expr.span.offset, expr.span.length))
-        {
+        if !self.uam_consume_site_at_root(expr) {
             return None;
         }
         // Root at a named local or `self` — the same two spellings the source
@@ -4867,11 +4902,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::FieldAccess { object, field } = &arg_expr.kind else {
             return false;
         };
-        if !self
-            .span_tables
-            .uam_consume_sites
-            .contains(&(arg_expr.span.offset, arg_expr.span.length))
-        {
+        if !self.uam_consume_site_at_root(arg_expr) {
             return false;
         }
         // The same two receiver spellings the disarm below resolves, so the
@@ -5007,11 +5038,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::TupleIndex { object, index } = &expr.kind else {
             return None;
         };
-        if !self
-            .span_tables
-            .uam_consume_sites
-            .contains(&(expr.span.offset, expr.span.length))
-        {
+        if !self.uam_consume_site_at_root(expr) {
             return None;
         }
         // Root of the place CHAIN, not just a bare identifier object — the

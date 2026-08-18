@@ -279,9 +279,19 @@ impl super::Parser {
                                     },
                                 };
                             } else {
-                                // Field access
+                                // Field access — B-2026-08-18-31 MEASUREMENT
+                                // SCAFFOLD: span lhs start -> past the field
+                                // name (the token `pos - 1` now points at,
+                                // every arm above having consumed it).
+                                let name_span = self.tokens[self.pos - 1].span;
+                                let end = name_span.offset + name_span.length;
                                 lhs = Expr {
-                                    span: lhs.span,
+                                    span: Span {
+                                        line: lhs.span.line,
+                                        column: lhs.span.column,
+                                        offset: lhs.span.offset,
+                                        length: end.saturating_sub(lhs.span.offset),
+                                    },
                                     kind: ExprKind::FieldAccess {
                                         object: Box::new(lhs),
                                         field: method,
