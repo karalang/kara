@@ -97,9 +97,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
-| missing-feature | 109 | 4 |
+| missing-feature | 109 | 3 |
 | diagnostics | 81 | 2 |
-| false-positive | 78 | 0 |
+| false-positive | 80 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 50 | 0 |
@@ -111,9 +111,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 933 | 2 |
-| typecheck | 200 | 2 |
+| typecheck | 200 | 1 |
 | interp | 153 | 0 |
-| ownership | 58 | 0 |
+| ownership | 60 | 0 |
 | other | 55 | 3 |
 | autopar | 49 | 1 |
 | cli | 45 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1340 surfaced · 8 open · 1314 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1342 surfaced · 7 open · 1317 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
-| B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
 | B-2026-08-18-39 | 2026-08-18 | autopar+codegen | high | `?.` ON TWO LET-BOUND CALL RESULTS MISCOMPILES UNDER AUTO-PAR, RETURNING MEMORY THAT VARIES BETWEEN RUNS. Two independent `let`s from Option-returning calls, consumed by `?.`, print `Some(23092184781)` where the answer is `Some(5)` — a different value on every execution. `--interp` and `KARAC_AUTO_PAR=0` are correct; the JIT and the default build each give their own garbage. | Unknown. The SHAPE is B-2026-08-16-1's family — two independent `let`s form an auto-par fork group and a later expression reading them gets no return slot — but that row's cause (a missing `refs_in_expr` arm) is NOT it here: `ExprKind::OptionalChain` IS handled, at closure_escape.rs:2362, recursing into both `object` and `args`. Checked before filing so the next reader does not repeat it. |
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | medium | A `#[gpu]` KERNEL BODY CANNOT LOOP OR USE MUTABLE LOCALS — no `while`/`for`, no `match`, no `let mut`. IMMUTABLE `let` LOCALS LANDED 2026-08-18 (increment 1 of 4), so `let y = x * 2.0; y + 1.0` now works; the remaining floor blocks every reduction, stencil, tiled-matmul and prefix-sum kernel. The v1 GPU ship gate is recorded MET against the element-wise-map shape, which this does not contradict — but the shipped kernel language is still far narrower than “GPU compute shaders” reads. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1340 surfaced
 
 </details>
 
-### Fixed (1314)
+### Fixed (1317)
 
-<details><summary>1314 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1317 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11765,6 +11764,17 @@ MEASURED, `--interp` vs `karac build`, before -> after:
 Tests: `asan_freshtemp_mapset_len_frees_its_handle` pins the handle accounting at zero leaked bytes, in a loop and with a `Map[String, i64]` whose String keys give the handle per-entry heap of its own, plus a bound-receiver control for the spelling that always worked. `test_freshtemp_mapset_read_methods_oracle` (interpreter) and `freshtemp_mapset_read_methods_answer_and_evaluate_once` (codegen E2E) pin the values AND print one marker per producer call, so a regression in either defect fails on its own line.
 
 Gates: cargo fmt clean, clippy clean on both feature sets, full suite green. |
+| B-2026-08-18-27 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', f… | FIXED by f3e8e42. Argument position now goes through the SAME pre-typecheck desugar as the annotated `let` and the return/tail positions, so interpreter/JIT/AOT parity holds by construction. `f(<chain>.collect())` rewrites the argument into the accumulate-into-`T` block using the CALLEE'S declared parameter type.
+
+The row's objection -- that a name-keyed fn map is unsafe because the desugar has no scope tracking, so a local closure shadowing a top-level fn name would be rewritten against the wrong signature -- is answered rather than routed around. The walk now runs TWICE over each function body: pass 1 does the existing `let`/`return` rewrites and records every name the body binds (parameters included); pass 2 does the argument rewrite and stands down when the callee's name is in that set. TWO PASSES OF THE SAME TRAVERSAL, not a separate collector: a shadowing `let` can sit textually after the call, so the decision needs the whole body first, and reusing the one traversal means any expression the rewrite reaches is one the collector already reached. Both `walk_expr` matches are exhaustive over `ExprKind`, so a new variant breaks the build instead of escaping either pass.
+
+VERIFIED that the shadow is a real hazard and not a theoretical one: a local `let ambush = |x: Vec[i64]| ...` shadowing a top-level `fn ambush(s: Set[i64])` compiles and calls today. The E2E fixtures include it and assert the Vec answer (4), so removing the guard turns those tests red rather than silently regressing user code.
+
+Remaining conservative gates, each a missed rewrite rather than a wrong one: bare-`Identifier` callees only (a path call may cross modules), all-positional arguments at exact arity (labels and defaults move which parameter an argument lands on), no generic functions (a `Set[T]` parameter pasted into the caller would name an unbound `T`), and a duplicated top-level name poisons its entry.
+
+The synthesized nodes take their spans from the ARGUMENT, not the parameter type. One parameter type is shared by every call site of a function, and for a `String` target that is a real miscompile: `w.iter().collect()` at one site and `s.chars().collect()` at another would record `String` and `char` for the same element key. Two `take_str` calls with different element types are in the fixtures for this.
+
+Verified byte-identical output on all four surfaces -- `run --interp`, `run` (JIT), `build`, and `KARAC_AUTO_PAR=0 build` -- for `Set`, `VecDeque`, `Map` and `String` targets. |
 | B-2026-08-18-28 | cli | low | NO lint diagnostic code is registered in `karac explain`'s CODE_TABLE, so `karac explain E0278` (must_use) and `karac explain E0259` (the four compil… | FIXED by 4d071c5. `CODE_TABLE` gains a `lint()` row constructor and rows for
 both halves of both pairs: W0259/E0259 (`undocumented_unsafe |
 unsafe_op_in_unsafe_fn | ffi_float_eq`) and W0278/E0278 (`must_use`). All four
@@ -11938,6 +11948,8 @@ Third visit to this arm; B-2026-08-18-3 taught it one more legal operand shape (
 
 Verified: the map miss through a struct field, the same miss through a local, and a nested-Vec out-of-range now all report the real user-facing error with exit 1 under `--interp`, matching what JIT and AOT already did. The error is reported ONCE, not compounded by the outer subscript re-reporting against the `Unit` placeholder. Anti-vacuity pinned in the test: the present-key and in-range spellings still evaluate to the right elements, and the test fails with the original ICE when the fix is stashed. |
 | B-2026-08-18-38 | other | medium | The ENTIRE wasm E2E surface in `tests/cli.rs` passed VACUOUSLY on any machine whose default rustup toolchain is not the pinned one: 36 tests took the… | c3f5f3f |
+| B-2026-08-18-44 | ownership | medium | A SLICE PATTERN'S BINDINGS were dropped by `cfg::pattern_bindings`, so the ownership CFG recorded no `Define` for them and never called `note_local_i… | f3e8e42 |
+| B-2026-08-18-45 | ownership | medium | EVERY `collect()` into a non-`Vec` target emitted a `perf[rc-fallback]` note naming a SYNTHESIZED binding the user never wrote -- "RC fallback insert… | f3e8e42 |
 
 </details>
 
