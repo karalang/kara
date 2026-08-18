@@ -3910,11 +3910,11 @@ The implementation cost is bounded — alias expansion already substitutes gener
 Refinement types attach value constraints to types via `where` clauses. The constraint is checked at construction boundaries; once a value has the refined type, the constraint is guaranteed:
 
 ```
-type NonZero = i32 where self != 0
-type Positive = i32 where self > 0
-type Percentage = f64 where self >= 0.0 and self <= 100.0
-type ValidPort = u16 where self >= 1 and self <= 65535
-type NonEmpty[T] = Vec[T] where self.len() > 0
+type NonZero = i32 where self != 0;
+type Positive = i32 where self > 0;
+type Percentage = f64 where self >= 0.0 and self <= 100.0;
+type ValidPort = u16 where self >= 1 and self <= 65535;
+type NonEmpty[T] = Vec[T] where self.len() > 0;
 ```
 
 **Refinement constraint language.** The `where` clause accepts any *pure expression* over `self` and compile-time constants. Formally:
@@ -4042,8 +4042,8 @@ let n: NonZero = x;                       // COMPILE ERROR — no implicit runti
 - **`as` (asserting):** Inserts a runtime check that panics on failure; propagates the `panics` effect. Use when you are confident the check will pass. A future phase may elide the check (and the `panics` effect) when the compiler can statically prove implication between the predicates, but this is explicitly out of scope for v1 — relying on it is not supported.
 
 ```
-type NonZero = i32 where self != 0
-type Positive = i32 where self > 0
+type NonZero = i32 where self != 0;
+type Positive = i32 where self > 0;
 
 let p: Positive = 5;
 let nz: NonZero = p;                         // ERROR — no implicit cross-refinement coercion
@@ -4072,10 +4072,10 @@ This rule applies to all arithmetic operators, bitwise operators, and method cal
 Zero-cost wrapper types that prevent mixing structurally identical but semantically different values:
 
 ```
-distinct type UserId = i64
-distinct type PostId = i64
-distinct type Meters = f64
-distinct type Seconds = f64
+distinct type UserId = i64;
+distinct type PostId = i64;
+distinct type Meters = f64;
+distinct type Seconds = f64;
 
 fn get_user(id: UserId) -> User { ... }
 
@@ -4089,10 +4089,10 @@ get_user(uid);    // OK
 
 ```
 #[derive(Eq, Hash, Display, Ord)]
-distinct type UserId = u64
+distinct type UserId = u64;
 
 #[derive(Eq, Ord, Arithmetic)]
-distinct type FloorNum = i64   // + - * / % Neg enabled, but only FloorNum op FloorNum
+distinct type FloorNum = i64;  // + - * / % Neg enabled, but only FloorNum op FloorNum
 ```
 
 **Conversion:**
@@ -4102,7 +4102,7 @@ distinct type FloorNum = i64   // + - * / % Neg enabled, but only FloorNum op Fl
 **Interaction with refinement types (G40).** Distinct and constrained can combine:
 
 ```
-distinct type ValidPort = u16 where self >= 1 and self <= 65535
+distinct type ValidPort = u16 where self >= 1 and self <= 65535;
 ```
 
 This gives you both type safety (can't pass a random `u16` as a port) and value safety (port is always in range).
