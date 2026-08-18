@@ -98416,6 +98416,44 @@ fn main() {
         }
     }
 
+    /// B-2026-08-18-24 / -31 — a generic-struct FIELD reached through an
+    /// INDEXED receiver: `v[0].second.len()` over `Vec[Pair[Vec, Vec]]`.
+    ///
+    /// A VALUE assertion, which is the point. The postfix-span rows are pinned
+    /// by parser tests asserting that each node carries its own SpanKey; those
+    /// cannot see this shape, because the failure mode here is not a lost span
+    /// but a field GEP that lands in the wrong place. `v[0]` and `v[0].second`
+    /// resolve their instantiation through span-keyed records, and when that
+    /// resolution picks up the wrong entry the receiver falls back to the
+    /// ERASED base struct — whose generic fields are one word each — so the GEP
+    /// reads mid-`{ptr,len,cap}`. Observed during that work: `.len()` on a
+    /// two-element field returning 4. The program builds and exits 0, so only
+    /// checking the ANSWER catches it.
+    ///
+    /// Both fields are read, since a wrong GEP that happens to land on the
+    /// other field would still satisfy a single-field check.
+    #[test]
+    fn indexed_generic_struct_field_receiver_reads_the_right_field() {
+        let src = "struct Pair[A, B] { first: A, second: B }\n\
+                   fn main() {\n\
+                       let mut a: Vec[i64] = Vec.new();\n\
+                       a.push(1);\n\
+                       let mut b: Vec[i64] = Vec.new();\n\
+                       b.push(10); b.push(20);\n\
+                       let mut v: Vec[Pair[Vec[i64], Vec[i64]]] = Vec.new();\n\
+                       v.push(Pair { first: a, second: b });\n\
+                       println(v[0].first.len().to_string());\n\
+                       println(v[0].second.len().to_string());\n\
+                   }\n";
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(
+            out, "1\n2\n",
+            "each field of an indexed generic struct must GEP to its own storage"
+        );
+    }
+
     /// B-2026-08-18-26 — READ METHODS on a freshly returned `Set`/`Map`, which
     /// silently produced garbage: `mk_set().len()` printed 0 for a three-element
     /// set, `mk_map().len()` printed 152 for a two-entry map, `is_empty()`
