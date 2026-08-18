@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 259 | 0 |
+| miscompile | 260 | 1 |
 | leak | 184 | 1 |
 | double-free | 132 | 0 |
 | run-vs-build | 128 | 0 |
-| codegen-gap | 115 | 0 |
-| missing-feature | 103 | 3 |
+| codegen-gap | 117 | 2 |
+| missing-feature | 104 | 3 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
 | diagnostics | 73 | 4 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 918 | 1 |
-| typecheck | 195 | 3 |
+| codegen | 921 | 4 |
+| typecheck | 196 | 3 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1307 surfaced · 8 open · 1282 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1311 surfaced · 11 open · 1283 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,10 +134,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1307 surfaced
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-17-36 | 2026-08-17 | typecheck | medium | `collect()` can only ever produce `Vec[T]` -- every other `FromIterator` target design.md promises is rejected at typecheck. § Iterator Adaptors: "Every standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`, `String`) implements `FromIterator` for its natural element type. `collect` infers the target type from context or requires annotation." Measured, one target per file: `let up: String = s.chars().map(|c| c.to_uppercase()).collect()` -> "expected 'String', found 'Vec[char]'"; `let j: String = v.iter().map(|s| s.to_uppercase()).collect()` -> "expected 'String', found 'Vec[String]'"; `let s: Set[i64] = ... .collect()` -> "expected 'Set[i64]', found 'Vec[i64]'"; `let d: VecDeque[i64] = ... .collect()` -> "expected 'VecDeque[i64]', found 'Vec[i64]'"; `let m: Map[i64, i64] = v.iter().map(|x| (x, x * 10)).collect()` -> "expected 'Map[i64, i64]', found 'Vec[(i64, i64)]'". The sixth target, `TreeMap`, cannot even be named -- see B-2026-08-17-38. In every case the annotation is ignored and the chain's type is fixed to `Vec` of the element type, so the diagnostic reads as a mismatch the user caused rather than a target the compiler does not support. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
-| B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
 | B-2026-08-18-10 | 2026-08-18 | codegen | medium | A `match` whose SCRUTINEE is a nested `match` with a BARE-IDENTIFIER arm leaks the boxed payload -- `match (match i % 3 { 0 => { o } _ => { None } }) { ... }` over an `o: Option[City]` local strands 1205 bytes in 68 objects across 200 iterations, while the `let`-bound twin `let c = match ...; match c { ... }` is clean. The last arm shape B-2026-08-18-8's fail-closed rule declines. | `match_result_scrutinee_owns_box` in src/codegen/control_flow_match.rs -- the `_ => self.expr_yields_fresh_owned_temp(tail)` arm is where a bare identifier currently falls through to false. The per-arm suppression this needs is the same channel `compile_match`'s arm loop uses for `freshtemp_boxed_slot`. |
+| B-2026-08-18-11 | 2026-08-18 | codegen | high | An OWNED `self` receiver on a builtin-container impl head is not lowered, and the two shapes measured fail in the two worst ways: `for x in self` over an owned `Set[i64]` self compiles to a sum over NOTHING (interpreter 12, `karac build` 0 -- a silent wrong answer), and `self[k]` over an owned `Map[String, i64]` self SEGFAULTS if the map index path is allowed to route it, because the slot does not hold the handle `compile_map_index` loads. The BORROWED spelling of both works. `Vec` and `Slice` owned selves work. | roadmap.md |
+| B-2026-08-18-12 | 2026-08-18 | codegen | medium | `self.len()` inside an `impl Trait for Map[K, V]` or `impl Trait for Set[T]` body has NO codegen dispatcher -- "no handler for method 'len' on non-identifier receiver" -- on BOTH receiver modes. The identical body over a `Vec[i64]` or `Slice[i64]` head compiles and runs. The interpreter answers correctly in every case, so this is a `karac check` / `karac build` divergence, not a language rule. | roadmap.md |
+| B-2026-08-18-13 | 2026-08-18 | typecheck | medium | A method declared by `impl Trait for Array[i64, 3]` CANNOT BE CALLED: the call site reports "no method 'g' on type 'Array'" even though the impl block itself now checks. Every other builtin container head measured (Vec, VecDeque, Slice, Map, Set, SortedMap, SortedSet, Option, Result, Column, Tensor) dispatches; `Array[T, N]` is the one that does not. | roadmap.md |
+| B-2026-08-18-14 | 2026-08-18 | codegen | medium | A RANGE SUBSCRIPT used directly as a METHOD RECEIVER -- `v[0..3].first_or(-1)` -- has no codegen: "no handler for expression kind Range". The same slice passed as an ARGUMENT works (`show(v[0..2])`), and binding it first works (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`), so it is the receiver position specifically. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -155,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1307 surfaced
 
 </details>
 
-### Fixed (1282)
+### Fixed (1283)
 
-<details><summary>1282 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1283 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11047,6 +11050,23 @@ duplicate — filed from the B-2026-08-17-25 follow-up pass without grepping the
 ledger for an existing row on the same subject, when one already existed from
 an earlier design.md probe. Nothing here was worked separately; -28 carries the
 full account of all four defects. |
+| B-2026-08-17-44 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anyth… | FIXED by 0beef548. The row asked for the scope to be checked before fixing, and the check changed the shape of the answer: it was not `Slice`, it was every builtin container head EXCEPT the four that had been hit before. Measured by binding `self` to a deliberately wrong annotation and reading the "found" type out of the error, one head per line -- args KEPT by `Vec`, `VecDeque`, `Column`, `Tensor`; args LOST by `Slice`, `Array`, `Map`, `Set`, `SortedMap`, `SortedSet`, `Option`, `Result`, `Vector`. The keep-list had grown one head at a time as each was hit (Column/Tensor for a reduction intercept, then Vec/VecDeque for a fold), so the set was an accident of discovery order rather than a decision.
+
+THE LIST EXISTED TWICE, hand-mirrored, which is why widening it was the smaller half of the work: `TypeChecker::check_impl_block` types `self` for the BODY, and `closure_escape::make_impl_method_function` synthesizes the `self` PARAM whose TypeExpr codegen registers its per-name side-tables from. Both now call one `impl_dispatch::impl_head_keeps_type_args`. `src/impl_dispatch.rs` is where it belongs: that module exists precisely so the emitters and the dispatch sites cannot disagree about an impl head, and its doc says so.
+
+TWO ARMS, NOT ONE, on the typechecker side. `Slice`, `Array` and `Vector` lower to DEDICATED `Type` variants rather than to `Named`, so for them the fallback did more than erase args -- it replaced the VARIANT with `Named { name: "Slice" }`, and every consumer that matches on the variant (the index rule, slice method dispatch, element-type reads) stopped recognizing `self` as a slice at all. Both arms are guarded on `type_is_fully_concrete`, which is what keeps the fallback's real job intact: erasing args off a GENERIC head, so `impl Foo[T]`'s `self` is still `Foo`. A test pins that half.
+
+CODEGEN NEEDED ITS OWN EDIT, and the typechecker fix alone would have been a false green. `self[0]` arrives as `ExprKind::SelfValue`, and `compile_index`'s Slice and Map arms keyed on `Identifier` only -- so even with the element type registered, the body fell through to "Index operator applied to non-array type" while `--interp` read the element. The Column/Tensor and Vec arms already accepted both spellings; the Slice arm now does too.
+
+THE MAP ARM IS DELIBERATELY NARROWER, and the reason is worth reading before widening it. Routed unconditionally, an OWNED `self` on a Map head does not fail -- it SEGFAULTS, because the slot does not hold the handle `compile_map_index` loads. So the map arm is gated on `signature_ref_params.contains("self")`: `ref self` works (42 on all three backends) and the owned spelling keeps its loud build error. B-2026-08-18-11 carries that measurement.
+
+MEASURED AFTER, interpreter / JIT / `karac build` all agreeing: `Slice` element read 10 on owned AND `ref` self; `Option[i64].unwrap_or` 9 and 0; `Map[String, i64]` read by String key 42 on `ref self`.
+
+IT ALSO REPAIRED TWO SILENT WRONG ANSWERS, which were the shapes that never announced themselves. `for x in self` over a `Slice[i64]` or `Set[i64]` head TYPECHECKED before -- iteration does not need the element type the way `self[0]` does -- so it built, and the compiled binary summed nothing while the interpreter summed correctly. Pre-fix 12 / 0, post-fix 12 / 12, with a free-function `Set[i64]` PARAMETER as the control that was 12 / 12 all along.
+
+FOUR REMAINDERS, each filed rather than folded in: an owned `self` container receiver is not lowered at all (B-2026-08-18-11, still 12 / 0 for Set iteration); `self.len()` on a Map/Set head has no dispatcher on either receiver mode (B-2026-08-18-12); an `impl ... for Array[i64, N]` method cannot be CALLED, "no method 'g' on type 'Array'", which this fix unmasked by making the body check (B-2026-08-18-13); and a range subscript used directly as a method receiver has no codegen (B-2026-08-18-14).
+
+THE SELF-CONTRADICTING DIAGNOSTIC the row asked about is gone by construction rather than by rewording: the receiver types correctly, so nothing calls `Slice[T]` unindexable while its own help text lists it as indexable. |
 | B-2026-08-17-45 | codegen | high | Moving an `Option`-TYPED FIELD out of a matched struct payload DOUBLE FREES under both compiled backends, on a program `karac check` passes clean and… | FIXED by 0dfeb3d. THE ROW'S OWN INVESTIGATION NAMED THREE MISSING PIECES; TWO OF THEM WERE NOT MISSING, which is why the landed diff is one condition rather than a new suppressor. Finding (1) said no suppression site exists for an arm-tail field move: a panic-backtrace off the emitting site shows the arm body is a BLOCK, so `suppress_block_tail_cleanup` -> `suppress_source_vec_cleanup_for_arg_ex` -> `zero_struct_field_move_cap_inst` already fires on this exact shape. Finding (2) said the admission class declines it and a `base_override` would be needed to reach the box: that site already carries B-2026-08-06-10's box mirror, wired and waiting. Only finding (3) held -- `deboxed_payload_box_ptrs` was empty, so the mirror had no box pointer to write through.
 
 ROOT CAUSE, confirmed against the emitted IR before any change. `match.body0` deboxes the payload into `%x`, a private load of the box `%a` still owns. The neutralizing `store i64 0, ptr %opt.move.tag` lands in `%x`; the drop that frees the field is `__karac_drop_struct_A(%a_box_ptr)`, which reads the box and cannot see the copy. So the field is freed by the box's drop AND by the binding the move handed it to.
