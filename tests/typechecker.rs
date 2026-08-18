@@ -5931,6 +5931,79 @@ fn an_immediately_invoked_closure_takes_its_param_types_from_the_call() {
     );
 }
 
+/// B-2026-08-17-30 — E0218 ends with ``Write `mut <expr>`.`` and shipped with
+/// no machine-applicable edit, so `karac fix` answered "no fixable
+/// diagnostics" to a message that had just spelled the repair out. Its exact
+/// inverse, E0219 ("drop the `mut` marker"), carried one all along.
+///
+/// The edit is anchored on the ARGUMENT EXPRESSION, not on `CallArg::span`,
+/// and the labeled case is what proves it: `arg.span` starts at the label, so
+/// an insertion there yields `f(mut name: x)`, which does not parse. The test
+/// therefore asserts on the offset relative to the expression, not just on the
+/// text.
+#[test]
+fn missing_mut_marker_carries_an_insertion_fix_it() {
+    for (src, label) in [
+        (
+            "fn bump(n: mut ref i64) { n = n + 1; }\n\
+             fn main() { let c = 0; bump(c); println(c); }",
+            "unlabeled",
+        ),
+        (
+            // The shape the anchor choice exists for.
+            "fn bump(counter: mut ref i64) { counter = counter + 1; }\n\
+             fn main() { let c = 0; bump(counter: c); println(c); }",
+            "labeled",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        let err = errors
+            .iter()
+            .find(|e| e.kind == TypeErrorKind::MissingMutMarker)
+            .unwrap_or_else(|| panic!("{label}: expected MissingMutMarker, got: {errors:?}"));
+        let fix = err.fix_it.as_ref().unwrap_or_else(|| {
+            panic!("{label}: E0218 names its own repair, so it must carry the edit")
+        });
+        assert_eq!(
+            fix.span.length, 0,
+            "{label}: the repair is a pure insertion"
+        );
+        assert_eq!(fix.replacement, "mut ", "{label}: inserts the marker");
+        // The insertion point must be the `c` of the argument — applying it at
+        // the label would produce `bump(mut counter: c)`.
+        let at = fix.span.offset;
+        assert_eq!(
+            &src[at..at + 1],
+            "c",
+            "{label}: the edit must anchor on the argument expression, not the label"
+        );
+    }
+}
+
+/// The counterweight: E0219, the deletion half, must keep its own edit — the
+/// two are a pair and the point of the row was that only one of them worked.
+#[test]
+fn invalid_mut_marker_keeps_its_deletion_fix_it() {
+    let errors = typecheck_errors(
+        "fn bump(n: mut ref i64) { n = n + 1; }\n\
+         fn outer(c: mut ref i64) { bump(mut c); }\n\
+         fn main() { let mut c = 0; bump(mut c); println(c); }",
+    );
+    let err = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::InvalidMutMarker)
+        .unwrap_or_else(|| panic!("expected InvalidMutMarker, got: {errors:?}"));
+    let fix = err
+        .fix_it
+        .as_ref()
+        .expect("E0219 has always carried its deletion");
+    assert!(fix.span.length > 0, "the repair is a deletion");
+    assert!(
+        fix.replacement.is_empty(),
+        "a deletion replaces with nothing"
+    );
+}
+
 // ── Category: iterator-adaptor diagnostic rendering ────────────
 
 /// B-2026-08-17-39 — six iterator-adaptor diagnostics formatted the offending

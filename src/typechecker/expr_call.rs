@@ -1741,15 +1741,41 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         if !arg.mut_marker && !forwarded {
-            self.type_error(
-                format!(
-                    "parameter expects `{}`; call with fresh binding requires \
-                     a `mut` marker at this argument to permit the mutation. \
-                     Write `mut <expr>`.",
-                    type_display(param_ty)
-                ),
+            let message = format!(
+                "parameter expects `{}`; call with fresh binding requires \
+                 a `mut` marker at this argument to permit the mutation. \
+                 Write `mut <expr>`.",
+                type_display(param_ty)
+            );
+            // B-2026-08-17-30 — this diagnostic names its own repair in
+            // imperative form ("Write `mut <expr>`.") and used to ship without
+            // an edit, so `karac fix` answered "no fixable diagnostics" to a
+            // message that had just spelled out the fix. Its exact inverse,
+            // E0219 ("drop the `mut` marker"), carried one all along: adjacent
+            // codes, the same marker, opposite directions, and only the
+            // deletion was machine-applicable.
+            //
+            // Safe to apply where B-2026-08-17-11's E0200 was not: that one's
+            // suggested repair was the UNSAFE direction, so an edit would have
+            // auto-applied a trapping fix. Here there is exactly one repair,
+            // no direction to choose, and no alternative that compiles.
+            //
+            // INSERTED AT THE ARGUMENT EXPRESSION, not at `arg.span` — the
+            // same distinction `emit_marker_deletion` records below.
+            // `CallArg::span` starts at the LABEL in `f(name: x)`, so an
+            // insertion there would produce `f(mut name: x)`, which does not
+            // parse. `arg.value.span` is the expression itself in both the
+            // labeled and unlabeled shapes.
+            let mut edit_span = arg.value.span;
+            edit_span.length = 0;
+            self.type_error_with_fix_it(
+                message,
                 arg.span,
                 TypeErrorKind::MissingMutMarker,
+                FixIt {
+                    span: edit_span,
+                    replacement: "mut ".to_string(),
+                },
             );
         }
     }
