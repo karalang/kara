@@ -590,6 +590,12 @@ fn lower_expr(
             let e = lower_expr(else_e, resolve, helpers)?;
             Ok(format!("select({e}, {t}, {cond})"))
         }
+        // Value `match` → a nested `select()` chain, the same branchless shape
+        // the value-`if` above uses (B-2026-08-18-40 increment 4). WGSL's own
+        // `switch` is a STATEMENT, so it cannot produce the value a Kāra `match`
+        // is; `select` can, and it composes into every expression position at
+        // once — a `let` initializer, an assignment RHS, a loop body, the tail.
+        ExprKind::Match { scrutinee, arms } => lower_match(scrutinee, arms, resolve, helpers),
         ExprKind::Call { callee, args } => {
             lower_call(callee, args, &|e| lower_expr(e, resolve, helpers), helpers)
         }
@@ -963,6 +969,112 @@ fn emit_helpers(
 /// (`else { .. }`) or another `if` (else-if chain, recursed by the caller). No
 /// `else` is an error — a value `if` needs both arms. WGSL has no statement `if`
 /// in this subset, so this lowers to `select(else, then, cond)`.
+/// Lower a value `match` into a nested `select()` chain, built from the last
+/// arm outward: `match s { p1 => e1, p2 => e2, _ => ef }` becomes
+/// `select(select(ef, e2, s == p2), e1, s == p1)`.
+///
+/// **Every arm is evaluated**, because `select` is not short-circuiting — and
+/// that is sound here precisely because of the `#[gpu]` effect gate. A kernel's
+/// whole transitive call graph is already proven free of allocation, host I/O,
+/// channel traffic and explicit panics, so an unselected arm can have no
+/// observable effect. (The implicit trap sources FE-4b keeps permitted —
+/// integer division by zero, indexing — are defined, non-trapping operations in
+/// WGSL, so they cannot fault an unselected arm either.) Branchless is also the
+/// shape a GPU wants: no per-lane divergence.
+///
+/// The LAST arm is the fallback and its pattern is not tested. That is sound
+/// without inspecting it: the typechecker has already proven the match
+/// exhaustive, so when no earlier arm matches the last one must.
+fn lower_match(
+    scrutinee: &Expr,
+    arms: &[crate::ast::MatchArm],
+    resolve: &dyn Fn(&str) -> Option<String>,
+    helpers: &HashSet<String>,
+) -> Result<String, WgslError> {
+    let Some((fallback, rest)) = arms.split_last() else {
+        return Err(WgslError::UnsupportedBody(
+            "a GPU kernel `match` must have at least one arm".to_string(),
+        ));
+    };
+    if arms.iter().any(|a| a.guard.is_some()) {
+        return Err(WgslError::UnsupportedBody(
+            "a GPU kernel `match` arm cannot have a guard yet".to_string(),
+        ));
+    }
+    // The scrutinee text is repeated once per tested arm; naga's own CSE folds
+    // the duplicates, and keeping it textual avoids a temporary that would need
+    // statement position.
+    let subject = lower_expr(scrutinee, resolve, helpers)?;
+    // Validate every pattern BEFORE lowering any body — including the
+    // fallback's, whose condition is discarded but whose shape still has to be
+    // supported. Otherwise an unsupported pattern surfaces as whatever its body
+    // happens to trip over first (a binding arm `n => n` reported "unknown
+    // identifier 'n'", naming the symptom rather than the cause).
+    let conditions = rest
+        .iter()
+        .map(|arm| match_arm_condition(&arm.pattern, &subject))
+        .collect::<Result<Vec<_>, _>>()?;
+    match_arm_condition(&fallback.pattern, &subject)?;
+
+    let mut acc = lower_expr(&fallback.body, resolve, helpers)?;
+    for (arm, cond) in rest.iter().zip(conditions).rev() {
+        let body = lower_expr(&arm.body, resolve, helpers)?;
+        match cond {
+            // An irrefutable arm before the end makes every later arm dead.
+            None => acc = body,
+            Some(cond) => acc = format!("select({acc}, {body}, {cond})"),
+        }
+    }
+    Ok(acc)
+}
+
+/// The WGSL test for one `match` arm against `subject`, or `None` when the
+/// pattern is irrefutable (`_`). Only the pattern forms with a WGSL equality
+/// exist here: integer and bool literals, and `|` alternatives of those.
+fn match_arm_condition(
+    pattern: &crate::ast::Pattern,
+    subject: &str,
+) -> Result<Option<String>, WgslError> {
+    use crate::ast::LiteralPattern;
+    match &pattern.kind {
+        PatternKind::Wildcard => Ok(None),
+        PatternKind::Literal(LiteralPattern::Integer(n, _)) => {
+            Ok(Some(format!("({subject} == {n})")))
+        }
+        PatternKind::Literal(LiteralPattern::Bool(b)) => Ok(Some(format!("({subject} == {b})"))),
+        PatternKind::Or(alts) => {
+            let mut parts = Vec::new();
+            for alt in alts {
+                match match_arm_condition(alt, subject)? {
+                    // `_` inside an alternation makes the whole arm irrefutable.
+                    None => return Ok(None),
+                    Some(c) => parts.push(c),
+                }
+            }
+            if parts.is_empty() {
+                return Err(WgslError::UnsupportedBody(
+                    "a GPU kernel `match` alternation must have at least one pattern".to_string(),
+                ));
+            }
+            Ok(Some(format!("({})", parts.join(" || "))))
+        }
+        PatternKind::Literal(LiteralPattern::Float(_, _)) => Err(WgslError::UnsupportedBody(
+            "a GPU kernel `match` cannot test a float literal — exact float equality is not a \
+             reliable selector; match on an integer instead"
+                .to_string(),
+        )),
+        PatternKind::Binding(name) => Err(WgslError::UnsupportedBody(format!(
+            "a GPU kernel `match` arm cannot bind `{name}` — the branchless `select` lowering has \
+             no place to introduce a binding; use `_` and read the scrutinee directly"
+        ))),
+        _ => Err(WgslError::UnsupportedBody(
+            "a GPU kernel `match` supports integer / bool literal patterns, `|` alternations of \
+             those, and `_`"
+                .to_string(),
+        )),
+    }
+}
+
 fn if_branches<'a>(
     then_block: &'a Block,
     else_branch: &'a Option<Box<Expr>>,
@@ -2955,6 +3067,92 @@ mod tests {
         let err = emit_kernel(&func, &[]).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("must iterate a range"), "{msg}");
+    }
+
+    // ── value `match` (B-2026-08-18-40, increment 4) ───────────────
+
+    #[test]
+    fn scalar_kernel_lowers_match_to_a_select_chain() {
+        let func = parse_kernel(
+            "#[gpu]\nfn weight(x: i32) -> i32 {\n    let w: i32 = match x {\n        0 => 4,\n        1 | 2 => 2,\n        _ => 1,\n    };\n    w * 10\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(
+            wgsl.contains(
+                "let w = select(select(1, 2, ((input[i] == 1) || (input[i] == 2))), 4, (input[i] == 0));"
+            ),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn scalar_kernel_lowers_match_in_tail_position() {
+        // `match` is an expression, so it works wherever one does — here as the
+        // kernel's own value, not only as a `let` initializer.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: i32) -> i32 {\n    match x {\n        0 => 7,\n        _ => 9,\n    }\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(
+            wgsl.contains("output[i] = select(9, 7, (input[i] == 0));"),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn scalar_kernel_match_uses_the_last_arm_as_the_fallback() {
+        // Exhaustive without a `_`: the typechecker has already proven that when
+        // no earlier arm matches, the last one must, so its pattern is not
+        // tested and it becomes the base of the chain. The scrutinee is a
+        // comparison because `bool` is not a legal kernel PARAMETER type.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: i32) -> i32 {\n    match x > 0 {\n        true => 1,\n        false => 0,\n    }\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(
+            wgsl.contains("output[i] = select(0, 1, ((input[i] > 0) == true));"),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn scalar_kernel_match_composes_inside_a_loop() {
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: i32) -> i32 {\n    let mut acc: i32 = 0;\n    for n in 0..3 {\n        acc = acc + match x {\n            0 => 1,\n            _ => 2,\n        };\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(
+            wgsl.contains("acc = (acc + select(2, 1, (input[i] == 0)));"),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_a_match_guard() {
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: i32) -> i32 {\n    match x {\n        0 if x > 1 => 1,\n        _ => 2,\n    }\n}",
+        );
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        assert!(err.to_string().contains("guard"), "{err:?}");
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_a_binding_match_arm() {
+        // The branchless `select` lowering has nowhere to introduce a binding.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: i32) -> i32 {\n    match x {\n        0 => 1,\n        n => n,\n    }\n}",
+        );
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        assert!(err.to_string().contains("cannot bind"), "{err:?}");
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_a_float_literal_match() {
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: f32) -> f32 {\n    match x {\n        1.0 => 1.0,\n        _ => 2.0,\n    }\n}",
+        );
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        assert!(err.to_string().contains("float literal"), "{err:?}");
     }
 
     #[test]

@@ -56332,6 +56332,41 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_gpu_scalar_kernel_lowers_match_to_select_chain() {
+        // B-2026-08-18-40 increment 4: a value `match` becomes a nested
+        // `select()` — the same branchless shape value-`if` already uses, since
+        // WGSL's `switch` is a statement and cannot produce a value. Literal
+        // arms, `|` alternations and `_` all appear here. Codegen-only, so
+        // CI-safe; the executed twin ran on lavapipe and matched the
+        // interpreter (40, 20, 10).
+        let src = r#"
+#[gpu]
+fn weight(x: i32) -> i32 {
+    let w: i32 = match x {
+        0 => 4,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    w * 10
+}
+
+fn main() {
+    let mut v: Vec[i32] = Vec.new();
+    v.push(0);
+    let out = gpu.dispatch(weight, v);
+    println(out[0]);
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains(
+                "let w = select(select(1, 2, ((input[i] == 1) || (input[i] == 2))), 4, (input[i] == 0));"
+            ),
+            "the match must lower to a nested select chain with the alternation OR'd; got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_gpu_scalar_kernel_lowers_for_over_range() {
         // B-2026-08-18-40 increment 3: `for v in a..b` lowers to a native WGSL
         // `for`, inclusive ranges compare with `<=`, loops nest, and the outer
