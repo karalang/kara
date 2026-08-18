@@ -33001,6 +33001,38 @@ fn main() {
     }
 
     #[test]
+    fn e2e_indexed_read_from_a_map_field() {
+        // B-2026-08-18-36, the read half of B-2026-08-18-34's write. That row
+        // made `h.buckets.entry(k).or_insert(Vec.new()).push(v)` work on a
+        // struct FIELD; reading an element straight back out --
+        // `h.buckets[k][i]`, the next line anyone writes -- still failed the
+        // build while `--interp` returned the right element.
+        //
+        // The nested-index lowering resolved a field's element type through
+        // `vec_inner_type_expr`, which takes the FIRST generic arg. For a map
+        // the element is the SECOND (the VALUE type), so the head has to be
+        // matched before the element type is resolved rather than after.
+        //
+        // The Vec-of-Vec leg is the regression control for that reordering.
+        if let Some(out) = run_program(
+            "struct Holder { buckets: Map[i64, Vec[i64]], byname: SortedMap[String, Vec[i64]] }\n\
+             fn main() {\n\
+                 let mut h = Holder { buckets: Map.new(), byname: SortedMap.new() };\n\
+                 h.buckets.entry(1).or_insert(Vec.new()).push(43);\n\
+                 h.buckets.entry(1).or_insert(Vec.new()).push(7);\n\
+                 println(h.buckets[1][0]);\n\
+                 println(h.buckets[1][1]);\n\
+                 h.byname.entry(\"k\").or_insert(Vec.new()).push(6);\n\
+                 println(h.byname[\"k\"][0]);\n\
+                 let vv: Vec[Vec[i64]] = [[1, 2], [3, 4]];\n\
+                 println(vv[1][0]);\n\
+             }",
+        ) {
+            assert_eq!(out, "43\n7\n6\n3\n");
+        }
+    }
+
+    #[test]
     fn e2e_question_struct_payload_survives_a_span_of_its_own() {
         // B-2026-08-18-9. `question_ok_payload_types` is WRITTEN by the
         // typechecker at the `?` node's span and READ by

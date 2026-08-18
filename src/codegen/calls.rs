@@ -1365,14 +1365,45 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return Ok(None);
         };
+        let head = match &field_te.kind {
+            TypeKind::Path(p) => p.segments.first().map(String::as_str),
+            _ => None,
+        };
+        // B-2026-08-18-36 — a MAP field (`h.buckets[k][i]` where
+        // `buckets: Map[K, Vec[V]]`). `Map[K, Vec[V]]` on a struct is the
+        // ordinary multimap, and B-2026-08-18-34 had just made WRITING to it
+        // idiomatic (`h.buckets.entry(k).or_insert(Vec.new()).push(v)`), so
+        // reading an element straight back out is the next line anyone writes
+        // — and it failed the build while `--interp` returned the right
+        // element.
+        //
+        // The "element" of a map, for this purpose, is its VALUE type: the
+        // second generic arg, not the first. `vec_inner_type_expr` takes the
+        // FIRST, which is why it cannot serve here and the head is matched
+        // before the element type is resolved rather than after.
+        if matches!(head, Some("Map") | Some("SortedMap")) {
+            let TypeKind::Path(p) = &field_te.kind else {
+                return Ok(None);
+            };
+            let Some(GenericArg::Type(val_te)) = p.generic_args.as_ref().and_then(|a| a.get(1))
+            else {
+                return Ok(None);
+            };
+            let val_te = val_te.clone();
+            let Some(GenericArg::Type(key_te)) = p.generic_args.as_ref().and_then(|a| a.first())
+            else {
+                return Ok(None);
+            };
+            let key_ll_ty = self.llvm_type_for_type_expr(key_te);
+            let val_ll_ty = self.llvm_type_for_type_expr(&val_te);
+            let (elem_ptr, ty) =
+                self.lower_indexed_elem_ptr_map_at(field_ptr, key_ll_ty, val_ll_ty, inner_idx)?;
+            return Ok(Some((elem_ptr, ty, val_te)));
+        }
         // The field must itself be an indexable container; its ELEMENT type is
         // what the synth identifier gets registered as.
         let Some(elem_te) = super::helpers::vec_inner_type_expr(&field_te) else {
             return Ok(None);
-        };
-        let head = match &field_te.kind {
-            TypeKind::Path(p) => p.segments.first().map(String::as_str),
-            _ => None,
         };
         let elem_ll_ty = self.llvm_type_for_type_expr(&elem_te);
         let (elem_ptr, ty) = match head {
@@ -1910,7 +1941,6 @@ impl<'ctx> super::Codegen<'ctx> {
         index: &Expr,
     ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
         let i64_t = self.context.i64_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
         let handle_ptr = self.get_data_ptr(outer_name).ok_or_else(|| {
             format!(
@@ -1918,12 +1948,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 outer_name
             )
         })?;
-        let map_handle = self
-            .builder
-            .build_load(ptr_ty, handle_ptr, "m.mr.handle")
-            .unwrap()
-            .into_pointer_value();
-
         let key_ty = self
             .mapset
             .map_key_types
@@ -1936,6 +1960,36 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(outer_name)
             .copied()
             .unwrap_or(i64_t.into());
+        self.lower_indexed_elem_ptr_map_at(handle_ptr, key_ty, val_ty, index)
+    }
+
+    /// Pointer-keyed twin of [`Self::lower_indexed_elem_ptr_map`], for a Map
+    /// that has no NAME — a struct FIELD (`h.buckets[k]`).
+    ///
+    /// B-2026-08-18-36. The name-keyed form resolves three things from
+    /// name-keyed side tables — the handle slot, the key LLVM type and the
+    /// value LLVM type — and everything after that is name-independent. A field
+    /// has none of those entries but can supply all three from its DECLARED
+    /// type and place-expression pointer, so the two paths split exactly at
+    /// that boundary and share this body. Same split B-2026-08-09-21 made for
+    /// the Vec arm (`lower_indexed_elem_ptr_vec_at`).
+    ///
+    /// `map_slot_ptr` is the address of the slot HOLDING the handle, not the
+    /// handle itself — identical to what `get_data_ptr` returns — so the load
+    /// below is the same one the named path performs.
+    pub(super) fn lower_indexed_elem_ptr_map_at(
+        &mut self,
+        map_slot_ptr: PointerValue<'ctx>,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+        index: &Expr,
+    ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let map_handle = self
+            .builder
+            .build_load(ptr_ty, map_slot_ptr, "m.mr.handle")
+            .unwrap()
+            .into_pointer_value();
 
         let key_val = self.compile_expr(index)?;
         // Declared-key-width coercion before the `key_ty`-sized slot is
