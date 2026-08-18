@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 259 | 0 |
-| leak | 183 | 1 |
+| leak | 184 | 1 |
 | double-free | 132 | 0 |
 | run-vs-build | 128 | 0 |
 | codegen-gap | 115 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 917 | 2 |
+| codegen | 918 | 2 |
 | typecheck | 195 | 4 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1306 surfaced · 9 open · 1280 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1307 surfaced · 9 open · 1281 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -137,8 +137,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1306 surfaced
 | B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
-| B-2026-08-18-8 | 2026-08-18 | codegen | medium | A `match` whose SCRUTINEE is itself a `match` yielding a boxed `Option` payload LEAKS the box -- 32 bytes per evaluation, unbounded in a loop. Minimal, with no `?.` and no closure anywhere: `match (match u.address { Some(x) => { x.city } None => { None } }) { Some(c) => { ... } None => { ... } }` over 200 iterations leaks 3200 bytes in 100 objects under LeakSanitizer. Binding the inner match to a `let` first is CLEAN, which is what isolates it to the scrutinee position. | The match-result temp's box cleanup in src/codegen/control_flow_match.rs. tests/memory_sanitizer.rs `asan_optional_chain_heap_payload_clean` deliberately uses the `let`-bound spelling and records why; switching it to the scrutinee spelling is the reproducer. |
 | B-2026-08-18-9 | 2026-08-18 | typecheck+codegen | medium | `question_ok_payload_types`' PRODUCER and CONSUMER do not key off the same node, and the `?` operator's span cannot be fixed until they do. Giving `ExprKind::Question` a span of its own (lhs start -> past the `?`, the way B-2026-08-18-7 fixed `?.`) makes `let b = mk(n)?;` stop resolving the binding's fields under codegen -- "codegen: cannot resolve field 'name' on this receiver" -- whenever the `Some`/`Ok` payload is a multi-word struct, while `--interp` stays correct. The two ends agree TODAY only because the node copies its operand's span, so they collide onto the same key by accident rather than by construction. | src/parser/exprs.rs (the `Token::Question` arm); the `question_ok_payload_types` producer in the typechecker and its consumer in codegen |
+| B-2026-08-18-10 | 2026-08-18 | codegen | medium | A `match` whose SCRUTINEE is a nested `match` with a BARE-IDENTIFIER arm leaks the boxed payload -- `match (match i % 3 { 0 => { o } _ => { None } }) { ... }` over an `o: Option[City]` local strands 1205 bytes in 68 objects across 200 iterations, while the `let`-bound twin `let c = match ...; match c { ... }` is clean. The last arm shape B-2026-08-18-8's fail-closed rule declines. | `match_result_scrutinee_owns_box` in src/codegen/control_flow_match.rs -- the `_ => self.expr_yields_fresh_owned_temp(tail)` arm is where a bare identifier currently falls through to false. The per-arm suppression this needs is the same channel `compile_match`'s arm loop uses for `freshtemp_boxed_slot`. |
 
 ### Wontfix (7)
 
@@ -156,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1306 surfaced
 
 </details>
 
-### Fixed (1280)
+### Fixed (1281)
 
-<details><summary>1280 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1281 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11301,6 +11301,26 @@ THE `?` ARM IS DELIBERATELY UNCHANGED, and this is the row's real remainder rath
 WHAT THAT MEANS, and it is a finding the row did not anticipate: that table's PRODUCER and its CONSUMER do not both key off the Question node. They agree today only because the node's span happens to equal its operand's, so the two ends silently disagree the moment the node gets a span of its own. `?` therefore carries the same latent one-slot-per-chain collision `?.` had, and it cannot be fixed at the parser alone — the table's two ends have to be put on one key first. The arm carries that evidence in a comment so the next attempt does not rediscover it by breaking the suite. Split into its own row rather than left implicit in this one, per the rule that a closed-out investigation's live remainder gets its own open row.
 
 TEST: `test_optional_chain_nodes_have_distinct_spans` (tests/parser.rs) asserts both properties a SpanKey consumer needs — nested steps do not share a key, and each span covers its own step — across the field form and the method form, whose span has to reach past the argument list. It sits beside `test_fstring_interp_spans_distinct_across_strings`, which pins the identical collision class one node type over. |
+| B-2026-08-18-8 | codegen | medium | A `match` whose SCRUTINEE is itself a `match` yielding a boxed `Option` payload LEAKS the box -- 32 bytes per evaluation, unbounded in a loop | FIXED by f7621d7. Registered the box drop for the value in SCRUTINEE position, which is the one thing the leaking spelling never had. `match (match … ) { … }` now behaves as its two-statement twin `let c = match …; match c { … }` always did — the `let` registers a `BoxedEnumDrop` for the binding, and in scrutinee position nothing registered one at all, so the 32-byte envelope had no owner anywhere in the frame.
+
+`track_freshtemp_boxed_enum_scrutinee` already owns the whole mechanism (staged alloca, tag-guarded free, per-arm suppression, inner-struct interior walk); it was simply unreachable, gated behind `expr_yields_fresh_owned_temp`, which admits `Call`/`MethodCall` only. The fix adds ONE alternative admission, `match_result_scrutinee_owns_box`, rather than widening that predicate: it has ~50 callers across codegen, each with its own aliasing contract, and this row is one position. The general case remains slice 4 of docs/spikes/general-owned-temp-tracking.md (scrutinee sub-frame), still open.
+
+BOTH leaking spellings close, through separate arms. `?.` is synthesized into this exact match by `compile_optional_chain` (B-2026-08-17-28), but it is synthesized DURING compilation, so the node the scrutinee tracker sees is still `ExprKind::OptionalChain` — recognized directly, with its owned-source test resolving recursively so a two-level `a?.b?.c` reaches its root. A CALL chain (`a?.f()`) declines: its arm is a method call whose result may alias the receiver, and this position cannot tell a borrow-returning member from an allocating one.
+
+FAIL-CLOSED on the arms, on the same grounds as `discarded_match_value_tail`: exactly one arm runs and the scrutinee is the merged phi, so one arm handing back storage someone else owns would make the registered free a double free. Accepted: `None` (no payload, no box); a non-borrow Call/MethodCall (fresh, including the `Some(x)` construction whose boxing allocated the envelope); and a field/tuple-index projection out of THAT ARM'S OWN payload binding under an owned inner scrutinee.
+
+TWO RESTRICTIONS ON THAT LAST FORM WERE HAZARDS THIS FIX INTRODUCED AND THEN REMOVED, not hazards it found in existing code — worth recording because the first cut had both. Rooting the chain at the arm's payload binding is what makes the projection a MOVE (the move zeroes the source slot, which is why the `let` spelling is single-free); a projection out of some other live local reads a place the frame still owns, and freeing the phi would double-free it. And an INDEX link anywhere in the chain is an element COPY, never a move — the container keeps the box and frees it itself. The first version accepted both and was measured only by luck of fixture choice; `moved_field_chain_root` is deliberately narrower than the existing `place_root_ident` for exactly this reason.
+
+MEASURED, 200 iterations, LeakSanitizer, each spelling before/after:
+  * `match (match u.address { Some(a) => { a.city } None => { None } }) { … }`   3200 B / 100 objs -> 0
+  * `match u.address?.city { … }`                                               3200 B / 100 objs -> 0
+  * `match u.address?.city?.name { … }`  (heap strings, so the interior counts)  3945 B / 200 objs -> 0
+  * both `let`-bound controls                                                    clean -> clean
+Also verified clean, matching `--interp` byte for byte: a `Result` scrutinee, a wildcard outer arm `Some(_)`, a struct-destructure outer arm `Some(City { name, zip })`, and a `ref`-param source (which declines and is clean anyway).
+
+Two ASAN fixtures pin it — `asan_match_on_match_result_scrutinee_clean` (explicit nested match, no `?.` anywhere, so it stays honest if the `?.` lowering changes again) and `asan_optional_chain_as_match_scrutinee_clean` (two-level chain with RUNTIME-built strings, since a literal's `cap == 0` would make an interior leak invisible). The sibling `asan_optional_chain_heap_payload_clean` keeps its `let`-bound spelling on purpose, so the pair reads as the contrast that isolated the defect.
+
+Gates: cargo fmt clean, clippy clean on both feature sets (the `--features llvm` leg caught a doc-lint the default leg does not see), memory_sanitizer 1121 passed, codegen 3038 passed, full suite green. |
 
 </details>
 
