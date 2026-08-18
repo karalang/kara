@@ -497,6 +497,22 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0803", ty("ReprTransparentInvalid", None)),
     ("E0804", ty("DiscriminantInvalid", None)),
     ("E0805", ty("ExternSignatureInvalid", None)),
+    // ── lint (non-`TypeErrorKind`) ──────────────────────────────
+    //
+    // Both halves of each pair are catalogued: the W code is what a default
+    // build emits and the E code is what `-D <lint>` escalates to, and it was
+    // the ESCALATED code that sent someone to `karac explain` in the first
+    // place (B-2026-08-18-17).
+    (
+        "W0259",
+        lint("undocumented_unsafe | unsafe_op_in_unsafe_fn | ffi_float_eq"),
+    ),
+    (
+        "E0259",
+        lint("undocumented_unsafe | unsafe_op_in_unsafe_fn | ffi_float_eq"),
+    ),
+    ("W0278", lint("must_use")),
+    ("E0278", lint("must_use")),
 ];
 
 const fn ty(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {
@@ -504,6 +520,31 @@ const fn ty(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {
         phase: "typecheck",
         kind,
         class,
+    }
+}
+
+/// A row for a lint that is NOT a `TypeErrorKind` (B-2026-08-18-28).
+///
+/// `ty` / `res` cannot express these: their `kind` restates a variant of an
+/// exhaustive compiler enum, and `must_use` and the `lint_entries_for_compile_path`
+/// family live outside both. That is exactly why they were absent from the
+/// catalogue while the lints registered AS `TypeErrorKind`s (`Deprecated`
+/// E0245, `UnstableApi` E0255) were present — the table had no row shape for
+/// them, so nobody noticed the omission.
+///
+/// `phase: "lint"` matches the `phase` these diagnostics carry in the JSON
+/// feed, so the catalogue and the emitted record agree on the field an agent
+/// loop reads.
+///
+/// `kind` names the LINT(S) the code covers rather than a single enum variant,
+/// because a lint code may be shared: `lint_name` is the discriminator (it is
+/// what `-A` / `-D` address), while the code identifies the family. See
+/// B-2026-08-18-17's note on whether that sharing should persist.
+const fn lint(kind: &'static str) -> CodeEntry {
+    CodeEntry {
+        phase: "lint",
+        kind,
+        class: Some(DiagnosticClass::LintWarning),
     }
 }
 
@@ -1158,8 +1199,8 @@ mod tests {
         );
     }
 
-    /// A LINT's diagnostic code must not be a code the table already assigns
-    /// to something else.
+    /// A LINT's diagnostic code must not be a code the table assigns to a
+    /// DIFFERENT PHASE.
     ///
     /// `code_table_has_no_duplicate_rows` above cannot see this: the lint codes
     /// are string literals in `diag_json.rs`'s emitters and never enter
@@ -1169,15 +1210,23 @@ mod tests {
     /// `ModuleBindingEffectfulInit` (B-2026-08-18-17).
     ///
     /// Scans the emitter's source for the one line shape every lint entry uses
-    /// — `code: if is_error { "Ennnn" } else { "Wnnnn" },` — and asserts both
-    /// halves are absent from the table. A lint that lands on a taken number
-    /// fails here rather than at whichever user runs `karac explain` on it.
+    /// — `code: if is_error { "Ennnn" } else { "Wnnnn" },` — and asserts
+    /// neither half is claimed by `typecheck` or `resolve`. A lint that lands
+    /// on a taken number fails here rather than at whichever user runs
+    /// `karac explain` on it.
+    ///
+    /// B-2026-08-18-28 RELAXED THIS FROM "absent" TO "not another phase's".
+    /// The original form asserted lint codes appear NOWHERE in the table,
+    /// which made the -17 guard and the -28 fix mutually exclusive: the
+    /// catalogue could not list a lint code without failing the test meant to
+    /// protect it. "No other phase owns this number" is the invariant -17
+    /// actually wanted; "the table has never heard of it" was a proxy that
+    /// happened to hold only while lints were uncatalogued.
+    /// `every_lint_code_is_catalogued` below now pins the other direction, so
+    /// relaxing this one loses no coverage.
     #[test]
     fn lint_codes_do_not_collide_with_the_code_table() {
         const DIAG_JSON_SRC: &str = include_str!("diag_json.rs");
-        let taken: std::collections::HashSet<&str> =
-            CODE_TABLE.iter().map(|(code, _)| *code).collect();
-
         let mut checked = 0usize;
         for line in DIAG_JSON_SRC.lines() {
             let line = line.trim();
@@ -1198,15 +1247,66 @@ mod tests {
             );
             for code in codes {
                 checked += 1;
+                let foreign: Vec<&str> = lookup_code(code)
+                    .iter()
+                    .map(|e| e.phase)
+                    .filter(|p| *p != "lint")
+                    .collect();
                 assert!(
-                    !taken.contains(code),
-                    "lint code {code} is already assigned in CODE_TABLE — pick a free \
-                     number for the lint (see B-2026-08-18-17)"
+                    foreign.is_empty(),
+                    "lint code {code} is already assigned in CODE_TABLE to {foreign:?} — \
+                     pick a free number for the lint (see B-2026-08-18-17)"
                 );
             }
         }
         // The scanner silently passing because it matched nothing is the one
         // way this test could rot into a no-op.
+        assert!(
+            checked >= 2,
+            "expected to find at least one lint code pair to check, found {checked}"
+        );
+    }
+
+    /// Every lint code the emitter mints must BE in the catalogue
+    /// (B-2026-08-18-28).
+    ///
+    /// The sibling test above pins that a lint code takes nobody else's
+    /// number; this pins that it has a number anyone can look up. Both were
+    /// needed: `karac explain E0278` and `E0259` answered "not in the
+    /// catalogue yet" for codes the compiler actively emits under
+    /// `-D <lint>`, because `CODE_TABLE`'s rows were all built from
+    /// `TypeErrorKind` and there was no row shape for a lint that is not one.
+    /// The lints that ARE `TypeErrorKind`s (`Deprecated` E0245, `UnstableApi`
+    /// E0255) were catalogued all along, which is why the hole was easy to
+    /// miss by inspection.
+    ///
+    /// Scans the same emitter line shape, so a lint added later with a fresh
+    /// code pair fails here until it is catalogued.
+    #[test]
+    fn every_lint_code_is_catalogued() {
+        const DIAG_JSON_SRC: &str = include_str!("diag_json.rs");
+        let mut checked = 0usize;
+        for line in DIAG_JSON_SRC.lines() {
+            let Some(rest) = line.trim().strip_prefix("code: if is_error {") else {
+                continue;
+            };
+            let codes: Vec<&str> = rest
+                .split('"')
+                .skip(1)
+                .step_by(2)
+                .filter(|s| s.len() == 5)
+                .collect();
+            for code in codes {
+                checked += 1;
+                let rows = lookup_code(code);
+                assert!(
+                    rows.iter().any(|e| e.phase == "lint"),
+                    "lint code {code} is emitted but has no `lint` row in CODE_TABLE — \
+                     `karac explain {code}` would answer \"not in the catalogue yet\" \
+                     for a code the compiler mints (see B-2026-08-18-28)"
+                );
+            }
+        }
         assert!(
             checked >= 2,
             "expected to find at least one lint code pair to check, found {checked}"
