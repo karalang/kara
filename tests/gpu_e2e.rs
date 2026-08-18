@@ -147,6 +147,10 @@ enum Probe {
     Ready,
     /// The host genuinely has no device. Skippable.
     NoAdapter(String),
+    /// The optional `libkarac_runtime_gpu.a` has not been built on this host, so
+    /// the probe never got as far as asking for a device. Skippable, unless
+    /// `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` — B-2026-08-18-51.
+    NoArchive(String),
     /// A device was there and the program still failed: invalid WGSL, a build
     /// error, a runtime fault. Never skippable — see [`gpu_or_skip`].
     Broken(String),
@@ -159,6 +163,23 @@ fn is_no_adapter(err: &str) -> bool {
     err.contains("no software (CPU) adapter is available")
         || err.contains("found no available GPU adapter")
         || err.contains("(no adapters found)")
+}
+
+/// Has the OPTIONAL GPU runtime archive simply not been built here?
+///
+/// B-2026-08-18-51. CLAUDE.md makes `libkarac_runtime_gpu.a` opt-in — "Skip
+/// unless doing GPU work" — so its absence is the default state of a fresh
+/// checkout, not a defect. Before this arm existed the resulting LINK error
+/// fell through `is_no_adapter` into `Broken`, which panics unconditionally,
+/// and every session working an unrelated bug got six failures out of
+/// `cargo test --features llvm`.
+///
+/// Matched on the linker driver's own wording (`src/codegen/driver.rs`, the
+/// `SpecialArchive::Gpu` arm) rather than on "any build failure", for the same
+/// reason `is_no_adapter` is written that way: everything else really is a
+/// compiler bug wearing a skip's clothing.
+fn is_missing_gpu_archive(err: &str) -> bool {
+    err.contains("needs the GPU runtime archive") && err.contains("libkarac_runtime_gpu.a")
 }
 
 /// Probe once per test binary: build and run the most trivial possible kernel.
@@ -174,6 +195,7 @@ fn gpu_probe() -> &'static Probe {
         .expect("write probe source");
         match build_and_run_on_gpu(&dir, &src, "probe") {
             Ok(_) => Probe::Ready,
+            Err(why) if is_missing_gpu_archive(&why) => Probe::NoArchive(why),
             Err(why) if is_no_adapter(&why) => Probe::NoAdapter(why),
             Err(why) => Probe::Broken(why),
         }
@@ -182,7 +204,7 @@ fn gpu_probe() -> &'static Probe {
 
 /// `None` means "skip this test".
 ///
-/// The three-way split is the whole point, and it was NOT the first design:
+/// The FOUR-way split is the whole point, and it was not the first design:
 /// the original probe returned a plain `Result` and treated every failure as
 /// "no adapter". Mutation-testing the emitter to produce invalid WGSL
 /// (`arrayLength(input)`, which naga rejects) showed what that costs — the
@@ -193,6 +215,19 @@ fn gpu_probe() -> &'static Probe {
 /// `KARAC_REQUIRE_GPU_ADAPTER` entirely — the same shape as
 /// `common::link_or_skip`, where an undefined-symbol link error panics because
 /// it can only mean staleness, while other link errors stay skippable.
+///
+/// B-2026-08-18-51 ADDED THE FOURTH ARM, and the reason is the other half of
+/// that same analogy. `Broken` was catching a case it should never have owned:
+/// a host that has simply not built the OPTIONAL `libkarac_runtime_gpu.a`,
+/// which CLAUDE.md documents as opt-in and is therefore the default state of a
+/// fresh checkout. That is an absent build artifact, not "a compiler or runtime
+/// bug on a host that HAS a working adapter", and the panic made
+/// `cargo test --features llvm` red for every session working an unrelated bug
+/// — six failures whose message was a build recipe. `link_or_skip` already had
+/// the right rule for exactly this shape, so `NoArchive` mirrors it: skippable
+/// by default, fatal under `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`, which is what
+/// CI's archive-building jobs set. `Broken` keeps its unconditional panic for
+/// what it was written for — the emitter producing a shader that will not run.
 fn gpu_or_skip() -> Option<()> {
     match gpu_probe() {
         Probe::Ready => Some(()),
@@ -202,6 +237,29 @@ fn gpu_or_skip() -> Option<()> {
              compiler or runtime bug, not a missing device, so it is never skippable \
              and no environment variable suppresses it.\n\nprobe failure:\n{why}"
         ),
+        Probe::NoArchive(why) => {
+            if std::env::var("KARAC_REQUIRE_RUNTIME_ARCHIVE").as_deref() == Ok("1") {
+                panic!(
+                    "the optional GPU runtime archive is missing and \
+                     KARAC_REQUIRE_RUNTIME_ARCHIVE=1 forbids the soft-skip, so this suite \
+                     would otherwise report green while executing no shader at all. This \
+                     is the same contract `common::link_or_skip` enforces for the other \
+                     archives; CI's GPU job sets the variable. Build it (CLAUDE.md \
+                     § Commands):\n\
+                     \x20 cargo rustc -p karac-runtime --release --features gpu \
+                     --crate-type staticlib\n\
+                     \x20 cp target/release/libkarac_runtime.a \
+                     target/release/libkarac_runtime_gpu.a\n\n\
+                     probe failure:\n{why}"
+                );
+            }
+            eprintln!(
+                "gpu_e2e: skipping — the optional libkarac_runtime_gpu.a is not built here \
+                 (it is opt-in; CLAUDE.md § Commands has the recipe). Set \
+                 KARAC_REQUIRE_RUNTIME_ARCHIVE=1 to make this a failure.\nprobe failure:\n{why}"
+            );
+            None
+        }
         Probe::NoAdapter(why) => {
             if std::env::var("KARAC_REQUIRE_GPU_ADAPTER").as_deref() == Ok("1") {
                 panic!(
@@ -491,4 +549,65 @@ fn gpu_executes_else_if_chain_carrying_locals() {
         "1.0, 2.0, 3.0, 4.0",
         "1\n7\n8\n8",
     );
+}
+
+/// B-2026-08-18-51 — the probe's classifier, pinned directly.
+///
+/// The four-way split is only worth anything if `NoArchive` catches EXACTLY the
+/// absent optional archive and nothing else. Widening it by one careless
+/// `contains` would hand `Broken`'s cases a skip, and `Broken` is what stops
+/// this suite reporting green on a compiler that cannot emit a valid shader —
+/// the hole the file's own doc comment records being dug and refilled once
+/// already.
+///
+/// The positive case is the linker driver's real wording (`src/codegen/
+/// driver.rs`, `SpecialArchive::Gpu`), not a paraphrase. The negatives are the
+/// three shapes that must keep their existing routing: a no-adapter host
+/// (`NoAdapter`, skippable on its own terms), a shader the backend rejected,
+/// and a runtime fault — the last two being `Broken`, which never skips.
+///
+/// Kept as a pure-string test so it runs everywhere, GPU or not. It is the only
+/// part of this file that asserts anything on a host with no adapter, which is
+/// precisely the host where the classifier decides everything.
+#[test]
+fn probe_classifier_matches_only_the_absent_gpu_archive() {
+    let real_driver_message = "this program calls `gpu.dispatch`, which needs the GPU runtime \
+         archive `libkarac_runtime_gpu.a` — not found. Build it with `cargo rustc -p \
+         karac-runtime --release --features gpu --crate-type staticlib`";
+    assert!(
+        is_missing_gpu_archive(real_driver_message),
+        "the linker driver's own archive-missing wording must classify as NoArchive; \
+         if this fails the message was reworded and the matcher needs updating in step"
+    );
+
+    for (label, err) in [
+        (
+            "no adapter",
+            "gpu.dispatch failed: found no available GPU adapter (no adapters found)",
+        ),
+        (
+            "backend rejected the shader",
+            "gpu.dispatch failed: shader validation error: arrayLength(input) \
+             expects a pointer to a runtime-sized array",
+        ),
+        (
+            "runtime fault",
+            "GPU binary exited Some(134): thread panicked at runtime/src/gpu.rs",
+        ),
+        (
+            "a DIFFERENT optional archive",
+            "this program uses `Regex.compile` / `is_match`, which needs the regex runtime \
+             archive `libkarac_runtime_regex.a` — not found.",
+        ),
+    ] {
+        assert!(
+            !is_missing_gpu_archive(err),
+            "{label}: must NOT classify as a missing GPU archive — routing it to the \
+             skippable arm is how this suite would go green on a broken emitter"
+        );
+    }
+
+    // And the two predicates are disjoint: nothing may satisfy both, or the
+    // arm order in `gpu_probe` would silently decide the outcome.
+    assert!(!is_no_adapter(real_driver_message));
 }
