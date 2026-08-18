@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 40 | 2 |
+| other | 40 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 926 | 2 |
+| codegen | 926 | 1 |
 | typecheck | 199 | 1 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
@@ -118,20 +118,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 48 | 0 |
 | cli | 45 | 1 |
 | runtime | 22 | 0 |
-| parser | 21 | 2 |
+| parser | 21 | 1 |
 | resolver | 19 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1326 surfaced · 6 open · 1303 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1326 surfaced · 5 open · 1304 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
-| B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-28 | 2026-08-18 | cli | low | NO lint diagnostic code is registered in `karac explain`'s CODE_TABLE, so `karac explain E0278` (must_use) and `karac explain E0259` (the four compile-path lints) both answer "not in the catalogue yet" -- for codes the compiler actively emits under `-D <lint>`. | roadmap.md |
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1326 surfaced
 
 </details>
 
-### Fixed (1303)
+### Fixed (1304)
 
-<details><summary>1303 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1304 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11656,6 +11655,19 @@ WHY NOT JUST CALL `render_text_diagnostics` FROM `run`, which would have been th
 MEASURED AFTER, on the same `#[deprecated]` program: `karac check`, `karac build`, `karac run` and `karac run --interp` all render a byte-identical `warning[deprecated]` line, and run still executes the program (prints `1`). `-A deprecated` suppresses it in every lane. `must_use` under run: one occurrence, unchanged rendering. A warning-free program stays silent everywhere.
 
 THIS ROW EXISTED BECAUSE B-2026-08-18-1's OWN CONTROL WAS MISREPORTED -- that row used "deprecated is emitted under run" as the evidence that the BUILD path specifically suppressed warnings, and re-measurement showed it absent under run too. The conclusion there survived (two independent mechanisms went silent on the build path); the leftover was this. Worth remembering as the general shape: a row's control measurement deserves re-running, not just its subject. |
+| B-2026-08-18-21 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last… | FIXED by 4a22ddc4. `Index` now spans lhs-start -> past the `]`, the third of the four postfix arms to stop copying its object's span (after `?.` in B-2026-08-18-7 and `?` in B-2026-08-18-9). `MethodCall` remains, as B-2026-08-18-24.
+
+The row specified the order and it held: put producer and consumer on the same key FIRST, widen SECOND. What the row got wrong was the SIZE of the consumer set. It inventoried three; the measured fallout was FOUR failures, and the fourth was not a consumer at all.
+
+CONSUMER 1 -- `try_compile_borrowed_string_slice` (src/codegen/collections.rs). Fixed exactly as the row prescribed: ask `type_name_of_expr` and fall back to the span table only when the static walk has no answer, the discriminator B-2026-08-18-14 established for `compile_index`'s range branch. A `ref String` parameter records as `Ref(Str)`, which `string_typed_exprs` filters out, so this gate had only ever answered "borrowed" for one because the SUBSCRIPT node -- typed plain `Str` -- wrote over the object's key. Separate the spans and the gate declines, the owning path allocates, nothing frees it: `asan_push_str_range_slice_temp_no_double_free` leaks 24 bytes in 4 allocations out of `karac_string_slice`. The two sites decide opposite halves of ONE question -- borrowed view vs owned copy -- about the same expression, so they now share a discriminator by construction.
+
+CONSUMER 2 -- `slice_borrow_key_for` (the B-2026-08-17-16 copy-out gate). NOT NEEDED, exactly as the row predicted, and now confirmed by a green suite rather than by argument: `slice_chain_copied_out_does_not_borrow_the_source` passes untouched, because the direct `slice_borrow_sources` lookup still resolves while only `Index` has moved. It stays owed by B-2026-08-18-24.
+
+CONSUMER 3 -- `loop_body_types_cross_task_safe` (src/concurrency/reductions.rs), the one the row called the blocker, resolved with the precision pass it asked for: `iter_local::scalar_projection_bases`, a third whitelist consumed alongside `iteration_local_spans` and `spans_rooted_at`. It exempts a place the body only ever reaches THROUGH, on the way to a SCALAR leaf. Measured on the fixture's IR before writing it: `out[j] = ps[j].v * 2` over `ps: Vec[P]` with `shared struct P` emits no refcount traffic anywhere in the loop -- the program's only rc ops are the constructor's `store i64 1` and the Vec's element drop, both outside it -- so there is no non-atomic header to lose an update on, which is the whole hazard B-2026-07-16-6's gate exists to catch. The whitelist requires a SCALAR (int/float/bool/char), not merely a cross-task-safe type: a safe-typed projection can still be a value whose materialization does work, and a scalar leaf is the case where "GEP and load" is the entire lowering.
+
+THE FOURTH FAILURE, WHICH THE ROW'S INVENTORY DID NOT PREDICT: the two self-host oracles, `selfhost_parser_matches_rust_parser` and `selfhost_typechecker_matches_rust_typechecker`. They compare the Kāra-implemented compiler against the Rust one SPAN FOR SPAN -- `(index @0:1 ...)` vs `(index @0:4 ...)` on the input `v[0]` -- so a seed-parser span change is a self-host change by construction. `selfhost/src/parser.kara`'s `finish_index` gained the same widening (`self.span_from(sp)` after `expect_rbracket`, which has just made `]` the token before `pos`). Worth carrying into the B-2026-08-18-24 attempt: budget for the oracle pair, and note that `finish_index` is now the ONE postfix builder there whose span is not its operand's, which its section comment records.
+
+ONE DESIGN NOTE THE NEW PASS FORCED, because it inverts an existing rule rather than reusing it. Its two siblings in `src/iter_local.rs` only ever ADD to a whitelist, so their walks may skip a statement or expression form: a missed form shrinks the whitelist and the gate's decline stands, which is why both are documented as fail-CLOSED by construction. `scalar_projection_bases` also TAINTS, and a skipped form there drops a taint -- fail-OPEN, the exact polarity the module was built to rule out. Its statement walk is therefore EXHAUSTIVE over `StmtKind` with no catch-all (a form added later is a compile error, not a silent hole), which is how `Defer` / `ErrDefer` bodies and `MultiAssign` targets -- all three skipped by the sibling this was modelled on -- got covered; and its expression-level fallback keeps tainting through unmodelled shapes rather than stopping. Anyone extending this file should check which polarity a new pass has before copying a sibling's walk. |
 | B-2026-08-18-22 | codegen | medium | A STRING range subscript used as a METHOD RECEIVER reaches codegen only for `to_string` / `clone`: `s[0..5].len()` fails the build with "indexed-rece… | FIXED by b3d0c97 for the SCALAR readers. `s[0..5].len()` and its scalar siblings now dispatch in receiver position; the value-returning readers stay deferred, deliberately and for a stated reason.
 
 BORROWED, NOT OWNED — that is the whole fix, and it is why the arm stopped where it did rather than by oversight. `to_string` / `clone` RETAIN the slice, so they must allocate, which is why they were the two methods the String-slice arm already handled. A scalar reader consumes the bytes inside the call and discards them, so `compile_string_slice_borrowed`'s `{ptr, len, cap = 0}` view into the source is exactly the right shape: `cap = 0` is the existing borrowed marker every `cap > 0` free guard skips, so there is nothing to free and no owned-temp bookkeeping to get wrong. The view is materialized into a synth local and re-dispatched by IDENTIFIER — the same materialize-and-re-dispatch move `try_compile_nonident_slice_method` makes for a `Slice` receiver.
