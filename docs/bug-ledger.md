@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 105 | 2 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
-| diagnostics | 77 | 5 |
+| diagnostics | 77 | 4 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
 | other | 38 | 1 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
-| cli | 43 | 3 |
+| cli | 43 | 2 |
 | runtime | 22 | 0 |
 | parser | 20 | 1 |
 | resolver | 19 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1319 surfaced · 9 open · 1293 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1319 surfaced · 8 open · 1294 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1319 surfaced
 | B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
 | B-2026-08-18-18 | 2026-08-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let`. The other two positions design.md's "infers the target type from context" covers still fix the chain to `Vec`: `return <chain>.collect()` against a declared non-`Vec` return type -> "expected 'Set[i64]', found 'Vec[i64]'", and argument position `f(<chain>.collect())` against a non-`Vec` parameter -> the same. Measured AFTER B-2026-08-17-36 landed, so these are the residue of that fix rather than a restatement of it. | src/desugar.rs (desugar_collect_target); src/typechecker/exprs.rs (check_expr) |
 | B-2026-08-18-19 | 2026-08-18 | cli | medium | PROJECT-mode `karac build` still renders no warning-level diagnostic. B-2026-08-18-1 gave the SINGLE-FILE build path a warning surface; a `karac build` run inside a project directory takes a different function entirely and prints only its module banner and `Built: <exe>`. | roadmap.md |
-| B-2026-08-18-20 | 2026-08-18 | cli | low | `karac run` is inconsistent with ITSELF about warnings: it renders `must_use` but not `deprecated`. The two ride different channels -- `must_use` through `cmd_run`'s own lint block, `deprecated` through `TypeCheckResult::warnings` -- and only the first is wired into the run path. | roadmap.md |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-22 | 2026-08-18 | codegen | medium | A STRING range subscript used as a METHOD RECEIVER reaches codegen only for `to_string` / `clone`: `s[0..5].len()` fails the build with "indexed-receiver method 'len' on 's' -- element TypeExpr unknown" while `karac check` accepts it and `--interp` prints 5. The non-owning readers the String-slice arm defers. | The `method == "to_string" || method == "clone"` gate at the head of `compile_indexed_receiver_method` in src/codegen/calls.rs. A wider set needs the borrowed-slice path (`try_compile_borrowed_string_slice`, already used for `push_str` and map-key lookups) or owned-temp tracking for the materialized slice. |
 
@@ -156,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1319 surfaced
 
 </details>
 
-### Fixed (1293)
+### Fixed (1294)
 
-<details><summary>1293 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1294 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11589,6 +11588,15 @@ relocated, there is still nothing to wire -- the exclusion in
 `lint_entries_for_compile_path` stays correct and should not be revisited until
 a bundled-stdlib compile mode exists to give them a legitimate user-facing
 scope. |
+| B-2026-08-18-20 | cli | low | `karac run` is inconsistent with ITSELF about warnings: it renders `must_use` but not `deprecated` | FIXED by d2ed766c. `cmd_run` never read `TypeCheckResult::warnings`, so every lint riding that channel -- `deprecated`, `unstable_api`, the CLI-attached `map_value_clone_reinsert` -- was silent under `karac run` and `karac run --interp` alike, while `must_use` (which has its own block in that function) printed fine. One lane, two channels, one of them unwired.
+
+RENDERED THROUGH A SHARED HELPER, not a third hand-rolled block. `render_typecheck_warning_blocks` is the warnings loop lifted out of `render_text_diagnostics`; `check`, `build` (via B-2026-08-18-1's filter) and now `run` all call it, so the three lanes cannot word one warning differently. The test compares the lanes against EACH OTHER rather than against a literal, because that drift is the regression worth catching.
+
+WHY NOT JUST CALL `render_text_diagnostics` FROM `run`, which would have been the shorter edit: it also renders `must_use`, and `run` already prints that through its own block with its own `note`/`help` continuation lines. The wholesale version double-prints it. A counterweight test asserts `must_use` appears EXACTLY ONCE under run, so the shorter edit cannot be reintroduced by accident.
+
+MEASURED AFTER, on the same `#[deprecated]` program: `karac check`, `karac build`, `karac run` and `karac run --interp` all render a byte-identical `warning[deprecated]` line, and run still executes the program (prints `1`). `-A deprecated` suppresses it in every lane. `must_use` under run: one occurrence, unchanged rendering. A warning-free program stays silent everywhere.
+
+THIS ROW EXISTED BECAUSE B-2026-08-18-1's OWN CONTROL WAS MISREPORTED -- that row used "deprecated is emitted under run" as the evidence that the BUILD path specifically suppressed warnings, and re-measurement showed it absent under run too. The conclusion there survived (two independent mechanisms went silent on the build path); the leftover was this. Worth remembering as the general shape: a row's control measurement deserves re-running, not just its subject. |
 
 </details>
 
