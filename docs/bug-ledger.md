@@ -95,22 +95,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 260 | 0 |
 | leak | 184 | 0 |
 | double-free | 133 | 0 |
-| run-vs-build | 128 | 0 |
-| codegen-gap | 117 | 1 |
+| run-vs-build | 129 | 1 |
+| codegen-gap | 117 | 0 |
 | missing-feature | 105 | 2 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
 | diagnostics | 77 | 5 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 37 | 0 |
+| other | 38 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 922 | 1 |
+| codegen | 924 | 2 |
 | typecheck | 197 | 2 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
@@ -118,26 +118,27 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 48 | 0 |
 | cli | 43 | 3 |
 | runtime | 22 | 0 |
+| parser | 20 | 1 |
 | resolver | 19 | 0 |
-| parser | 19 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1317 surfaced · 8 open · 1292 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1319 surfaced · 9 open · 1293 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
-| B-2026-08-18-14 | 2026-08-18 | codegen | medium | A RANGE SUBSCRIPT used directly as a METHOD RECEIVER -- `v[0..3].first_or(-1)` -- has no codegen: "no handler for expression kind Range". The same slice passed as an ARGUMENT works (`show(v[0..2])`), and binding it first works (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`), so it is the receiver position specifically. | roadmap.md |
 | B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
 | B-2026-08-18-18 | 2026-08-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let`. The other two positions design.md's "infers the target type from context" covers still fix the chain to `Vec`: `return <chain>.collect()` against a declared non-`Vec` return type -> "expected 'Set[i64]', found 'Vec[i64]'", and argument position `f(<chain>.collect())` against a non-`Vec` parameter -> the same. Measured AFTER B-2026-08-17-36 landed, so these are the residue of that fix rather than a restatement of it. | src/desugar.rs (desugar_collect_target); src/typechecker/exprs.rs (check_expr) |
 | B-2026-08-18-19 | 2026-08-18 | cli | medium | PROJECT-mode `karac build` still renders no warning-level diagnostic. B-2026-08-18-1 gave the SINGLE-FILE build path a warning surface; a `karac build` run inside a project directory takes a different function entirely and prints only its module banner and `Built: <exe>`. | roadmap.md |
 | B-2026-08-18-20 | 2026-08-18 | cli | low | `karac run` is inconsistent with ITSELF about warnings: it renders `must_use` but not `deprecated`. The two ride different channels -- `must_use` through `cmd_run`'s own lint block, `deprecated` through `TypeCheckResult::warnings` -- and only the first is wired into the run path. | roadmap.md |
+| B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
+| B-2026-08-18-22 | 2026-08-18 | codegen | medium | A STRING range subscript used as a METHOD RECEIVER reaches codegen only for `to_string` / `clone`: `s[0..5].len()` fails the build with "indexed-receiver method 'len' on 's' -- element TypeExpr unknown" while `karac check` accepts it and `--interp` prints 5. The non-owning readers the String-slice arm defers. | The `method == "to_string" || method == "clone"` gate at the head of `compile_indexed_receiver_method` in src/codegen/calls.rs. A wider set needs the borrowed-slice path (`try_compile_borrowed_string_slice`, already used for `push_str` and map-key lookups) or owned-temp tracking for the materialized slice. |
 
 ### Wontfix (7)
 
@@ -155,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1317 surfaced
 
 </details>
 
-### Fixed (1292)
+### Fixed (1293)
 
-<details><summary>1292 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1293 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11493,6 +11494,28 @@ MEASURED AFTER, `karac check` / `--interp` / JIT / `karac build` all agreeing: `
 STILL OUT: `Vector[T, N]`. It has neither a registration arm nor an interpreter receiver name, so admitting it at the lookup would report a method the backends cannot find -- the same run-vs-build split leg 3 exists to prevent.
 
 THE BOUNDARY TEST B-2026-08-13-7 LEFT BEHIND did its job. `test_user_trait_impl_on_fixed_array_still_rejected` pinned the rejection with the note "pinned here so a later widening has to confront that test rather than drift past it" -- it failed on the first full-suite run, which is exactly the intended outcome. Rewritten as `test_user_trait_impl_on_simd_vector_still_rejected`: the `Vector[T, N]` half is still a real boundary and keeps its assertion, and the fixed-array half now asserts the opposite, with the reasoning for the flip in the doc. |
+| B-2026-08-18-14 | codegen | medium | A RANGE SUBSCRIPT used directly as a METHOD RECEIVER -- `v[0..3].first_or(-1)` -- has no codegen: "no handler for expression kind Range" | FIXED by 6a80d37. Two INDEPENDENT causes, one per spelling of the same call — which is why the row's own repro and its "control" both mattered.
+
+CAUSE 1, the split spelling (`let r = v[1..3].first_or(-1);`). `try_compile_nonident_slice_method` materializes a range subscript's `{ptr,len}` header into a synth local and re-dispatches by IDENTIFIER — exactly the spelling that already worked (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`). It gated on a list of BUILTIN slice method names, so a method a USER `impl … for Slice[i64]` declared was declined, and the caller fell through to the element-pointer lowering, which compiled the RANGE as if it were a subscript. Nothing below that gate is method-specific, so admitting the user method (`user_impl_method_exists`, the predicate the sibling dispatch arms already use) routes it to the path its bound twin takes rather than adding one.
+
+CAUSE 2, the chained spelling (`v[0..3].first_or(-1).to_string()`) — a SPAN COLLISION, not a missing lowering. Every postfix node copies its object's span, so a method chain collapses onto its innermost receiver's key and the last write wins. Measured: for this program `string_typed_exprs` held exactly ONE entry, `(256,1)`, which is the span of `v` — the `Vec[i64]` receiver — because the chain's String-typed `.to_string()` tail was recorded against it. `compile_index` read that flag and built a fresh owned STRING (3-word `{ptr,len,cap}`) where a 2-word view was due; the dispatcher rejected the shape and the range fell through to the same element-pointer path. The tell was that splitting the identical call across two statements built fine.
+
+Both fixes are the same move: ask `type_name_of_expr` — which resolves the receiver ITSELF — and fall back to the span table only when the static walk has no answer. A discriminator that depends on what happens LATER in the chain cannot be right.
+
+THE ROOT FIX WAS ATTEMPTED AND REVERTED, and the negative result is the most useful thing here. Giving `Index` its own span (lhs start -> past the `]`), the rule the `Binary` arm states and `?.` adopted in B-2026-08-18-7, DOES fix both spellings — and it breaks `asan_push_str_range_slice_temp_no_double_free`, which starts leaking (ASAN exit 48). The reason is the one B-2026-08-18-7 recorded when it declined to widen `?`: nothing calls `record_expr_type` for an `Index` node, so every table lookup keyed on a subscript's span had been resolving through its OBJECT's entry. Separate the spans and the producer and consumer stop meeting. Verified by reverting the parser change alone and re-running: green without, leaking with. Split into its own row rather than traded for a leak.
+
+MEASURED, all three backends:
+  * `v[0..3].first_or(-1).to_string()`   build: "no handler for expression kind Range" -> 10
+  * `let r = v[1..3].first_or(-1);`      build: same error                             -> 20
+  * `empty[0..0].first_or(-1)`           (exercises the impl's own len()==0 arm)       -> -1
+  * `let s: Slice[i64] = v[0..3];`       (the row's control)                           unchanged
+`karac check` and `--interp` accepted every one of these throughout, so this was a check/build divergence rather than a wrong answer.
+
+NOT IN SCOPE, filed separately: the STRING sibling `s[0..5].len()`. It fails on a different path with a different error ("indexed-receiver method 'len' on 's' — element TypeExpr unknown"), and `compile_indexed_receiver_method`'s String-slice arm already documents it as a deferred follow-up ("non-owning readers are a separate follow-up", B-2026-07-22-6). Verified pre-existing by rebuilding with this row's changes stashed.
+
+Tests: `test_range_subscript_as_method_receiver_oracle` (interpreter) and `a_range_subscript_dispatches_a_user_slice_method_in_receiver_position` (codegen E2E). Both spell the chained AND split forms on separate lines, since before the fix each failed for a different reason — a regression in either cause shows up on its own line.
+
+Gates: cargo fmt clean, clippy clean on both feature sets, memory_sanitizer 1126 passed, codegen 3049 passed, full suite green. |
 | B-2026-08-18-15 | codegen | high | Binding a container element's BOXED `Option` field double-frees the payload envelope: `let c = v[i].opt;` aborts with `free(): double free detected i… | Narrowed the let-site box registration: an initializer that PROJECTS A FIELD OUT OF A CONTAINER ELEMENT no longer registers a `BoxedEnumDrop`, leaving the container the sole owner it already was.
 
 THIS ROW UNDERSTATED ITS OWN SHAPE, and the correction matters more than the fix. It was filed as a match-arm-tail case found while probing which arm shapes B-2026-08-18-10 could admit, and titled accordingly. The match is INCIDENTAL. The minimal repro is a plain `let c = v[i].opt;` — no match anywhere — and it aborts with `free(): double free detected in tcache 2` on a DEFAULT `karac build`, no sanitizer needed. That is an everyday shape, and the row read as an exotic one.
