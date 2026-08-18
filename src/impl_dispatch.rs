@@ -48,6 +48,7 @@ use std::collections::HashMap;
 
 use crate::ast::{GenericArg, Item, Program, TypeExpr, TypeKind};
 use crate::resolver::SpanKey;
+use crate::token::Span;
 
 /// Qualified type segments for impls whose head name is not a unique dispatch
 /// identity, keyed by the SPAN of the impl block's target type expression.
@@ -183,6 +184,86 @@ pub fn collect_impl_dispatch_names(program: &Program) -> ImplDispatchNames {
             }
         }
     }
+    out
+}
+
+/// The colliding groups this module CANNOT name apart: two or more impls that
+/// share a head name and a method name, whose targets are not all identical,
+/// and at least one of which [`render_impl_target`] declines (today: a target
+/// carrying a CONST argument — `Array[i64, 3]`, `Tensor[f32, [4]]`).
+///
+/// Returns one entry per member, `(target span, head, method)`, so a caller can
+/// point at every impl in the group.
+///
+/// # Why this needs reporting rather than a silent fallback
+///
+/// [`collect_impl_dispatch_names`] leaves such a group unqualified on purpose —
+/// half-qualifying it is worse, as that function's doc explains. But leaving it
+/// unqualified is not harmless: the group collapses onto one `Head.method`
+/// symbol, and the two backends then disagree about WHICH member owns it.
+/// Measured on two `impl Head for Tensor[f32, [2]]` / `Tensor[f64, [2]]` blocks,
+/// with a `Tensor[f32, [2]]` receiver: `--interp` printed `F64` and `karac
+/// build` printed `F32` — opposite wrong answers, and `karac check` accepted
+/// the program. That is the B-2026-08-13-8 failure this module exists to
+/// prevent, surviving in the one corner it cannot rename its way out of.
+///
+/// So the answer is to refuse the program. A rejection an author can act on
+/// beats two silently disagreeing binaries, and it costs nothing for the
+/// overwhelmingly common case: a group needs two impls of one trait method on
+/// one head with different const-carrying targets before this fires at all.
+/// `(head, method)` -> the impls in that group, as `(target span, rendered
+/// target)`. The span-carrying sibling of [`CollisionGroups`], which keys by
+/// `SpanKey` because it only needs to look a rendering up; this one has to
+/// point a diagnostic at each member.
+type SpannedCollisionGroups = HashMap<(String, String), Vec<(Span, Option<String>)>>;
+
+pub fn unqualifiable_collision_groups(program: &Program) -> Vec<(Span, String, String)> {
+    // (head, method) -> [(target span, rendered target)]
+    let mut groups: SpannedCollisionGroups = SpannedCollisionGroups::new();
+    for item in &program.items {
+        let Item::ImplBlock(imp) = item else { continue };
+        let Some(head) = impl_target_head(&imp.target_type) else {
+            continue;
+        };
+        // Same exclusion as `collect_impl_dispatch_names`: a generic impl is
+        // mangled per instantiation and owns no unmangled symbol to collide over.
+        if imp.generic_params.is_some() {
+            continue;
+        }
+        let rendered = render_impl_target(&imp.target_type);
+        for it in &imp.items {
+            let crate::ast::ImplItem::Method(m) = it else {
+                continue;
+            };
+            groups
+                .entry((head.clone(), m.name.clone()))
+                .or_default()
+                .push((imp.target_type.span, rendered.clone()));
+        }
+    }
+
+    let mut out = Vec::new();
+    for ((head, method), members) in groups {
+        if members.len() < 2 {
+            continue;
+        }
+        // Every target identical is not a collision this module is about — it
+        // is a coherence question, reported elsewhere.
+        let all_same = members
+            .iter()
+            .all(|(_, r)| *r == members[0].1 && r.is_some());
+        if all_same {
+            continue;
+        }
+        if members.iter().all(|(_, r)| r.is_some()) {
+            continue; // renderable: `collect_impl_dispatch_names` qualifies it
+        }
+        for (span, _) in members {
+            out.push((span, head.clone(), method.clone()));
+        }
+    }
+    // Deterministic order for reproducible diagnostics.
+    out.sort_by_key(|(sp, head, m)| (sp.offset, sp.length, head.clone(), m.clone()));
     out
 }
 

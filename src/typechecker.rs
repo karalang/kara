@@ -2375,6 +2375,18 @@ impl<'a> TypeChecker<'a> {
         // helper codegen and the interpreter call, so all three agree on which
         // impls need more than a head name and on what that name is.
         self.impl_dispatch_names = crate::impl_dispatch::collect_impl_dispatch_names(self.program);
+        // B-2026-08-18-13 — the corner the qualified-name machinery above
+        // cannot rename its way out of. A colliding group whose targets carry
+        // CONST arguments (`Array[i64, 3]`, `Tensor[f32, [4]]`) cannot be
+        // rendered, so the group is deliberately left unqualified and collapses
+        // onto one `Head.method` symbol — after which the two backends disagree
+        // about which member owns it. Measured on two `impl Head for
+        // Tensor[f32, [2]]` / `Tensor[f64, [2]]` blocks with an `f32` receiver:
+        // `--interp` printed `F64`, `karac build` printed `F32`, and `karac
+        // check` accepted the program. Refusing it is the only honest answer
+        // available, and it is what keeps `Array` — newly dispatchable in this
+        // row — from joining that class.
+        self.reject_unqualifiable_impl_collisions();
         self.check_items();
         self.finalize_pattern_binding_inner_types();
         self.finalize_closure_expr_types();
@@ -2747,6 +2759,40 @@ impl<'a> TypeChecker<'a> {
     /// *"deny-by-default for stdlib crates and allow for user code"*
     /// surface without needing a build-wide CLI default (which lands
     /// in slice 4b polish).
+    /// Refuse a program whose impls collide on a `Head.method` symbol that the
+    /// dispatch-name machinery cannot qualify apart (B-2026-08-18-13).
+    ///
+    /// `impl_dispatch::render_impl_target` declines a target carrying a CONST
+    /// argument, and `collect_impl_dispatch_names` deliberately leaves a group
+    /// with any declining member unqualified — half-qualifying it would be
+    /// worse. The consequence, unreported until now, is that such a group
+    /// collapses onto a single symbol and each backend answers every receiver
+    /// with a different member of it.
+    ///
+    /// One error per member, so both offending impls are pointed at rather
+    /// than only whichever happens to be second.
+    fn reject_unqualifiable_impl_collisions(&mut self) {
+        for (span, head, method) in
+            crate::impl_dispatch::unqualifiable_collision_groups(self.program)
+        {
+            self.type_error(
+                format!(
+                    "error[E_IMPL_TARGET_NOT_DISTINGUISHABLE]: two or more \
+                     `impl` blocks define '{method}' for different \
+                     instantiations of '{head}', and their targets cannot be \
+                     told apart at dispatch because they carry a const \
+                     argument (a size or shape). Both would compile to one \
+                     `{head}.{method}`, and the interpreter and the compiled \
+                     backends would each answer every receiver with a \
+                     different one. Give the methods distinct names, or move \
+                     them onto a wrapper type per instantiation"
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+    }
+
     fn emit_missing_non_exhaustive_warnings(&mut self) {
         let mut emissions: Vec<(Vec<crate::lints::LintLevelOverride>, Span, String)> = Vec::new();
         for item in &self.program.items {

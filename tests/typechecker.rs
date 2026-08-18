@@ -39685,29 +39685,46 @@ fn test_generic_impl_on_slice_still_rejected() {
     );
 }
 
-/// B-2026-08-13-7 — the boundary the fix does NOT cross. `Array[T, N]` and
-/// `Vector[T, N]` stay out of `env_add_impl` and out of the dispatch fork,
-/// because neither has a call-site gate: widening to them intercepts every
-/// absent-method call ahead of the `.iter()` hint
-/// (`test_absent_fixed_array_methods_rejected_with_iter_hint`). Pinned here so
-/// a later widening has to confront that test rather than drift past it.
+/// B-2026-08-13-7 drew this boundary and asked that "a later widening has to
+/// confront that test rather than drift past it". B-2026-08-18-13 is that
+/// widening, and it confronted it: `Array[T, N]` is IN, and the objection —
+/// that admitting it would intercept every absent-method call ahead of the
+/// `.iter()` hint and leave a check-green/backend-dead program — was answered
+/// rather than overruled. Only a receiver whose method a user impl actually
+/// declares takes the impl-table path (`array_user_impl_declares`), so the
+/// rejection path and its hint are untouched
+/// (`an_absent_fixed_array_method_keeps_its_rejection_alongside_a_user_impl`
+/// pins that), and the interpreter leg landed with it
+/// (`a_fixed_array_impl_method_runs_on_every_backend`).
+///
+/// `Vector[T, N]` is still OUT, and the boundary now marks that alone: it has
+/// no registration arm and no interpreter receiver name, so admitting it at
+/// the lookup would report a method no backend can find.
 #[test]
-fn test_user_trait_impl_on_fixed_array_still_rejected() {
+fn test_user_trait_impl_on_simd_vector_still_rejected() {
     let errors = typecheck_errors(
+        "trait Zero { fn describe(ref self) -> String; }\n\
+         impl Zero for Vector[f32, 4] { fn describe(ref self) -> String { return f\"z\"; } }\n\
+         fn use_it(v: Vector[f32, 4]) -> String { return v.describe(); }\n\
+         fn main() { println(f\"ok\"); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'describe'")),
+        "a `Vector[T, N]` user-impl call must still be REJECTED — it has no \
+         registration arm and no interpreter receiver name, so accepting it \
+         would be check-green/backend-dead; got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+    // The fixed-array sibling this test used to pin is the one that changed.
+    typecheck_ok(
         "trait Zero { fn describe(ref self) -> String; }\n\
          impl Zero for Array[i64, 3] { fn describe(ref self) -> String { return f\"z\"; } }\n\
          fn main() {\n\
              let a: Array[i64, 3] = [1, 2, 3];\n\
              println(a.describe());\n\
          }",
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("no method 'describe'")),
-        "an Array user-impl call must still be REJECTED — it has no call-site \
-         gate, so accepting it would be check-green/backend-dead; got: {:?}",
-        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
     );
 }
 
@@ -40137,5 +40154,112 @@ fn a_generic_container_impl_head_still_erases_its_args() {
     assert!(
         !errors.is_empty(),
         "a generic head must keep taking the arg-erasing path"
+    );
+}
+
+/// B-2026-08-18-13 — a method declared by `impl Trait for Array[i64, N]` is
+/// callable. The impl block itself always checked; the CALL SITE reported
+/// "no method 'head_or' on type 'Array'", so the declaration was accepted in
+/// full and then unusable.
+///
+/// The registration was a deliberate deferral, not an oversight: `env_add_impl`
+/// left `Array` out because routing an Array receiver through the impl table
+/// would land an ABSENT method in that table's not-found tail, which does not
+/// know about the `.iter()` hint and (for a name that is neither user-defined
+/// nor exhaustive-prelude) falls silent. So only a receiver with a MATCHING
+/// user impl is normalized, and the two tests below pin both halves.
+#[test]
+fn a_fixed_array_impl_method_is_callable() {
+    typecheck_ok(
+        "trait Head { fn head_or(self, d: i64) -> i64; }\n\
+         impl Head for Array[i64, 3] { fn head_or(self, d: i64) -> i64 { return self[0]; } }\n\
+         fn main() { let a: Array[i64, 3] = [1, 2, 3]; println(a.head_or(-1).to_string()); }",
+    );
+    // The `ref self` receiver too — a fixed array is passed by reference at
+    // the ABI level, so the two spellings take different paths.
+    typecheck_ok(
+        "trait Head { fn second(ref self) -> i64; }\n\
+         impl Head for Array[i64, 3] { fn second(ref self) -> i64 { return self[1]; } }\n\
+         fn main() { let a: Array[i64, 3] = [1, 2, 3]; println(a.second().to_string()); }",
+    );
+}
+
+/// The counterweight, and the reason the registration had been deferred: an
+/// ABSENT method on a fixed array must keep the rejection it had, hint and all.
+/// A first attempt that widened the impl-table arm for every Array receiver
+/// turned both of these into "All checks passed".
+#[test]
+fn an_absent_fixed_array_method_keeps_its_rejection_alongside_a_user_impl() {
+    let with_impl = "trait Head { fn head_or(self, d: i64) -> i64; }\n\
+                     impl Head for Array[i64, 3] { fn head_or(self, d: i64) -> i64 { return self[0]; } }\n";
+    // A typo, with a user impl on the same head in scope.
+    let errors = typecheck_errors(&format!(
+        "{with_impl}fn main() {{ let a: Array[i64, 3] = [1, 2, 3]; a.head_ors(1); }}"
+    ));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+        "a typo'd Array method must stay a NoMethodFound, got: {errors:?}"
+    );
+    // The `.iter()` hint, likewise.
+    let errors = typecheck_errors(&format!(
+        "{with_impl}fn main() {{ let a: Array[i64, 3] = [1, 2, 3]; let _ = a.map(|x| x * 2).collect(); }}"
+    ));
+    let msg = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::NoMethodFound)
+        .map(|e| e.message.clone())
+        .expect("expected NoMethodFound for a direct `.map()` on Array");
+    assert!(
+        msg.contains("require an explicit `.iter()`"),
+        "the `.iter()` hint must survive the impl-table routing, got: {msg}"
+    );
+}
+
+/// Two impls of one trait method whose targets carry a CONST argument cannot be
+/// told apart at dispatch: `render_impl_target` declines them, so
+/// `collect_impl_dispatch_names` leaves the group unqualified and it collapses
+/// onto one `Head.method` symbol.
+///
+/// This was not hypothetical and it was not introduced by admitting `Array`.
+/// Measured on the PRE-EXISTING `Tensor` spelling — two `impl Head for
+/// Tensor[f32, [2]]` / `Tensor[f64, [2]]` blocks, `f32` receiver — `--interp`
+/// printed `F64` while `karac build` printed `F32`, on a program `karac check`
+/// accepted. Both spellings are refused now.
+#[test]
+fn impls_whose_targets_differ_only_inside_const_args_are_rejected() {
+    for (label, src) in [
+        (
+            "Array, differing element",
+            "trait Head { fn h(self) -> String; }\n\
+             impl Head for Array[i64, 3] { fn h(self) -> String { return \"INT\"; } }\n\
+             impl Head for Array[String, 2] { fn h(self) -> String { return \"STR\"; } }\n\
+             fn main() { }",
+        ),
+        (
+            "Tensor, differing element (pre-existing)",
+            "trait Head { fn h(self) -> String; }\n\
+             impl Head for Tensor[f32, [2]] { fn h(self) -> String { return \"F32\"; } }\n\
+             impl Head for Tensor[f64, [2]] { fn h(self) -> String { return \"F64\"; } }\n\
+             fn main() { }",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("E_IMPL_TARGET_NOT_DISTINGUISHABLE")),
+            "{label}: must be refused rather than dispatched by coin flip, got: {errors:?}"
+        );
+    }
+    // A group the machinery CAN qualify is untouched: `Vec[i64]` and
+    // `Vec[String]` render distinctly, so `collect_impl_dispatch_names` names
+    // them apart and the program stays legal.
+    typecheck_ok(
+        "trait Head { fn h(self) -> String; }\n\
+         impl Head for Vec[i64] { fn h(self) -> String { return \"INT\"; } }\n\
+         impl Head for Vec[String] { fn h(self) -> String { return \"STR\"; } }\n\
+         fn main() { }",
     );
 }

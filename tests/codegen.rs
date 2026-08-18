@@ -98498,6 +98498,64 @@ fn main() {
         }
     }
 
+    /// B-2026-08-18-13 — a method declared by `impl Trait for Array[i64, N]`,
+    /// end to end. The impl block always checked; the CALL SITE reported "no
+    /// method 'head_or' on type 'Array'", so the declaration was accepted in
+    /// full and then unusable on every backend.
+    ///
+    /// Run rather than merely checked because the INTERPRETER is the leg that
+    /// nearly shipped broken. A fixed `Array[T, N]` and a `Vec[T]` are both
+    /// `Value::Array` at runtime and `value_type_name` reports "Vec" for
+    /// either, so an impl registered under "Array" was unreachable there —
+    /// "method not found on type 'Vec' (no interpreter dispatch arm)" on a
+    /// program `karac check` and `karac build` both accepted. That
+    /// run-vs-build split is what got the `Slice` version of this row reverted
+    /// twice (B-2026-08-13-7), so `run_program` (which agrees the interpreter,
+    /// the JIT and the AOT binary) is the assertion that matters.
+    #[test]
+    fn a_fixed_array_impl_method_runs_on_every_backend() {
+        for (label, self_mode, body, want) in [
+            ("owned self", "self", "return self[0];", "1\n"),
+            ("borrowed self", "ref self", "return self[1];", "2\n"),
+        ] {
+            let src = format!(
+                "trait Head {{ fn pick({self_mode}) -> i64; }}\n\
+                 impl Head for Array[i64, 3] {{ fn pick({self_mode}) -> i64 {{ {body} }} }}\n\
+                 fn main() {{\n\
+                     let a: Array[i64, 3] = [1, 2, 3];\n\
+                     println(a.pick().to_string());\n\
+                 }}\n"
+            );
+            let Some(out) = run_program(&src) else {
+                return;
+            };
+            assert_eq!(out, want, "{label}");
+        }
+    }
+
+    /// The Array head alongside a `Vec` head declaring the SAME method name.
+    /// Both are legal — the two receivers are distinct types — and each must
+    /// reach its own impl. This is the case the interpreter cannot decide for
+    /// itself (one `Value::Array` for both), so it is decided at check and
+    /// recorded per call site; without that recording the interpreter would
+    /// answer both receivers with whichever head it tried first.
+    #[test]
+    fn an_array_impl_and_a_vec_impl_of_one_method_stay_apart() {
+        let src = "trait Head { fn tag(self) -> String; }\n\
+                   impl Head for Array[i64, 3] { fn tag(self) -> String { return \"ARR\"; } }\n\
+                   impl Head for Vec[i64] { fn tag(self) -> String { return \"VEC\"; } }\n\
+                   fn main() {\n\
+                       let a: Array[i64, 3] = [1, 2, 3];\n\
+                       let v: Vec[i64] = [1, 2];\n\
+                       println(a.tag());\n\
+                       println(v.tag());\n\
+                   }\n";
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(out, "ARR\nVEC\n", "each head must answer its own receiver");
+    }
+
     /// B-2026-08-18-12 — a BUILTIN method called on `self` inside an
     /// `impl Trait for Map[K, V]` or `impl Trait for Set[T]` body.
     ///

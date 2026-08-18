@@ -32,6 +32,22 @@ impl<'a> super::TypeChecker<'a> {
     /// the end, with the receiver already normalized to
     /// `receiver_for_lookup`. Returns the call's type, or `Type::Error`
     /// after emitting a diagnostic.
+    /// Does any user `impl` on the `Array` head declare `method`?
+    ///
+    /// The single predicate behind B-2026-08-18-13's split: a fixed-array
+    /// receiver whose method a user impl declares is normalized to a `Named`
+    /// receiver and looked up in the impl table, and one whose method nothing
+    /// declares keeps the dedicated Array REJECTION path — the one that renders
+    /// "no method 'map' on type 'Array': iterator adaptors/terminals require an
+    /// explicit `.iter()`". Both call sites read this, so the two halves cannot
+    /// disagree about which receiver goes where.
+    fn array_user_impl_declares(&self, method: &str) -> bool {
+        self.env
+            .impls
+            .iter()
+            .any(|imp| imp.target_type == "Array" && imp.methods.contains_key(method))
+    }
+
     pub(super) fn dispatch_user_impl_method(
         &mut self,
         object: &Expr,
@@ -40,6 +56,65 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
         receiver_for_lookup: &Type,
     ) -> Type {
+        // B-2026-08-18-13 — a fixed-size `Array[T, N]` receiver whose method a
+        // user impl actually declares is looked up like a `Named` receiver,
+        // under the head name `env_add_impl` registers it by ("Array") and its
+        // ELEMENT as the single arg (the size is not part of the key; see that
+        // arm for why).
+        //
+        // Normalized here, rather than by widening the `Str | Slice` arm below,
+        // to keep the Array REJECTION path exactly where it was. That path — the
+        // `_` arm's Array branch — is what renders "no method 'map' on type
+        // 'Array': iterator adaptors/terminals require an explicit `.iter()`",
+        // and routing every Array receiver through the impl table would land an
+        // absent method in the table's own not-found tail instead, which does
+        // not know about `.iter()` and (for a non-user-defined, non-prelude name
+        // like "Array") falls silent. Measured: with the wider arm,
+        // `a.map(...)` and a plain typo both went from a clear rejection to
+        // "All checks passed". So only a receiver with a MATCHING user impl is
+        // normalized, and everything else keeps the diagnostic it had.
+        let array_user_impl_receiver: Option<Type> = match receiver_for_lookup {
+            Type::Array { element, .. } if self.array_user_impl_declares(method) => {
+                Some(Type::Named {
+                    name: "Array".to_string(),
+                    args: vec![(**element).clone()],
+                })
+            }
+            _ => None,
+        };
+        if array_user_impl_receiver.is_some() {
+            // Name the resolved head for the BACKENDS. The interpreter cannot
+            // work it out: a fixed `Array[T, N]` and a `Vec[T]` are both
+            // `Value::Array` at runtime and `value_type_name` reports "Vec" for
+            // either, so the key it builds is `Vec.<method>` while the env holds
+            // `Array.<method>` — the call died with "not found on type 'Vec'
+            // (no interpreter dispatch arm)" on a program `karac check` and
+            // `karac build` both accepted. That run-vs-build split is the exact
+            // failure that got the `Slice` version of this row reverted twice
+            // (B-2026-08-13-7), so it is not a detail to leave for later.
+            //
+            // `method_impl_dispatch` is the right table rather than
+            // `method_callee_types`, and the difference is not cosmetic: it is
+            // keyed by (span, METHOD), so the chained-call span aliasing cannot
+            // clobber it. Measured on the first attempt through the other
+            // table — `a.head_or(-1).to_string()` shares one span, and the
+            // OUTER call had overwritten the entry with "i64.to_string", so the
+            // recovery correctly declined its own stale recording and the
+            // interpreter still failed.
+            //
+            // Codegen reads the same table through `impl_dispatch_segment_at`,
+            // whose fallback is the bare head name — which for an Array
+            // receiver is already "Array". So this is inert there, and the
+            // compiled backends behave exactly as they did.
+            self.method_impl_dispatch.insert(
+                (SpanKey::from_span(span), method.to_string()),
+                "Array".to_string(),
+            );
+        }
+        let receiver_for_lookup: &Type = array_user_impl_receiver
+            .as_ref()
+            .unwrap_or(receiver_for_lookup);
+
         let (type_name, type_args) = match receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
             // B-2026-08-12-32 — a `String` receiver reaching here has already
@@ -281,7 +356,9 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         return Type::Error;
                     }
-                } else if matches!(receiver_for_lookup, Type::Array { .. }) {
+                } else if matches!(receiver_for_lookup, Type::Array { .. })
+                    && !self.array_user_impl_declares(method)
+                {
                     // A fixed-size `Array[T, N]` receiver whose method was not
                     // resolved by the modelled read arm (`len`/`is_empty`/`get`/
                     // `first`/`last`/`contains`), the iterator-source arm

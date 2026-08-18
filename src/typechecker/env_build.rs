@@ -2385,6 +2385,44 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 (name, vec![(**element).clone()])
             }
+            // B-2026-08-18-13 — `Array[T, N]`, on the same terms as `Slice`
+            // above and with one extra caveat of its own.
+            //
+            // THE SIZE IS NOT PART OF THE KEY. `target_args` is a `Vec<Type>`
+            // and `N` is a const, so `impl Zero for Array[i64, 3]` registers
+            // under the element alone, exactly as the `Slice` arm does. That
+            // is consistent with the rest of the pipeline rather than a local
+            // shortcut: `impl_dispatch::render_impl_target` already DECLINES a
+            // target with a const arg (`render_declines_const_args` pins it),
+            // so two `Array` impls differing only in `N` could not be given
+            // distinct dispatch names even if they were registered
+            // separately — they would collapse to one `Array.<method>` symbol
+            // and one of them would silently answer for both, which is the
+            // B-2026-08-13-8 wrong-answer shape.
+            //
+            // Both ways that could bite are refused at check rather than left
+            // to the backends. Two impls differing ONLY in `N` land on the
+            // identical `(trait, "Array", [element])` key and hit the existing
+            // conflicting-impl check ("another `impl Head for Array[i64]`
+            // already exists"). Two differing in ELEMENT get distinct keys and
+            // so pass that check, but their targets still carry a const arg and
+            // cannot be qualified apart — `reject_unqualifiable_impl_collisions`
+            // is what catches those, and it catches the pre-existing `Tensor`
+            // version of the same shape with them.
+            //
+            // A NON-CONCRETE element is not registered, for the same reason
+            // the `Slice` arm gives: codegen mangles a generic impl's methods
+            // per instantiation, so no plain `Array.<method>` fn exists and
+            // the build would die while check and `--interp` passed.
+            Type::Array { element, .. } => {
+                let Some(name) = method_callee_type_name(&lowered_target) else {
+                    return;
+                };
+                if !type_is_fully_concrete(element) {
+                    return;
+                }
+                (name, vec![(**element).clone()])
+            }
             // Non-path target types (`impl Foo for (i32, i32)` etc.) are
             // unsupported in v1; bail without registering. Matches the
             // pre-Theme-4 behavior of the path-only short-circuit.
