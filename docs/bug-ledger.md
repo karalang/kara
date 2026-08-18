@@ -97,8 +97,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
-| missing-feature | 107 | 2 |
-| diagnostics | 80 | 2 |
+| missing-feature | 109 | 4 |
+| diagnostics | 81 | 2 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
@@ -114,28 +114,30 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 200 | 2 |
 | interp | 153 | 0 |
 | ownership | 58 | 0 |
-| other | 54 | 3 |
+| other | 55 | 3 |
 | autopar | 49 | 1 |
 | cli | 45 | 0 |
-| parser | 23 | 0 |
+| parser | 25 | 2 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1337 surfaced · 6 open · 1313 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1340 surfaced · 8 open · 1314 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
-| B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
 | B-2026-08-18-39 | 2026-08-18 | autopar+codegen | high | `?.` ON TWO LET-BOUND CALL RESULTS MISCOMPILES UNDER AUTO-PAR, RETURNING MEMORY THAT VARIES BETWEEN RUNS. Two independent `let`s from Option-returning calls, consumed by `?.`, print `Some(23092184781)` where the answer is `Some(5)` — a different value on every execution. `--interp` and `KARAC_AUTO_PAR=0` are correct; the JIT and the default build each give their own garbage. | Unknown. The SHAPE is B-2026-08-16-1's family — two independent `let`s form an auto-par fork group and a later expression reading them gets no return slot — but that row's cause (a missing `refs_in_expr` arm) is NOT it here: `ExprKind::OptionalChain` IS handled, at closure_escape.rs:2362, recursing into both `object` and `args`. Checked before filing so the next reader does not repeat it. |
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | medium | A `#[gpu]` KERNEL BODY MUST BE A SINGLE EXPRESSION WITH NO `let` BINDINGS — no locals, no loops, no `match`. `let y: f32 = x * 2.0; y + 1.0` is rejected with E_GPU_DISPATCH_KERNEL, so every intermediate must be hand-inlined and no reduction, stencil, or tiled kernel can be written at all. The v1 GPU ship gate is recorded MET against the element-wise-map shape, which this does not contradict — but the shipped kernel language is far narrower than "GPU compute shaders" reads, and nothing outside the emitter source says so. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
+| B-2026-08-18-41 | 2026-08-18 | parser | low | THREE `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket"), MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216, under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213), and PARAMETERIZED resources (`effect resource UserDB[user_id: i64];` -> the `[...]` is parsed as generic type params, so the diagnostic is the naming-convention error "`user_id` is Value-class but generic type parameters must be Type-class", spec'd at design.md:7124 under its own heading "### Parameterized Resources" at :7121). Only `effect resource X;` and `effect resource X: Trait;` parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
+| B-2026-08-18-42 | 2026-08-18 | other | low | EIGHT occurrences across SEVEN lines in design.md's kara blocks use Rust MACRO syntax (`name!(...)`), which Kara does not have -- the parser rejects `!` outright with "the `!` operator is not used in Kara". `panic!` (6, five of them in § Never type -- one line carries two -- plus § FFI callbacks), `matches!` (1, § peek-and-drop) and `format_into!` (1, § embedded formatting). Transcribing any of them fails to parse. Only `panic!` has a drop-in replacement -- `panic("x")` checks FULLY clean -- while `matches` resolves to nothing at all ("undefined name 'matches'") and `format_into!` is variadic over a format string, so two of the three need a language answer before the doc can be corrected. | docs/design.md:542, :543, :556, :557 (panic!), :5941 (panic!), :8419 (matches!), :12162 (format_into!); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR; cf. B-2026-08-17-35 for the same class |
+| B-2026-08-18-43 | 2026-08-18 | parser | medium | `Expected Semicolon` -- the most common parse error in the whole corpus -- carries NO machine-applicable `replacement`, so `karac fix` reports it and changes nothing. The mechanism already exists and a SIBLING parse diagnostic uses it: the stray-comma-in-`with`-clause error emits `replacement: {offset, length, text}` and `karac fix` applies it. Since `karac fix` is the Mend loop's primary fix path, the single most frequent authoring mistake is the one it cannot repair. | the `Expected Semicolon` raise site in src/parser.rs and ParseResult.fix_edits (the stray-comma-in-with-clause edit is the working sibling to copy); consumers are collect_diagnostics (JSON `replacement`) and cmd_fix |
 
 ### Wontfix (7)
 
@@ -153,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1337 surfaced
 
 </details>
 
-### Fixed (1313)
+### Fixed (1314)
 
-<details><summary>1313 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1314 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11809,6 +11811,19 @@ correct either way.
 
 Gates: fmt clean, clippy --all --all-targets --features llvm clean, 14,056
 passed / 0 failed / 18 ignored across 107 suites. |
+| B-2026-08-18-29 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `… | FIXED by 56f6bfa. Done the way the row prescribed -- a real parse, not a longer regex. A hill-climb over each fenced block: feed it to the parser, take the FIRST `Expected Semicolon` position, insert `;` at the end of the CODE on the preceding non-empty line (preserving any trailing comment and the whitespace aligning it), re-parse, and KEEP the edit only if the block improved. That guard is the whole reason the line-level attempt had to be reverted: a block going from parsing cleanly to failing is the one outcome a docs edit must never produce, and only the parser knows.
+
+ACCEPTANCE took two forms, and the second one mattered. "Fewer parse diagnostics" alone stalls on a block that contains several omissions, because fixing one reveals the next and the count plateaus. Adding "same count, but the first `Expected Semicolon` moves strictly LATER" cleared the § module-scope-let block -- 5 sites, 2 -> 0 diagnostics -- that a strict decrease had abandoned half-fixed, which would have left it teaching `;` on two `let`s and no `;` on three.
+
+MEASURED 25 blocks -> 2, 45 semicolons inserted across 28 hunks. Both residuals are `Expected Semicolon` MISREPORTS with nothing to terminate, and each is filed separately: `effect resource RequestCh: Channel[Request]` (the parser stops at `[`; B-2026-08-18-41) and `matches!(...)` (Kara has no `!` at all; B-2026-08-18-42).
+
+FOUR EDITS ARE NOT SEMICOLONS, and are called out because they change tokens rather than add one. Three were Rust path syntax in expression position -- `host::close`, `File::open`, `log::error` -> `.` -- which design.md itself specifies as `.` (§ Modules, `myapp.db.UserDB`); each was reported AS an `Expected Semicolon` (`found ColonColon`) and blocked the terminator measurement of its block. The fourth is `unsafe { *out = parse(s).unwrap() }` -> `...unwrap(); }`: a genuine terminator, but on a statement INSIDE a single-line block, so it goes before the `}` rather than at end-of-line and no line-based pass can place it.
+
+THE SCAN WAS ALSO WIDER THAN THE ROW'S. The original harness anchored its fence match at column 0 and never saw INDENTED ```kara fences (blocks nested in list items). The new gate finds them, which is how the § structured-logging block -- a missing `;` on an `import`, where every other import in the document carries one -- was caught at all.
+
+GATED by `design_md_statements_carry_their_terminating_semicolon` in tests/design_md_code_blocks.rs, which calls `karac::parse` in-process rather than shelling out, and reports both the line to fix and the line the parser stopped at. It checks that ONE diagnostic rather than "every block parses", because most blocks are deliberate fragments. Its allow-list is two entries, each naming its row, and a sibling test asserts every entry still fires -- so a fixed row cannot leave a stale entry silently covering a future regression. Verified non-vacuous: removing one `;` fails the gate with the right line.
+
+ONE MORE ROW CAME OUT OF DOING THIS BY HAND: B-2026-08-18-43. Writing a parser-driven fixer raised the question of why the compiler was not doing it, and `Expected Semicolon` turns out to carry no machine-applicable `replacement`, so `karac fix` reports it and changes nothing -- while a sibling parse diagnostic (stray comma in a `with` clause) does emit one and gets applied. That is the most actionable of the three follow-ups: the insertion offset is exact at the raise site, and this is the most common parse error in the corpus. |
 | B-2026-08-18-31 | parser+codegen | low | `FieldAccess` nodes still copy their object's span -- a FIFTH postfix arm with the identical defect the four-row family (`?.`, `?`, `Index`, `MethodC… | FIXED by 399c7a68. The FIFTH and final postfix arm. `FieldAccess` now spans lhs-start -> past the field name, joining `?.` (B-2026-08-18-7), `?` (B-2026-08-18-9), `Index` (B-2026-08-18-21) and `MethodCall` (B-2026-08-18-24). No postfix node in the seed parser copies its object's span any more.
 
 TWELVE FAILURES, against 42 for the `MethodCall` arm -- and the shape of the difference is the useful part. `MethodCall`'s fallout was spread across four unrelated mechanisms (fresh-temp dispatch, for-loop ownership, generic field resolution, slice borrows). This one was a SINGLE mechanism, hit through three doors: 6 codegen + 4 memory_sanitizer tests, all in the B-2026-08-13-14 use-after-move defensive-copy family, plus the customary 2 self-host oracles.
