@@ -12677,6 +12677,61 @@ fn test_pipe_and_range_nodes_span_their_whole_expression() {
     assert_eq!(rtext(&ranges[0]), "1..3");
 }
 
+/// `Path`'s generic-args head spans the whole head, not just the name.
+///
+/// The last entry in B-2026-08-18-33's list, and the one that did NOT belong
+/// there. That row said "SEVEN parser arms still copy their LHS's span",
+/// derived from a grep for `span: lhs.span` — but `ExprKind::Path` carries
+/// `segments: Vec<String>` and NO child expression. The collision class is a
+/// parent sharing a key with its child; this arm REPLACES the identifier
+/// rather than wrapping it, so the identifier node ceases to exist and two
+/// live nodes never shared the span. Six arms were the defect; this one was a
+/// grep artifact.
+///
+/// Widened anyway, for diagnostics rather than for correctness: a span of
+/// `foo` underlines three characters of `foo[i64, u8](x)` when the node means
+/// the whole generic-args head. This test pins that, and its name says span
+/// rather than SpanKey because there was no key collision to fix.
+#[test]
+fn test_generic_args_path_spans_its_whole_head() {
+    let source = "fn pick[A, B](a: A, b: B) -> A { return a; }\n\
+                  fn f() -> i64 {\n  let r = pick[i64, bool](1, true);\n  return r;\n}";
+    let prog = parse(source).program;
+
+    fn find_path(e: &Expr, out: &mut Vec<karac::token::Span>) {
+        match &e.kind {
+            ExprKind::Path {
+                generic_args: Some(_),
+                ..
+            } => out.push(e.span),
+            ExprKind::Call { callee, args } => {
+                find_path(callee, out);
+                for a in args {
+                    find_path(&a.value, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut paths = Vec::new();
+    for item in &prog.items {
+        if let Item::Function(f) = item {
+            for st in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &st.kind {
+                    find_path(value, &mut paths);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        paths.len(),
+        1,
+        "expected one generic-args `Path` node, got {paths:?}"
+    );
+    let text = |s: &karac::token::Span| &source[s.offset..s.offset + s.length];
+    assert_eq!(text(&paths[0]), "pick[i64, bool]");
+}
+
 /// `Span.line`/`Span.column` of an interpolation sub-expression must point to
 /// its true position in the ORIGINAL source — not into the synthetic
 /// `fn __interp__() { … }` re-parse wrapper (B-2026-06-09-1a). Before the fix

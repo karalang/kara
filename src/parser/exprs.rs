@@ -365,8 +365,22 @@ impl super::Parser {
                             _ => unreachable!(),
                         };
                         let gen_args = self.parse_generic_type_args()?;
+                        // B-2026-08-18-33 — NOT a collision fix, and the
+                        // difference matters. The other six arms wrap a child
+                        // and share its key; `ExprKind::Path` has no child
+                        // expression at all (`segments: Vec<String>`), so it
+                        // REPLACES the identifier rather than wrapping it and
+                        // no two live nodes ever shared this span. The row's
+                        // "seven arms" was derived from a grep for
+                        // `span: lhs.span` and overcounted by this one.
+                        //
+                        // Widened purely for DIAGNOSTIC accuracy: a span of
+                        // `foo` underlines three characters of
+                        // `foo[i64, u8](x)`, where the node means the whole
+                        // generic-args head.
+                        let path_span = self.span_from(&lhs.span);
                         lhs = Expr {
-                            span: lhs.span,
+                            span: path_span,
                             kind: ExprKind::Path {
                                 segments,
                                 generic_args: Some(gen_args),
