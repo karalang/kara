@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 50 | 0 |
-| other | 47 | 2 |
+| other | 47 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 202 | 2 |
 | interp | 153 | 0 |
 | ownership | 60 | 0 |
-| other | 56 | 2 |
+| other | 56 | 1 |
 | autopar | 49 | 0 |
 | cli | 46 | 0 |
 | parser | 26 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced · 5 open · 1325 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced · 4 open · 1326 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-18-41 | 2026-08-18 | parser | low | TWO `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket", design.md:6071) and MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216 under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213). The third form this row was filed with -- PARAMETERIZED resources, `effect resource UserDB[user_id: i64];` -- is FIXED (see below); only `effect resource X;`, `effect resource X: Trait;` and the parameterized form parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
 | B-2026-08-18-50 | 2026-08-18 | typecheck | low | A PARAMETERIZED RESOURCE'S PARTITION KEY IS NEVER TYPECHECKED against its declared type. `effect resource UserDB[user_id: i64];` records `i64`, and a use site `with writes(UserDB[name])` for a `String` binding is accepted with no diagnostic -- as is a keyed use of a resource that declares no key at all. design.md § Parameterized Resources additionally requires the key type to implement `Eq` (and `Hash + Eq` for the hash-partition path), "rejected at resource declaration with a clear diagnostic" (design.md:7180); nothing checks that either. | roadmap.md |
-| B-2026-08-18-51 | 2026-08-18 | other | medium | `tests/gpu_e2e.rs` FAILS THE WHOLE SUITE on any machine that has not built the OPTIONAL `libkarac_runtime_gpu.a` — six tests panic with a link error rather than skipping. CLAUDE.md documents that archive as opt-in ("Skip unless doing GPU work"), so this is the default state of a fresh checkout: every session working an unrelated bug now has a red `cargo test --features llvm`. The probe classifies a MISSING-ARCHIVE link failure as `Probe::Broken`, which panics unconditionally and no environment variable suppresses. | `gpu_probe` / `gpu_or_skip` in tests/gpu_e2e.rs and its `is_no_adapter` predicate; cf. `common::link_or_skip`, whose three-way discrimination this needs to mirror. Archive recipe in CLAUDE.md under the optional `gpu` archive. |
 
 ### Wontfix (7)
 
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced
 
 </details>
 
-### Fixed (1325)
+### Fixed (1326)
 
-<details><summary>1325 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1326 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12082,6 +12081,21 @@ cover the WGSL shape, the `select` fork, and the annotation diagnostic.
 
 Gates: fmt, clippy both legs, 78 gpu_wgsl unit tests, 12 gpu_e2e execution
 fixtures, 2294 typechecker, 3064 codegen. Zero test churn across both steps. |
+| B-2026-08-18-51 | other | medium | `tests/gpu_e2e.rs` FAILS THE WHOLE SUITE on any machine that has not built the OPTIONAL `libkarac_runtime_gpu.a` — six tests panic with a link error… | FIXED by 066b695. A FOURTH ARM on the probe's classifier, not a weakening of the third.
+
+`gpu_probe` sorted failures two ways — `is_no_adapter(err)` to a skippable `NoAdapter`, everything else to `Broken`, which panics unconditionally. `Broken`'s unconditional panic is right and stays: the file's own doc comment records why it exists, having watched a mutation that made the emitter produce invalid WGSL turn into all six fixtures soft-skipping and the suite reporting GREEN on a compiler that could not emit a single valid shader.
+
+What `Broken` should never have owned is a host that simply has not built the OPTIONAL `libkarac_runtime_gpu.a`. CLAUDE.md makes that archive opt-in ("Skip unless doing GPU work"), so its absence is the default state of a fresh checkout — an absent build artifact, not "a compiler or runtime bug on a host that HAS a working adapter". The failure text was a link error whose body is literally a build recipe, and it panicked.
+
+THE RULE WAS ALREADY WRITTEN DOWN, in the same doc comment, describing the sibling it was modelled on: `common::link_or_skip`, where "an undefined-symbol link error panics because it can only mean staleness, while OTHER link errors stay skippable". `NoArchive` is that rule applied here — skippable by default with a visible, actionable notice, fatal under `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`, which is the same variable every other archive-gated suite honours and which CI's GPU job sets.
+
+MEASURED BOTH WAYS on a host with no GPU archive:
+    cargo test --features llvm --test gpu_e2e            12 passed, 0 failed, skip notice on stderr
+    KARAC_REQUIRE_RUNTIME_ARCHIVE=1 ... --test gpu_e2e   rc=101, 12 failed, actionable message
+
+THE MATCHER IS PINNED BY ITS OWN TEST, because the whole value of a four-way split is that the new arm catches EXACTLY the absent archive: one careless `contains` would hand `Broken`'s cases a skip and reopen the hole the file exists to close. `probe_classifier_matches_only_the_absent_gpu_archive` asserts the driver's real wording classifies as `NoArchive`, and that four things do NOT — a no-adapter host, a shader the backend rejected, a runtime fault, and a DIFFERENT optional archive's message (regex), whose near-identical phrasing is the likeliest way a future widening goes wrong. It also asserts the two predicates are disjoint, so arm order in `gpu_probe` cannot silently decide an outcome. Verified non-vacuous: widening the matcher to `contains("not found") || contains("failed")` fails it on the no-adapter case. Pure-string, so it runs on any host — which matters, since a host with no adapter is exactly where the classifier decides everything.
+
+SCOPE NOTE: this does not make the GPU tests run anywhere they did not before, and it is not a substitute for building the archive. It restores the property every other archive-gated suite already has — that an opt-in artifact's absence is a skip, and that one flag turns every such skip into a failure. |
 
 </details>
 
