@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 258 | 2 |
 | leak | 182 | 0 |
-| double-free | 130 | 0 |
+| double-free | 131 | 1 |
 | run-vs-build | 128 | 4 |
 | codegen-gap | 115 | 1 |
 | missing-feature | 103 | 4 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 911 | 8 |
+| codegen | 912 | 9 |
 | typecheck | 193 | 10 |
 | interp | 149 | 2 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1296 surfaced · 21 open · 1259 fixed · 6 wontfix** (2026-05-20 → 2026-08-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1297 surfaced · 22 open · 1259 fixed · 6 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (21)
+### Open (22)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -151,6 +151,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1296 surfaced
 | B-2026-08-17-42 | 2026-08-17 | codegen | medium | A RANGE bound to a variable has no codegen. `let r = 0..4; for i in r { println(i); }` prints 0 1 2 3 under `--interp` and NOTHING under `karac run` (JIT) and `karac build` (AOT), exiting 0 either way, with `karac check` clean. The inline spelling (`for i in 0..4`) is correct on all three -- only the binding form is dead. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::Range` arm. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure; implementing this should flip that case, which is a deliberate edit to that test. |
 | B-2026-08-17-43 | 2026-08-17 | codegen | high | `?.` OPTIONAL CHAINING has no codegen and produced a SILENT WRONG ANSWER. `let v = get(1)?.x; println(v);` where `get -> Option[P]` printed `Some(5)` under `--interp` and `0` under both `karac run` (JIT) and `karac build` (AOT), with `karac check` clean. roadmap.md line 241 carries a CHECKED box claiming `?.` optional chaining is done. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::OptionalChain` arm; roadmap.md line 241. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure. |
 | B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
+| B-2026-08-17-45 | 2026-08-18 | codegen | high | Moving an `Option`-TYPED FIELD out of a matched struct payload DOUBLE FREES under both compiled backends, on a program `karac check` passes clean and `--interp` runs correctly. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C] }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- `free(): double free detected in tcache 2`, abort, under both `karac run` (JIT) and `karac build` (AOT). The interpreter prints the right answer. No `?.`, no closure, no generic involved. | src/codegen/control_flow_match.rs — the per-arm suppressor block (~line 620-760). `suppress_struct_field_boxed_payload_match_out` is the nearest existing suppressor but gates on a FieldAccess scrutinee (`match a.value { ... }`), not on an arm body that moves a field out of the bound payload. |
 
 ### Wontfix (6)
 
